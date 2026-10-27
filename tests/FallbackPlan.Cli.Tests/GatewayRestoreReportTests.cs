@@ -80,6 +80,40 @@ public sealed class GatewayRestoreReportTests
     }
 
     [TestMethod]
+    [DataRow("failed")]
+    [DataRow("cancelled")]
+    public async Task ARestoreThatDidNotFinish_SaysHowToResumeIt(string outcome)
+    {
+        // ADR-0110: the run's name is what --resume takes, so the CLI says it
+        // where a run was cut short.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(
+            1, outcome == "failed" ? 1 : 0, "/out/.fbp-quarantine/0123456789abcdef", outcome, Run: "0123456789abcdef"));
+
+        var report = await RestoreAsync(client, timeout.Token);
+
+        Assert.IsTrue(
+            report.Lines.Any(printed => printed.Contains("--resume 0123456789abcdef", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
+    [DataRow("complete")]
+    [DataRow("partial")]
+    public async Task ARestoreAResumeWouldNotAddTo_SaysNothingOfResuming(string outcome)
+    {
+        // A partial run skipped what this target cannot hold, which a resume
+        // would skip again.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(
+            1, 0, "/out/.fbp-quarantine/0123456789abcdef", outcome, Run: "0123456789abcdef"));
+
+        var report = await RestoreAsync(client, timeout.Token);
+
+        Assert.IsFalse(report.Lines.Any(printed => printed.Contains("--resume", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
     public async Task AResumeNamingNoRun_IsRefusedBeforeAnythingIsAsked()
     {
         // Through the service each run lands in a folder of its own, so a

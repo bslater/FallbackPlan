@@ -890,6 +890,11 @@ public sealed record RestoreSpaceDescriptor(
 /// as they stood (contract 1.67, ADR-0109), counted among
 /// <paramref name="Restored"/>. The receipt names them.
 /// </param>
+/// <param name="Run">
+/// The name a resume of this run gives as <c>resume</c> (contract 1.68,
+/// ADR-0110): the run's own, or, for a resumed quarantined run, the run it
+/// continued, whose folder it landed in. Null from a service before 1.68.
+/// </param>
 public sealed record RestoreResult(
     long Restored,
     long Failed,
@@ -904,7 +909,8 @@ public sealed record RestoreResult(
     long ReadAround = 0,
     IReadOnlyList<string>? ReadAroundSample = null,
     IReadOnlyList<string>? NotApplied = null,
-    long FoundInPlace = 0) : ServiceResult;
+    long FoundInPlace = 0,
+    string? Run = null) : ServiceResult;
 
 /// <summary>
 /// An opened restore source (ADR-0041): the handle the source-aware verbs

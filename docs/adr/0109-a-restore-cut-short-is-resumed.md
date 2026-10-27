@@ -82,7 +82,11 @@ A hard-link group's first name found in place is the file its later names are ma
 
 - **Resume within a file.** A file cut short mid-write never landed, so it is restored whole.
 - **Resume from the console.** The wizard runs a restore whole, and resuming one from there is not built.
+
+  > **2026-10 ([ADR-0110](0110-the-console-resumes-a-restore-cut-short.md)).** The wizard offers to restore what is left of a run that failed or was stopped, naming the run its result names.
 - **Find the run itself.** Through the service the run is named, as the folder it landed in is named. A run's answer says where that folder is, and the folder stays when the run is cut short before it answers.
+
+  > **2026-10 ([ADR-0110](0110-the-console-resumes-a-restore-cut-short.md)).** A run's result names the run a resume of it gives (contract 1.68), so a client need not read it out of the folder's path. A run cut short before it answers is still resumed by its folder's name.
 
 ## Alternatives considered
 
@@ -112,3 +116,4 @@ A hard-link group's first name found in place is the file its later names are ma
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A resumed restore leaves each file already holding the snapshot's content, by length and whole-file hash, as it stands, reads none of its content, applies its metadata again, and lands the rest; it is measured for what is left. Through the service it continues the run it names, in that run's folder (contract 1.67), and the receipt (schema 8) says what was found in place. A resume is not planned, and not under rename. |
 | 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--a-resume-under-rename-looks-beside): a resume under rename is run. With a file in the way it looks beside it, and leaves a copy there holding the snapshot's content under a name the restore writes beside, naming it in the receipt; §5's refusal is superseded. |
+| 2026-10 | Accepted (amended) | [ADR-0110](0110-the-console-resumes-a-restore-cut-short.md) takes up the console resume this record left owed: a restore's result names its run (contract 1.68), the wizard offers to restore what is left of a run that failed or was stopped, and the command line says how. |

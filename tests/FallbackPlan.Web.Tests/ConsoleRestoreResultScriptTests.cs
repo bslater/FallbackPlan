@@ -5,7 +5,9 @@ namespace FallbackPlan.Web.Tests;
 /// FR-RST-007): a restore that read some files around damage says how many
 /// and shows the service's own lines naming each file's copy — the one it
 /// came from and the one it was read around — so the person who met the
-/// damage hears of it where they are looking, not only in a notice.
+/// damage hears of it where they are looking, not only in a notice. A run
+/// that failed is offered a resume naming the run the service said it was
+/// (FR-RST-008, ADR-0110).
 /// </summary>
 /// <remarks>
 /// Like <see cref="ConsoleReceiptsScriptTests"/>: no browser, the script's own
@@ -45,5 +47,19 @@ public sealed class ConsoleRestoreResultScriptTests
         // Escaped like every other line the service writes: a path is text a
         // backup recorded, never markup.
         Assert.Contains("esc(W.result.readAroundSample", step, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void TheResultStep_OffersAResume_NamingTheRunTheServiceSaid_AndSaysWhatItFoundInPlace()
+    {
+        // FR-RST-008, ADR-0110: the button the DOM suite presses, and the
+        // count of what a resume left as it stood.
+        var script = AppJs();
+        var step = FunctionBody(script, "rstStep6");
+
+        Assert.Contains("W.result.run", step, StringComparison.Ordinal, "a resume is not offered for the run the service named");
+        Assert.Contains("id=\"rst-resume\"", step, StringComparison.Ordinal);
+        Assert.Contains("W.result.foundInPlace", step, StringComparison.Ordinal, "what a resume found in place is not shown");
+        Assert.Contains("resume: W.result.run", script, StringComparison.Ordinal, "the resume does not name the run");
     }
 }
