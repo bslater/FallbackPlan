@@ -55,6 +55,8 @@ A file already at that path is somebody's. It is refused before anything is aske
 ## What this does not do
 
 - **Run a kept plan.** A plan is a picture of the run at the time it was made. Running one later means planning again, because the replica, the destination and what is free may all have moved.
+
+  > **2026-10 ([ADR-0114](0114-a-kept-plan-is-run-as-it-was-approved.md)).** `restore --as-planned <file>` runs a kept plan by planning again, as this bullet says it must, and runs only where the plan made now says what the kept one said.
 - **Resume a restore.** A restore cut short is run again from the start, as before.
 
   > **2026-10 ([ADR-0109](0109-a-restore-cut-short-is-resumed.md)).** A restore cut short is resumed with `restore --resume`. A resume is not kept as a plan: `--export` beside it is refused.
@@ -88,3 +90,4 @@ The command line describes the run its command plans as the service is asked it,
 | 2026-10 | Accepted | Built in one slice, tests first. `restore --export <file>` keeps the plan as JSON, in the contract's own words beside the run it was made for, implies `--plan` so nothing is restored, and refuses a file already there. Running a kept plan, and resume, stay owed. |
 | 2026-10 | Accepted | [ADR-0109](0109-a-restore-cut-short-is-resumed.md) resumes a restore cut short, which this record left owed. A resume is not planned, so `--export` beside `--resume` is refused. |
 | 2026-10 | Accepted; built (amended) | [Amendment 1](#amendment-1-2026-10--one-shape-for-every-client-and-the-run-as-asked): the file's shape moves into the contract's assembly at version 2, which keeps version 1's fields and adds the run as asked (paths, target, policy, in place), and leaves out the source. Both clients write it, the console since [ADR-0113](0113-the-console-keeps-a-restores-plan.md). |
+| 2026-10 | Accepted | [ADR-0114](0114-a-kept-plan-is-run-as-it-was-approved.md) runs a kept plan, which this record left owed: `restore --as-planned` holds the run to the file's, plans again, and restores only where nothing approved has changed. |
