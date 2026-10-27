@@ -496,6 +496,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>Where persisted restore receipts land (FR-RST-004).</summary>
     internal string ReceiptsRoot => Path.Combine(Options.StateDirectory, "receipts");
 
+    /// <summary>Where each restore run keeps the parts of the files it was cut short in (ADR-0129).</summary>
+    internal string RestorePartsRoot => RestoreParts.RootUnder(Options.StateDirectory);
+
     /// <summary>This device's writer identity — one per device, shared by every archive it writes.</summary>
     public WriterId Writer => WriterId.FromBytes(State.WriterId);
 
@@ -652,6 +655,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 notices.RaiseUnlessAcknowledged(
                     UnfinishedRestoreNotice.KeyOf(run.Run), UnfinishedRestoreNotice.MessageOf(run), nowMs);
             }
+
+            RestoreParts.Sweep(RestoreParts.RootUnder(options.StateDirectory), restoreRuns.Runs.Select(run => run.Run));
 
             // Crash leftovers: per-source catalogue caches are worthless
             // without their (gone) handles, and a failed purge is only noise.

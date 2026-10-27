@@ -468,6 +468,18 @@ public sealed record RestoreExecutionOptions
     /// </summary>
     public string? ResumedRunId { get; init; }
 
+    /// <summary>
+    /// Where the run assembles each file it writes, as a part named by the
+    /// file's whole-file hash, and keeps one it was stopped in, or could not
+    /// read all of, for a resume to take up (ADR-0129); null keeps none, and
+    /// a file cut short is restored whole again.
+    /// </summary>
+    /// <remarks>
+    /// A part is taken up only by a resume, as a file in place is: without
+    /// being told, a run cannot know the part is its own.
+    /// </remarks>
+    public string? PartsDirectory { get; init; }
+
     /// <summary>The wall clock for receipt timestamps.</summary>
     public required ulong NowUnixMilliseconds { get; init; }
 }
@@ -529,7 +541,8 @@ public sealed class RestoreExecutor(
     private sealed class PrefetchWave(
         RepositoryReader reader,
         RestorePlan plan,
-        Func<int, FileVersionManifest, CancellationToken, ValueTask<string?>> landed)
+        Func<int, FileVersionManifest, CancellationToken, ValueTask<string?>> landed,
+        Func<FileVersionManifest, bool> takesUpAPart)
     {
         private const int MaximumItems = 1024;
         private const int MaximumSegments = 512;
@@ -628,7 +641,10 @@ public sealed class RestoreExecutor(
                     continue;
                 }
 
-                if (await landed(index, manifest, cancellationToken).ConfigureAwait(false) is not null)
+                // A file a part holds some of is read for what it lacks once
+                // the part is taken up, and not ahead of it.
+                if (await landed(index, manifest, cancellationToken).ConfigureAwait(false) is not null
+                    || takesUpAPart(manifest))
                 {
                     continue;
                 }
@@ -726,7 +742,19 @@ public sealed class RestoreExecutor(
         // this restore is asked for at once.
         var landedAt = new Dictionary<int, string?>();
         var listed = new Dictionary<string, string[]>(StringComparer.Ordinal);
-        var wave = new PrefetchWave(reader, plan, LandedAsync);
+        if (options.PartsDirectory is { } parts)
+        {
+            Directory.CreateDirectory(parts);
+        }
+
+        var wave = new PrefetchWave(reader, plan, LandedAsync, TakesUpAPart);
+
+        bool TakesUpAPart(FileVersionManifest manifest) =>
+            options.Resume && PartOf(manifest) is { } part && File.Exists(part);
+
+        string? PartOf(FileVersionManifest manifest) => options.PartsDirectory is { } directory
+            ? Path.Combine(directory, $"{Convert.ToHexStringLower(manifest.WholeFileHash.Span)}.part")
+            : null;
 
         // Where a resumed run finds each file already landed, decided once:
         // ahead of the loop, so none of its content is read, and in it. That
@@ -928,7 +956,9 @@ public sealed class RestoreExecutor(
                         var output = File.Create(spool);
                         await using (output.ConfigureAwait(false))
                         {
-                            result = await engine.RestoreFileAsync(manifest, output, cancellationToken).ConfigureAwait(false);
+                            result = PartOf(manifest) is { } part
+                                ? await engine.RestoreFileAsync(manifest, output, part, options.Resume, cancellationToken).ConfigureAwait(false)
+                                : await engine.RestoreFileAsync(manifest, output, cancellationToken).ConfigureAwait(false);
                         }
                     }
                     catch (IOException exception)

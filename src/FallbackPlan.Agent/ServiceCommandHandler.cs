@@ -1142,23 +1142,26 @@ public sealed partial class ServiceCommandHandler(
                 reader.UseOtherCopies(context.OwnCopyName, copies.Sources);
             }
 
+            // A fresh identifier per run, not per snapshot: two restores of
+            // one snapshot must displace into distinct stores, or the second
+            // overwrites the first's displaced copies — the single shared
+            // refuge architecture 08 §3.1 forbids. A snapshot-derived id made
+            // every restore of a snapshot share one.
+            var runId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
+
+            // A resumed quarantined run lands in the folder of the run it
+            // continues, under its name; one in place lands where any run
+            // does, under its own (ADR-0109).
+            var resumedRunId = mode == RestoreDestinationMode.Quarantine ? command.Resume : null;
             var options = new RestoreExecutionOptions
             {
                 DestinationMode = mode,
                 ExistingDestination = existing,
-
-                // A fresh identifier per run, not per snapshot: two restores of
-                // one snapshot must displace into distinct stores, or the second
-                // overwrites the first's displaced copies — the single shared
-                // refuge architecture 08 §3.1 forbids. A snapshot-derived id
-                // made every restore of a snapshot share one.
-                RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
+                RunId = runId,
                 NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-
-                // A resumed quarantined run lands in the folder of the run it
-                // continues; one in place lands where any run does (ADR-0109).
                 Resume = command.Resume is not null,
-                ResumedRunId = mode == RestoreDestinationMode.Quarantine ? command.Resume : null,
+                ResumedRunId = resumedRunId,
+                PartsDirectory = RestoreParts.Of(runtime, resumedRunId ?? runId),
             };
 
             string? ResumedInFolder(string outputDirectory) =>
@@ -1206,6 +1209,7 @@ public sealed partial class ServiceCommandHandler(
             if (command.Resume is { } continued && continued != record.Run)
             {
                 UnfinishedRestoreNotice.Resolve(runtime, continued, options.NowUnixMilliseconds);
+                RestoreParts.Carry(runtime, continued, record.Run);
             }
 
             RestoreResult? answered = null;
@@ -1311,6 +1315,7 @@ public sealed partial class ServiceCommandHandler(
         {
             runtime.RestoreRuns.Finish(record.Run);
             UnfinishedRestoreNotice.Resolve(runtime, record.Run, nowMs);
+            RestoreParts.LetGo(runtime, record.Run);
             return;
         }
 
@@ -1492,6 +1497,7 @@ public sealed partial class ServiceCommandHandler(
         }
 
         UnfinishedRestoreNotice.Resolve(runtime, command.Run, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        RestoreParts.LetGo(runtime, command.Run);
         return new AcknowledgedResult();
     }
 
