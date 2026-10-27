@@ -3210,7 +3210,9 @@ public sealed partial class ServiceCommandHandler(
                 HoldsNewest: figure.Whole,
                 InRun: figure.InRun,
                 Syncing: figure.Syncing,
-                Requests: DescribeRequests(destination)));
+                Requests: DescribeRequests(destination),
+                ArchivedMetadata: ledger?.MetadataArchivedKey,
+                ArchivedMetadataSince: ledger?.MetadataArchivedSince));
         }
 
         return (inputs, rows, lastCompleted);

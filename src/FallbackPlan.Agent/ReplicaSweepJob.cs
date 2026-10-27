@@ -525,8 +525,10 @@ internal static class ReplicaSweepJob
         }
 
         // What it passed over because the store holds it only in an archival
-        // tier (ADR-0104), said, and withdrawn by a circuit that met none.
+        // tier (ADR-0104), said, and withdrawn by a circuit that met none; and
+        // a metadata blob among it, which no restore can do without (ADR-0112).
         ArchivedReplicaNotice.Reflect(runtime, set, destinationName, recorded, nowMs);
+        ArchivedMetadataNotice.Met(runtime, set, destinationName, result.ArchivedKeys, nowMs);
 
         // Staging's copy proven unsound where this one is the blob: the
         // staging archive's finding, never this destination's, repaired here

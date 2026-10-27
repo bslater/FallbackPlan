@@ -866,6 +866,17 @@ function requestsLabel(d) {
   return `${esc(asked)} <span class="detail">in the last ${fmtCount(r.days)} days${esc(since)} · ${esc(fmtBytes(r.bytesSent))} sent, ${esc(fmtBytes(r.bytesReceived))} received</span>`;
 }
 
+// A store that holds an object of the replica's own only in an archival
+// tier (contract 1.70): nothing restores from there until it is rehydrated,
+// whatever the row's state says of the copy, so the card's summary carries a
+// badge and its body the object and what a lifecycle rule must leave served.
+// Nothing where none is named, or from a service older than 1.70.
+function archivedMetadataNote(d) {
+  if (d.archivedMetadata == null) return null;
+  const since = d.archivedMetadataSince == null ? "" : ` since ${rel(d.archivedMetadataSince)}`;
+  return `<b class="bad">Nothing can be restored from here.</b> The store has held ${esc(d.archivedMetadata)} only in an archival tier${esc(since)}, and every restore opens the replica through it. Rehydrate it at the store, and keep everything but blobs/data/ out of the store's lifecycle rule: only the data blobs may be held archived.`;
+}
+
 // A staging set's own staging archive, swept as a destination is (contract
 // 1.63): drawn by the same words, so it can never claim what a destination's
 // sweep would not, and not drawn at all for a set with no staging archive or
@@ -957,6 +968,7 @@ function renderSetCard(set) {
     const pr = destPriority(d.name);
     const sweep = sweepLabel(d);
     const requests = requestsLabel(d);
+    const archivedMetadata = archivedMetadataNote(d);
 
     // The card's one caption line: the circle in words, then, while
     // something is moving files here, what — never the job's own counts,
@@ -984,6 +996,7 @@ function renderSetCard(set) {
           <span class="dest-title"><b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>
             ${badge(ds, ds.label ?? d.state)}
             ${d.needsFull ? badge({ cls: "warn", icon: "◐" }, "awaiting seed") : ""}
+            ${archivedMetadata ? badge({ cls: "bad", icon: "✖" }, "restores nothing") : ""}
             ${pr != null ? `<span class="chip" title="Backups ship to destinations in priority order">priority ${pr}</span>` : ""}</span>
           <span class="detail dest-caption">${caption}</span>
         </span>
@@ -999,6 +1012,7 @@ function renderSetCard(set) {
         ${sweep ? `<div><span class="detail">Deep verify</span><span>${sweep}</span></div>` : ""}
         ${requests ? `<div><span class="detail">Requests</span><span>${requests}</span></div>` : ""}
         <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
+        ${archivedMetadata ? `<div class="dest-note">${archivedMetadata}</div>` : ""}
         ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}
         ${d.reason === "catching-up" && set.lastCompletedAt
           ? `<div class="dest-note detail">last backup finished ${esc(fmtWhen(set.lastCompletedAt))}; this destination last synced ${esc(rel(d.lastSuccessAt))} — heals on the next sync pass</div>`

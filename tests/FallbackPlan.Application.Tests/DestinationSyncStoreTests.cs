@@ -687,6 +687,56 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void Open_ASchemaTwelveLedger_Migrates_WithNoMetadataArchived()
+    {
+        // Schema 13 (ADR-0112) added the replica's object a reader found held
+        // only in an archival tier, without which nothing restores. An older
+        // row told none apart, and the next sync to look says so.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 12, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "synced_sequence": 42, "sweep_closed_archived": 2 } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-12 ledger must migrate, not quarantine");
+        Assert.AreEqual(2, record.SweepClosedArchived);
+        Assert.IsNull(record.MetadataArchivedKey);
+        Assert.IsNull(record.MetadataArchivedSince);
+    }
+
+    [TestMethod]
+    public void RecordMetadataArchived_KeepsTheFirstObjectAndWhen_UntilThatObjectIsServed()
+    {
+        // The object is what a person rehydrates, and what the next sync asks
+        // after: a second one met meanwhile does not take its place.
+        var store = DestinationSyncStore.Open(_state);
+
+        store.RecordMetadataArchived(SetId, "cloud", "repository-format", 1_000);
+        var second = store.RecordMetadataArchived(SetId, "cloud", "blobs/meta/ab/abcdef", 2_000);
+        Assert.AreEqual("repository-format", second.MetadataArchivedKey);
+        Assert.AreEqual(1_000UL, second.MetadataArchivedSince);
+
+        var other = store.RecordMetadataServed(SetId, "cloud", "blobs/meta/ab/abcdef", 3_000);
+        Assert.AreEqual("repository-format", other.MetadataArchivedKey, "another object served says nothing of this one");
+
+        var served = store.RecordMetadataServed(SetId, "cloud", "repository-format", 4_000);
+        Assert.IsNull(served.MetadataArchivedKey);
+        Assert.IsNull(served.MetadataArchivedSince);
+        Assert.IsNull(DestinationSyncStore.Open(_state).Find(SetId, "cloud")!.MetadataArchivedKey, "a restart keeps what was cleared");
+
+        var again = store.RecordMetadataArchived(SetId, "cloud", "index/delta/0000000000000000/xyz", 5_000);
+        Assert.AreEqual("index/delta/0000000000000000/xyz", again.MetadataArchivedKey);
+        Assert.AreEqual(5_000UL, again.MetadataArchivedSince, "a meeting after one ended is news again");
+        Assert.AreEqual(
+            "index/delta/0000000000000000/xyz",
+            DestinationSyncStore.Open(_state).Find(SetId, "cloud")!.MetadataArchivedKey,
+            "a restart must not forget it");
+    }
+
+    [TestMethod]
     public void RecordSweep_ACircuitThatClosesPastArchivedBlobs_KeepsHowMany_UntilTheNextCloses()
     {
         var store = DestinationSyncStore.Open(_state);
@@ -760,7 +810,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 13, "destinations": [
+            { "schema_version": 14, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -813,7 +863,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 12", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 13", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

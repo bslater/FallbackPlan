@@ -1151,6 +1151,19 @@ public sealed record DrillResult(IReadOnlyList<string> Lines, int Failed, int No
 /// a local path, a peer — and from services before 1.69. Null is not zero: a
 /// client draws nothing for it, never a store asked nothing.
 /// </param>
+/// <param name="ArchivedMetadata">
+/// An object of the replica's own, not a data blob, that the destination's
+/// store holds only in an archival tier, keyed under the replica's root —
+/// <c>repository-format</c>, an index object, a metadata blob (contract 1.70,
+/// ADR-0112). Every opening of the replica reads such objects, so nothing
+/// restores from there until it is rehydrated, whatever the row's state
+/// says of the copy. Null where none was found, and from services before
+/// 1.70.
+/// </param>
+/// <param name="ArchivedMetadataSince">
+/// When <paramref name="ArchivedMetadata"/> was first found so, Unix
+/// milliseconds; null with it.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -1178,7 +1191,9 @@ public sealed record DestinationStatusDescriptor(
     bool HoldsNewest = false,
     bool InRun = false,
     bool Syncing = false,
-    StoreRequestsDescriptor? Requests = null);
+    StoreRequestsDescriptor? Requests = null,
+    string? ArchivedMetadata = null,
+    ulong? ArchivedMetadataSince = null);
 
 /// <summary>
 /// What a cloud destination's store was asked, as its status row reports it
