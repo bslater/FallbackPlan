@@ -2790,6 +2790,55 @@ public static class CliApplication
         }
 
         {
+            var receiptsStateOption = new Option<string>("--state")
+            {
+                Description = "The state directory whose kept restore receipts to read: the service's, or one direct mode used.",
+                Required = true,
+            };
+            var receiptsRunOption = new Option<string?>("--run")
+            {
+                Description = "Print one run's receipt whole, as it was kept, by the run's sixteen hex digits.",
+            };
+            var receiptsLimitOption = new Option<int?>("--limit")
+            {
+                Description = "At most this many of the newest.",
+            };
+            var command = new Command(
+                "restore-receipts",
+                "Read back the restore receipts kept under a state directory, by the service or in direct mode "
+                + "(ADR-0124): each run, newest first, with when it ended, what became of its files and where it "
+                + "wrote them, or one run's receipt whole.");
+            command.Options.Add(receiptsStateOption);
+            command.Options.Add(receiptsRunOption);
+            command.Options.Add(receiptsLimitOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, _) => GuardAsync(() =>
+            {
+                var state = parse.GetValue(receiptsStateOption)!;
+                if (!Directory.Exists(state))
+                {
+                    throw new CliFailureException(Strings.FormatCliApplication_NoStateDirectoryKeepsReceipts(state));
+                }
+
+                if (parse.GetValue(receiptsRunOption) is { } run)
+                {
+                    RestoreReceiptReport.WriteRun(output, state, run);
+                    return Task.FromResult(0);
+                }
+
+                var limit = parse.GetValue(receiptsLimitOption);
+                if (limit is <= 0)
+                {
+                    throw new CliFailureException(Strings.CliApplication_LimitTakesAtLeastOne);
+                }
+
+                RestoreReceiptReport.WriteKept(output, state, limit);
+                return Task.FromResult(0);
+            }));
+        }
+
+        {
             var destinationOption = new Option<string>("--destination")
             {
                 Description = "The declared destination to look in, by name.",

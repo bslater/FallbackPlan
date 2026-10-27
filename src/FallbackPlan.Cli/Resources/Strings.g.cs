@@ -482,4 +482,36 @@ internal static class Strings
     /// --target original lands each file where it was captured, so it takes no --output: use one or the other.
     /// </summary>
     internal static string CliApplication_OriginalTakesNoOutput => Get(nameof(CliApplication_OriginalTakesNoOutput));
+
+    /// <summary>
+    /// --run takes a run's name: the sixteen lowercase hex digits its receipt is kept under. restore-receipts with no run lists those kept.
+    /// </summary>
+    internal static string RestoreReceiptReport_NotARunsName => Get(nameof(RestoreReceiptReport_NotARunsName));
+
+    /// <summary>
+    /// Run {0} has no receipt kept under '{1}'. restore-receipts with no run lists those kept.
+    /// </summary>
+    private static string RestoreReceiptReport_NoReceiptKept => Get(nameof(RestoreReceiptReport_NoReceiptKept));
+
+    /// <summary>
+    /// Run {0} has no receipt kept under '{1}'. restore-receipts with no run lists those kept.
+    /// </summary>
+    internal static string FormatRestoreReceiptReport_NoReceiptKept(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, RestoreReceiptReport_NoReceiptKept, arg0, arg1);
+
+    /// <summary>
+    /// no state directory at '{0}' — nothing has been kept there.
+    /// </summary>
+    private static string CliApplication_NoStateDirectoryKeepsReceipts => Get(nameof(CliApplication_NoStateDirectoryKeepsReceipts));
+
+    /// <summary>
+    /// no state directory at '{0}' — nothing has been kept there.
+    /// </summary>
+    internal static string FormatCliApplication_NoStateDirectoryKeepsReceipts(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, CliApplication_NoStateDirectoryKeepsReceipts, arg0);
+
+    /// <summary>
+    /// --limit takes at least 1.
+    /// </summary>
+    internal static string CliApplication_LimitTakesAtLeastOne => Get(nameof(CliApplication_LimitTakesAtLeastOne));
 }
