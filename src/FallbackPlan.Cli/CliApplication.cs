@@ -1495,23 +1495,33 @@ public static class CliApplication
                 Description = "Restore even when the destination looks too small. Without it, a restore that will not fit "
                     + "is refused before anything is written; a volume that compresses what it stores can hold more than the estimate.",
             };
+            var planOption = new Option<bool>("--plan")
+            {
+                Description = "Say what the restore would do and restore nothing: what it writes and reads, whether it fits, "
+                    + "and what it could not bring back. Exits non-zero unless the restore would bring back every file and fit.",
+            };
             var command = WithRemoteCapableSession(new Command(
                 "restore", "Restore a snapshot (or a path within it), each file verified per segment and by whole-file hash."));
             command.Arguments.Add(snapshotArgument);
             command.Arguments.Add(pathArgument);
             command.Options.Add(outputOption);
             command.Options.Add(ignoreFreeSpaceOption);
+            command.Options.Add(planOption);
             command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
                 parse,
-                (gateway, token) => gateway.RestoreAsync(
-                    new RestoreRequest(
+                (gateway, token) =>
+                {
+                    var request = new RestoreRequest(
                         parse.GetValue(snapshotArgument)!,
                         parse.GetValue(pathArgument),
                         parse.GetValue(outputOption)!,
-                        parse.GetValue(ignoreFreeSpaceOption)),
-                    token),
+                        parse.GetValue(ignoreFreeSpaceOption));
+                    return parse.GetValue(planOption)
+                        ? gateway.PlanRestoreAsync(request, token)
+                        : gateway.RestoreAsync(request, token);
+                },
                 cancellationToken)));
         }
 

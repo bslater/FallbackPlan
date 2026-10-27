@@ -97,6 +97,15 @@ public interface IOperationGateway : IAsyncDisposable
     ValueTask<OperationReport> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Plans the restore <see cref="RestoreAsync"/> would run, and restores
+    /// nothing (FR-RST-003, ADR-0107).
+    /// </summary>
+    /// <param name="request">What the run would restore and where.</param>
+    /// <param name="cancellationToken">Cancels the plan.</param>
+    /// <returns>The plan, a success only where the run would restore every file and fit.</returns>
+    ValueTask<OperationReport> PlanRestoreAsync(RestoreRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Converges destinations now, outside the schedule (FR-DEST-002). Only a
     /// service can serve this — the fan-out needs its scheduler, ledger and
     /// per-set archives — so direct mode refuses with directions.
@@ -583,6 +592,32 @@ internal sealed class ServiceGateway(
             lines.AddRange(result.NotApplied ?? []);
 
             return new OperationReport(result.Failed == 0, lines);
+        }
+        finally
+        {
+            await GrantedSources.CloseAsync(client, source).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> PlanRestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(request);
+
+        // The plan names the backup's files as the restore would, so it reads
+        // through a source the passphrase unlocked (FR-WOR-007), and asks for
+        // the shape the restore above runs: where it writes, under quarantine.
+        var source = (await GrantedSources.OpenHoldingAsync(
+            client, passphraseEnvironmentVariable, "A restore's plan", request.SnapshotId, cancellationToken)
+            .ConfigureAwait(false)).SourceId;
+        try
+        {
+            var plan = await SendAsync<RestorePlanResult>(
+                new PlanRestoreCommand(
+                    request.SnapshotId, request.Path, Source: source, OutputDirectory: request.OutputDirectory),
+                "a restore's plan",
+                cancellationToken).ConfigureAwait(false);
+            return RestorePlanReport.Describe(plan, request.OutputDirectory);
         }
         finally
         {
@@ -1257,13 +1292,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             [new RestoreSlice(plan, request.OutputDirectory)],
             RestoreDestinationMode.InPlace,
             ExistingDestinationPolicy.Preserve,
-            new RestoreSpaceProbe
-            {
-                AvailableBytes = AvailableBytesInFlow ?? RestoreSpaceProbe.PlatformAvailableBytes,
-                VolumeOf = path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
-                    ? stat.Device
-                    : null,
-            },
+            SpaceProbe(),
             reader,
             cancellationToken).ConfigureAwait(false);
         if (space.IsShort && !request.IgnoreFreeSpace)
@@ -1318,6 +1347,63 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         return new OperationReport(receipt.Outcome is RestoreOutcome.Complete, lines);
     }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> PlanRestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(request);
+
+        // The plan the service makes, made here for the run above: its
+        // manifests read and every blob it names asked for, measured where
+        // that run writes, in place and preserving what it finds.
+        var snapshotId = Convert.FromHexString(request.SnapshotId);
+        using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
+        var target = RestoreTargetProfile.ForLocalPlatform(catalogue, snapshotId, session.DeviceId);
+        var plan = RestorePlanner.Plan(catalogue, snapshotId, request.Path ?? string.Empty, target);
+        if (plan.Items.Count == 0)
+        {
+            throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
+        }
+
+        var probed = await RestoreBlobSet.ResolveAsync(
+            catalogue, plan, session.Store, session.Repository.RepositoryId, session.Repository.Keys, cancellationToken)
+            .ConfigureAwait(false);
+        var space = await RestoreSpace.MeasureAsync(
+            [new RestoreSlice(plan, request.OutputDirectory)],
+            RestoreDestinationMode.InPlace,
+            ExistingDestinationPolicy.Preserve,
+            SpaceProbe(),
+            RestoreSpace.WrittenBytesFrom(probed.Facts),
+            cancellationToken).ConfigureAwait(false);
+
+        var conflicts = RestorePlanFigures.Conflicts(plan);
+        var degradations = RestorePlanFigures.Degradations(plan, probed, target);
+        return RestorePlanReport.Describe(
+            new RestorePlanResult(
+                plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
+                (long)plan.SpaceEstimateBytes,
+                probed.Missing,
+                conflicts.Count,
+                conflicts.Count == 0 ? null : [.. conflicts.Take(20)],
+                degradations.Count == 0 ? null : degradations,
+                (long)RestorePlanFigures.WriteBytes(plan, probed),
+                [
+                    .. space.Needs.Select(need => new RestoreSpaceDescriptor(
+                        need.Directory, (long)need.NeededBytes, need.AvailableBytes, need.Working)),
+                ],
+                (long)probed.ReadBytes,
+                probed.Archived.Count == 0 ? null : probed.Archived),
+            request.OutputDirectory);
+    }
+
+    /// <summary>How this machine says how much room a directory's volume has.</summary>
+    private static RestoreSpaceProbe SpaceProbe() => new()
+    {
+        AvailableBytes = AvailableBytesInFlow ?? RestoreSpaceProbe.PlatformAvailableBytes,
+        VolumeOf = path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
+            ? stat.Device
+            : null,
+    };
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> SyncAsync(

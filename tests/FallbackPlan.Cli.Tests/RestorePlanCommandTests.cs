@@ -1,0 +1,87 @@
+using FallbackPlan.Cli;
+
+namespace FallbackPlan.Cli.Tests;
+
+/// <summary>
+/// A restore is planned from the command line on its own (FR-RST-003,
+/// ADR-0107): what the run would write and read, whether it fits, and what it
+/// could not bring back, with nothing written. The exit code says whether the
+/// run would restore every file, so a script can plan before it restores.
+/// </summary>
+/// <remarks>
+/// In direct mode the CLI makes the plan itself, as it runs the restore
+/// itself. The disk is the flow's own: <c>DirectGateway.AvailableBytesInFlow</c>
+/// answers for every directory this test's plan asks about, and no other
+/// test's.
+/// </remarks>
+[TestClass]
+public sealed class RestorePlanCommandTests : IDisposable
+{
+    private readonly CliHarness _cli = new();
+
+    [TestMethod]
+    public async Task Plan_SaysWhatTheRunWouldDo_AndWritesNothing()
+    {
+        var snapshot = await BackUpAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+
+        Assert.AreEqual(0, plan.ExitCode, plan.All);
+        Assert.Contains("2 file(s)", plan.All, StringComparison.Ordinal);
+        Assert.Contains(destination, plan.All, StringComparison.Ordinal);
+        Assert.Contains("nothing was restored", plan.All, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(destination), "a plan writes nothing, not even the folder");
+    }
+
+    [TestMethod]
+    public async Task Plan_ThatWillNotFit_SaysSo_AndExitsNonZero()
+    {
+        var snapshot = await BackUpAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        DirectGateway.AvailableBytesInFlow = _ => 1_000;
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+
+        Assert.AreNotEqual(0, plan.ExitCode, plan.All);
+        Assert.Contains("would not fit", plan.All, StringComparison.Ordinal);
+        Assert.Contains("1000", plan.All, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(destination));
+    }
+
+    [TestMethod]
+    public async Task Plan_OfFilesWhoseContentIsGone_NamesThem_AndExitsNonZero()
+    {
+        var snapshot = await BackUpAsync();
+        Directory.Delete(Path.Combine(_cli.RepositoryPath, "blobs", "data"), recursive: true);
+
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"), "--plan");
+
+        Assert.AreNotEqual(0, plan.ExitCode, plan.All);
+        Assert.Contains("missing", plan.All, StringComparison.Ordinal);
+        Assert.Contains("one.txt", plan.All, StringComparison.Ordinal);
+        Assert.Contains("two.txt", plan.All, StringComparison.Ordinal);
+    }
+
+    public void Dispose() => _cli.Dispose();
+
+    private async Task<string> BackUpAsync()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/one.txt", "first");
+        _cli.WriteFile("tree/nested/two.txt", "second");
+
+        var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+        Assert.IsTrue(backup.ExitCode == 0, backup.All);
+
+        var snapshots = await _cli.RunAsync("snapshots");
+        Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
+
+        // The identifier is the leading hex token of the listing line.
+        var first = snapshots.Output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+        Assert.IsNotNull(first);
+        return first.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+    }
+}

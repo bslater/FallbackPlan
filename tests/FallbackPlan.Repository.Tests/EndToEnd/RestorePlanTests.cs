@@ -105,6 +105,13 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         });
 
         Assert.AreEqual(2, plan.Conflicts.Count(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal)));
+
+        // What a plan reports, whichever of the service and the command line
+        // made it (ADR-0107): each conflict by its path and why.
+        var reported = RestorePlanFigures.Conflicts(plan);
+        Assert.HasCount(plan.Conflicts.Count, reported);
+        Assert.AreEqual(2, reported.Count(line => line.Contains("Collides", StringComparison.Ordinal)));
+        Assert.IsTrue(plan.Conflicts.All(conflict => reported.Any(line => line.StartsWith(conflict.Path, StringComparison.Ordinal))));
         Assert.Contains(degradation => degradation.Capability == "posix-metadata", plan.Degradations);
         Assert.Contains(degradation => degradation.Capability == "symlinks", plan.Degradations);
         Assert.AreEqual(200ul, plan.SpaceEstimateBytes);

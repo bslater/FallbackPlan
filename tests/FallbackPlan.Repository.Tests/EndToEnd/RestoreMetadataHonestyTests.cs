@@ -578,6 +578,25 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Plan_AFileWithHoles_WritesWhatItsManifestSays_NotItsLength()
+    {
+        // What a plan says its files write is what lands, a hole skipped
+        // (ADR-0083), whichever of the service and the command line made it
+        // (ADR-0107).
+        const int MiB = 1024 * 1024;
+        var content = new byte[4 * MiB];
+        new Random(9).NextBytes(content.AsSpan(MiB, MiB));
+        var source = new FakeFileSystemSource();
+        var disk = source.AddFile("disk.img", content);
+        source.AddNode(disk with { SparseExtents = [new SparseExtent(0, MiB), new SparseExtent(2 * MiB, 2 * MiB)] });
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xC8);
+
+        Assert.AreEqual((ulong)(4 * MiB), plan.SpaceEstimateBytes, "the premise: the file is 4 MiB long");
+        Assert.AreEqual((ulong)MiB, RestorePlanFigures.WriteBytes(plan, new RestoreBlobSetResult([], []) { Facts = facts }));
+    }
+
+    [TestMethod]
     public async Task Probe_EachFile_CarriesTheNamesItsOwnershipWasCapturedUnder()
     {
         // The plan predicts ownership per file, by the names, so the probe
