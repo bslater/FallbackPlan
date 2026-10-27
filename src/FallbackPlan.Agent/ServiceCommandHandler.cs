@@ -2159,6 +2159,10 @@ public sealed partial class ServiceCommandHandler(
                             + (swept
                                 ? "; the sweep tries it again after a pause"
                                 : "; nothing sweeps this destination on a schedule, so the next verify-destination tries it again")
+                    : outcome.Archived > 0 && outcome.CompletedCircuit
+                        ? $"{set.Name} -> {reference.Ref}: {examined} object(s) confirmed, and {outcome.Archived} held "
+                            + "only in an archival tier were not read: the store serves nothing of them until they are "
+                            + "rehydrated there"
                     : $"{set.Name} -> {reference.Ref}: {examined} object(s) confirmed"
                         + (record?.SweepCompletedAt is not null && record.SweepCursor is null
                             ? " — every stored object has now been checked"

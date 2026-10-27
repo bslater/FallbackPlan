@@ -41,7 +41,13 @@ public sealed record RestoreResult
 /// One blob the load could not open, and why — reported, never silent
 /// (specification 00 §3's posture applied per blob rather than per load).
 /// </summary>
-public sealed record SkippedBlob(ObjectKey Key, string Reason);
+/// <param name="Key">The blob's store key.</param>
+/// <param name="Reason">Why it was not opened.</param>
+/// <param name="Archived">
+/// Whether its store holds it only in an archival tier, which serves nothing
+/// until it is rehydrated (ADR-0104): not damage, and not a passing fault.
+/// </param>
+public sealed record SkippedBlob(ObjectKey Key, string Reason, bool Archived = false);
 
 /// <summary>
 /// The read side of the slice, built on footers alone (specification 05 §4,
@@ -195,6 +201,14 @@ public sealed class RepositoryReader : IDisposable
                 _skipped.Add(new SkippedBlob(entry.Key, exception.Message));
                 continue;
             }
+            catch (StoreObjectArchivedException exception)
+            {
+                // Neither damage nor a passing fault: the store serves
+                // nothing of it until a person rehydrates it, so it is
+                // skipped as what it is, and the rest is loaded.
+                _skipped.Add(new SkippedBlob(entry.Key, exception.Message, Archived: true));
+                continue;
+            }
 
             _blobReaders.Add(reader);
 
@@ -237,6 +251,12 @@ public sealed class RepositoryReader : IDisposable
                 continue;
             }
 
+            if (found.Archived)
+            {
+                _skipped.Add(new SkippedBlob(key, "the store holds this blob only in an archival tier", Archived: true));
+                continue;
+            }
+
             BlobReader reader;
             try
             {
@@ -254,6 +274,11 @@ public sealed class RepositoryReader : IDisposable
             catch (BlobFormatException exception)
             {
                 _skipped.Add(new SkippedBlob(key, exception.Message));
+                continue;
+            }
+            catch (StoreObjectArchivedException exception)
+            {
+                _skipped.Add(new SkippedBlob(key, exception.Message, Archived: true));
                 continue;
             }
 

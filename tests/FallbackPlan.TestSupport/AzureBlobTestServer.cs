@@ -159,7 +159,7 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
             && query.GetValueOrDefault("comp") == "list";
     }
 
-    private static Response Put(Request request, SortedDictionary<string, StoredObject> objects, string blob)
+    private Response Put(Request request, SortedDictionary<string, StoredObject> objects, string blob)
     {
         if (request.Header("x-ms-blob-type") is not "BlockBlob")
         {
@@ -177,7 +177,10 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
             return Error(409, "BlobAlreadyExists", "The specified blob already exists.");
         }
 
-        var stored = new StoredObject(request.Body, DateTimeOffset.UtcNow);
+        var stored = new StoredObject(request.Body, DateTimeOffset.UtcNow)
+        {
+            Archive = ArchiveOnArrival?.Invoke(blob) == true ? ArchiveState.Archived : null,
+        };
         objects[blob] = stored;
         return new Response(201)
         {

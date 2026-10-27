@@ -30,7 +30,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// names: a link cut partway, a credential refused partway, and listings that
 /// lag the store's writes. A restore's plan from the store names what it
 /// holds only in an archival tier, and the run says why those files fail
-/// (FR-RST-003, ADR-0103).
+/// (FR-RST-003, ADR-0103); the sweep passes over such a blob rather than
+/// stopping at it, a sync's read-back counts it neither way, and either says
+/// so in a notice that a circuit meeting none resolves (FR-VER-002,
+/// FR-VER-001, ADR-0104).
 /// </summary>
 /// <remarks>
 /// The credential reaches the service only as an envelope sealed to its
@@ -635,6 +638,128 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task Sweep_PassesOverWhatTheStoreHoldsOnlyInAnArchivalTier_SaysSo_UntilACircuitMeetsNone()
+    {
+        // A lifecycle rule moved the replica's data blobs to an archival tier
+        // (ADR-0104). The sweep would stop at the first of them for good, and
+        // the sync's read-back would fail every sample it drew from them.
+        WriteConfiguration(directShip: false, deepVerifyIntervalDays: 30);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        var first = Pair(runtime, "cloud");
+        Assert.IsNotNull(first.SweepCompletedAt, $"the premise: a first circuit closed: {first.LastError}");
+        var data = Store.KeysIn(Namespace).Where(key => key.Contains("/blobs/data/", StringComparison.Ordinal)).ToList();
+        foreach (var key in data)
+        {
+            Store.Archive(Namespace, key);
+        }
+
+        var asked = Store.Requests.Count;
+        var due = DateTimeOffset.Now.AddDays(31);
+        var pass = await Scheduler.RunPassAsync(runtime, due, Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+
+        var swept = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, swept.State, swept.LastError);
+        Assert.AreEqual(0, swept.SweepStalls, "an archived blob is no stall");
+        Assert.IsGreaterThan(first.SweepCompletedAt!.Value, swept.SweepCompletedAt!.Value, "the circuit closed past them");
+        var notice = ArchivedNotice(runtime);
+        Assert.IsNotNull(notice, "a person learns the store holds some of the set only archived");
+        Assert.Contains("archival tier", notice.Message, StringComparison.Ordinal);
+        Assert.IsFalse(
+            Store.Requests.Skip(asked).Any(request => request.Method is "PUT" or "DELETE" && data.Any(key => request.Target.Contains(key, StringComparison.Ordinal))),
+            "nothing archived is repaired: a re-put would bring it back out of the tier at the owner's cost");
+
+        foreach (var key in data)
+        {
+            Store.Archive(Namespace, key, ArchiveState.Rehydrated);
+        }
+
+        var later = await Scheduler.RunPassAsync(runtime, due.AddDays(31), Timeout);
+        await later.Transfers.WaitAsync(Timeout);
+
+        Assert.IsNull(ArchivedNotice(runtime), "a circuit that met nothing archived resolves it");
+
+        foreach (var key in data)
+        {
+            Store.Archive(Namespace, key);
+        }
+
+        var again = await Scheduler.RunPassAsync(runtime, due.AddDays(62), Timeout);
+        await again.Transfers.WaitAsync(Timeout);
+
+        Assert.IsNotNull(ArchivedNotice(runtime), "a run that begins after an earlier one ended is news again");
+    }
+
+    [TestMethod]
+    public async Task Sweep_ThatPassesOverWhatIsArchived_AndThenStopsAtABlobThatWillNotRead_SaysWhatItPassedOver()
+    {
+        WriteConfiguration(directShip: false, deepVerifyIntervalDays: 30);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        foreach (var key in Store.KeysIn(Namespace).Where(key => key.Contains("/blobs/data/", StringComparison.Ordinal)))
+        {
+            Store.Archive(Namespace, key);
+        }
+
+        // Every metadata blob's key sorts after every data blob's, so the
+        // segment passes over the archived ones before it reaches one the
+        // store will not serve.
+        Store.FailFrom(servedFirst: 0, 403, RefusalCode, method: "GET", targetContains: "/blobs/meta/");
+        var set = Assert.ContainsSingle(runtime.Configuration.BackupSets);
+        await ReplicaSweepJob.SweepAsync(
+            runtime, set, "cloud", (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), userInitiated: false, Timeout);
+        Store.Recover();
+
+        var record = Pair(runtime, "cloud");
+        Assert.IsNotNull(record.SweepStalledOn, $"the premise: the segment stopped at a blob: {record.LastError}");
+        Assert.IsGreaterThan(0, record.SweepArchived);
+        Assert.IsNotNull(ArchivedNotice(runtime), "what it passed over before it stopped is said");
+    }
+
+    [TestMethod]
+    public async Task Sync_WhoseReadBackMeetsWhatTheStoreArchivedOnArrival_StaysInSync_AndSaysSo()
+    {
+        // A store whose data objects land archived: the newest snapshot, which
+        // every read-back covers, is in an archival tier from the start.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        Store.ArchiveOnArrival = key => key.Contains("/blobs/data/", StringComparison.Ordinal);
+
+        await BackUpAsync(runtime);
+
+        var record = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, record.State, record.LastError);
+        Assert.IsNotNull(ArchivedNotice(runtime));
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_OnAStoreHoldingSomeOfItsBlobsArchived_SaysHowManyItCouldNotRead()
+    {
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        var data = Store.KeysIn(Namespace).Where(key => key.Contains("/blobs/data/", StringComparison.Ordinal)).ToList();
+        foreach (var key in data)
+        {
+            Store.Archive(Namespace, key);
+        }
+
+        var line = await VerifyAsync(runtime);
+
+        Assert.Contains($"{data.Count} held only in an archival tier", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("every stored object has now been checked", line, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task VerifyDestination_OnTheStore_ReadsEveryObjectWhenAPersonAsks()
     {
         // No cadence is stated: a person asking is consent for the reads, as
@@ -1123,6 +1248,11 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="request">The request as the store answered it.</param>
     private static bool Landed(ObjectStoreTestServer.RecordedRequest request) =>
         request.Method == "PUT" && request.Status is >= 200 and < 300;
+
+    /// <summary>The notice that the store holds some of the set's objects only in an archival tier, or null.</summary>
+    /// <param name="runtime">The service.</param>
+    private Notice? ArchivedNotice(ServiceRuntime runtime) =>
+        runtime.Notices.Unacknowledged.SingleOrDefault(notice => notice.Key == $"replica-archived:{Harness.DocsSetId}:cloud");
 
     /// <summary>The ledger's row for the set and the named destination.</summary>
     /// <param name="runtime">The service.</param>

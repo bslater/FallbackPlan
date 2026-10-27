@@ -113,7 +113,7 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
         }
     }
 
-    private static Response Put(Request request, SortedDictionary<string, StoredObject> objects, string key)
+    private Response Put(Request request, SortedDictionary<string, StoredObject> objects, string key)
     {
         var declared = request.Header("x-amz-content-sha256");
         if (declared is not "UNSIGNED-PAYLOAD" && !string.Equals(
@@ -127,7 +127,10 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
             return Error(412, "PreconditionFailed", "At least one of the preconditions you specified did not hold.");
         }
 
-        objects[key] = new StoredObject(request.Body, DateTimeOffset.UtcNow);
+        objects[key] = new StoredObject(request.Body, DateTimeOffset.UtcNow)
+        {
+            Archive = ArchiveOnArrival?.Invoke(key) == true ? ArchiveState.Archived : null,
+        };
         return new Response(200) { ETag = ETagOf(request.Body) };
     }
 

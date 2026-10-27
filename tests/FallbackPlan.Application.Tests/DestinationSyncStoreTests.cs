@@ -647,13 +647,73 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void Open_ASchemaTenLedger_Migrates_WithNothingArchivedStanding()
+    {
+        // Schema 11 (ADR-0104) added what the readers met held only in an
+        // archival tier. An older row told nothing apart, so it holds none,
+        // and the next reader to meet one says so.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 10, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "synced_sequence": 42 } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-10 ledger must migrate, not quarantine");
+        Assert.AreEqual(0, record.SweepArchived);
+        Assert.IsNull(record.ArchivedSince);
+    }
+
+    [TestMethod]
+    public void RecordSweep_ACircuitThatMetSomethingArchived_KeepsItStanding_AndTheNextThatMeetsNoneEndsIt()
+    {
+        var store = DestinationSyncStore.Open(_state);
+
+        store.RecordSweep(SetId, "vault", cursor: "blobs/b", examined: 3, completedCircuit: false, nowUnixMilliseconds: 1_000, archived: 2);
+        var further = store.RecordSweep(SetId, "vault", cursor: "blobs/d", examined: 3, completedCircuit: false, nowUnixMilliseconds: 1_500, archived: 1);
+
+        Assert.AreEqual(1_000UL, further.ArchivedSince, "a run that stands keeps its start");
+        Assert.AreEqual(3, further.SweepArchived);
+
+        var closed = store.RecordSweep(SetId, "vault", cursor: null, examined: 3, completedCircuit: true, nowUnixMilliseconds: 2_000);
+
+        Assert.AreEqual(1_000UL, closed.ArchivedSince, "the circuit met some, so the run stands from when it began");
+        Assert.AreEqual(0, closed.SweepArchived, "the count is the circuit's, and a new one starts at none");
+
+        var clean = store.RecordSweep(SetId, "vault", cursor: null, examined: 6, completedCircuit: true, nowUnixMilliseconds: 3_000);
+
+        Assert.IsNull(clean.ArchivedSince, "a whole circuit that met none ends the run");
+    }
+
+    [TestMethod]
+    public void RecordArchived_StartsARunOnce_AndAStallCountsWhatItPassedOver()
+    {
+        var store = DestinationSyncStore.Open(_state);
+
+        Assert.AreEqual(1_000UL, store.RecordArchived(SetId, "vault", 1_000).ArchivedSince);
+        Assert.AreEqual(1_000UL, store.RecordArchived(SetId, "vault", 2_000).ArchivedSince, "a run that stands keeps its start");
+
+        var stalled = store.RecordSweepStall(SetId, "vault", "blobs/a", examined: 1, stalledOn: "blobs/b", nowUnixMilliseconds: 3_000, archived: 1);
+
+        Assert.AreEqual(1, stalled.SweepArchived);
+        Assert.AreEqual(1_000UL, stalled.ArchivedSince);
+
+        var elsewhere = store.RecordSweepStall(SetId, "cellar", "blobs/a", examined: 1, stalledOn: "blobs/b", nowUnixMilliseconds: 4_000, archived: 1);
+
+        Assert.AreEqual(4_000UL, elsewhere.ArchivedSince, "where none stands, what a stall passed over starts one");
+        Assert.Contains("\"archived_since\": 1000", File.ReadAllText(Path.Combine(_state, "destinations.json")), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void Open_AFileOneSchemaAhead_IsSetAside()
     {
         // The downgrade rule, pinned at the edge rather than at 99: the very
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 11, "destinations": [
+            { "schema_version": 12, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -706,7 +766,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 10", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 11", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

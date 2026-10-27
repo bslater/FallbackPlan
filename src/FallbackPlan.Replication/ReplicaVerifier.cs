@@ -47,6 +47,13 @@ public sealed record VerificationOutcome(
 {
     /// <summary>Whether this run established anything at all.</summary>
     public bool ProvedSomething => Passed > 0;
+
+    /// <summary>
+    /// The keys the replica holds only in an archival tier, which serves
+    /// nothing until they are rehydrated (ADR-0104): counted neither way,
+    /// because nothing here was read and nothing says their bytes changed.
+    /// </summary>
+    public IReadOnlyList<string> Archived { get; init; } = [];
 }
 
 /// <summary>
@@ -80,6 +87,17 @@ public static class RangeReader
             return null;
         }
 
+        return (await ReadOrArchivedAsync(store, parsed, offset, length, cancellationToken).ConfigureAwait(false)).Bytes;
+    }
+
+    /// <summary>
+    /// Reads exactly the range as <see cref="ReadAsync(IObjectStore, string, ulong, uint, CancellationToken)"/>
+    /// does, and says apart a store that holds the object only in an archival
+    /// tier (ADR-0104), which is not a fault of the replica's.
+    /// </summary>
+    internal static async Task<(byte[]? Bytes, bool Archived)> ReadOrArchivedAsync(
+        IObjectStore store, ObjectKey parsed, ulong offset, uint length, CancellationToken cancellationToken)
+    {
         try
         {
             using var read = await store.OpenReadAsync(
@@ -87,7 +105,7 @@ public static class RangeReader
                 .ConfigureAwait(false);
             if (read.Outcome != OpenReadOutcome.Found)
             {
-                return null;
+                return (null, false);
             }
 
             var bytes = new byte[length];
@@ -102,12 +120,16 @@ public static class RangeReader
 
             // A short copy cannot prove the range — which is exactly what the
             // challenge exists to catch.
-            return filled == bytes.Length ? bytes : null;
+            return (filled == bytes.Length ? bytes : null, false);
+        }
+        catch (StoreObjectArchivedException)
+        {
+            return (null, true);
         }
         catch (Exception exception)
             when (exception is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            return null;
+            return (null, false);
         }
     }
 
@@ -212,6 +234,7 @@ public static class ReplicaVerifier
 
         var passed = 0;
         var failed = new List<string>();
+        var archived = new List<string>();
 
         // The blob half, proved at the replica and against nothing else.
         // Comparison needs an independent copy, and a direct-ship set does not
@@ -222,14 +245,14 @@ public static class ReplicaVerifier
         var sealedProof = repository is null
             ? new SealedProof([], 0, 0, 0)
             : await SealedProofAsync(
-                replica, samples, repository, failed, signedDigestOf, digestByteBudget, cancellationToken)
+                replica, samples, repository, failed, archived, signedDigestOf, digestByteBudget, cancellationToken)
                 .ConfigureAwait(false);
         var sealedKeys = sealedProof.Proved;
         passed += sealedKeys.Count;
 
         foreach (var sample in samples)
         {
-            if (sealedKeys.Contains(sample.Key) || failed.Contains(sample.Key))
+            if (sealedKeys.Contains(sample.Key) || failed.Contains(sample.Key) || archived.Contains(sample.Key))
             {
                 continue;
             }
@@ -240,7 +263,16 @@ public static class ReplicaVerifier
                 continue;
             }
 
-            var actual = await RangeReader.ReadAsync(replica, sample, cancellationToken).ConfigureAwait(false);
+            var (actual, archivedThere) = ObjectKey.TryParse(sample.Key, out var key)
+                ? await RangeReader.ReadOrArchivedAsync(replica, key, sample.Offset, sample.Length, cancellationToken)
+                    .ConfigureAwait(false)
+                : (null, false);
+            if (archivedThere)
+            {
+                archived.Add(sample.Key);
+                continue;
+            }
+
             if (actual is not null && expected.AsSpan().SequenceEqual(actual))
             {
                 passed++;
@@ -252,7 +284,10 @@ public static class ReplicaVerifier
         }
 
         return new VerificationOutcome(
-            passed, failed, sealedProof.ByTag, sealedProof.ByDigest, sealedProof.ByChunk);
+            passed, failed, sealedProof.ByTag, sealedProof.ByDigest, sealedProof.ByChunk)
+        {
+            Archived = archived,
+        };
     }
 
     /// <summary>
@@ -309,13 +344,17 @@ public static class ReplicaVerifier
         ThrowHelper.ThrowIfNull(repository);
 
         var failed = new List<string>();
+        var archived = new List<string>();
         var samples = blobKeys.Select(key => new VerificationSample(key, 0, 0)).ToList();
         var proof = await SealedProofAsync(
-            replica, samples, repository, failed, signedDigestOf, digestByteBudget, cancellationToken,
+            replica, samples, repository, failed, archived, signedDigestOf, digestByteBudget, cancellationToken,
             signedMerkleRootOf, chunkProver)
             .ConfigureAwait(false);
 
-        return new VerificationOutcome(proof.Proved.Count, failed, proof.ByTag, proof.ByDigest, proof.ByChunk);
+        return new VerificationOutcome(proof.Proved.Count, failed, proof.ByTag, proof.ByDigest, proof.ByChunk)
+        {
+            Archived = archived,
+        };
     }
 
     /// <summary>What the sealed half proved, and by which tier.</summary>
@@ -353,6 +392,7 @@ public static class ReplicaVerifier
         IReadOnlyList<VerificationSample> samples,
         Repository.OpenedRepository repository,
         List<string> failed,
+        List<string> archived,
         Func<BlobId, ReadOnlyMemory<byte>?>? signedDigestOf,
         long digestByteBudget,
         CancellationToken cancellationToken,
@@ -379,9 +419,10 @@ public static class ReplicaVerifier
             repository.RepositoryId, repository.Keys, replica);
         await reader.LoadBlobsAsync(blobKeys, cancellationToken).ConfigureAwait(false);
 
+        // An archived blob was not read, so it is neither proved nor failed.
         foreach (var skipped in reader.SkippedBlobs)
         {
-            failed.Add(skipped.Key.Value);
+            (skipped.Archived ? archived : failed).Add(skipped.Key.Value);
         }
 
         var budget = digestByteBudget;

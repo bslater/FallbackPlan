@@ -75,6 +75,8 @@ A run that reaches an archived record reads around it to a copy that holds it re
 - **Rehydrate anything.** A rehydration is billed to the store's owner and chosen per object and per speed, and the service holds a credential only for the reads and writes a backup needs.
 - **Wait for a rehydration.** A plan names what is archived now. One made after the store has rehydrated the objects names none of them.
 - **Keep a backup's objects out of an archival tier, or change how the other readers of a replica take one.** Which objects move is the store's lifecycle rule, which its owner sets. A sync's read-back, the deep sweep and a drill read a replica back and meet the same refusal; this record does not change how they report it.
+
+  > **2026-10 ([ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md)).** A sync's read-back now counts an archived sample neither proven nor failed, and the deep sweep passes over an archived blob and closes its circuit. One notice for the pair says so. A drill is as it was.
 - **Report an archival tier at a local path or a peer.** Neither has one.
 - **Export a plan or resume one**, which architecture 08 §2 still asks for.
 
@@ -90,3 +92,4 @@ A run that reaches an archived record reads around it to a copy that holds it re
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The store contract says when an object is held only in an archival tier, and refuses a read of one as archived. The S3 and Azure Blob providers read it from their APIs and declare `ArchivalTiers`. A plan passes over an archived copy for a readable one and names what every copy holds only archived, apart from the missing (contract 1.65), and the console's wizard lists them before a restore is armed. |
+| 2026-10 | Accepted | [ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md) takes up what this record left to the replica's other readers: a sync's read-back and the deep sweep take an archived object as archived, and say so in one notice for the pair. |

@@ -1475,6 +1475,14 @@ public static class FanOut
                     .ConfigureAwait(false);
             }
 
+            // A sample the store holds only in an archival tier is no proof
+            // and no finding (ADR-0104), and is said.
+            if (verification.Archived.Count > 0)
+            {
+                ArchivedReplicaNotice.Reflect(
+                    runtime, set, destination.Name, ledger.RecordArchived(set.Id, destination.Name, nowMs), nowMs);
+            }
+
             if (verification.Failed.Count > 0)
             {
                 RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);

@@ -156,6 +156,9 @@ internal static class ReplicaSweepJob
 
         /// <summary>Why the segment stopped short; null when it did not.</summary>
         public string? Stall { get; init; }
+
+        /// <summary>Blobs passed over because the store holds them only in an archival tier (ADR-0104).</summary>
+        public int Archived { get; init; }
     }
 
     private static readonly SegmentOutcome Nothing = new(0, 0, 0, null, false);
@@ -223,6 +226,7 @@ internal static class ReplicaSweepJob
                 Examined = total.Examined + outcome.Examined,
                 Damaged = total.Damaged + outcome.Damaged,
                 Repaired = total.Repaired + outcome.Repaired,
+                Archived = total.Archived + outcome.Archived,
             };
 
             if (outcome.Unreadable is not null || outcome.Stall is not null
@@ -504,19 +508,25 @@ internal static class ReplicaSweepJob
         // blob it could not read; a stall is counted, and the scheduler waits
         // it out under the back-off instead of meeting it again on the next
         // pass.
+        DestinationSyncRecord recorded;
         if (result.Stall is { } stall)
         {
-            Stalled(runtime, set, destinationName,
-                ledger.RecordSweepStall(
-                    set.Id, destinationName, result.NextCursor, result.Examined, result.StalledOn, nowMs),
-                stall, nowMs);
+            recorded = ledger.RecordSweepStall(
+                set.Id, destinationName, result.NextCursor, result.Examined, result.StalledOn, nowMs,
+                result.ArchivedKeys.Count);
+            Stalled(runtime, set, destinationName, recorded, stall, nowMs);
         }
         else
         {
-            ledger.RecordSweep(
-                set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs);
+            recorded = ledger.RecordSweep(
+                set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs,
+                result.ArchivedKeys.Count);
             runtime.Notices.Resolve($"deep-verify-stalled:{set.Id}:{destinationName}", nowMs);
         }
+
+        // What it passed over because the store holds it only in an archival
+        // tier (ADR-0104), said, and withdrawn by a circuit that met none.
+        ArchivedReplicaNotice.Reflect(runtime, set, destinationName, recorded, nowMs);
 
         // Staging's copy proven unsound where this one is the blob: the
         // staging archive's finding, never this destination's, repaired here
@@ -614,6 +624,7 @@ internal static class ReplicaSweepJob
             {
                 StalledOn = result.StalledOn,
                 Stall = result.Stall,
+                Archived = result.ArchivedKeys.Count,
             };
         }
 
@@ -631,6 +642,7 @@ internal static class ReplicaSweepJob
         {
             StalledOn = result.StalledOn,
             Stall = result.Stall,
+            Archived = result.ArchivedKeys.Count,
         };
     }
 

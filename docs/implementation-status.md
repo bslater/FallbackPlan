@@ -128,6 +128,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0101](adr/0101-a-restore-gives-a-symlink-its-own-metadata-back.md) | A restore gives a symlink its own metadata back, onto the link itself: its owner and group, its extended attributes, its times on Linux and macOS, and on macOS its permissions and creation time, each by a call that changes the link and never what it points at. On Linux a link's permissions land only where they are those every link there has, and a user-namespace attribute or ACL on a link is withheld and named. The plan counts links on the lines files and folders use | **Built** | `Domain/SymlinkMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Repository.Tests/RestoreSymlinkMetadataTests`, `Domain.Tests/SymlinkMetadataTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0101--a-links-own) |
 | [0102](adr/0102-a-restore-gives-a-hard-link-group-back-as-one-file.md) | A restore gives a hard-link group back as one file: the first name of a group the run reaches lands as any file does, and each later name that agrees with it in content, length and every attribute but the access time is a link to that file, through the existing-file policy at its own destination. A name that does not agree, or that the target will not link, is restored as a file of its own and says why. Receipt schema 7 names the file a name shares, and the plan measures a group once | **Built** | `Domain/HardLinks` · `Restore/RestoreHardLinks` · `Restore/RestoreExecutor` · `Restore/RestoreSpace` · `Restore/RestoreBlobSet` · `Repository.Tests/RestoreHardLinkTests`, `Domain.Tests/HardLinksTests`, `Repository.Tests/RestoreBreadthTests`, `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0102--one-file-every-name) |
 | [0103](adr/0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md) | A restore plan names what is held only in an archival tier: the store contract's metadata says when a store holds an object only in a tier that serves nothing until it is rehydrated, and a read of one is refused as archived; the S3-compatible provider reads it from the storage class, the Intelligent-Tiering archive status and the restore status, the Azure Blob provider from the access tier, and both declare the hazard. The plan passes over an archived copy for one that holds it readable and names what every copy holds archived, apart from the missing (contract 1.65), and the console's wizard lists them before a restore is armed | **Built** | `Storage.Abstractions/StoreResults.cs` · `Storage.Abstractions/StoreObjectArchivedException` · `Storage.S3/S3ObjectStore` · `Storage.AzureBlob/AzureBlobObjectStore` · `Restore/FirstHolderStore` · `Restore/RestoreBlobSet` · `Agent/ServiceCommandHandler` · `Api/Results` · `Api/ContractVersion` · `Repository.Tests/RestoreArchiveTests`, `Storage.ContractTests/S3ObjectStoreTests`, `Storage.ContractTests/AzureBlobObjectStoreTests`, `Hosts.Tests/ObjectStoreDestinationTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0103--held-but-cold) |
+| [0104](adr/0104-a-replicas-readers-take-an-archived-object-as-archived.md) | A replica's readers take an archived object as archived: a sync's read-back counts a sample its store holds only in an archival tier neither proven nor failed, through the comparison and the sealed proof, and the deep sweep passes over such a blob, repairs nothing and closes its circuit past it. One notice for the pair, dated from when the readers first met one (ledger schema 11), says so until a circuit meets none, and a person's full read says how many it could not read | **Built** | `Replication/ReplicaVerifier` · `Repository/RepositoryReader` · `Repository/ReplicaSweep` · `Application/DestinationSyncStore` · `Agent/ArchivedReplicaNotice` · `Agent/FanOut` · `Agent/ReplicaSweepJob` · `Agent/ServiceCommandHandler` · `Replication.Tests/ReplicaVerifierTests`, `Repository.Tests/ArchivedBlobLoadTests`, `Repository.Tests/ReplicaSweepTests`, `Application.Tests/DestinationSyncStoreTests`, `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0104--cold-is-not-broken) |
 
 ---
 
@@ -3243,7 +3244,42 @@ much else of it is archived. The names cross as `archived_objects`
 armed.
 
 What remains is recorded rather than done. Nothing rehydrates an object,
-which is billed to the store's owner and chosen per object and speed, and a
-sync's read-back, the deep sweep and a drill meet the same refusal without
-reporting it differently.
+which is billed to the store's owner and chosen per object and speed. A
+sync's read-back and the deep sweep met the same refusal and took it as a
+failure and a stall, until [0104](#0104--cold-is-not-broken); a drill still
+does.
+
+### 0104 — cold is not broken
+
+0103 taught the store contract to say an object is archived and left the
+replica's other readers as they were. Two of them went wrong on it. A sync's
+read-back counted a sample its store would not serve as a failed proof, so
+one archived blob in the newest snapshot's sample failed the pair on every
+sync. The deep sweep stopped at a blob that would not read, and the next
+attempt began with it again; an archived blob reads no differently, so the
+circuit stopped there for good and a notice blamed the blob after three
+tries.
+
+Now `Replication/ReplicaVerifier` counts an archived sample apart, neither
+proven nor failed, whether the range comparison or the sealed proof met it,
+and `Repository/RepositoryReader`'s loads skip an archived blob as archived
+rather than as damage. A full load no longer fails over one: collection vetoes
+at it, as at any blob that would not open, and convergence keeps it.
+`Repository/ReplicaSweep` passes over an archived blob, names it, moves its
+cursor past it, spends none of the segment's bytes on it and closes its
+circuit, and since it is no finding nothing deletes and re-puts it out of the
+tier at the owner's cost.
+
+One notice for the pair says it (`Agent/ArchivedReplicaNotice`), raised by
+either reader and dated from when the run of such meetings began, which
+`Application/DestinationSyncStore` keeps at schema 11 with what the circuit
+under way has passed over. Only a circuit that closes having met nothing
+archived ends the run and resolves the notice, because only a circuit reads
+every blob. A person's `verify-destination --full` names how many it could
+not read and does not claim every stored object was checked.
+
+What remains is recorded rather than done. The status row's sweep says when
+a circuit closed, and a circuit that passed over archived blobs closes too,
+so that no longer means every object was read; the notice says so. A drill
+whose sample is archived fails in the provider's words.
 
