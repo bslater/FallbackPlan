@@ -662,8 +662,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// pre-1.64 client ignores the field, and a pre-1.64 service's plan
     /// reads as not saying, never as nothing to read.
     /// </para>
+    /// <para>
+    /// 1.65 names what is held only in an archival tier (FR-RST-003,
+    /// ADR-0103). `RestorePlanResult` gains `archived_objects`: the paths
+    /// whose manifest or content every copy that holds it holds only in a
+    /// tier that serves nothing until it is rehydrated, apart from
+    /// `missing_objects`. Additive: a pre-1.65 client ignores the field, and
+    /// a pre-1.65 service's plan names none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 64);
+    public static ContractVersion Current { get; } = new(1, 65);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

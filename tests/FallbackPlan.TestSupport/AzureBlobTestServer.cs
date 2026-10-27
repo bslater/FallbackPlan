@@ -200,6 +200,11 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
                 : Error(404, "BlobNotFound", "The specified blob does not exist.");
         }
 
+        if (!head && stored.Unreadable)
+        {
+            return Error(409, "BlobArchived", "This operation is not permitted on an archived blob.");
+        }
+
         var bytes = stored.Bytes;
         if (!head && (request.Header("x-ms-range") ?? request.Header("range")) is { } range)
         {
@@ -233,6 +238,19 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
             };
         }
 
+        var headers = new Dictionary<string, string> { ["x-ms-blob-type"] = "BlockBlob" };
+        if (head && stored.Archive is { } state)
+        {
+            // A rehydration copies the blob back to an online tier, which is
+            // what the API then names; until it finishes the tier stays the
+            // archive's, with the rehydration's own status beside it.
+            headers["x-ms-access-tier"] = state == ArchiveState.Rehydrated ? "Hot" : stored.Tier ?? "Archive";
+            if (state == ArchiveState.Rehydrating)
+            {
+                headers["x-ms-archive-status"] = "rehydrate-pending-to-hot";
+            }
+        }
+
         return new Response(200)
         {
             Body = head ? null : bytes,
@@ -240,7 +258,7 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
             ContentType = "application/octet-stream",
             LastModified = stored.LastModified,
             ETag = ETagOf(bytes),
-            Headers = new Dictionary<string, string> { ["x-ms-blob-type"] = "BlockBlob" },
+            Headers = headers,
         };
     }
 

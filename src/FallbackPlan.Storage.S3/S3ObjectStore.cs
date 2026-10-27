@@ -96,6 +96,7 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
         RangedReads = true,
         ListingConsistency = ListingConsistency.Strong,
         MaximumObjectSize = MaximumSinglePut,
+        ArchivalTiers = true,
     };
 
     /// <inheritdoc />
@@ -115,7 +116,7 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
         return response.StatusCode switch
         {
             HttpStatusCode.OK => new GetMetadataResult(new ObjectMetadata(
-                response.Content.Headers.ContentLength ?? 0, response.Content.Headers.LastModified)),
+                response.Content.Headers.ContentLength ?? 0, response.Content.Headers.LastModified, IsArchived(response))),
             HttpStatusCode.NotFound => GetMetadataResult.NotFound,
             _ => throw await RefusedAsync(response, "head", key, cancellationToken).ConfigureAwait(false),
         };
@@ -564,6 +565,14 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
             return new StoreFullException(Strings.FormatS3ObjectStore_Full(operation, subject, answered, word, said));
         }
 
+        // An archival storage class answers a read with this until the
+        // object is restored; it is no fault of the credential that signed it.
+        if (code == "InvalidObjectState")
+        {
+            return new StoreObjectArchivedException(
+                Strings.FormatS3ObjectStore_Archived(operation, subject, answered, word, said));
+        }
+
         // The API itself has no quota; the S3-compatible stores that hold one
         // each name it, with a status of their own.
         if (code is "QuotaExceeded" or "XMinioAdminBucketQuotaExceeded")
@@ -580,6 +589,23 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
 
         return new IOException(Strings.FormatS3ObjectStore_Refused(operation, subject, answered, word, said));
     }
+
+    /// <summary>
+    /// Whether a HEAD's answer says the object is held only in an archival
+    /// tier: the Glacier Flexible Retrieval and Deep Archive storage classes,
+    /// or an Intelligent-Tiering archive tier, unless a restore of it has
+    /// finished. Glacier Instant Retrieval is read as any other class is.
+    /// </summary>
+    private static bool IsArchived(HttpResponseMessage response)
+    {
+        var archival = Header(response, "x-amz-storage-class") is "GLACIER" or "DEEP_ARCHIVE"
+            || Header(response, "x-amz-archive-status") is "ARCHIVE_ACCESS" or "DEEP_ARCHIVE_ACCESS";
+        return archival
+            && Header(response, "x-amz-restore")?.Contains("ongoing-request=\"false\"", StringComparison.Ordinal) != true;
+    }
+
+    private static string? Header(HttpResponseMessage response, string name) =>
+        response.Headers.TryGetValues(name, out var values) ? values.FirstOrDefault() : null;
 
     /// <summary>The error code and message an error answer carries, read as the API shapes them.</summary>
     private static async ValueTask<(string? Code, string? Message)> ErrorOfAsync(

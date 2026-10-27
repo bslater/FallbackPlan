@@ -18,6 +18,8 @@ namespace FallbackPlan.Storage.ContractTests;
 /// is a fault, never an empty store; a delete of nothing is one request; a
 /// listing spans pages from markers only the store can read and sees only
 /// its own root; and nothing is spoken in clear to anywhere but this machine.
+/// A blob in the archive tier is said to be archived until its rehydration
+/// finishes, and a read of it is refused as archived (FR-RST-003, ADR-0103).
 /// </summary>
 [TestClass]
 public sealed class AzureBlobObjectStoreTests : IAsyncDisposable
@@ -374,9 +376,75 @@ public sealed class AzureBlobObjectStoreTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task GetMetadata_ABlobInTheArchiveTier_IsArchived()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/cold"), Content(new byte[10]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.Archive(Container, "root/blobs/data/ab/cold");
+
+        var held = await store.GetMetadataAsync(Key("blobs/data/ab/cold"), CancellationToken.None);
+
+        Assert.IsTrue(held.Found);
+        Assert.AreEqual(10L, held.Metadata!.Length);
+        Assert.IsTrue(held.Metadata.Archived);
+    }
+
+    [TestMethod]
+    public async Task GetMetadata_ABlobWhoseRehydrationIsPending_IsStillArchived()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/cold"), Content(new byte[10]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.Archive(Container, "root/blobs/data/ab/cold", ArchiveState.Rehydrating);
+
+        Assert.IsTrue((await store.GetMetadataAsync(Key("blobs/data/ab/cold"), CancellationToken.None)).Metadata!.Archived);
+    }
+
+    [TestMethod]
+    public async Task GetMetadata_ABlobRehydratedToAnOnlineTier_IsNotArchived_AndReads()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/cold"), Content([1, 2, 3]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.Archive(Container, "root/blobs/data/ab/cold", ArchiveState.Rehydrated);
+
+        var held = await store.GetMetadataAsync(Key("blobs/data/ab/cold"), CancellationToken.None);
+        using var read = await store.OpenReadAsync(Key("blobs/data/ab/cold"), range: null, CancellationToken.None);
+
+        Assert.IsFalse(held.Metadata!.Archived);
+        using var copy = new MemoryStream();
+        await read.Content!.CopyToAsync(copy);
+        CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, copy.ToArray());
+    }
+
+    [TestMethod]
+    public async Task GetMetadata_ABlobNeverArchived_IsNotArchived()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/warm"), Content(new byte[10]), PutConditions.IfNotExists, CancellationToken.None);
+
+        Assert.IsFalse((await store.GetMetadataAsync(Key("blobs/data/ab/warm"), CancellationToken.None)).Metadata!.Archived);
+    }
+
+    [TestMethod]
+    public async Task OpenRead_ABlobInTheArchiveTier_IsRefusedAsArchived_AndAskedOnce()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/cold"), Content(new byte[10]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.Archive(Container, "root/blobs/data/ab/cold");
+
+        var refused = await Assert.ThrowsExactlyAsync<StoreObjectArchivedException>(
+            () => store.OpenReadAsync(Key("blobs/data/ab/cold"), new ObjectRange(0, 5), CancellationToken.None).AsTask());
+
+        Assert.Contains("archival", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("blobs/data/ab/cold", refused.Message, StringComparison.Ordinal);
+        Assert.ContainsSingle(_server.Requests.Where(request => request.Method == "GET"));
+    }
+
+    [TestMethod]
     public void Capabilities_DeclareWhatTheApiPromises()
     {
         var declared = AzureBlobObjectStore.DeclaredCapabilities;
+
+        Assert.IsTrue(declared.ArchivalTiers, "a lifecycle rule can move a blob to the archive tier");
 
         Assert.IsTrue(declared.ConditionalCreate);
         Assert.IsTrue(declared.RangedReads);

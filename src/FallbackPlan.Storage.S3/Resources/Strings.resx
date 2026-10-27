@@ -94,6 +94,9 @@
   <data name="S3ObjectStore_QuotaExceeded" xml:space="preserve">
     <value>The S3-compatible store's quota would be crossed by '{1}': it answered a {0} with {2} {3}. {4} Raise the quota, or keep less at this destination.</value>
   </data>
+  <data name="S3ObjectStore_Archived" xml:space="preserve">
+    <value>The S3-compatible store holds '{1}' only in an archival storage class, and will not serve it until it is restored: it answered a {0} with {2} {3}. {4} Restore the object at the store, or restore from another copy.</value>
+  </data>
   <data name="S3ObjectStore_BodyEndedEarly" xml:space="preserve">
     <value>The S3-compatible store's answer ended before the object it was sending did.</value>
   </data>

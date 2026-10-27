@@ -40,7 +40,15 @@ public enum DeleteOutcome
 public sealed record DeleteResult(DeleteOutcome Outcome);
 
 /// <summary>Metadata for one stored object.</summary>
-public sealed record ObjectMetadata(long Length, DateTimeOffset? LastModified);
+/// <param name="Length">Its length in bytes.</param>
+/// <param name="LastModified">When it was last written, where the store says.</param>
+/// <param name="Archived">
+/// Whether the store holds it only in an archival tier, from which nothing is
+/// read until it is rehydrated (ADR-0103). An object whose rehydration has
+/// finished is not archived, whatever the store still calls its tier. Never
+/// true of a store that declares no <see cref="StoreCapabilities.ArchivalTiers"/>.
+/// </param>
+public sealed record ObjectMetadata(long Length, DateTimeOffset? LastModified, bool Archived = false);
 
 /// <summary>
 /// The result of <see cref="IObjectStore.GetMetadataAsync"/>: found with

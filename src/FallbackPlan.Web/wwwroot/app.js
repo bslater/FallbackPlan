@@ -5911,6 +5911,10 @@ function rstStep6() {
         Restore anyway — a disk that compresses what it stores can hold more than this estimate</label></div>` : ""}
     ${plan.missingObjects?.length ? `<ul class="warnings"><li>${fmtCount(plan.missingObjects.length)} object(s) the plan
       needs cannot be found — those files will fail.</li></ul>` : ""}
+    ${plan.archivedObjects?.length ? `<div id="rst-archived"><ul class="warnings"><li>${fmtCount(plan.archivedObjects.length)} file(s)
+      are held only in the store's archival tier, which serves nothing until they are rehydrated there — rehydrate them
+      first, or those files will fail.</li></ul>
+      <pre class="report">${esc(plan.archivedObjects.slice(0, 20).join("\n"))}</pre></div>` : ""}
     ${plan.conflictSample?.length ? `<pre class="report">${esc(plan.conflictSample.join("\n"))}</pre>` : ""}
     ${plan.degradations?.length ? `<p class="subtle">${plan.degradations.map(esc).join("<br>")}</p>` : ""}`
     : W.planFailed

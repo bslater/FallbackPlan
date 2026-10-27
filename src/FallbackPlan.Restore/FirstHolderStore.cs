@@ -11,11 +11,18 @@ namespace FallbackPlan.Restore;
 /// it (FR-RST-003, FR-RST-007).
 /// </summary>
 /// <remarks>
+/// <para>
 /// Presence only: a plan asks whether a blob is there, and reads the
 /// manifests it needs from wherever the metadata blob is found. Nothing here
 /// judges whether a copy is sound — a run reads records through the verifying
 /// path whichever copy they come from. Once a key is found somewhere, its
 /// reads go there, so a manifest is read from the copy that was probed.
+/// </para>
+/// <para>
+/// A copy that holds a key only in an archival tier is passed over for one
+/// that holds it readable, as a run reads around it (ADR-0103). Only when
+/// every copy that holds it holds it archived is the archived answer given.
+/// </para>
 /// </remarks>
 internal sealed class FirstHolderStore(IObjectStore own, IReadOnlyList<CopySource> others) : IObjectStore
 {
@@ -29,11 +36,13 @@ internal sealed class FirstHolderStore(IObjectStore own, IReadOnlyList<CopySourc
     public async ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken)
     {
         var held = await own.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
-        if (held.Found)
+        if (held is { Found: true, Metadata.Archived: false })
         {
             _holders[key] = own;
             return held;
         }
+
+        var archived = held.Found ? (Answer: held, At: own) : default((GetMetadataResult Answer, IObjectStore At)?);
 
         for (var index = 0; index < others.Count; index++)
         {
@@ -54,11 +63,22 @@ internal sealed class FirstHolderStore(IObjectStore own, IReadOnlyList<CopySourc
                 continue;
             }
 
-            if (atCopy.Found)
+            if (atCopy is { Found: true, Metadata.Archived: false })
             {
                 _holders[key] = copy;
                 return atCopy;
             }
+
+            if (atCopy.Found)
+            {
+                archived ??= (atCopy, copy);
+            }
+        }
+
+        if (archived is { } first)
+        {
+            _holders[key] = first.At;
+            return first.Answer;
         }
 
         return held;

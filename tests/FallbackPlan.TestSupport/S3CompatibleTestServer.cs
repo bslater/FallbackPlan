@@ -138,6 +138,11 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
             return head ? new Response(404) : Error(404, "NoSuchKey", "The specified key does not exist.");
         }
 
+        if (!head && stored.Unreadable)
+        {
+            return Error(403, "InvalidObjectState", "The operation is not valid for the object's storage class");
+        }
+
         var bytes = stored.Bytes;
         if (!head && request.Header("range") is { } range)
         {
@@ -175,7 +180,37 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
             HeadLength = head ? bytes.Length : null,
             LastModified = stored.LastModified,
             ETag = ETagOf(bytes),
+            Headers = head ? ArchiveHeaders(stored) : null,
         };
+    }
+
+    /// <summary>
+    /// What the API says of an archived object on a HEAD: its storage class,
+    /// for Intelligent-Tiering the archive tier it reached, and how far a
+    /// restore it was asked for has got.
+    /// </summary>
+    private static Dictionary<string, string>? ArchiveHeaders(StoredObject stored)
+    {
+        if (stored.Archive is not { } state)
+        {
+            return null;
+        }
+
+        var storageClass = stored.Tier ?? "GLACIER";
+        var headers = new Dictionary<string, string> { ["x-amz-storage-class"] = storageClass };
+        if (storageClass == "INTELLIGENT_TIERING" && state != ArchiveState.Rehydrated)
+        {
+            headers["x-amz-archive-status"] = "ARCHIVE_ACCESS";
+        }
+
+        if (state != ArchiveState.Archived)
+        {
+            headers["x-amz-restore"] = state == ArchiveState.Rehydrating
+                ? "ongoing-request=\"true\""
+                : "ongoing-request=\"false\", expiry-date=\"Fri, 21 Dec 2029 00:00:00 GMT\"";
+        }
+
+        return headers;
     }
 
     private static Response Delete(SortedDictionary<string, StoredObject> objects, string key)
