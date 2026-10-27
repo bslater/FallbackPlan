@@ -34,11 +34,58 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_APlanOfAResume_IsRecordedAtOneSeventyTwo()
+    public void ContractVersion_TheRestoreReceiptsKept_IsRecordedAtOneSeventyThree()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.72", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.73", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void TheRestoreReceiptsKept_CrossUnderTheirWireNames_AndNameNoneOfTheBackupsFiles()
+    {
+        // Contract 1.73 (FR-RST-004, ADR-0125): each run's kept receipt, as
+        // what became of its files and where it wrote them, never the paths.
+        Assert.AreEqual(
+            """{"command":"list_restore_receipts","limit":50}""",
+            JsonSerializer.Serialize<ServiceCommand>(new ListRestoreReceiptsCommand(50), FrameCodec.SerializerOptions));
+        Assert.AreEqual(
+            """{"command":"list_restore_receipts","limit":null}""",
+            JsonSerializer.Serialize<ServiceCommand>(new ListRestoreReceiptsCommand(), FrameCodec.SerializerOptions));
+
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreReceiptsResult(
+            [
+                new RestoreReceiptDescriptor(
+                    "0123456789abcdef", "partial", 2_000, new string('e', 32), "/srv/restored",
+                    Restored: 3, FoundInPlace: 1, Skipped: 2, Failed: 1, Degraded: 1),
+                new RestoreReceiptDescriptor(
+                    "fedcba9876543210", null, null, null, null, 0, 0, 0, 0, 0, Problem: "not a receipt"),
+            ],
+            Total: 7),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"result\":\"restore_receipts\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"run\":\"0123456789abcdef\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"outcome\":\"partial\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"ended_at\":2000", listed, StringComparison.Ordinal);
+        Assert.Contains($"\"snapshot_id\":\"{new string('e', 32)}\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"written_to\":\"/srv/restored\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"restored\":3", listed, StringComparison.Ordinal);
+        Assert.Contains("\"found_in_place\":1", listed, StringComparison.Ordinal);
+        Assert.Contains("\"skipped\":2", listed, StringComparison.Ordinal);
+        Assert.Contains("\"failed\":1", listed, StringComparison.Ordinal);
+        Assert.Contains("\"degraded\":1", listed, StringComparison.Ordinal);
+        Assert.Contains("\"problem\":\"not a receipt\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"total\":7", listed, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"path", listed, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"items", listed, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(listed, FrameCodec.SerializerOptions), out var read);
+        Assert.HasCount(2, read.Receipts);
+        Assert.AreEqual(7, read.Total);
+        Assert.AreEqual("not a receipt", read.Receipts[1].Problem);
     }
 
     [TestMethod]

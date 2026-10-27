@@ -732,8 +732,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// Additive: a pre-1.72 client never asks, and a pre-1.72 service plans a
     /// resume as a run afresh and names nothing landed.
     /// </para>
+    /// <para>
+    /// 1.73 lists the restore receipts the service keeps (FR-RST-004,
+    /// ADR-0125). `list_restore_receipts` takes `limit` and answers
+    /// `restore_receipts`: the newest under the limit, each with its `run`,
+    /// `outcome`, `ended_at`, `snapshot_id`, `written_to`, the counts of its
+    /// files `restored`, `found_in_place`, `skipped`, `failed` and
+    /// `degraded`, and `problem` where it does not read, never the paths it
+    /// restored; and `total`, how many are kept. Additive: a pre-1.73 client
+    /// never asks, and a pre-1.73 service refuses the verb, which a console
+    /// reads as none listed.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 72);
+    public static ContractVersion Current { get; } = new(1, 73);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

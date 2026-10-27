@@ -100,6 +100,8 @@ const S = {
   attributions: [],         // ReplicaAttributionDescriptor[] — replicas stored here (contract 1.31); [] where the service predates it
   receipts: null,           // ReceiptDescriptor[] newest first (contract 1.33); null until first list_receipts, [] where the service predates it
   receiptsTotal: 0,         // how many are on file for the whole pile (contract 1.35); 0 where the service predates it
+  restoreReceipts: null,    // RestoreReceiptDescriptor[] newest first (contract 1.73); null until first list_restore_receipts, [] where the service predates it
+  restoreReceiptsTotal: 0,  // how many restore receipts the service keeps (contract 1.73)
   invites: [],              // PairingInviteDescriptor[]
   notices: null,            // NoticeDescriptor[]; null until first list_notices
   noticesHistory: false,    // whether the view includes acknowledged history
@@ -656,6 +658,7 @@ function route() {
   if (S.view === "config") refreshConfigData();
   if (S.view === "notices") refreshNotices();
   if (S.view === "maintenance") refreshReceipts();
+  if (S.view === "maintenance") refreshRestoreReceipts();
   if (S.view === "diagnostics") refreshDiagnostics();
 }
 
@@ -1647,8 +1650,11 @@ function renderMaintenance() {
 
       <div class="card" id="receipts-card"></div>
 
+      <div class="card" id="restore-receipts-card"></div>
+
     </div>`;
   renderReceiptsCard();
+  renderRestoreReceiptsCard();
 }
 
 // The Receipts card (contract 1.33): every fact is what the peer signed,
@@ -1657,6 +1663,65 @@ function renderMaintenance() {
 // the page from the absence of a problem. Not yet fetched is not empty.
 /** How many receipts the card asks the service to read (contract 1.35's limit). */
 const RECEIPTS_SHOWN = 50;
+
+/** How many restore receipts the card asks the service for (contract 1.73). */
+const RESTORE_RECEIPTS_SHOWN = 50;
+
+// What each restore the service kept a receipt for did (ADR-0125): its
+// outcome, what became of its files and where it wrote them. A receipt the
+// service could not read says so, rather than reading as a run that restored
+// nothing. Not yet fetched is not empty.
+function renderRestoreReceiptsCard() {
+  const el = document.getElementById("restore-receipts-card");
+  if (!el) return;
+
+  const files = row => {
+    const restored = row.foundInPlace
+      ? `${fmtCount(row.restored)} restored (${fmtCount(row.foundInPlace)} found in place)`
+      : `${fmtCount(row.restored)} restored`;
+    const counts = `${restored}, ${fmtCount(row.skipped)} skipped, ${fmtCount(row.failed)} failed`;
+    return row.degraded ? `${counts}, ${fmtCount(row.degraded)} degraded` : counts;
+  };
+
+  let body;
+  if (S.restoreReceipts === null) {
+    body = `<p class="sub">Reading the restores kept here…</p>`;
+  } else if (S.restoreReceipts.length === 0) {
+    body = `<p class="sub">No restore has kept a receipt here yet. Each restore keeps one as it ends, saying what
+              became of every file it was asked for.</p>`;
+  } else {
+    body = `
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>Ended</th><th>Run</th><th>Outcome</th><th>Files</th><th>Written to</th></tr></thead>
+        <tbody>${S.restoreReceipts.map(row => row.problem ? `
+          <tr>
+            <td>—</td>
+            <td class="mono">${esc(row.run)}</td>
+            <td>${badge({ cls: "warn", icon: "?" }, "unreadable")}</td>
+            <td colspan="2">${esc(row.problem)}</td>
+          </tr>` : `
+          <tr>
+            <td>${esc(fmtWhen(row.endedAt))}</td>
+            <td class="mono">${esc(row.run)}</td>
+            <td>${esc(row.outcome)}</td>
+            <td>${esc(files(row))}</td>
+            <td class="mono detail">${esc(row.writtenTo)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>`;
+  }
+
+  const shown = S.restoreReceipts === null || S.restoreReceipts.length === 0
+    || S.restoreReceiptsTotal <= S.restoreReceipts.length
+    ? ""
+    : ` Showing the newest ${fmtCount(S.restoreReceipts.length)} of ${fmtCount(S.restoreReceiptsTotal)} kept.`;
+
+  el.innerHTML = `
+    <h3>📥 Restores</h3>
+    <p class="sub">Each restore this service ran, newest first, as its receipt keeps it: what became of its files and
+       where it wrote them (ADR-0125).${shown}</p>
+    ${body}`;
+}
 
 function renderReceiptsCard() {
   const el = document.getElementById("receipts-card");
@@ -3413,6 +3478,7 @@ async function refreshConfigData() {
   await refreshSets();
   if (S.view === "config") renderConfigBody();
   if (S.view === "maintenance") refreshReceipts();
+  if (S.view === "maintenance") refreshRestoreReceipts();
 }
 
 // The receipts filed here (contract 1.33; ADR-0063, ADR-0064): what peers
@@ -3426,6 +3492,17 @@ async function refreshReceipts() {
   S.receipts = listed?.result === "receipts_listed" ? listed.receipts : [];
   S.receiptsTotal = listed?.result === "receipts_listed" ? (listed.total ?? 0) : 0;
   if (S.view === "maintenance") renderReceiptsCard();
+}
+
+// The restores the service kept receipts for (contract 1.73, ADR-0125), read
+// as the peers' receipts are: on entering the Maintenance view, never by the
+// pollers, and asked directly, since a service before the verb refuses it by
+// name and that is an empty card, not a toast on every visit.
+async function refreshRestoreReceipts() {
+  const listed = await api({ command: "list_restore_receipts", limit: RESTORE_RECEIPTS_SHOWN }).catch(() => null);
+  S.restoreReceipts = listed?.result === "restore_receipts" ? listed.receipts : [];
+  S.restoreReceiptsTotal = listed?.result === "restore_receipts" ? (listed.total ?? 0) : 0;
+  if (S.view === "maintenance") renderRestoreReceiptsCard();
 }
 
 function renderConfig() {
