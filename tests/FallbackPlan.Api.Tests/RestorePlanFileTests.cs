@@ -9,7 +9,8 @@ namespace FallbackPlan.Api.Tests;
 /// ADR-0113): one shape whichever client keeps it, the command line or the
 /// console. It holds the run the plan was made for, in the contract's own
 /// words, and the plan itself, field for field as <c>restore_plan</c> crosses
-/// the wire.
+/// the wire. A plan made now is held to a kept one by a comparison both
+/// clients share (ADR-0118).
 /// </summary>
 /// <remarks>
 /// Version 2 keeps every field of version 1 with the meaning it had, and
@@ -126,5 +127,37 @@ public sealed class RestorePlanFileTests
         var refused = Assert.ThrowsExactly<InvalidDataException>(() => RestorePlanFile.Read(text));
 
         Assert.Contains(why, refused.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void APlanMadeNow_HeldToAKeptOne_NamesEachChange_EachWay()
+    {
+        // ADR-0118: one comparison for both clients, so the console says what
+        // changed in the words the command line says it (ADR-0114 §3).
+        var then = new RestorePlanResult(3, 0, ["docs/a.txt"], Conflicts: 1, ArchivedObjects: ["docs/x.txt"]);
+        var now = new RestorePlanResult(2, 0, ["docs/b.txt"], Conflicts: 0, ArchivedObjects: ["docs/y.txt"]);
+
+        var changes = RestorePlanFile.Changes(then, now);
+
+        CollectionAssert.AreEquivalent(
+            new[]
+            {
+                "files: 3 kept, 2 now",
+                "missing now: docs/b.txt",
+                "missing no longer: docs/a.txt",
+                "archived now: docs/y.txt",
+                "archived no longer: docs/x.txt",
+                "conflicts: 1 kept, 0 now",
+            },
+            changes.ToArray());
+    }
+
+    [TestMethod]
+    public void APlanMadeNow_AsKept_ChangesNothing_EvenWhereItWouldFailFiles()
+    {
+        // What the kept plan already said would fail was approved, and is not news.
+        var kept = new RestorePlanResult(2, 0, ["docs/a.txt"], Conflicts: 1, ArchivedObjects: ["docs/x.txt"]);
+
+        Assert.IsEmpty(RestorePlanFile.Changes(kept, kept with { Bytes = 99, ReadBytes = 7 }));
     }
 }

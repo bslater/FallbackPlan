@@ -142,6 +142,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0115](adr/0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md) | A restore cut short is named, and resumed by its name alone: the service names each restore run in `restore-runs.json` before it writes and keeps it until a run of it finishes, says each one left unfinished, at start too, lists them without the backup's file names, resumes one as it was asked by its name alone, and lets one go (contract 1.71, `restore-resume`) | **Built** | `Application/RestoreRunJournal` · `Agent/ServiceCommandHandler`, `Agent/UnfinishedRestoreNotice`, `Agent/ServiceRuntime` · `Cli/CliApplication`, `Cli/OperationGateway` · `Application.Tests/RestoreRunJournalTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Hosts.Tests/ClientModeTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0115--a-restore-cut-short-named-and-resumed-by-name) |
 | [0116](adr/0116-the-console-resumes-a-restore-it-did-not-see-end.md) | The console resumes a restore it did not see end: the snapshots page lists the restores left unfinished without their files, the list and each run's notice offer to restore what is left, the wizard's resume mode unlocks the passphrase and opens a source of the run's own set before the service resumes the run by its name, and a run can be let go | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0116--the-console-resumes-a-restore-it-did-not-see-end) |
 | [0117](adr/0117-the-command-line-asks-a-restore-as-the-console-does.md) | The command line asks a restore as the console does: `restore` takes several paths, `--target`, `--existing` and `--in-place`, asks the service the run and its plan in that shape, restores and plans several paths under the policy in direct mode while refusing the original location there, keeps the plan of the run as asked, and holds `--as-planned` to every field, so a plan the console kept runs from the command line | **Built** | `Cli/CliApplication`, `Cli/OperationGateway`, `Cli/RestorePlanExport` · `Cli.Tests/RestoreShapeCommandTests`, `Cli.Tests/RestoreAsPlannedCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/ClientModeTests` · [notes](#0117--the-command-line-asks-a-restore-as-the-console-does) |
+| [0118](adr/0118-the-console-runs-a-kept-plan-as-it-was-approved.md) | The console runs a kept plan as it was approved: the console process reads the file with the command line's reader, plans the kept run again through a source of the plan's own set, holds it to the kept plan with the comparison both clients now share, and runs it as kept only where nothing changed; otherwise it names each change and runs nothing | **Built** | `Api/RestorePlanFile` · `Web/WebConsoleHost` · `Cli/RestorePlanReport` · `Api.Tests/RestorePlanFileTests`, `Web.Tests/ConsoleKeptPlanTests`, `Web.DomTests/RestoreKeptPlanDomTests` · [notes](#0118--the-console-runs-a-kept-plan-as-it-was-approved) |
 
 ---
 
@@ -3532,3 +3533,19 @@ field, so a console's plan runs where it is asked as kept.
 
 What remains is recorded rather than done. The console runs no kept plan, and
 direct mode does not restore to the original location.
+
+### 0118 — the console runs a kept plan as it was approved
+
+The console kept plans and could not run one, so a plan approved from it was
+run from a terminal. The snapshots page now takes a kept plan's file, which
+the console process reads with the command line's reader. The wizard unlocks
+the passphrase, opens a source of the plan's own set, and the console process
+plans the kept run again through it and holds the plan to the kept one, with
+the comparison that moved from the command line into the shared reader. The
+run is offered under the typed word only where nothing changed, and asked
+exactly as kept; otherwise each change is named and nothing can be run. The
+file input stands outside every view, so a redraw while the picker is open
+does not lose the file chosen.
+
+What remains is recorded rather than done. A kept plan is run as kept and
+never changed; one wanted otherwise is planned again.

@@ -55,6 +55,8 @@ Each run on the list can be let go, once the person confirms it. The service nam
 - **Show what a run left unfinished was asked for, file by file.** That needs the passphrase. The run's receipt names its files.
 - **Run a kept plan from the console** ([ADR-0114](0114-a-kept-plan-is-run-as-it-was-approved.md)).
 
+  > **2026-10 ([ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md)).** The console runs a kept plan too, held to it with the command line's own comparison, and only where nothing it said has changed.
+
 ## Alternatives considered
 
 - **Offer the resume on the notice only.** Rejected. An acknowledged notice stops surfacing, and the run it named is still left unfinished.
@@ -66,3 +68,4 @@ Each run on the list can be let go, once the person confirms it. The service nam
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The snapshots page lists the restores left unfinished without their files; that list and each run's notice offer to restore what is left, which unlocks the passphrase, opens a source of the run's own set, and has the service resume it by its name; a run can be let go. |
+| 2026-10 | Accepted | [ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md): the console runs a kept plan, which this record left to another. |

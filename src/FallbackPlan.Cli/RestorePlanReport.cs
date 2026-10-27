@@ -114,19 +114,7 @@ internal static class RestorePlanReport
             ? string.Create(CultureInfo.InvariantCulture, $", planned {at.UtcDateTime:yyyy-MM-dd HH:mm} UTC")
             : string.Empty;
 
-        List<string> changed = [];
-        if (now.Files != then.Files)
-        {
-            changed.Add(string.Create(CultureInfo.InvariantCulture, $"  files: {then.Files} kept, {now.Files} now"));
-        }
-
-        Differ(changed, "missing", then.MissingObjects, now.MissingObjects);
-        Differ(changed, "archived", then.ArchivedObjects ?? [], now.ArchivedObjects ?? []);
-        if (now.Conflicts != then.Conflicts)
-        {
-            changed.Add(string.Create(CultureInfo.InvariantCulture, $"  conflicts: {then.Conflicts} kept, {now.Conflicts} now"));
-        }
-
+        var changed = RestorePlanFile.Changes(then, now);
         if (changed.Count == 0)
         {
             return new OperationReport(
@@ -143,15 +131,8 @@ internal static class RestorePlanReport
             false,
             [
                 $"plan: no longer as kept in {kept.File}{planned}:",
-                .. changed,
+                .. changed.Select(change => "  " + change),
                 "nothing was restored: the plan has changed since it was kept; plan the restore again",
             ]);
-    }
-
-    /// <summary>The names one plan says and another does not, each way.</summary>
-    private static void Differ(List<string> changed, string what, IReadOnlyList<string> then, IReadOnlyList<string> now)
-    {
-        changed.AddRange(now.Except(then, StringComparer.Ordinal).Select(path => $"  {what} now: {path}"));
-        changed.AddRange(then.Except(now, StringComparer.Ordinal).Select(path => $"  {what} no longer: {path}"));
     }
 }

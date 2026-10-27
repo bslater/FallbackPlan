@@ -55,6 +55,8 @@ The plan step offers Keep plan beside the restore's confirmation, only while a p
 
 - **Run a kept plan,** from either client, as before.
 
+  > **2026-10 ([ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md)).** The console runs a kept plan too, held to it with the command line's own comparison, and only where nothing it said has changed.
+
   > **2026-10 ([ADR-0114](0114-a-kept-plan-is-run-as-it-was-approved.md)).** The command line runs a kept plan of a run it asks, held to what the plan said. A console's plan of several paths, a target or a policy is refused there by name, and the console runs none.
 - **Keep the plan the page showed.** The file holds the plan asked when the person kept it. Between showing and keeping, the replica or the free space may have moved, and the kept plan says what they are then.
 - **Keep a resume's plan.** A resume is not planned ([ADR-0109](0109-a-restore-cut-short-is-resumed.md)).
@@ -71,3 +73,4 @@ The plan step offers Keep plan beside the restore's confirmation, only while a p
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The file's shape moves into the contract's assembly at version 2, which keeps version 1's fields and adds the run as asked, and both clients write it. The console's endpoint asks the service for the plan the wizard sends and gives back the file as an attachment, and the wizard offers to keep a plan while one is on screen. |
 | 2026-10 | Accepted | [ADR-0114](0114-a-kept-plan-is-run-as-it-was-approved.md): the command line runs a kept plan of a run it asks; a plan kept from the console of a run it does not ask is refused there by name. |
+| 2026-10 | Accepted | [ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md): the console runs a plan kept in this file, read with the command line's reader and held to it with the command line's comparison. |
