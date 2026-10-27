@@ -1512,6 +1512,11 @@ public static class CliApplication
                     + ".fbp-quarantine is named; in direct mode it lands in place and names none.",
                 Arity = ArgumentArity.ZeroOrOne,
             };
+            var asPlannedOption = new Option<string?>("--as-planned")
+            {
+                Description = "Restore only as the plan kept in this file says: the run it was kept for, and only while "
+                    + "planning it again says what the kept plan said. Otherwise nothing is restored, and what changed is said.",
+            };
             var command = WithRemoteCapableSession(new Command(
                 "restore", "Restore a snapshot (or a path within it), each file verified per segment and by whole-file hash."));
             command.Arguments.Add(snapshotArgument);
@@ -1521,6 +1526,7 @@ public static class CliApplication
             command.Options.Add(planOption);
             command.Options.Add(exportOption);
             command.Options.Add(resumeOption);
+            command.Options.Add(asPlannedOption);
             command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() =>
@@ -1540,9 +1546,23 @@ public static class CliApplication
                     throw new CliFailureException(Strings.CliApplication_ResumeIsNotPlanned);
                 }
 
+                // A kept plan is read and held to the run asked before
+                // anything is asked of the repository or the service.
+                KeptPlan? asPlanned = null;
+                if (parse.GetValue(asPlannedOption) is { Length: > 0 } keptFile)
+                {
+                    if (resume || parse.GetValue(planOption) || export is not null)
+                    {
+                        throw new CliFailureException(Strings.CliApplication_AsPlannedIsARun);
+                    }
+
+                    asPlanned = ReadKeptPlan(
+                        keptFile, parse.GetValue(snapshotArgument)!, parse.GetValue(pathArgument), parse.GetValue(outputOption)!);
+                }
+
                 return ReadThroughGatewayAsync(
                     parse,
-                    (gateway, token) =>
+                    async (gateway, token) =>
                     {
                         var request = new RestoreRequest(
                             parse.GetValue(snapshotArgument)!,
@@ -1552,9 +1572,27 @@ public static class CliApplication
                             export,
                             resume,
                             parse.GetValue(resumeOption));
-                        return parse.GetValue(planOption) || export is not null
-                            ? gateway.PlanRestoreAsync(request, token)
-                            : gateway.RestoreAsync(request, token);
+                        if (parse.GetValue(planOption) || export is not null)
+                        {
+                            return await gateway.PlanRestoreAsync(request, token).ConfigureAwait(false);
+                        }
+
+                        if (asPlanned is null)
+                        {
+                            return await gateway.RestoreAsync(request, token).ConfigureAwait(false);
+                        }
+
+                        // Planned again and held to the kept plan; run only
+                        // where nothing a person approved has changed.
+                        var held = await gateway.PlanRestoreAsync(request with { AsPlanned = asPlanned }, token)
+                            .ConfigureAwait(false);
+                        if (!held.Ok)
+                        {
+                            return held;
+                        }
+
+                        var restored = await gateway.RestoreAsync(request, token).ConfigureAwait(false);
+                        return restored with { Lines = [.. held.Lines, .. restored.Lines] };
                     },
                     cancellationToken);
             }));
@@ -3460,6 +3498,71 @@ public static class CliApplication
             CultureInfo.InvariantCulture,
             $"requests ({asked.Days} days{since}): {asked.Puts} put, {asked.Gets} get, {asked.Heads} head, {asked.Lists} list, "
             + $"{asked.Deletes} delete; {asked.BytesSent} bytes sent, {asked.BytesReceived} bytes received");
+    }
+
+    /// <summary>
+    /// Reads the plan a restore is held to (ADR-0114), and holds it to the run
+    /// asked before anything else is: the same snapshot, path and destination,
+    /// and a run the command line asks at all.
+    /// </summary>
+    /// <param name="file">The kept plan's file.</param>
+    /// <param name="snapshotId">The snapshot asked.</param>
+    /// <param name="path">The path within it asked, if any.</param>
+    /// <param name="outputDirectory">Where the run asked writes.</param>
+    /// <exception cref="CliFailureException">The file is not a plan of this run.</exception>
+    private static KeptPlan ReadKeptPlan(string file, string snapshotId, string? path, string outputDirectory)
+    {
+        RestorePlanFile.Kept kept;
+        try
+        {
+            kept = RestorePlanFile.Read(File.ReadAllText(file));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            throw new CliFailureException(Strings.FormatCliApplication_AsPlannedUnreadable(file, exception.Message));
+        }
+
+        var asked = kept.Request;
+        if (asked.Paths is { Count: > 0 } || asked.Target is not null || asked.Existing is not null || asked.InPlace)
+        {
+            throw new CliFailureException(Strings.FormatCliApplication_AsPlannedNotAsked(file));
+        }
+
+        if (!string.Equals(asked.SnapshotId, snapshotId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(asked.Path ?? string.Empty, path ?? string.Empty, StringComparison.Ordinal)
+            || !SamePlace(asked.OutputDirectory, outputDirectory))
+        {
+            throw new CliFailureException(Strings.FormatCliApplication_AsPlannedAnotherRun(
+                file, asked.SnapshotId, asked.Path is { Length: > 0 } within ? $"path {within}" : "all of it",
+                asked.OutputDirectory ?? "nowhere named"));
+        }
+
+        return new KeptPlan(file, kept);
+    }
+
+    /// <summary>Whether a kept plan's destination is the one asked, as typed or as the full path it names here.</summary>
+    private static bool SamePlace(string? kept, string asked)
+    {
+        if (kept is not { Length: > 0 })
+        {
+            return false;
+        }
+
+        if (string.Equals(kept, asked, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(kept), Path.GetFullPath(asked),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

@@ -218,6 +218,11 @@ public interface IOperationGateway : IAsyncDisposable
 /// Through the service each run lands in a folder of its own, so a resume
 /// names one; in direct mode a run lands in place, and names none.
 /// </param>
+/// <param name="AsPlanned">
+/// The kept plan this restore is held to (FR-RST-003, ADR-0114): a plan of it
+/// is compared with the kept one, and the restore runs only where nothing
+/// changed. Null holds it to none.
+/// </param>
 public sealed record RestoreRequest(
     string SnapshotId,
     string? Path,
@@ -225,7 +230,13 @@ public sealed record RestoreRequest(
     bool IgnoreFreeSpace = false,
     string? PlanExport = null,
     bool Resume = false,
-    string? ResumedRun = null);
+    string? ResumedRun = null,
+    KeptPlan? AsPlanned = null);
+
+/// <summary>A kept plan a restore is held to (ADR-0114), and the file it was read from.</summary>
+/// <param name="File">The file, as the person named it.</param>
+/// <param name="Plan">What the file holds.</param>
+public sealed record KeptPlan(string File, RestorePlanFile.Kept Plan);
 
 /// <summary>Resolves which gateway a command gets.</summary>
 public static class OperationGateway

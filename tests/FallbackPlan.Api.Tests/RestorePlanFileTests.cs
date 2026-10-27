@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Api.Tests;
 
@@ -14,7 +15,9 @@ namespace FallbackPlan.Api.Tests;
 /// Version 2 keeps every field of version 1 with the meaning it had, and
 /// adds what a run asks beside one path: several paths, its target, its
 /// existing-file policy and whether it lands in place. A restore source is an
-/// open handle that means nothing once it closes, so it is not kept.
+/// open handle that means nothing once it closes, so it is not kept. A kept
+/// plan reads back as the run and the plan it holds, of either version, so a
+/// run can be held to it (ADR-0114); anything else is refused by name.
 /// </remarks>
 [TestClass]
 public sealed class RestorePlanFileTests
@@ -69,5 +72,59 @@ public sealed class RestorePlanFileTests
         Assert.AreEqual(JsonValueKind.Null, root.GetProperty("target").ValueKind);
         Assert.IsFalse(root.GetProperty("in_place").GetBoolean());
         Assert.AreEqual(1, root.GetProperty("plan").GetProperty("files").GetInt64());
+    }
+
+    [TestMethod]
+    public void AKeptPlan_ReadsBack_AsTheRunAndThePlanItHolds()
+    {
+        var kept = RestorePlanFile.Read(RestorePlanFile.Serialize(
+            new PlanRestoreCommand(
+                "0123456789abcdef", null, Source: "src-1", Paths: ["docs/a.txt"],
+                OutputDirectory: "/srv/restored", Target: "folder", Existing: "rename", InPlace: true),
+            new RestorePlanResult(2, 9_000, ["docs/b.txt"], Conflicts: 1, ArchivedObjects: ["docs/a.txt"]),
+            At));
+
+        Assert.AreEqual(RestorePlanFile.Version, kept.Version);
+        Assert.AreEqual("0123456789abcdef", kept.Request.SnapshotId);
+        SequenceAssert.AreEqual(["docs/a.txt"], kept.Request.Paths!);
+        Assert.AreEqual("/srv/restored", kept.Request.OutputDirectory);
+        Assert.AreEqual("folder", kept.Request.Target);
+        Assert.AreEqual("rename", kept.Request.Existing);
+        Assert.IsTrue(kept.Request.InPlace);
+        Assert.IsNull(kept.Request.Source, "a source was never kept");
+        Assert.AreEqual(2, kept.Plan.Files);
+        SequenceAssert.AreEqual(["docs/b.txt"], kept.Plan.MissingObjects);
+        SequenceAssert.AreEqual(["docs/a.txt"], kept.Plan.ArchivedObjects!);
+        Assert.AreEqual(1, kept.Plan.Conflicts);
+        Assert.AreEqual(At, kept.PlannedAt);
+    }
+
+    [TestMethod]
+    public void AVersionOneFile_ReadsBack_AsARunOfOnePath()
+    {
+        var kept = RestorePlanFile.Read("""
+            {"kind":"fallbackplan-restore-plan","version":1,"contract":"1.66","snapshot_id":"0123456789abcdef",
+             "path":"docs","output_directory":"/srv/restored","planned_at":"2026-10-20T08:00:00.0000000+00:00",
+             "plan":{"files":1,"bytes":42,"missing_objects":[]}}
+            """);
+
+        Assert.AreEqual(1, kept.Version);
+        Assert.AreEqual("docs", kept.Request.Path);
+        Assert.IsNull(kept.Request.Paths);
+        Assert.IsNull(kept.Request.Target);
+        Assert.IsFalse(kept.Request.InPlace);
+        Assert.AreEqual(1, kept.Plan.Files);
+    }
+
+    [TestMethod]
+    [DataRow("""{"kind":"fallbackplan-diagnostic-bundle","version":1}""", "not a kept restore plan")]
+    [DataRow("""{"kind":"fallbackplan-restore-plan","version":3,"snapshot_id":"ab","plan":{"files":1,"bytes":1,"missing_objects":[]}}""", "version 3")]
+    [DataRow("""{"kind":"fallbackplan-restore-plan","version":2,"snapshot_id":"ab"}""", "no plan")]
+    [DataRow("""{ not json""", "not JSON")]
+    public void AFileThatIsNotAKeptPlanThisBuildReads_IsRefused_SayingWhy(string text, string why)
+    {
+        var refused = Assert.ThrowsExactly<InvalidDataException>(() => RestorePlanFile.Read(text));
+
+        Assert.Contains(why, refused.Message, StringComparison.Ordinal);
     }
 }
