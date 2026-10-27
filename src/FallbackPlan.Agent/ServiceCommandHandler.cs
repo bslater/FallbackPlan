@@ -866,16 +866,9 @@ public sealed partial class ServiceCommandHandler(
 
             // What the files write and what they carry, from the manifests
             // the probe has already read.
-            var writeBytes = plan.Items
-                .Where(item => item.Kind == EntryKind.File)
-                .Aggregate(0ul, (sum, item) => sum
-                    + (probed.Facts.TryGetValue(item.ObjectId, out var known) ? known.WrittenBytes : item.Length));
-            List<string> conflicts = [.. plan.Conflicts.Select(conflict => $"{conflict.Path} — {conflict.Reason}")];
-            List<string> degradations =
-            [
-                .. plan.Degradations.Concat(RestoreMetadata.Declare(plan, probed.Facts, target))
-                    .Select(degradation => degradation.Detail),
-            ];
+            var writeBytes = RestorePlanFigures.WriteBytes(plan, probed);
+            var conflicts = RestorePlanFigures.Conflicts(plan);
+            var degradations = RestorePlanFigures.Degradations(plan, probed, target);
 
             IReadOnlyList<RestoreSpaceDescriptor>? space = null;
             if (slices is not null)

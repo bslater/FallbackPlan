@@ -592,6 +592,34 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RestorePlan_RoutedThroughTheService_SaysWhatTheRunWould_AndWritesNothing()
+    {
+        // FR-RST-003, ADR-0107: the plan the service makes for the run the
+        // CLI would ask for, under the grant the passphrase gives, with
+        // nothing restored.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var destination = Path.Combine(_harness.WorkPath, "planned-restore");
+
+        var result = await RunCliAsync(
+            "restore", snapshots.Snapshots[0].SnapshotId, "--output", destination, "--plan");
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
+        Assert.Contains("1 file(s)", result.All, StringComparison.Ordinal);
+        Assert.Contains("nothing was restored", result.All, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(destination), "a plan writes nothing, not even the folder");
+    }
+
+    [TestMethod]
     public async Task RetentionApply_RoutedThroughTheService_DerivesTheReclaimGrantHere()
     {
         // FR-GC-008: the service holds the key that publishes and not the key
