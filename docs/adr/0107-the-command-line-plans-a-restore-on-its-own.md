@@ -63,6 +63,8 @@ The verb succeeds only where the run would restore every file the plan names and
 
   > **2026-10 ([ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md)).** `restore --export <file>` now keeps the plan as JSON. Running a kept plan is still not done.
 - **Resume a restore.** A restore cut short is run again from the start. Its existing-file policy settles what the first run wrote.
+
+  > **2026-10 ([ADR-0109](0109-a-restore-cut-short-is-resumed.md)).** A restore cut short is resumed with `restore --resume`, which leaves what the first run landed as it stands. A resume is not planned.
 - **Plan a run with another existing-file policy, or in place.** `restore` asks for neither, so its plan does not.
 
 ## Alternatives considered
@@ -77,3 +79,4 @@ The verb succeeds only where the run would restore every file the plan names and
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. `restore --plan` prints the plan for the run `restore` would make and restores nothing, through the service or in direct mode alike, and exits non-zero unless the run would restore every file and fit. Export to a file and resume stay owed. |
 | 2026-10 | Accepted | [ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md) takes up the export this record left owed: `restore --export <file>` keeps the plan as JSON and implies `--plan`. |
+| 2026-10 | Accepted | [ADR-0109](0109-a-restore-cut-short-is-resumed.md) takes up the resume this record left owed: `restore --resume` leaves what a run cut short landed and restores the rest. `--plan` beside it is refused. |

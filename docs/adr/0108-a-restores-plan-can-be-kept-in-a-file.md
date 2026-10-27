@@ -53,6 +53,8 @@ A file already at that path is somebody's. It is refused before anything is aske
 
 - **Run a kept plan.** A plan is a picture of the run at the time it was made. Running one later means planning again, because the replica, the destination and what is free may all have moved.
 - **Resume a restore.** A restore cut short is run again from the start, as before.
+
+  > **2026-10 ([ADR-0109](0109-a-restore-cut-short-is-resumed.md)).** A restore cut short is resumed with `restore --resume`. A resume is not kept as a plan: `--export` beside it is refused.
 - **Keep a plan from the console.** The wizard shows its plan, and keeping one from there is not built.
 
 ## Alternatives considered
@@ -66,3 +68,4 @@ A file already at that path is somebody's. It is refused before anything is aske
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. `restore --export <file>` keeps the plan as JSON, in the contract's own words beside the run it was made for, implies `--plan` so nothing is restored, and refuses a file already there. Running a kept plan, and resume, stay owed. |
+| 2026-10 | Accepted | [ADR-0109](0109-a-restore-cut-short-is-resumed.md) resumes a restore cut short, which this record left owed. A resume is not planned, so `--export` beside `--resume` is refused. |

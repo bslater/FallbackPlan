@@ -81,3 +81,4 @@ The space measure counts a later name of a group as writing nothing, from the ma
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A group's later names are links to the file its first name landed as, where they agree with it in content, length and every attribute but the access time, each through the existing-file policy at its destination. A name that disagrees, or that the target will not link, is a file of its own and says why. The receipt moves to schema 7's `linked_to`, and the plan measures a group once. |
+| 2026-10 | Accepted | [ADR-0109](0109-a-restore-cut-short-is-resumed.md): a group's first name a resumed run finds already in place is the file its later names are made from, as one the run writes is. The receipt moves to schema 8. |
