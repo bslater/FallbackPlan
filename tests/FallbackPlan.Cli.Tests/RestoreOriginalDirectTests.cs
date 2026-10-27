@@ -70,6 +70,7 @@ public sealed class RestoreOriginalDirectTests : IDisposable
         Assert.Contains("\"media/clip.txt\"", kept, StringComparison.Ordinal);
         using var document = JsonDocument.Parse(kept);
         Assert.AreEqual("docs", document.RootElement.GetProperty("set").GetString(), "the merged receipt names the set");
+        Assert.AreEqual(SetId, document.RootElement.GetProperty("set_id").GetString(), "and records which it is");
     }
 
     [TestMethod]
@@ -85,6 +86,7 @@ public sealed class RestoreOriginalDirectTests : IDisposable
         using var document = JsonDocument.Parse(await File.ReadAllTextAsync(
             Assert.ContainsSingle(Directory.GetFiles(Path.Combine(_cli.StatePath, "receipts"), "*.json"))));
         Assert.AreEqual("docs", document.RootElement.GetProperty("set").GetString());
+        Assert.AreEqual(SetId, document.RootElement.GetProperty("set_id").GetString());
     }
 
     [TestMethod]

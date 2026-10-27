@@ -750,8 +750,20 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// knew no set. Additive: a pre-1.74 client ignores the field, and a
     /// pre-1.74 service's row names no set.
     /// </para>
+    /// <para>
+    /// 1.75 shows what a restore did not restore, through the passphrase
+    /// (FR-RST-004, FR-WOR-007, ADR-0127). `RestoreReceiptDescriptor` gains
+    /// `set_id`, the identity of the set the receipt records.
+    /// `get_restore_receipt` takes `run`, `source` and `limit`, and answers
+    /// `restore_receipt`: the `receipt`, the `items` its run failed, skipped
+    /// or degraded, each with `path`, `outcome` and `detail`, and `unlisted`,
+    /// how many more there are. It is answered only through a source of the
+    /// receipt's set, unlocked by the session that asks, and refused for a
+    /// receipt that records no set. Additive: a pre-1.75 client never asks,
+    /// and a pre-1.75 service refuses the verb.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 74);
+    public static ContractVersion Current { get; } = new(1, 75);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

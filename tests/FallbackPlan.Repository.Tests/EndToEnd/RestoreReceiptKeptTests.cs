@@ -9,7 +9,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// all, so the service and the command line's direct mode keep it alike and
 /// "the restore succeeded" stays a claim a person can check. At schema 9 it
 /// names the set whose snapshot its run restored, where the run knew it
-/// (ADR-0126), and says nothing of a set where it did not.
+/// (ADR-0126), and says nothing of a set where it did not; at schema 10 it
+/// records that set's identity too (ADR-0127), which a rename does not
+/// change. One run's receipt is read alone, by its run.
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptKeptTests : IDisposable
@@ -52,27 +54,49 @@ public sealed class RestoreReceiptKeptTests : IDisposable
     }
 
     [TestMethod]
-    public void AReceiptNamesTheSetItsRunRestored_AtSchemaNine_AndOneThatKnewNoneSaysNothingOfOne()
+    public void AReceiptNamesAndRecordsTheSetItsRunRestored_AtSchemaTen_AndOneThatKnewNoneSaysNothingOfOne()
     {
         var receipts = Path.Combine(_root, "receipts");
 
-        var named = (ReceiptOf("notes.txt") with { Set = "docs" }).Keep(receipts, "0123456789abcdef");
+        var named = (ReceiptOf("notes.txt") with { Set = "docs", SetId = new string('a', 32) }).Keep(receipts, "0123456789abcdef");
         var unnamed = ReceiptOf("notes.txt").Keep(receipts, "fedcba9876543210");
 
-        Assert.AreEqual(9, RestoreReceipt.CurrentSchemaVersion);
+        Assert.AreEqual(10, RestoreReceipt.CurrentSchemaVersion);
         using (var document = JsonDocument.Parse(File.ReadAllText(named)))
         {
             Assert.AreEqual("docs", document.RootElement.GetProperty("set").GetString());
+            Assert.AreEqual(new string('a', 32), document.RootElement.GetProperty("set_id").GetString());
         }
 
         using (var document = JsonDocument.Parse(File.ReadAllText(unnamed)))
         {
             Assert.IsFalse(document.RootElement.TryGetProperty("set", out _), "a run that knew no set names none");
+            Assert.IsFalse(document.RootElement.TryGetProperty("set_id", out _), "nor records one");
         }
 
         var kept = RestoreReceipt.ReadKept(receipts);
         Assert.AreEqual("docs", kept.Single(entry => entry.Run == "0123456789abcdef").Receipt!.Set);
         Assert.IsNull(kept.Single(entry => entry.Run == "fedcba9876543210").Receipt!.Set);
+        Assert.AreEqual(new string('a', 32), kept.Single(entry => entry.Run == "0123456789abcdef").Receipt!.SetId);
+    }
+
+    [TestMethod]
+    public void OneRunsReceipt_IsReadAloneByItsRun_AndARunThatKeptNoneReadsAsNone()
+    {
+        var receipts = Path.Combine(_root, "receipts");
+        ReceiptOf("first.txt").Keep(receipts, "0123456789abcdef");
+        ReceiptOf("second.txt").Keep(receipts, "fedcba9876543210");
+
+        var one = RestoreReceipt.ReadKept(receipts, "fedcba9876543210");
+
+        Assert.IsNotNull(one);
+        Assert.AreEqual("fedcba9876543210", one.Run);
+        Assert.AreEqual("second.txt", one.Receipt!.Items[0].Path);
+        Assert.IsNull(RestoreReceipt.ReadKept(receipts, "1111111111111111"));
+        Assert.IsNull(
+            RestoreReceipt.ReadKept(receipts, Path.Combine("..", "receipts", "fedcba9876543210")),
+            "what is not a run's name is never joined to a path, even one that would find a receipt");
+        Assert.IsNull(RestoreReceipt.ReadKept(Path.Combine(_root, "elsewhere"), "fedcba9876543210"));
     }
 
     private static RestoreReceipt ReceiptOf(string path) => new()

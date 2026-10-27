@@ -45,6 +45,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
 [JsonDerivedType(typeof(ListRestoreRunsCommand), "list_restore_runs")]
 [JsonDerivedType(typeof(ListRestoreReceiptsCommand), "list_restore_receipts")]
+[JsonDerivedType(typeof(GetRestoreReceiptCommand), "get_restore_receipt")]
 [JsonDerivedType(typeof(ResumeRestoreCommand), "resume_restore")]
 [JsonDerivedType(typeof(PlanResumeRestoreCommand), "plan_resume_restore")]
 [JsonDerivedType(typeof(ForgetRestoreRunCommand), "forget_restore_run")]
@@ -647,6 +648,21 @@ public sealed record ListRestoreRunsCommand : ServiceCommand;
 /// </remarks>
 /// <param name="Limit">At most this many of the newest, or null for every one kept.</param>
 public sealed record ListRestoreReceiptsCommand(int? Limit = null) : ServiceCommand;
+
+/// <summary>
+/// Reads one kept restore receipt's files that its run did not restore
+/// (contract 1.75, FR-RST-004, ADR-0127): those that failed, were skipped or
+/// were degraded, with what became of each and why.
+/// </summary>
+/// <remarks>
+/// A receipt's paths are the backup's file names, so this is answered only
+/// through a source of the set the receipt records, unlocked with that set's
+/// passphrase by the session that asks (FR-WOR-007).
+/// </remarks>
+/// <param name="Run">The run whose receipt to read, as <see cref="ListRestoreReceiptsCommand"/> names it.</param>
+/// <param name="Source">An open restore source of the receipt's set, unlocked with its passphrase.</param>
+/// <param name="Limit">At most this many of the files, in the receipt's order, or null for the service's own bound.</param>
+public sealed record GetRestoreReceiptCommand(string Run, string? Source = null, int? Limit = null) : ServiceCommand;
 
 /// <summary>
 /// Resumes a restore run left unfinished by its name alone (contract 1.71,
