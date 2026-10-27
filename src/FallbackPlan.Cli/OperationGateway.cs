@@ -617,6 +617,14 @@ internal sealed class ServiceGateway(
                 lines.Add(OperationGateway.FoundInPlace(result.FoundInPlace));
             }
 
+            // What --resume takes, where a run was cut short (ADR-0110). A
+            // partial run skipped what this target cannot hold, which a
+            // resume would skip again.
+            if (result.Run is { } run && result.Outcome is "failed" or "cancelled")
+            {
+                lines.Add($"to restore what is left, run it again with --resume {run}");
+            }
+
             // A person restoring hears that a copy of their backup is damaged
             // from the restore that met it (FR-RST-007), and which copy.
             if (result.ReadAround > 0)

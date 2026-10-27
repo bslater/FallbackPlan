@@ -34,11 +34,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_AResumedRestore_IsRecordedAtOneSixtySeven()
+    public void ContractVersion_ARestoresRun_IsRecordedAtOneSixtyEight()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.67", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.68", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -251,6 +251,25 @@ public sealed class ConfigurationContractTests : IDisposable
         Assert.IsInstanceOfType<RestoreResult>(
             JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions), out var read);
         Assert.AreEqual(0, read.FoundInPlace);
+    }
+
+    [TestMethod]
+    public void RestoreResult_NamesTheRunAResumeOfItGives_UnderItsWireName()
+    {
+        // Contract 1.68 (FR-RST-008, ADR-0110): the name a client sends back
+        // as resume, so none has to read it out of a path.
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreResult(2, 1, "/srv/restored/.fbp-quarantine/0123456789abcdef", "failed", Run: "0123456789abcdef"),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"run\":\"0123456789abcdef\"", modern, StringComparison.Ordinal);
+
+        // A pre-1.68 service's result names none, and offers no resume.
+        var old = modern.Replace(",\"run\":\"0123456789abcdef\"", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsInstanceOfType<RestoreResult>(
+            JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions), out var read);
+        Assert.IsNull(read.Run);
     }
 
     [TestMethod]

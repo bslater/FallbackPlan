@@ -134,6 +134,27 @@ public sealed class RestoreResumeServiceTests : IDisposable
         Assert.AreEqual("deeper", await File.ReadAllTextAsync(Path.Combine(destination, "nested", "deeper.txt"), _timeout.Token));
     }
 
+    [TestMethod]
+    public async Task EveryRun_SaysTheNameAResumeOfItGives()
+    {
+        // ADR-0110: a quarantined run is resumed by its folder's name, and so
+        // is the run that resumes it, so a run cut short twice is resumed by
+        // the same name both times. A run in place is resumed where it
+        // lands, and names itself as its receipt does.
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var destination = Path.Combine(_harness.WorkPath, "restored");
+
+        var first = await RestoreAsync(handler, destination);
+        Assert.AreEqual(Path.GetFileName(first.OutputDirectory), first.Run);
+
+        var resumed = await RestoreAsync(handler, destination, resume: first.Run);
+        Assert.AreEqual(first.Run, resumed.Run);
+
+        var inPlace = await RenameInPlaceAsync(handler, Path.Combine(_harness.WorkPath, "in-place"), resume: null);
+        Assert.AreEqual(Path.GetFileNameWithoutExtension(inPlace.ReceiptPath), inPlace.Run);
+    }
+
     public void Dispose()
     {
         _timeout.Dispose();

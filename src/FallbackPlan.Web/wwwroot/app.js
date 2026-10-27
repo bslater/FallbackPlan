@@ -5867,6 +5867,10 @@ function rstStep5() {
 function rstStep6() {
   if (W.result) {
     const clean = W.result.outcome === "complete";
+    // A run that failed or was stopped can be resumed by the name the service
+    // gave it (ADR-0110). A partial one skipped what this target cannot
+    // hold, which a resume would skip again.
+    const resumable = W.result.run && (W.result.outcome === "failed" || W.result.outcome === "cancelled");
     return `
       <h3>${clean ? "✔ Restore complete" : "◐ Restore " + esc(W.result.outcome)}</h3>
       <div class="plan-figures">
@@ -5886,7 +5890,14 @@ function rstStep6() {
       ${W.result.notApplied?.length ? `<p class="dlg-sub">The files came back without some of what was captured with them;
         the receipt names it file by file.</p>
         <pre class="report" id="rst-not-applied">${esc(W.result.notApplied.join("\n"))}</pre>` : ""}
-      <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div>`;
+      ${W.result.foundInPlace ? `<p class="dlg-sub" id="rst-found-in-place">${fmtCount(W.result.foundInPlace)} file(s) were
+        already in place, holding the snapshot's content, and were left as they stood.</p>` : ""}
+      ${resumable ? `<p class="dlg-sub">A resume restores what is left: each file already holding the snapshot's
+        content stays as it stands.</p>` : ""}
+      <div class="dlg-actions">
+        ${resumable ? `<button type="button" class="btn" id="rst-resume" data-action="rst-resume">Restore what is left</button>` : ""}
+        <button type="button" class="btn primary" data-action="close-dialog">Close</button>
+      </div>`;
   }
 
   // The word confirms the plan shown above it, so its field takes nothing
@@ -6115,26 +6126,40 @@ Object.assign(actions, {
 
   async "rst-run"(el) {
     await withBusy(el, async () => {
-      const result = await run({
-        command: "run_restore",
-        snapshotId: W.snapshot.snapshotId,
-        path: null,
-        outputDirectory: W.target === "original" ? "" : W.output,
-        source: W.source.sourceId,
-        paths: rstCompile(),
-        target: W.target,
-        existing: W.existing,
-        inPlace: true,
-        ignoreFreeSpace: document.getElementById("rst-ignore-space")?.checked ?? false,
-      }, { errToast: "Restore refused" });
-      if (result?.result === "restore") {
-        W.result = result;
-        rstRender();
-        refreshJobs();
-      }
+      await rstRunRestore(
+        { ignoreFreeSpace: document.getElementById("rst-ignore-space")?.checked ?? false }, "Restore refused");
+    });
+  },
+
+  // The run again, as it was confirmed, naming the run it continues
+  // (ADR-0110): what already landed is left, and the rest restored.
+  async "rst-resume"(el) {
+    await withBusy(el, async () => {
+      await rstRunRestore({ resume: W.result.run }, "Resume refused");
     });
   },
 });
+
+/* The restore the wizard confirmed, with what this asking adds to it. */
+async function rstRunRestore(extra, refused) {
+  const result = await run({
+    command: "run_restore",
+    snapshotId: W.snapshot.snapshotId,
+    path: null,
+    outputDirectory: W.target === "original" ? "" : W.output,
+    source: W.source.sourceId,
+    paths: rstCompile(),
+    target: W.target,
+    existing: W.existing,
+    inPlace: true,
+    ...extra,
+  }, { errToast: refused });
+  if (result?.result === "restore") {
+    W.result = result;
+    rstRender();
+    refreshJobs();
+  }
+}
 
 /* ---------------------------------------------------------------- toast */
 

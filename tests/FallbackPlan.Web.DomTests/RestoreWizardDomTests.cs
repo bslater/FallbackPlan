@@ -21,7 +21,9 @@ namespace FallbackPlan.Web.DomTests;
 /// person chooses to restore anyway (ADR-0083). Where the service says what
 /// the run will read, the plan shows that too (ADR-0083 Amendment 2), and it
 /// names what every copy holds only in an archival tier (ADR-0103). The result says which
-/// captured metadata the files came back without (FR-RST-004). Its file tree
+/// captured metadata the files came back without (FR-RST-004), and a run that
+/// failed offers to resume it, naming the run the service said it was, and
+/// says what the resume found already in place (FR-RST-008, ADR-0110). Its file tree
 /// shows what will not be restored a shade lighter rather than struck
 /// through, with toggles large enough to hit, as the backup wizard's does.
 /// </summary>
@@ -366,6 +368,81 @@ public sealed class RestoreWizardDomTests
 
         await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-not-applied")).ToContainTextAsync("accessed_at not applied to 1 item(s)");
+    }
+
+    [TestMethod]
+    [DataRow("failed")]
+    [DataRow("cancelled")]
+    public async Task Wizard_ARestoreCutShort_OffersToResumeIt_AndTheResumeNamesItsRun(string outcome)
+    {
+        // FR-RST-008, ADR-0110: a restore cut short is resumed where the
+        // person restoring is looking, in the run's own shape, naming the run
+        // the service said it was.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            RunRestoreCommand { Resume: null } => new ApiRestoreResult(
+                0, outcome == "failed" ? 1 : 0, "/restore/out", outcome, ReceiptPath: "/state/receipts/0123456789abcdef.json",
+                FailedSample: outcome == "failed" ? ["notes.txt — the copy it was read from went away"] : null, Run: "0123456789abcdef"),
+            RunRestoreCommand { Resume: "0123456789abcdef" } => new ApiRestoreResult(
+                1, 0, "/restore/out", "complete", ReceiptPath: "/state/receipts/fedcba9876543210.json",
+                FoundInPlace: 1, Run: "fedcba9876543210"),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+
+        await Expect(page.GetByText($"Restore {outcome}")).ToBeVisibleAsync();
+        await page.Locator("#rst-resume").ClickAsync();
+
+        var resumed = await harness.ReceivedAsync<RunRestoreCommand>(command => command.Resume is not null);
+        Assert.AreEqual("0123456789abcdef", resumed.Resume);
+        Assert.AreEqual("/restore/out", resumed.OutputDirectory);
+        Assert.AreEqual("src-1", resumed.Source);
+        Assert.AreEqual("folder", resumed.Target);
+        Assert.AreEqual("rename", resumed.Existing);
+        Assert.IsTrue(resumed.InPlace);
+        Assert.IsNotNull(resumed.Paths);
+        CollectionAssert.Contains(resumed.Paths.ToList(), "notes.txt");
+
+        await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-found-in-place")).ToContainTextAsync("1 file(s)");
+        await Expect(page.Locator("#rst-resume")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    [DataRow("complete", "0123456789abcdef", DisplayName = "a run that completed")]
+    [DataRow("partial", "0123456789abcdef", DisplayName = "a run that failed nothing")]
+    [DataRow("failed", null, DisplayName = "a service that names no run")]
+    public async Task Wizard_ARestoreThereIsNothingToResume_OffersNoResume(string outcome, string? run)
+    {
+        // A partial run skipped what this target cannot hold, which a resume
+        // would skip again; and a service before 1.68 says no run to name.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is RunRestoreCommand
+            ? new ApiRestoreResult(
+                1, outcome == "failed" ? 1 : 0, "/restore/out", outcome,
+                ReceiptPath: "/state/receipts/0123456789abcdef.json", Run: run)
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+
+        await Expect(page.GetByText($"Restore {outcome}")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-resume")).ToHaveCountAsync(0);
     }
 
     [TestMethod]

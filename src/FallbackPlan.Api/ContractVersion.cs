@@ -687,8 +687,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// sends no run and its restore resumes nothing, and a pre-1.67 service's
     /// result reads as finding none.
     /// </para>
+    /// <para>
+    /// 1.68 names the run a resume continues (FR-RST-008, ADR-0110).
+    /// `RestoreResult` gains `run`: the name a resume of it gives as
+    /// `resume`, the run's own or, for a resumed quarantined run, the run it
+    /// continued. Additive: a pre-1.68 client ignores the field, and a
+    /// pre-1.68 service's result names none and offers no resume.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 67);
+    public static ContractVersion Current { get; } = new(1, 68);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

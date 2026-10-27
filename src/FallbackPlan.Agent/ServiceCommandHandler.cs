@@ -1206,7 +1206,8 @@ public sealed partial class ServiceCommandHandler(
                         $"{item.Path} — read from {string.Join(", ", item.ReadFrom ?? [])}, "
                         + $"around {string.Join("; ", item.ReadAround!)}")],
                 NotApplied: notApplied.Count == 0 ? null : notApplied,
-                FoundInPlace: receipt.Items.Count(item => item.FoundInPlace));
+                FoundInPlace: receipt.Items.Count(item => item.FoundInPlace),
+                Run: options.ResumedRunId ?? options.RunId);
         }
         finally
         {
