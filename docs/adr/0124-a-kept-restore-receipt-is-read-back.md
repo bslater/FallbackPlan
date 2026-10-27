@@ -50,6 +50,7 @@ A name that is not a run's is refused before it is joined to a path, as the serv
 ## What this does not do
 
 - **Read the receipts through the service.** The verb reads the state directory itself, as `receipts` does. A console on another machine still sees a run's receipt only in that run's result.
+  > **2026-10 ([ADR-0125](0125-the-service-lists-the-restore-receipts-it-keeps.md)).** The service answers them, as what became of each run's files and where it wrote them, and the console shows them in its Maintenance view.
 - **List them as JSON.** `--run` prints one receipt as JSON, as it was kept, and a script that wants them all reads the folder.
 - **Let receipts go.** Every receipt kept stays until a person removes it.
 
@@ -63,3 +64,4 @@ A name that is not a run's is refused before it is joined to a path, as the serv
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The receipt reads back the receipts a state directory keeps, newest first, each under its run, saying which do not read and passing over what is not a run's; `restore-receipts` lists them with what each run did and where it wrote, or prints one whole, through no service. |
+| 2026-10 | Accepted | [ADR-0125](0125-the-service-lists-the-restore-receipts-it-keeps.md): the service answers the receipts it keeps, and the console shows them, which this record left undone. |

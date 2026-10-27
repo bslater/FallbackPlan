@@ -149,6 +149,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0122](adr/0122-direct-mode-keeps-a-restores-receipt.md) | Direct mode keeps a restore's receipt: the receipt keeps itself as its run's own file under a state directory's receipts, written whole; the service keeps its receipts through it, and direct mode keeps each run's receipt there too and says where, while a run refused before it begins and a plan keep none | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway`, `Cli/CliSession` · `Repository.Tests/RestoreReceiptKeptTests`, `Cli.Tests/RestoreReceiptDirectTests`, `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0122--direct-mode-keeps-a-restores-receipt) |
 | [0123](adr/0123-the-console-plans-the-resume-a-result-offers.md) | The console plans the resume a result offers: restoring what is left of a failed or stopped run is planned by the run's name first, shown as a resume's plan is shown, and asked only from beneath the plan, armed only on the person's say where it will not fit, and offered as before where the service cannot plan it | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreWizardDomTests`, `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0123--the-console-plans-the-resume-a-result-offers) |
 | [0124](adr/0124-a-kept-restore-receipt-is-read-back.md) | A kept restore receipt is read back: the receipts a state directory keeps, the service's or direct mode's, are read newest first, each under its run, a file that does not read said to and what is not a run's passed over; `restore-receipts` lists each run with what became of its files and where it wrote them, or prints one run's receipt whole | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/CliApplication`, `Cli/RestoreReceiptReport` · `Repository.Tests/RestoreReceiptReadBackTests`, `Cli.Tests/RestoreReceiptsVerbTests`, `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0124--a-kept-restore-receipt-is-read-back) |
+| [0125](adr/0125-the-service-lists-the-restore-receipts-it-keeps.md) | The service lists the restore receipts it keeps: `list_restore_receipts` answers each, newest first under a limit with how many are kept, as its outcome, when it ended, what became of its files and where it wrote them, never the paths, which are the backup's file names; the console shows them in the Maintenance view, and a service before the listing is an empty card (contract 1.73) | **Built** | `Agent/ServiceCommandHandler` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Api.Tests/ConfigurationContractTests`, `Hosts.Tests/RestoreReceiptsServiceTests`, `Web.Tests/ConsoleRestoreReceiptsScriptTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0125--the-service-lists-the-restore-receipts-it-keeps) |
 
 ---
 
@@ -3648,5 +3649,22 @@ service now shares.
 
 What remains is recorded rather than done. The receipts are read from the state
 directory itself, not through the service, so a console on another machine
-still sees a run's receipt only in its result. They are not listed as JSON, and
+still sees a run's receipt only in its result. ADR-0125 has since answered them
+through the service. They are not listed as JSON, and none is let go.
+
+### 0125 — the service lists the restore receipts it keeps
+
+The receipts were read back from the state directory, which a console on
+another machine cannot reach. The service now answers `list_restore_receipts`:
+each receipt it keeps, newest first under a limit, with how many are kept. Each
+is answered as its run, its outcome, when it ended, the snapshot, the counts of
+its files restored, found in place, skipped, failed and degraded, and where it
+wrote them. The paths it restored, which are the backup's file names, are never
+answered, so the listing needs no source; a receipt that does not read is
+answered with why. The console shows them in the Maintenance view beside the
+peers' receipts, read on entering the view, and a service before contract 1.73
+is an empty card.
+
+What remains is recorded rather than done. A receipt's files are not shown in
+the console, the command line does not ask the service for the receipts, and
 none is let go.
