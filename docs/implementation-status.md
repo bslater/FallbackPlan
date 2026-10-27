@@ -136,6 +136,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0109](adr/0109-a-restore-cut-short-is-resumed.md) | A restore cut short is resumed: `restore --resume` leaves each file already holding the snapshot's content, by length and whole-file hash, as it stands, reads none of its content, applies its metadata again and lands the rest, measured for what is left; through the service it continues the run it names in that run's folder (contract 1.67), and the receipt (schema 8) says what was found in place | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Repository.Tests/RestoreResumeTests`, `Repository.Tests/RestoreSpaceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/RestoreResumeServiceTests`, `Hosts.Tests/ClientModeTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0109--a-restore-resumed) |
 | [0110](adr/0110-the-console-resumes-a-restore-cut-short.md) | The console resumes a restore cut short: a restore's result names the run a resume of it gives (contract 1.68), the wizard offers to restore what is left of a run that failed or was stopped, as it was confirmed and naming that run, and says what was found in place; the command line says how to resume such a run | **Built** | `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Web.DomTests/RestoreWizardDomTests`, `Web.Tests/ConsoleRestoreResultScriptTests`, `Hosts.Tests/RestoreResumeServiceTests`, `Cli.Tests/GatewayRestoreReportTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0110--a-restore-resumed-from-the-console) |
 | [0111](adr/0111-a-cloud-destination-says-what-its-store-was-asked.md) | A cloud destination says what its store was asked: each network store tells an observer of every request it sends, once an attempt, with its bytes; the service counts them by destination and by UTC day; and the destination's status row says what its store was asked over the thirty days ending today, and when counting began where that falls inside them (contract 1.69), on the command line and the console | **Built** | `Storage.Abstractions/IStoreRequestObserver` · `Storage.S3/S3ObjectStore`, `Storage.AzureBlob/AzureBlobObjectStore` · `Application/StoreRequestLedger` · `Agent/StoreComposition`, `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Storage.ContractTests/StoreRequestObserverTests`, `Application.Tests/StoreRequestLedgerTests`, `Hosts.Tests/ObjectStoreDestinationTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusRequestsLineTests`, `Web.DomTests/DestinationRequestsDomTests` · [notes](#0111--what-a-cloud-destinations-store-was-asked) |
+| [0112](adr/0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md) | A store that archives a replica's metadata restores nothing: each sync to an object store asks after the replica's format with a head, the sync's read-back and the deep sweep tell an archived metadata blob from a data blob, the ledger keeps the first object met until it is served again (schema 13), and a notice and the status row say nothing restores from the destination until it is rehydrated and that only data blobs may be held archived (contract 1.70), on the command line and the console | **Built** | `Agent/FanOut`, `Agent/ReplicaSweepJob`, `Agent/ArchivedMetadataNotice`, `Agent/ServiceCommandHandler` · `Application/DestinationSyncStore` · `Cli/CliApplication` · `Hosts.Tests/ObjectStoreDestinationTests`, `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusArchivedMetadataLineTests`, `Web.DomTests/ArchivedMetadataDomTests` · [notes](#0112--a-replicas-metadata-held-archived) |
 
 ---
 
@@ -3428,3 +3429,22 @@ console's destination card.
 What remains is recorded rather than done. The requests are not priced, a
 request another client sent the same account is not seen, and a service that
 dies unstopped loses at most the last thirty seconds' count.
+
+### 0112 — a replica's metadata held archived
+
+A lifecycle rule that moves objects past an age moves a replica's format
+first, and a rule on its blobs moves its metadata blobs: either way no restore
+can open the replica, while every sync called the destination in sync and the
+archived notice said a restore would name the files it needed. Each sync to
+an object store now asks after the replica's format with a head, and the
+sync's read-back and the deep sweep tell a metadata blob from a data blob. The
+first such object met is kept on the ledger's row until that object is found
+served again (schema 13), named on the status row (contract 1.70's
+`archived_metadata`) and in a notice of its own that says nothing restores
+from the destination and that only `blobs/data/` may be held archived. The
+command line prints it under the row, and the console's card carries a badge
+on its summary.
+
+What remains is recorded rather than done. An index object archived while
+the format stays served is met by a drill or a restore, as before, and the
+store's lifecycle rule itself is not read.
