@@ -703,8 +703,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// by the request. Additive: a pre-1.69 client ignores the field, and a
     /// pre-1.69 service's row reads as nothing counted, never as nothing asked.
     /// </para>
+    /// <para>
+    /// 1.70 says when a store holds a replica's metadata only in an archival
+    /// tier (FR-DEST-020, ADR-0112). `DestinationStatusDescriptor` gains
+    /// `archived_metadata`, the replica's object a reader found so, keyed
+    /// under its root, and `archived_metadata_since`. Nothing restores from
+    /// such a replica until the object is rehydrated. Additive: a pre-1.70
+    /// client ignores the fields, and a pre-1.70 service's row names none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 69);
+    public static ContractVersion Current { get; } = new(1, 70);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

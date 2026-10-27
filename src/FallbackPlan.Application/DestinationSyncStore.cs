@@ -288,6 +288,30 @@ public sealed record DestinationSyncRecord
     public int SweepClosedArchived { get; init; }
 
     /// <summary>
+    /// An object of the replica's own, not a data blob, that a reader found
+    /// the store holding only in an archival tier, keyed under the replica's
+    /// root; null when none stands (schema 13,
+    /// [ADR-0112](../../docs/adr/0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md)).
+    /// </summary>
+    /// <remarks>
+    /// Every opening of the replica reads such objects, so while one is held
+    /// so nothing restores from the destination. The first one met is kept,
+    /// because it is what a person is told to rehydrate and what the next
+    /// sync asks after; only that object found served again clears it.
+    /// </remarks>
+    [JsonPropertyName("metadata_archived_key")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MetadataArchivedKey { get; init; }
+
+    /// <summary>
+    /// When <see cref="MetadataArchivedKey"/> was first met, Unix
+    /// milliseconds; null when none stands (schema 13, ADR-0112).
+    /// </summary>
+    [JsonPropertyName("metadata_archived_since")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? MetadataArchivedSince { get; init; }
+
+    /// <summary>
     /// The snapshot whose complete closure first made this destination a full
     /// replica; null while it holds none. Declared ahead of its writer
     /// (ADR-0047 §6): nothing fills it yet — the schema carries the field so
@@ -554,7 +578,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 12;
+    private const int CurrentSchemaVersion = 13;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -696,7 +720,9 @@ public sealed class DestinationSyncStore
         // because nothing told it apart: the next reader to meet one says so.
         // Schema 12 added how many blobs the last closed circuit passed over,
         // none on an older row, which counted none apart: the next circuit to
-        // close says how many. Only 1 → 2 changes a row, below.
+        // close says how many. Schema 13 added the replica object a reader
+        // found held only archived, none on an older row, which told none
+        // apart: the next sync looks. Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -1150,6 +1176,52 @@ public sealed class DestinationSyncStore
                 SweepArchived = (previous?.SweepArchived ?? 0) + archived,
                 ArchivedSince = archived > 0 ? previous?.ArchivedSince ?? nowUnixMilliseconds : previous?.ArchivedSince,
             };
+        });
+    }
+
+    /// <summary>
+    /// Records that a reader found an object of the replica's own, not a data
+    /// blob, held only in an archival tier (ADR-0112). The first such object
+    /// met stands until it is found served again.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="key">The object, keyed under the replica's root.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <returns>The row, with <see cref="DestinationSyncRecord.MetadataArchivedKey"/> set.</returns>
+    public DestinationSyncRecord RecordMetadataArchived(string setId, string destination, string key, ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(key);
+
+        return Mutate(setId, destination, previous => previous?.MetadataArchivedKey is not null
+            ? previous
+            : Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+            {
+                MetadataArchivedKey = key,
+                MetadataArchivedSince = nowUnixMilliseconds,
+            });
+    }
+
+    /// <summary>
+    /// Records that a reader found an object of the replica's own served, or
+    /// gone: when it is the object that stood archived, that no longer stands
+    /// (ADR-0112). Another object says nothing of it.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="key">The object, keyed under the replica's root.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <returns>The row as it now stands.</returns>
+    public DestinationSyncRecord RecordMetadataServed(string setId, string destination, string key, ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(key);
+
+        return Mutate(setId, destination, previous =>
+        {
+            var row = Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind);
+            return string.Equals(row.MetadataArchivedKey, key, StringComparison.Ordinal)
+                ? row with { MetadataArchivedKey = null, MetadataArchivedSince = null }
+                : row;
         });
     }
 

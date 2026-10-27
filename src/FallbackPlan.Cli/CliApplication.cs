@@ -3185,6 +3185,11 @@ public static class CliApplication
                             {
                                 output.WriteLine($"     {requests}");
                             }
+
+                            if (DescribeArchivedMetadata(row) is { } archived)
+                            {
+                                output.WriteLine($"     {archived}");
+                            }
                         }
                     }
                 }
@@ -3455,6 +3460,34 @@ public static class CliApplication
             CultureInfo.InvariantCulture,
             $"requests ({asked.Days} days{since}): {asked.Puts} put, {asked.Gets} get, {asked.Heads} head, {asked.Lists} list, "
             + $"{asked.Deletes} delete; {asked.BytesSent} bytes sent, {asked.BytesReceived} bytes received");
+    }
+
+    /// <summary>
+    /// A destination whose store holds an object of the replica's own only in
+    /// an archival tier (contract 1.70, FR-DEST-020): nothing restores from
+    /// there until it is rehydrated, and what a lifecycle rule must leave
+    /// served. Null where none is named, and from a service before 1.70.
+    /// </summary>
+    /// <remarks>
+    /// A line of its own under the row rather than a token on it, because the
+    /// row's state stays in sync: the copy did land, and only a restore finds
+    /// it cannot be opened.
+    /// </remarks>
+    internal static string? DescribeArchivedMetadata(DestinationStatusDescriptor row)
+    {
+        ThrowHelper.ThrowIfNull(row);
+        if (row.ArchivedMetadata is not { } key)
+        {
+            return null;
+        }
+
+        var held = row.ArchivedMetadataSince is { } since
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"since {DateTimeOffset.FromUnixTimeMilliseconds((long)since):yyyy-MM-dd} the store has held {key}")
+            : $"the store holds {key}";
+        return $"nothing restores from here: {held} only in an archival tier; rehydrate it there, and keep "
+            + "everything but blobs/data/ out of the store's lifecycle rule";
     }
 
     /// <summary>

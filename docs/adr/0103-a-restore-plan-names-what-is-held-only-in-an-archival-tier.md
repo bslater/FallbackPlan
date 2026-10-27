@@ -76,6 +76,8 @@ A run that reaches an archived record reads around it to a copy that holds it re
 - **Wait for a rehydration.** A plan names what is archived now. One made after the store has rehydrated the objects names none of them.
 - **Keep a backup's objects out of an archival tier, or change how the other readers of a replica take one.** Which objects move is the store's lifecycle rule, which its owner sets. A sync's read-back, the deep sweep and a drill read a replica back and meet the same refusal; this record does not change how they report it.
 
+  > **2026-10 ([ADR-0112](0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md)).** Which objects move is still the owner's rule. The service now says which may: only the data blobs, under `blobs/data/`. An object of the replica's own held archived is named on the status row, with a notice that nothing restores from the destination until it is rehydrated.
+
   > **2026-10 ([ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md)).** A sync's read-back now counts an archived sample neither proven nor failed, and the deep sweep passes over an archived blob and closes its circuit. One notice for the pair says so. A drill is as it was.
 
   > **2026-10 ([ADR-0105](0105-a-drill-takes-archived-content-as-a-stated-limit.md)).** A drill now plans each sampled file at such a store, and takes a file whose content is archived as a stated limit rather than a failure.
@@ -95,3 +97,4 @@ A run that reaches an archived record reads around it to a copy that holds it re
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The store contract says when an object is held only in an archival tier, and refuses a read of one as archived. The S3 and Azure Blob providers read it from their APIs and declare `ArchivalTiers`. A plan passes over an archived copy for a readable one and names what every copy holds only archived, apart from the missing (contract 1.65), and the console's wizard lists them before a restore is armed. |
 | 2026-10 | Accepted | [ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md) takes up what this record left to the replica's other readers: a sync's read-back and the deep sweep take an archived object as archived, and say so in one notice for the pair. |
+| 2026-10 | Accepted | [ADR-0112](0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md): a plan names the files whose data is held archived, and only data. A store that holds an object of the replica's own archived restores nothing, and the destination now says so before a restore meets it. |

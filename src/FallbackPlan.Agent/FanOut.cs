@@ -1072,6 +1072,7 @@ public static class FanOut
                     runtime, set, destination, archive, PacedObjectStore.Over(store, limiter), replicaRootMissing,
                     shortOfSpace: null, nowMs, userInitiated, cancellationToken)
                 .ConfigureAwait(false);
+            await LookAtMetadataAsync(runtime, set, destination.Name, store, nowMs, cancellationToken).ConfigureAwait(false);
 
             // The store took this set's objects again: a quota it refused
             // them under has been raised, or room made beneath it.
@@ -1103,6 +1104,49 @@ public static class FanOut
         {
             ledger.RecordFailure(
                 set.Id, destination.Name, DestinationSyncState.Failed, exception.Message, nowMs);
+        }
+    }
+
+    /// <summary>
+    /// Asks an object store whether it holds the replica's format only in an
+    /// archival tier, and the object last found so, if another (FR-DEST-020,
+    /// ADR-0112): a head each. The format is the first object any opening of
+    /// the replica reads and the oldest it holds, so the first a lifecycle rule
+    /// that moves objects past an age moves.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set.</param>
+    /// <param name="destinationName">The destination.</param>
+    /// <param name="store">The replica's store.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="cancellationToken">Cancels the heads.</param>
+    private static async ValueTask LookAtMetadataAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, Storage.Abstractions.IObjectStore store,
+        ulong nowMs, CancellationToken cancellationToken)
+    {
+        var ledger = runtime.DestinationSync;
+        var format = Repository.RepositoryLifecycle.DescriptorKey.Value;
+        string[] keys = ledger.Find(set.Id, destinationName)?.MetadataArchivedKey is { } standing && standing != format
+            ? [standing, format]
+            : [format];
+        try
+        {
+            DestinationSyncRecord? row = null;
+            foreach (var key in keys)
+            {
+                var head = await store.GetMetadataAsync(Storage.Abstractions.ObjectKey.Parse(key), cancellationToken)
+                    .ConfigureAwait(false);
+                row = head.Metadata is { Archived: true }
+                    ? ledger.RecordMetadataArchived(set.Id, destinationName, key, nowMs)
+                    : ledger.RecordMetadataServed(set.Id, destinationName, key, nowMs);
+            }
+
+            ArchivedMetadataNotice.Reflect(runtime, set, destinationName, row!, nowMs);
+        }
+        catch (IOException)
+        {
+            // The copy has landed: a store that did not answer the look leaves
+            // what was recorded as it stood, and the next pass asks again.
         }
     }
 
@@ -1481,6 +1525,7 @@ public static class FanOut
             {
                 ArchivedReplicaNotice.Reflect(
                     runtime, set, destination.Name, ledger.RecordArchived(set.Id, destination.Name, nowMs), nowMs);
+                ArchivedMetadataNotice.Met(runtime, set, destination.Name, verification.Archived, nowMs);
             }
 
             if (verification.Failed.Count > 0)

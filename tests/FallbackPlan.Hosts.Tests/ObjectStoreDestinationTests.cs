@@ -37,7 +37,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// under a stated limit, and one missing an object still fails, naming no
 /// file (FR-DRL-002, ADR-0105). Its status row says what the store was
 /// asked, request for request as the store received them, and a restart
-/// neither loses the count nor counts it twice (FR-DEST-019, ADR-0111).
+/// neither loses the count nor counts it twice (FR-DEST-019, ADR-0111). A
+/// store that holds the replica's metadata only in an archival tier is said
+/// to restore nothing until that object is rehydrated, whichever reader met
+/// it — the sync's look at the replica's format, its read-back, the sweep —
+/// and a data blob held so is not (FR-DEST-020, ADR-0112).
 /// </summary>
 /// <remarks>
 /// The credential reaches the service only as an envelope sealed to its
@@ -211,6 +215,108 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
 
         Assert.IsNotNull(before);
         Assert.AreEqual(before, after, "a restart neither loses what was counted nor counts it twice");
+    }
+
+    [TestMethod]
+    public async Task Sync_ToAStoreThatArchivedTheReplicasFormat_SaysNothingRestoresFromThere_UntilItIsRehydrated()
+    {
+        // FR-DEST-020, ADR-0112: a lifecycle rule that moves every object past
+        // an age moves the replica's format first, the oldest object it holds
+        // and the first any opening of the replica reads. Nothing restores
+        // from there then, not one file and not the set on a clean machine,
+        // while every sync goes on landing its copy in sync.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        Assert.IsNull((await RowAsync(runtime, "cloud")).ArchivedMetadata, "the premise: a store that archived nothing");
+        var format = Store.KeysIn(Namespace).Single(key => key.EndsWith("/repository-format", StringComparison.Ordinal));
+        Store.Archive(Namespace, format);
+
+        var asked = Store.Requests.Count;
+        await SyncAsync(runtime);
+
+        var row = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("repository-format", row.ArchivedMetadata);
+        Assert.IsNotNull(row.ArchivedMetadataSince);
+        Assert.AreEqual(
+            1,
+            Store.Requests.Skip(asked).Count(request => request.Method == "HEAD" && request.Target.EndsWith("/repository-format", StringComparison.Ordinal)),
+            "one head a pass is what it costs to know");
+        var notice = ArchivedMetadataNotice(runtime);
+        Assert.IsNotNull(notice, "a person learns before a restore does");
+        Assert.Contains("repository-format", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("nothing can be restored", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("blobs/data/", notice.Message, StringComparison.Ordinal);
+
+        await using (var listener = LocalServiceListener.Start(
+            new ServiceCommandHandler(runtime, RemoteBindingState.Off), Harness.StateDirectory))
+        {
+            var status = await HostHarness.RunAsync(
+                (a, o, e, c) => Cli.CliApplication.RunAsync(
+                    a, new System.CommandLine.InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+                "status", "--state", Harness.StateDirectory);
+            Assert.AreEqual(0, status.ExitCode, status.All);
+            Assert.Contains("nothing restores from here", status.All, StringComparison.Ordinal);
+        }
+
+        Store.Archive(Namespace, format, ArchiveState.Rehydrated);
+        await SyncAsync(runtime);
+
+        Assert.IsNull((await RowAsync(runtime, "cloud")).ArchivedMetadata, "the object it named is served again");
+        Assert.IsNull(ArchivedMetadataNotice(runtime));
+    }
+
+    [TestMethod]
+    public async Task Sweep_ThatPassesOverAnArchivedMetadataBlob_SaysNothingRestoresFromThere_AndADataBlobDoesNot()
+    {
+        // FR-DEST-020, ADR-0112: a data blob held only archived costs the
+        // files that need it, which a restore's plan names; a metadata blob
+        // costs every restore, since a backup's tree is read from it.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        foreach (var key in Store.KeysIn(Namespace).Where(key => key.Contains("/blobs/data/", StringComparison.Ordinal)))
+        {
+            Store.Archive(Namespace, key);
+        }
+
+        await VerifyAsync(runtime);
+        Assert.IsNull((await RowAsync(runtime, "cloud")).ArchivedMetadata, "data held archived leaves the replica open");
+        Assert.IsNull(ArchivedMetadataNotice(runtime));
+
+        var meta = Store.KeysIn(Namespace).First(key => key.Contains("/blobs/meta/", StringComparison.Ordinal));
+        Store.Archive(Namespace, meta);
+        await VerifyAsync(runtime);
+
+        Assert.AreEqual(meta[(meta.IndexOf("/blobs/meta/", StringComparison.Ordinal) + 1)..], (await RowAsync(runtime, "cloud")).ArchivedMetadata);
+        Assert.IsNotNull(ArchivedMetadataNotice(runtime));
+
+        Store.Archive(Namespace, meta, ArchiveState.Rehydrated);
+        await SyncAsync(runtime);
+        Assert.IsNull((await RowAsync(runtime, "cloud")).ArchivedMetadata, "the next sync asks after the object it named");
+        Assert.IsNull(ArchivedMetadataNotice(runtime));
+    }
+
+    [TestMethod]
+    public async Task Sync_WhoseReadBackMeetsAMetadataBlobArchivedOnArrival_SaysNothingRestoresFromThere()
+    {
+        // FR-DEST-020, ADR-0112: a rule on the replica's blobs moves its
+        // metadata blobs with its data, and the first sync's read-back is the
+        // first reader to meet one.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        Store.ArchiveOnArrival = key => key.Contains("/blobs/", StringComparison.Ordinal);
+
+        await BackUpAsync(runtime);
+
+        StringAssert.StartsWith((await RowAsync(runtime, "cloud")).ArchivedMetadata, "blobs/meta/");
+        Assert.IsNotNull(ArchivedMetadataNotice(runtime));
     }
 
     [TestMethod]
@@ -1386,6 +1492,11 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="runtime">The service.</param>
     private Notice? ArchivedNotice(ServiceRuntime runtime) =>
         runtime.Notices.Unacknowledged.SingleOrDefault(notice => notice.Key == $"replica-archived:{Harness.DocsSetId}:cloud");
+
+    /// <summary>The notice that the store holds the replica's metadata only in an archival tier, or null.</summary>
+    /// <param name="runtime">The service.</param>
+    private Notice? ArchivedMetadataNotice(ServiceRuntime runtime) =>
+        runtime.Notices.Unacknowledged.SingleOrDefault(notice => notice.Key == $"replica-metadata-archived:{Harness.DocsSetId}:cloud");
 
     /// <summary>The ledger's row for the set and the named destination.</summary>
     /// <param name="runtime">The service.</param>

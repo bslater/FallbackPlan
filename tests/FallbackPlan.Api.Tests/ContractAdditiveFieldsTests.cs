@@ -32,8 +32,9 @@ namespace FallbackPlan.Api.Tests;
 /// held only in an archival tier, the wire half of FR-RST-003's report of
 /// them; 1.66's count of blobs a closed circuit passed over held only
 /// there, the wire half of FR-VER-003's report of a circuit that did not
-/// read them; and 1.69's requests a cloud destination's store was sent, the
-/// wire half of FR-DEST-019.
+/// read them; 1.69's requests a cloud destination's store was sent, the
+/// wire half of FR-DEST-019; and 1.70's replica object a store holds only
+/// archived without which nothing restores, the wire half of FR-DEST-020.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1092,6 +1093,29 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var old = modern.Replace(",\"circuit_archived\":3", "", StringComparison.Ordinal);
         Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
         Assert.AreEqual(0, JsonSerializer.Deserialize<DeepSweepDescriptor>(old, FrameCodec.SerializerOptions)!.CircuitArchived);
+    }
+
+    [TestMethod]
+    public void WhatAStoreArchivedOfTheReplicasMetadata_WireNamesAndPre170Default()
+    {
+        // Contract 1.70 (FR-DEST-020, ADR-0112): the replica's object a store
+        // holds only in an archival tier, without which nothing restores from
+        // there, and since when.
+        var modern = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "cloud", "s3", "in-sync", null, null, "offsite", "proven",
+                ArchivedMetadata: "repository-format", ArchivedMetadataSince: 8_000),
+            FrameCodec.SerializerOptions);
+
+        const string Wire = ",\"archived_metadata\":\"repository-format\",\"archived_metadata_since\":8000";
+        Assert.Contains(Wire, modern, StringComparison.Ordinal);
+
+        // A pre-1.70 service names none, and its replica reads as open.
+        var old = modern.Replace(Wire, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+        var read = JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(read.ArchivedMetadata);
+        Assert.IsNull(read.ArchivedMetadataSince);
     }
 
     [TestMethod]

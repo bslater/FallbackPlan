@@ -9,7 +9,9 @@ namespace FallbackPlan.Web.Tests;
 /// its set's card (contract 1.63, FR-VER-009); the drill's row with its
 /// drill-now button (contract 1.58), the console half of FR-DRL-003; and
 /// the row saying what a cloud destination's store was asked (contract 1.69),
-/// the console half of FR-DEST-019.
+/// the console half of FR-DEST-019; and the badge and note saying nothing
+/// restores from a store that archived the replica's metadata (contract
+/// 1.70), the console half of FR-DEST-020.
 /// </summary>
 /// <remarks>
 /// Like <see cref="ConsoleProgressScriptTests"/>: no browser, just the
@@ -146,6 +148,22 @@ public sealed class ConsoleDestinationCardTests
         Assert.Contains("d.requests == null", body, StringComparison.Ordinal);
         Assert.Contains("return null", body, StringComparison.Ordinal);
         Assert.Contains("counted since", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Card_AStoreThatArchivedTheReplicasMetadata_SaysSoOnItsSummary_AndNoneWhereNoneIsNamed()
+    {
+        var script = AppJs();
+        var card = FunctionBody(script, "renderSetCard");
+        Assert.Contains("archivedMetadataNote(d)", card, StringComparison.Ordinal);
+        Assert.Contains("\"restores nothing\"", card, StringComparison.Ordinal);
+
+        // The copy is in sync and its circle full: only the badge says that
+        // no restore can open it, and only where the service named an object.
+        var body = FunctionBody(script, "archivedMetadataNote");
+        Assert.Contains("d.archivedMetadata == null", body, StringComparison.Ordinal);
+        Assert.Contains("return null", body, StringComparison.Ordinal);
+        Assert.Contains("blobs/data/", body, StringComparison.Ordinal);
     }
 
     [TestMethod]
