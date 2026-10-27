@@ -146,6 +146,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0119](adr/0119-direct-mode-restores-to-the-original-location.md) | Direct mode restores to the original location: the mapping of a plan onto a set's roots, and the merge of their receipts, move into the restore library for the service and direct mode alike, and direct mode plans, measures and restores each root's slice in place from the set the state directory configures, refusing a snapshot of no configured set and a label no root carries | **Built** | `Restore/RestoreOriginalLocation` · `Cli/OperationGateway`, `Cli/RestorePlanReport` · `Agent/ServiceCommandHandler` · `Repository.Tests/RestoreOriginalLocationTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Cli.Tests/GatewayRestoreReportTests` · [notes](#0119--direct-mode-restores-to-the-original-location) |
 | [0120](adr/0120-a-resume-is-planned.md) | A resume is planned: measured where its run landed, by length as the resume is, and saying how many files the run already landed; `restore --resume --plan` plans the run asked, through the service or in direct mode, and `restore-resume <run> --plan` plans a run left unfinished by its name alone, restoring nothing; a plan of a resume is not kept (contract 1.72) | **Built** | `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/CliApplication`, `Cli/OperationGateway`, `Cli/RestorePlanReport` · `FallbackPlan.Api` · `Repository.Tests/RestoreSpaceTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0120--a-resume-is-planned) |
 | [0121](adr/0121-the-console-plans-a-resume.md) | The console plans a resume: the wizard's resume mode plans the run by its name alone once its source is open, shows the plan as a restore's plan is shown with how many files the run already landed, arms a resume that will not fit only when the person says to go on, and offers it as before where the service cannot plan it | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0121--the-console-plans-a-resume) |
+| [0122](adr/0122-direct-mode-keeps-a-restores-receipt.md) | Direct mode keeps a restore's receipt: the receipt keeps itself as its run's own file under a state directory's receipts, written whole; the service keeps its receipts through it, and direct mode keeps each run's receipt there too and says where, while a run refused before it begins and a plan keep none | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway`, `Cli/CliSession` · `Repository.Tests/RestoreReceiptKeptTests`, `Cli.Tests/RestoreReceiptDirectTests`, `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0122--direct-mode-keeps-a-restores-receipt) |
 
 ---
 
@@ -3570,7 +3571,7 @@ they were captured, where its first line named an empty folder.
 
 What remains is recorded rather than done. A snapshot captured from a folder
 named on the command line has no recorded root to go back to, and direct mode
-still keeps no receipt.
+still keeps no receipt. ADR-0122 has since taken up the receipt.
 
 ### 0120 — a resume is planned
 
@@ -3601,3 +3602,15 @@ contract 1.72, which cannot plan one, still resumes it, as before.
 
 What remains is recorded rather than done. A run the wizard has just seen
 fail or stop is resumed from its result without a plan.
+
+### 0122 — direct mode keeps a restore's receipt
+
+A restore through the service kept its receipt under the state directory, and
+one in direct mode built the same receipt, printed what it said, and kept
+nothing. The receipt now keeps itself, as its run's own file under a state
+directory's receipts, written beside its place and moved there. The service
+keeps its receipts through it, and direct mode keeps each run's there too,
+under the run's identifier, and says where; a run of several roots keeps its
+one merged receipt. A run refused before it begins, and a plan, keep none.
+
+What remains is recorded rather than done. No verb lists the receipts kept.

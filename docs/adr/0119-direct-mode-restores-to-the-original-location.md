@@ -57,6 +57,8 @@ A plan of the original location names no folder, and the plan's first line said 
 - **Quarantine in direct mode.** A direct run lands in place, as it always has; `--in-place` still changes nothing there.
 - **Keep the receipt in direct mode.** The service keeps each run's receipt, and direct mode still prints what the receipt says.
 
+  > **2026-10 ([ADR-0122](0122-direct-mode-keeps-a-restores-receipt.md)).** Direct mode keeps each run's receipt where the service keeps one, with the same keeper.
+
 ## Alternatives considered
 
 - **Keep the refusal.** Rejected. It rested on the service alone knowing a set's roots, which it does not.
@@ -68,3 +70,4 @@ A plan of the original location names no folder, and the plan's first line said 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The original-location mapping and the receipts' merge move into the restore library, used by the service and by direct mode, which now plans, measures and restores each root's slice in place from the set's configured roots, refusing a snapshot of no configured set and a label no root carries. A plan of the original location says its files go back where they were captured. |
+| 2026-10 | Accepted | [ADR-0122](0122-direct-mode-keeps-a-restores-receipt.md): direct mode keeps its receipt, which this record left undone. |
