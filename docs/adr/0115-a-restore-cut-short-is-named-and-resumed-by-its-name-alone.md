@@ -85,6 +85,8 @@ In direct mode a run lands in place and names none, so the verb is refused there
 ## What this does not do
 
 - **Resume from the console.** The wizard still offers a resume only for the result in front of it ([ADR-0110](0110-the-console-resumes-a-restore-cut-short.md)). Its notices list shows a run left unfinished, which the command line resumes.
+
+  > **2026-10 ([ADR-0116](0116-the-console-resumes-a-restore-it-did-not-see-end.md)).** The console lists the restores left unfinished on its snapshots page, offers to restore what is left from there and from the notice, and lets one go. Its wizard resumes one by its name alone, through a source of the run's own set.
 - **Name a run in direct mode.** It lands in place and needs no name.
 - **Resume within a file.** A file cut short mid-write never landed, so it is restored whole (ADR-0109).
 - **Find a run its folder no longer holds.** A quarantined run whose folder is gone is refused as ADR-0109 refuses it, and can be let go.
@@ -101,3 +103,4 @@ In direct mode a run lands in place and names none, so the verb is refused there
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The service names each restore run in `restore-runs.json` before it writes, under the name its result gives, keeps it until a run of it finishes, and says each one left unfinished, including at start for one the service did not see end. Contract 1.71 lists such runs without the backup's file names, resumes one by its name alone as it was asked, and lets one go; `restore-resume` does each from the command line. |
+| 2026-10 | Accepted | [ADR-0116](0116-the-console-resumes-a-restore-it-did-not-see-end.md) takes up the console's resume, which this record left owed: the snapshots page lists the runs left unfinished, the list and each run's notice offer to restore what is left by its name alone, and a run can be let go. |
