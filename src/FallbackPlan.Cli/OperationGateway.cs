@@ -1589,6 +1589,10 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         lines.Add(string.Create(CultureInfo.InvariantCulture,
             $"restore {receipt.Outcome}: {restored} file(s) to {receipt.WrittenTo}; {failed} failure(s), {skipped} skipped, {degraded} degraded"));
 
+        // Kept as the service keeps one, so the claim outlives the terminal
+        // it was printed in (FR-RST-004).
+        lines.Add($"receipt: {receipt.Keep(session.ReceiptsDirectory, options.RunId)}");
+
         var foundInPlace = receipt.Items.Count(item => item.FoundInPlace);
         if (foundInPlace > 0)
         {
