@@ -209,9 +209,11 @@ public sealed record RestoreReceipt
     /// said it restored the file would not say this run never wrote it.
     /// Version 9 added the optional <c>set</c> (ADR-0126): a receipt read
     /// back long after its run said which snapshot it restored, and only a
-    /// hex identifier said whose.
+    /// hex identifier said whose. Version 10 added the optional
+    /// <c>set_id</c> (ADR-0127): a set's name can pass to another set, and
+    /// its files are shown only to the passphrase of the set they are.
     /// </remarks>
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -260,6 +262,15 @@ public sealed record RestoreReceipt
     [JsonPropertyName("set")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Set { get; init; }
+
+    /// <summary>
+    /// The identity of the set <see cref="Set"/> names, as 32 hex digits
+    /// (ADR-0127), which a rename does not change. Null where the run knew no
+    /// set, and in a receipt kept before schema 10.
+    /// </summary>
+    [JsonPropertyName("set_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SetId { get; init; }
 
     /// <summary>The receipt as indented JSON.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, SerializerOptions);
@@ -328,21 +339,10 @@ public sealed record RestoreReceipt
                 continue;
             }
 
-            RestoreReceipt? receipt = null;
-            string? problem;
-            try
-            {
-                receipt = JsonSerializer.Deserialize<RestoreReceipt>(File.ReadAllText(path));
-                problem = receipt is null ? "the file holds no receipt" : null;
-            }
-            catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
-            {
-                problem = exception.Message;
-            }
-
-            var endedAt = receipt?.CompletedAt
+            var entry = Read(path, run);
+            var endedAt = entry.Receipt?.CompletedAt
                 ?? (ulong)Math.Max(0L, new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeMilliseconds());
-            kept.Add((endedAt, new KeptRestoreReceipt(run, path, receipt, problem)));
+            kept.Add((endedAt, entry));
         }
 
         return
@@ -352,6 +352,47 @@ public sealed record RestoreReceipt
                 .ThenBy(entry => entry.Kept.Run, StringComparer.Ordinal)
                 .Select(entry => entry.Kept),
         ];
+    }
+
+    /// <summary>
+    /// The receipt <paramref name="run"/> kept under
+    /// <paramref name="receiptsDirectory"/>, read alone (ADR-0127), or null
+    /// where it kept none there.
+    /// </summary>
+    /// <param name="receiptsDirectory">Where a state directory keeps restore receipts.</param>
+    /// <param name="run">The run.</param>
+    /// <returns>
+    /// The run's kept receipt, or why its file does not read as one; null where
+    /// there is no file, and where <paramref name="run"/> is not a run's name,
+    /// which is never joined to a path.
+    /// </returns>
+    public static KeptRestoreReceipt? ReadKept(string receiptsDirectory, string run)
+    {
+        ThrowHelper.ThrowIfNull(receiptsDirectory);
+        if (!IsRunName(run))
+        {
+            return null;
+        }
+
+        var path = Path.Combine(receiptsDirectory, $"{run}.json");
+        return File.Exists(path) ? Read(path, run) : null;
+    }
+
+    private static KeptRestoreReceipt Read(string path, string run)
+    {
+        RestoreReceipt? receipt = null;
+        string? problem;
+        try
+        {
+            receipt = JsonSerializer.Deserialize<RestoreReceipt>(File.ReadAllText(path));
+            problem = receipt is null ? "the file holds no receipt" : null;
+        }
+        catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
+        {
+            problem = exception.Message;
+        }
+
+        return new KeptRestoreReceipt(run, path, receipt, problem);
     }
 }
 

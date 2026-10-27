@@ -11,7 +11,10 @@ namespace FallbackPlan.Web.DomTests;
 /// the newest under the limit the console asks with and how many are kept; a
 /// receipt the service could not read said to be unreadable; and a service
 /// before contract 1.73 an empty card, not an error. Each names the set it
-/// restored where its receipt does (ADR-0126).
+/// restored where its receipt does (ADR-0126). What a run did not restore is
+/// shown only once the passphrase of the set its receipt records has
+/// unlocked a source, which is closed after (ADR-0127), and a run that
+/// restored everything offers nothing to show.
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -54,6 +57,58 @@ public sealed class RestoreReceiptsDomTests
         await Expect(card).ToContainTextAsync("Showing the newest 2 of 60 kept.");
         var asked = await harness.ReceivedAsync<ListRestoreReceiptsCommand>();
         Assert.AreEqual(50, asked.Limit);
+    }
+
+    [TestMethod]
+    public async Task WhatARunDidNotRestore_IsShownOnlyThroughThePassphrase_AndTheSourceIsClosedAfter()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var receipt = new RestoreReceiptDescriptor(
+            "0123456789abcdef", "partial", 1_700_000_000_000, new string('e', 32), "/srv/restored",
+            Restored: 3, FoundInPlace: 0, Skipped: 1, Failed: 1, Degraded: 0, Set: "docs", SetId: Wire.SetId);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListDestinationsCommand => new DestinationsResult([]),
+            ListRestoreReceiptsCommand => new RestoreReceiptsResult(
+            [
+                receipt,
+                new RestoreReceiptDescriptor(
+                    "fedcba9876543210", "complete", 1_600_000_000_000, new string('e', 32), "/srv/whole",
+                    Restored: 2, FoundInPlace: 0, Skipped: 0, Failed: 0, Degraded: 0, Set: "docs", SetId: Wire.SetId),
+            ],
+            Total: 2),
+            OpenRestoreSourceCommand => new RestoreSourceOpenedResult("src-1", "docs", "staging", [], []),
+            GetRestoreReceiptCommand { Source: "src-1" } => new RestoreReceiptResult(
+                receipt,
+                [
+                    new RestoreReceiptItemDescriptor("kept.txt", "skipped", "a newer file was in the way"),
+                    new RestoreReceiptItemDescriptor("lost.txt", "failed", "no copy would read"),
+                ],
+                Unlisted: 4),
+            GetRestoreReceiptCommand => new ServiceError(ServiceErrorReason.Refused, "A receipt's files need the set's passphrase."),
+            _ => new AcknowledgedResult(),
+        };
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#maintenance");
+
+        await Expect(page.Locator("[data-action=\"restore-receipt-files\"][data-run=\"fedcba9876543210\"]"))
+            .ToHaveCountAsync(0);
+        await page.ClickAsync("[data-action=\"restore-receipt-files\"][data-run=\"0123456789abcdef\"]");
+        await Expect(page.Locator("#gate-passphrase")).ToBeVisibleAsync();
+        await page.FillAsync("#gate-passphrase", Wire.Passphrase);
+        await page.ClickAsync("[data-action=\"gate-unlock\"]");
+
+        var dialog = page.Locator("#dialog");
+        await Expect(dialog).ToContainTextAsync("failed lost.txt — no copy would read");
+        await Expect(dialog).ToContainTextAsync("skipped kept.txt — a newer file was in the way");
+        await Expect(dialog).ToContainTextAsync("and 4 more");
+        var asked = await harness.ReceivedAsync<GetRestoreReceiptCommand>();
+        Assert.AreEqual("0123456789abcdef", asked.Run);
+        Assert.AreEqual("src-1", asked.Source);
+        Assert.AreEqual("src-1", (await harness.ReceivedAsync<CloseRestoreSourceCommand>()).SourceId);
     }
 
     [TestMethod]

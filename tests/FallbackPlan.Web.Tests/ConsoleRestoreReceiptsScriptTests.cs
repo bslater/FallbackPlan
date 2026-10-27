@@ -62,6 +62,22 @@ public sealed class ConsoleRestoreReceiptsScriptTests
     }
 
     [TestMethod]
+    public void WhatARunDidNotRestore_IsAskedOnlyThroughAnUnlockedSource_ClosedAfter()
+    {
+        var script = AppJs();
+        var start = script.IndexOf("async \"restore-receipt-files\"(el)", StringComparison.Ordinal);
+        Assert.IsGreaterThanOrEqualTo(0, start, "app.js no longer declares the action");
+        var end = script.IndexOf("\n  },", start, StringComparison.Ordinal);
+        var action = script[start..end];
+
+        Assert.Contains("unlockSource(", action, StringComparison.Ordinal, "a receipt's files are the backup's file names");
+        Assert.Contains("command: \"get_restore_receipt\"", action, StringComparison.Ordinal);
+        Assert.Contains("source,", action, StringComparison.Ordinal, "asked through the source the passphrase unlocked");
+        Assert.Contains("finally", action, StringComparison.Ordinal);
+        Assert.Contains("close_restore_source", action, StringComparison.Ordinal, "and the source closed after");
+    }
+
+    [TestMethod]
     public void ARowTheServiceCouldNotRead_SaysSo()
     {
         var card = FunctionBody(AppJs(), "renderRestoreReceiptsCard");

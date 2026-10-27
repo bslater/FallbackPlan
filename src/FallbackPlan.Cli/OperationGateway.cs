@@ -1513,7 +1513,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
 
         var slices = SlicesOf(catalogue, snapshotId, plan, request);
-        var setName = SetNameOf(catalogue, snapshotId);
+        var set = SetForReceipt(catalogue, snapshotId);
         using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
 
         // No load at all: the catalogue says where every record is, so the
@@ -1566,7 +1566,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 slice.LabelPrefix));
         }
 
-        var receipt = RestoreOriginalLocation.Merge(receipts) with { Set = setName };
+        var receipt = RestoreOriginalLocation.Merge(receipts) with { Set = set?.Name, SetId = set?.Id };
 
         var directories = plan.Items
             .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
@@ -1704,15 +1704,15 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     }
 
     /// <summary>
-    /// The name of the snapshot's set, for its receipt to name (ADR-0126);
-    /// null where this state's configuration has none or does not read, since
-    /// naming a set never stops a restore.
+    /// The snapshot's set, for its receipt to name (ADR-0126, ADR-0127); null
+    /// where this state's configuration has none or does not read, since naming
+    /// a set never stops a restore.
     /// </summary>
-    private string? SetNameOf(Catalogue catalogue, byte[] snapshotId)
+    private BackupSetConfiguration? SetForReceipt(Catalogue catalogue, byte[] snapshotId)
     {
         try
         {
-            return SetOf(catalogue, snapshotId)?.Name;
+            return SetOf(catalogue, snapshotId);
         }
         catch (Exception exception) when (exception is ClientStateException or IOException or UnauthorizedAccessException)
         {

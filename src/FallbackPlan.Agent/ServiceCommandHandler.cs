@@ -689,6 +689,7 @@ public sealed partial class ServiceCommandHandler(
         CloseRestoreSourceCommand close => await CloseRestoreSourceAsync(close).ConfigureAwait(false),
         ListRestoreRunsCommand => ListRestoreRuns(),
         ListRestoreReceiptsCommand listRestoreReceipts => ListRestoreReceipts(listRestoreReceipts),
+        GetRestoreReceiptCommand getRestoreReceipt => GetRestoreReceipt(getRestoreReceipt),
         ForgetRestoreRunCommand forget => ForgetRestoreRun(forget),
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
@@ -1222,7 +1223,11 @@ public sealed partial class ServiceCommandHandler(
                         slice.LabelPrefix));
                 }
 
-                var receipt = RestoreOriginalLocation.Merge(receipts) with { Set = record.SetName };
+                var receipt = RestoreOriginalLocation.Merge(receipts) with
+                {
+                    Set = record.SetName,
+                    SetId = context.Source?.SetId ?? context.Set?.Id,
+                };
                 var receiptPath = PersistReceipt(receipt, options.RunId);
                 if (copies is not null)
                 {
@@ -1411,7 +1416,63 @@ public sealed partial class ServiceCommandHandler(
             Skipped: receipt.Items.Count(item => item.Outcome == "skipped"),
             Failed: receipt.Items.Count(item => item.Outcome == "failed"),
             Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
-            Set: receipt.Set);
+            Set: receipt.Set,
+            SetId: receipt.SetId);
+
+    /// <summary>How many of a receipt's files a reading answers where the caller names no limit.</summary>
+    private const int ReceiptFilesAnswered = 200;
+
+    /// <summary>
+    /// What one kept receipt says its run did not restore (contract 1.75,
+    /// ADR-0127), through a source of the set it records: its paths are the
+    /// backup's file names, which only that set's passphrase shows (FR-WOR-007).
+    /// </summary>
+    private ServiceResult GetRestoreReceipt(GetRestoreReceiptCommand command)
+    {
+        if (!IsRunId(command.Run))
+        {
+            return NamesNoRun(command.Run);
+        }
+
+        if (command.Limit is <= 0)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, "limit must be at least 1 when given.");
+        }
+
+        if (RestoreReceipt.ReadKept(runtime.ReceiptsRoot, command.Run) is not { } kept)
+        {
+            return new ServiceError(ServiceErrorReason.NotFound, $"Run {command.Run} has no receipt kept here.");
+        }
+
+        if (kept.Receipt is not { } receipt)
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, $"Run {command.Run}'s receipt does not read: {kept.Problem}");
+        }
+
+        // Checked against the identity the run recorded, not the name: a name
+        // can pass to another set, and with it this receipt's file names.
+        if (receipt.SetId is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Run {command.Run}'s receipt records no set, so no passphrase here shows its files. Read it on the "
+                + $"service's machine with restore-receipts --run {command.Run}.");
+        }
+
+        if (RefuseUnproved(command.Source, command.SessionId, receipt.SetId, $"Run {command.Run}'s receipt") is { } refused)
+        {
+            return refused;
+        }
+
+        var notRestored = receipt.Items
+            .Where(item => item.Outcome is "failed" or "skipped" or "degraded")
+            .Select(item => new RestoreReceiptItemDescriptor(item.Path, item.Outcome, item.Detail))
+            .ToList();
+        var limit = command.Limit ?? ReceiptFilesAnswered;
+        return new RestoreReceiptResult(
+            DescribeKept(kept), [.. notRestored.Take(limit)], Math.Max(0, notRestored.Count - limit));
+    }
 
     /// <summary>Lets a run left unfinished go: named no more, and its notice resolved (ADR-0115).</summary>
     private ServiceResult ForgetRestoreRun(ForgetRestoreRunCommand command)

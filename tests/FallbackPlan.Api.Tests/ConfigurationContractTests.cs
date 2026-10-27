@@ -34,11 +34,43 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheSetARestoreReceiptNames_IsRecordedAtOneSeventyFour()
+    public void ContractVersion_WhatARestoreDidNotRestore_IsRecordedAtOneSeventyFive()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.74", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.75", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void WhatARestoreDidNotRestore_CrossesUnderItsWireNames_ThroughASource()
+    {
+        // Contract 1.75 (FR-RST-004, ADR-0127): a kept receipt's files that
+        // were not restored, asked through a source of the set it records.
+        Assert.AreEqual(
+            """{"command":"get_restore_receipt","run":"0123456789abcdef","source":"src-1","limit":200}""",
+            JsonSerializer.Serialize<ServiceCommand>(
+                new GetRestoreReceiptCommand("0123456789abcdef", "src-1", 200), FrameCodec.SerializerOptions));
+
+        var answered = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreReceiptResult(
+                new RestoreReceiptDescriptor(
+                    "0123456789abcdef", "partial", 2_000, new string('e', 32), "/srv/restored", 1, 0, 0, 1, 0,
+                    Set: "docs", SetId: new string('a', 32)),
+                [new RestoreReceiptItemDescriptor("lost.txt", "failed", "no copy would read")],
+                Unlisted: 3),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"result\":\"restore_receipt\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"set_id\":\"" + new string('a', 32) + "\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"path\":\"lost.txt\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"outcome\":\"failed\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"detail\":\"no copy would read\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"unlisted\":3", answered, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestoreReceiptResult>(
+            JsonSerializer.Deserialize<ServiceResult>(answered, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual("lost.txt", Assert.ContainsSingle(read.Items).Path);
+        Assert.AreEqual(3, read.Unlisted);
+        Assert.AreEqual(new string('a', 32), read.Receipt.SetId);
     }
 
     [TestMethod]

@@ -1667,6 +1667,9 @@ const RECEIPTS_SHOWN = 50;
 /** How many restore receipts the card asks the service for (contract 1.73). */
 const RESTORE_RECEIPTS_SHOWN = 50;
 
+/** How many of a receipt's files not restored the dialog asks the service for (contract 1.75). */
+const RESTORE_RECEIPT_FILES_SHOWN = 200;
+
 // What each restore the service kept a receipt for did (ADR-0125): its
 // outcome, what became of its files and where it wrote them. A receipt the
 // service could not read says so, rather than reading as a run that restored
@@ -1682,6 +1685,13 @@ function renderRestoreReceiptsCard() {
     const counts = `${restored}, ${fmtCount(row.skipped)} skipped, ${fmtCount(row.failed)} failed`;
     return row.degraded ? `${counts}, ${fmtCount(row.degraded)} degraded` : counts;
   };
+  // Which files a run did not restore are the backup's file names, so they
+  // are offered only where the receipt records the set whose passphrase
+  // shows them (ADR-0127), and only where there is something to show.
+  const notRestored = row => row.setId && (row.failed || row.skipped || row.degraded)
+    ? ` <button type="button" class="btn small" data-action="restore-receipt-files"
+          data-run="${esc(row.run)}" data-set-id="${esc(row.setId)}">Not restored…</button>`
+    : "";
 
   let body;
   if (S.restoreReceipts === null) {
@@ -1706,7 +1716,7 @@ function renderRestoreReceiptsCard() {
             <td class="mono">${esc(row.run)}</td>
             <td>${esc(row.set ?? "—")}</td>
             <td>${esc(row.outcome)}</td>
-            <td>${esc(files(row))}</td>
+            <td>${esc(files(row))}${notRestored(row)}</td>
             <td class="mono detail">${esc(row.writtenTo)}</td>
           </tr>`).join("")}
         </tbody>
@@ -3075,6 +3085,24 @@ const actions = {
       reportDialog(`What changed under '${name}'`,
         [report.summary, "", ...(report.detail ? report.detail.split("\n") : [])],
         "Compared with the last backup — a dry scan; nothing was captured.");
+    } finally {
+      run({ command: "close_restore_source", sourceId: source });
+    }
+  },
+
+  async "restore-receipt-files"(el) {
+    const { run: name, setId } = el.dataset;
+    const source = await unlockSource(() => S.sets.find(s => s.id === setId) ?? null, "Reading what the restore did not restore");
+    if (!source) return;
+    try {
+      const result = await run(
+        { command: "get_restore_receipt", run: name, source, limit: RESTORE_RECEIPT_FILES_SHOWN },
+        { errToast: "The service could not read the receipt" });
+      if (result?.result !== "restore_receipt") { closeDialog(); return; }
+      const lines = result.items.map(item => `${item.outcome} ${item.path}${item.detail ? ` — ${item.detail}` : ""}`);
+      if (result.unlisted) lines.push(`…and ${fmtCount(result.unlisted)} more`);
+      reportDialog(`What run ${name} did not restore`, lines,
+        `Restored to ${result.receipt.writtenTo ?? "?"} — from its receipt; nothing was read from the backup.`);
     } finally {
       run({ command: "close_restore_source", sourceId: source });
     }

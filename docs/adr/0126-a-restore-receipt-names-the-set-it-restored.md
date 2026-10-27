@@ -65,3 +65,4 @@ A receipt kept before schema 9 names none, and reads as it did.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The receipt at schema 9 names the set whose snapshot its run restored, where the run knew it: through the service, the set it was asked through; in direct mode, the set this state's configuration has the snapshot as, or none. `restore-receipts`, the service's listing (contract 1.74) and the console say it. |
+| 2026-10 | Accepted | [ADR-0127](0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md): the receipt records the identity of the set it names too, at schema 10, so the passphrase that shows its files is the set's and not whichever set now has its name. |

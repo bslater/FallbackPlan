@@ -50,6 +50,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(RestoreResult), "restore")]
 [JsonDerivedType(typeof(RestoreRunsResult), "restore_runs")]
 [JsonDerivedType(typeof(RestoreReceiptsResult), "restore_receipts")]
+[JsonDerivedType(typeof(RestoreReceiptResult), "restore_receipt")]
 [JsonDerivedType(typeof(RestoreSourceOpenedResult), "restore_source")]
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
@@ -972,6 +973,11 @@ public sealed record RestoreRunsResult(IReadOnlyList<RestoreRunDescriptor> Runs)
 /// ADR-0126); null where the receipt names none, kept before receipt schema 9
 /// or by a run that knew none.
 /// </param>
+/// <param name="SetId">
+/// That set's identity, as 32 hex digits (contract 1.75, ADR-0127): the set
+/// whose passphrase shows the receipt's files. Null where the receipt records
+/// none, kept before receipt schema 10 or by a run that knew no set.
+/// </param>
 public sealed record RestoreReceiptDescriptor(
     string Run,
     string? Outcome,
@@ -984,7 +990,27 @@ public sealed record RestoreReceiptDescriptor(
     long Failed,
     long Degraded,
     string? Problem = null,
-    string? Set = null);
+    string? Set = null,
+    string? SetId = null);
+
+/// <summary>
+/// One file a restore did not restore, as its kept receipt says (contract
+/// 1.75, ADR-0127).
+/// </summary>
+/// <param name="Path">The file's path within the snapshot: one of the backup's file names.</param>
+/// <param name="Outcome"><c>failed</c>, <c>skipped</c> or <c>degraded</c>.</param>
+/// <param name="Detail">Why, as the receipt says it; null where it says nothing.</param>
+public sealed record RestoreReceiptItemDescriptor(string Path, string Outcome, string? Detail);
+
+/// <summary>
+/// What one kept restore receipt says its run did not restore (contract 1.75,
+/// ADR-0127), answered through a source of the set it records.
+/// </summary>
+/// <param name="Receipt">The receipt, as the listing describes it.</param>
+/// <param name="Items">The files it did not restore, in the receipt's order, under the limit asked.</param>
+/// <param name="Unlisted">How many more it did not restore beyond the limit.</param>
+public sealed record RestoreReceiptResult(
+    RestoreReceiptDescriptor Receipt, IReadOnlyList<RestoreReceiptItemDescriptor> Items, int Unlisted) : ServiceResult;
 
 /// <summary>The restore receipts the service keeps, newest first (contract 1.73, ADR-0125).</summary>
 /// <param name="Receipts">The newest under the limit asked, each as <see cref="RestoreReceiptDescriptor"/> describes it.</param>
