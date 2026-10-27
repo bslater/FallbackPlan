@@ -15,7 +15,11 @@ namespace FallbackPlan.Restore;
 /// </remarks>
 /// <param name="Plan">What the slice restores.</param>
 /// <param name="OutputDirectory">Where it lands, as the operator named it.</param>
-public sealed record RestoreSlice(RestorePlan Plan, string OutputDirectory);
+/// <param name="ResumedIn">
+/// Where the run this one resumes landed it (ADR-0109): the output itself in
+/// place, or that run's quarantine folder. Null for a run that resumes none.
+/// </param>
+public sealed record RestoreSlice(RestorePlan Plan, string OutputDirectory, string? ResumedIn = null);
 
 /// <summary>How a restore asks the platform about room (FR-RST-003; ADR-0083).</summary>
 public sealed record RestoreSpaceProbe
@@ -145,6 +149,13 @@ public sealed record RestoreSpaceReport(IReadOnlyList<RestoreSpaceNeed> Needs, u
 /// of its own, so nothing there is in the way.
 /// </para>
 /// <para>
+/// A resumed run leaves a file an earlier one landed as it stands, so a file
+/// already where that run landed it, at its length, needs nothing. The run
+/// checks its hash when it reaches it; the measure goes by length, which
+/// costs nothing to ask. A file of that length whose content differs is
+/// landed under the policy, and the estimate erred low for it.
+/// </para>
+/// <para>
 /// It is an estimate that errs high. A volume that compresses what it stores
 /// can hold more than this says, so a run may be told to ignore it. One the
 /// platform will not describe is never short: the check exists to stop a disk
@@ -267,10 +278,13 @@ public static class RestoreSpace
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Only a run in place can find anything in its way.
+                // Only a run in place, or one landing where an earlier run
+                // landed, can find anything in its way.
+                var landsIn = mode == RestoreDestinationMode.InPlace
+                    ? root
+                    : slice.ResumedIn is { } resumed ? new DirectoryInfo(resumed).FullName : null;
                 string? destination = null;
-                if (mode == RestoreDestinationMode.InPlace
-                    && RestoreExecutor.TryResolve(root, item.Path, out var resolved, out _))
+                if (landsIn is not null && RestoreExecutor.TryResolve(landsIn, item.Path, out var resolved, out _))
                 {
                     destination = resolved;
                 }
@@ -282,6 +296,13 @@ public static class RestoreSpace
                 }
 
                 if (item.Kind != EntryKind.File)
+                {
+                    continue;
+                }
+
+                if (slice.ResumedIn is not null && destination is not null
+                    && new FileInfo(destination) is { Exists: true } landed
+                    && (ulong)landed.Length == item.Length)
                 {
                     continue;
                 }

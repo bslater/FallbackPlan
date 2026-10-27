@@ -121,6 +121,11 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, CliApplication_RestoreRefused, arg0);
 
     /// <summary>
+    /// --resume runs a restore, and a plan restores nothing: plan the restore without --resume, or resume it without --plan or --export.
+    /// </summary>
+    internal static string CliApplication_ResumeIsNotPlanned => Get(nameof(CliApplication_ResumeIsNotPlanned));
+
+    /// <summary>
     /// snapshot {0} is not in the catalogue — check `snapshots`, or run `rebuild-index` if it is stale.
     /// </summary>
     private static string CliApplication_SnapshotNotCatalogue => Get(nameof(CliApplication_SnapshotNotCatalogue));
@@ -184,6 +189,11 @@ internal static class Strings
     /// </summary>
     internal static string FormatDirectGateway_RestoreWouldNotFit(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, DirectGateway_RestoreWouldNotFit, arg0);
+
+    /// <summary>
+    /// In direct mode a restore lands in place, where --output points, so there is no run to name: pass --resume alone.
+    /// </summary>
+    internal static string DirectGateway_ResumeLandsInPlace => Get(nameof(DirectGateway_ResumeLandsInPlace));
 
     /// <summary>
     /// No backup set named '{0}' exists in {1}.
@@ -339,4 +349,15 @@ internal static class Strings
     /// </summary>
     internal static string FormatServiceGateway_ServiceStoppedReportingJob(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, ServiceGateway_ServiceStoppedReportingJob, arg0);
+
+    /// <summary>
+    /// Through the service each restore lands in a folder of its own under '{0}', in .fbp-quarantine; name the run to resume as that folder is named: --resume &lt;run&gt;.
+    /// </summary>
+    private static string ServiceGateway_ResumeNamesTheRun => Get(nameof(ServiceGateway_ResumeNamesTheRun));
+
+    /// <summary>
+    /// Through the service each restore lands in a folder of its own under '{0}', in .fbp-quarantine; name the run to resume as that folder is named: --resume &lt;run&gt;.
+    /// </summary>
+    internal static string FormatServiceGateway_ResumeNamesTheRun(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ServiceGateway_ResumeNamesTheRun, arg0);
 }

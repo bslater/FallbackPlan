@@ -28,7 +28,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// existing-file policy frees. Overwriting frees each file once its
 /// replacement lands, so the largest one is in flight on top. Moving aside on
 /// the same volume, or keeping both, frees nothing. A file the policy fails
-/// is never written.
+/// is never written. A run resumed over what an earlier one landed needs
+/// nothing for a file already there at its length (FR-RST-008, ADR-0109).
 /// </para>
 /// <para>
 /// The refusal itself, before anything is written, belongs to the run: the
@@ -265,6 +266,50 @@ public sealed class RestoreSpaceTests : ArchiveTestHarness
         // Quarantined: the run lands in a directory of its own, so nothing
         // there is replaced whatever the policy says.
         Assert.AreEqual(3ul * MiB + Cluster + MiB, await NeedAsync(RestoreDestinationMode.Quarantine, ExistingDestinationPolicy.Replace));
+    }
+
+    [TestMethod]
+    public async Task AResume_NeedsNothingForAFileAlreadyThereAtItsLength_WhereTheEarlierRunLanded()
+    {
+        // FR-RST-008, ADR-0109: a run resumed over what an earlier one landed
+        // leaves those files as they stand, so they need no room. The run
+        // checks each one's hash as it reaches it; the measure goes by length,
+        // which costs nothing to ask.
+        var source = new FakeFileSystemSource();
+        source.AddFile("one.bin", Deterministic(MiB, 1));
+        source.AddFile("two.bin", Deterministic(MiB, 2));
+        source.AddFile("small.bin", Deterministic(100, 4));
+        using var published = await PublishAsync(source, 0xBB);
+
+        async Task<ulong> NeedAsync(RestoreSlice slice, RestoreDestinationMode mode) =>
+            Assert.ContainsSingle((await RestoreSpace.MeasureAsync(
+                [slice], mode, ExistingDestinationPolicy.Preserve,
+                Probe(Plenty), writtenBytes: null, CancellationToken.None)).Needs).NeededBytes;
+
+        // In place: one file landed whole, another only begun.
+        var live = Path.Combine(SpoolDirectory, "resumed");
+        Directory.CreateDirectory(live);
+        await File.WriteAllBytesAsync(Path.Combine(live, "one.bin"), new byte[MiB]);
+        await File.WriteAllBytesAsync(Path.Combine(live, "two.bin"), new byte[10]);
+
+        Assert.AreEqual(
+            MiB + Cluster + MiB,
+            await NeedAsync(new RestoreSlice(published.Plan, live, ResumedIn: live), RestoreDestinationMode.InPlace));
+        Assert.AreEqual(
+            2ul * MiB + Cluster + MiB,
+            await NeedAsync(new RestoreSlice(published.Plan, live), RestoreDestinationMode.InPlace),
+            "a run that resumes nothing needs room for every file, as before");
+
+        // Quarantined: the resumed run lands in the folder the earlier one
+        // landed in, so that is where it looks.
+        var output = Path.Combine(SpoolDirectory, "quarantined");
+        var earlier = Path.Combine(output, ".fbp-quarantine", "0123456789abcdef");
+        Directory.CreateDirectory(earlier);
+        await File.WriteAllBytesAsync(Path.Combine(earlier, "one.bin"), new byte[MiB]);
+
+        Assert.AreEqual(
+            MiB + Cluster + MiB,
+            await NeedAsync(new RestoreSlice(published.Plan, output, ResumedIn: earlier), RestoreDestinationMode.Quarantine));
     }
 
     [TestMethod]

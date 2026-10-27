@@ -367,7 +367,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
     private const string GoldenReceipt = """
         {
-          "schema_version": 7,
+          "schema_version": 8,
           "snapshot_id": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
           "started_at": 1722700000000,
           "completed_at": 1722700000000,

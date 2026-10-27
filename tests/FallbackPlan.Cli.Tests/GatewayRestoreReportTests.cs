@@ -13,7 +13,9 @@ namespace FallbackPlan.Cli.Tests;
 /// learns that a copy of their backup is damaged from the restore that met
 /// it, not only from a notice they may never open. And what
 /// <c>restore --plan</c> prints through the service (FR-RST-003, ADR-0107):
-/// the plan for the run's own shape, with nothing run.
+/// the plan for the run's own shape, with nothing run. And what
+/// <c>restore --resume</c> asks of the service (FR-RST-008, ADR-0109): the
+/// run it continues, named, and what that run found already in place.
 /// </summary>
 [TestClass]
 public sealed class GatewayRestoreReportTests
@@ -51,6 +53,47 @@ public sealed class GatewayRestoreReportTests
 
         Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
         Assert.IsFalse(report.Lines.Any(printed => printed.Contains("another copy", StringComparison.Ordinal)));
+        Assert.IsNull(
+            Assert.ContainsSingle(client.Received.OfType<RunRestoreCommand>()).Resume,
+            "a restore not told to resume names no run");
+        Assert.IsFalse(report.Lines.Any(printed => printed.Contains("already in place", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task AResume_NamesTheRunItContinues_AndSaysWhatWasFoundInPlace()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(
+            2, 0, "/out/.fbp-quarantine/0123456789abcdef", "complete", FoundInPlace: 1));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.RestoreAsync(
+                new RestoreRequest(SnapshotId, null, "/out", Resume: true, ResumedRun: "0123456789abcdef"), token),
+            timeout.Token);
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        Assert.AreEqual("0123456789abcdef", Assert.ContainsSingle(client.Received.OfType<RunRestoreCommand>()).Resume);
+        Assert.IsTrue(
+            report.Lines.Any(printed => printed.Contains("1 file(s) already in place", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
+    public async Task AResumeNamingNoRun_IsRefusedBeforeAnythingIsAsked()
+    {
+        // Through the service each run lands in a folder of its own, so a
+        // resume that names none has nowhere to continue.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(2, 0, "/out/.fbp-quarantine/run", "complete"));
+
+        var refused = await Assert.ThrowsExactlyAsync<CliFailureException>(() => ThroughAsync(
+            client,
+            (gateway, token) => gateway.RestoreAsync(new RestoreRequest(SnapshotId, null, "/out", Resume: true), token),
+            timeout.Token));
+
+        Assert.Contains(".fbp-quarantine", refused.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(client.Received);
     }
 
     [TestMethod]

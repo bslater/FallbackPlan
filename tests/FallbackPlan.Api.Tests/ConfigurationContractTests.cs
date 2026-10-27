@@ -34,11 +34,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_WhatAClosedCircuitPassedOver_IsRecordedAtOneSixtySix()
+    public void ContractVersion_AResumedRestore_IsRecordedAtOneSixtySeven()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.66", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.67", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -211,6 +211,46 @@ public sealed class ConfigurationContractTests : IDisposable
                 FrameCodec.SerializerOptions),
             out var bare);
         Assert.IsFalse(bare.IgnoreFreeSpace, "a client that never heard of the check must not skip it");
+    }
+
+    [TestMethod]
+    public void RunRestoreCommand_ResumesOnlyTheRunItNames()
+    {
+        // Contract 1.67 (FR-RST-008, ADR-0109): a restore names the run it
+        // continues, by the name of the folder that run landed in.
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new RunRestoreCommand(new string('a', 32), null, "/srv/restored", Resume: "0123456789abcdef"),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"resume\":\"0123456789abcdef\"", asked, StringComparison.Ordinal);
+
+        // A pre-1.67 client sends none, and its restore resumes nothing.
+        Assert.IsInstanceOfType<RunRestoreCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                $$"""{"command":"run_restore","snapshot_id":"{{new string('a', 32)}}","output_directory":"/srv/restored"}""",
+                FrameCodec.SerializerOptions),
+            out var bare);
+        Assert.IsNull(bare.Resume);
+    }
+
+    [TestMethod]
+    public void RestoreResult_SaysHowManyFilesWereFoundInPlace_UnderItsWireName()
+    {
+        // Contract 1.67: the files a resumed run left as they stood, because
+        // they already held the snapshot's content.
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreResult(2, 0, "/srv/restored/.fbp-quarantine/0123456789abcdef", "complete", FoundInPlace: 1),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"found_in_place\":1", modern, StringComparison.Ordinal);
+
+        // A pre-1.67 service's result carries none, and reads as having found
+        // nothing in place.
+        var old = modern.Replace(",\"found_in_place\":1", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsInstanceOfType<RestoreResult>(
+            JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual(0, read.FoundInPlace);
     }
 
     [TestMethod]

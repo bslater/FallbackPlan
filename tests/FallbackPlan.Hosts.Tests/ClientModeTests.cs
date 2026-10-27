@@ -620,6 +620,39 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RestoreResume_RoutedThroughTheService_ContinuesTheRunItNames()
+    {
+        // FR-RST-008, ADR-0109: the folder a routed restore lands in is the
+        // run's own, and the CLI names it to the service to continue it.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteSourceFile("more.txt", "more");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var snapshot = snapshots.Snapshots[0].SnapshotId;
+        var destination = Path.Combine(_harness.WorkPath, "resumed-restore");
+
+        var first = await RunCliAsync("restore", snapshot, "--output", destination);
+        Assert.AreEqual(0, first.ExitCode, first.All);
+        var folder = Path.GetDirectoryName(
+            Directory.EnumerateFiles(destination, "more.txt", SearchOption.AllDirectories).Single())!;
+        File.Delete(Path.Combine(folder, "more.txt"));
+
+        var resumed = await RunCliAsync("restore", snapshot, "--output", destination, "--resume", Path.GetFileName(folder));
+
+        Assert.AreEqual(0, resumed.ExitCode, resumed.All);
+        Assert.Contains(folder, resumed.All, StringComparison.Ordinal);
+        Assert.Contains("1 file(s) already in place", resumed.All, StringComparison.Ordinal);
+        Assert.AreEqual("more", await File.ReadAllTextAsync(Path.Combine(folder, "more.txt"), _timeout.Token));
+    }
+
+    [TestMethod]
     public async Task RetentionApply_RoutedThroughTheService_DerivesTheReclaimGrantHere()
     {
         // FR-GC-008: the service holds the key that publishes and not the key

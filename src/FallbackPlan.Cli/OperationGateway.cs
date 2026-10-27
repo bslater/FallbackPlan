@@ -208,8 +208,24 @@ public interface IOperationGateway : IAsyncDisposable
 /// Where a plan of the restore is kept as JSON, on the machine running the
 /// command line (ADR-0108); null keeps none. A file already there is refused.
 /// </param>
+/// <param name="Resume">
+/// Whether this restore resumes one cut short (FR-RST-008, ADR-0109): each
+/// file already holding the snapshot's content where the run lands it is left
+/// as it stands, and the rest are restored.
+/// </param>
+/// <param name="ResumedRun">
+/// The run resumed, as the folder it landed in under the quarantine is named.
+/// Through the service each run lands in a folder of its own, so a resume
+/// names one; in direct mode a run lands in place, and names none.
+/// </param>
 public sealed record RestoreRequest(
-    string SnapshotId, string? Path, string OutputDirectory, bool IgnoreFreeSpace = false, string? PlanExport = null);
+    string SnapshotId,
+    string? Path,
+    string OutputDirectory,
+    bool IgnoreFreeSpace = false,
+    string? PlanExport = null,
+    bool Resume = false,
+    string? ResumedRun = null);
 
 /// <summary>Resolves which gateway a command gets.</summary>
 public static class OperationGateway
@@ -444,6 +460,12 @@ public static class OperationGateway
 
     private static string RemoteMode(string host, int port) =>
         $"mode: service (remote) — the paired service at {host}:{port} will run this.";
+
+    /// <summary>What a resumed restore found already landed, said alike by either gateway (ADR-0109).</summary>
+    /// <param name="count">The files left as they stood.</param>
+    internal static string FoundInPlace(long count) => string.Create(
+        CultureInfo.InvariantCulture,
+        $"{count} file(s) already in place, holding the snapshot's content, were left as they stood");
 }
 
 /// <summary>The gateway that sends work to a running service.</summary>
@@ -562,6 +584,13 @@ internal sealed class ServiceGateway(
     {
         ThrowHelper.ThrowIfNull(request);
 
+        // Each run through the service lands in a quarantine folder of its
+        // own, so a resume that names none has nowhere to continue.
+        if (request.Resume && request.ResumedRun is null)
+        {
+            throw new CliFailureException(Strings.FormatServiceGateway_ResumeNamesTheRun(request.OutputDirectory));
+        }
+
         // A set-up installation holds no content key (ADR-0042 §7), and a
         // restore names the backup's files (FR-WOR-007): it reads through a
         // source opened under a grant derived here, where the passphrase is.
@@ -573,7 +602,7 @@ internal sealed class ServiceGateway(
             var result = await SendAsync<RestoreResult>(
                 new RunRestoreCommand(
                     request.SnapshotId, request.Path, request.OutputDirectory, Source: source,
-                    IgnoreFreeSpace: request.IgnoreFreeSpace),
+                    IgnoreFreeSpace: request.IgnoreFreeSpace, Resume: request.Resume ? request.ResumedRun : null),
                 "a restore",
                 cancellationToken).ConfigureAwait(false);
 
@@ -582,6 +611,11 @@ internal sealed class ServiceGateway(
                 string.Create(CultureInfo.InvariantCulture,
                     $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
             ];
+
+            if (result.FoundInPlace > 0)
+            {
+                lines.Add(OperationGateway.FoundInPlace(result.FoundInPlace));
+            }
 
             // A person restoring hears that a copy of their backup is damaged
             // from the restore that met it (FR-RST-007), and which copy.
@@ -1263,6 +1297,12 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     {
         ThrowHelper.ThrowIfNull(request);
 
+        // In direct mode a run lands in place, so there is no run to name.
+        if (request.ResumedRun is not null)
+        {
+            throw new CliFailureException(Strings.DirectGateway_ResumeLandsInPlace);
+        }
+
         // Direct mode restores through the same planner and executor the
         // service uses (ADR-0028 §3: "the same operation performs identically
         // through either path"). The earlier hand-rolled walk here combined
@@ -1292,9 +1332,9 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         // Whether it fits, before anything is written (FR-RST-003). The run
         // below lands in place and preserves what it finds, so that is the
-        // run measured.
+        // run measured, less what a resume leaves where it stands.
         var space = await RestoreSpace.MeasureRunAsync(
-            [new RestoreSlice(plan, request.OutputDirectory)],
+            [new RestoreSlice(plan, request.OutputDirectory, request.Resume ? request.OutputDirectory : null)],
             RestoreDestinationMode.InPlace,
             ExistingDestinationPolicy.Preserve,
             SpaceProbe(),
@@ -1321,6 +1361,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 // snapshot displace into distinct stores (architecture 08 §3.1).
                 RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
                 NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                Resume = request.Resume,
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -1345,6 +1386,12 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         lines.Add(string.Create(CultureInfo.InvariantCulture,
             $"restore {receipt.Outcome}: {restored} file(s) to {receipt.WrittenTo}; {failed} failure(s), {skipped} skipped, {degraded} degraded"));
+
+        var foundInPlace = receipt.Items.Count(item => item.FoundInPlace);
+        if (foundInPlace > 0)
+        {
+            lines.Add(OperationGateway.FoundInPlace(foundInPlace));
+        }
 
         // What the files came back without, which the receipt names file by
         // file (FR-RST-004).
