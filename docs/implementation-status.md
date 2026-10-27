@@ -134,6 +134,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0107](adr/0107-the-command-line-plans-a-restore-on-its-own.md) | The command line plans a restore on its own: `restore --plan` prints the plan for the run `restore` would make, through the service or in direct mode alike, restores nothing, and exits non-zero unless that run would restore every file and fit; a plan is still not exported to a file, and a restore is not resumed | **Built** | `Cli/CliApplication` · `Cli/OperationGateway` · `Cli/RestorePlanReport` · `Restore/RestorePlanFigures` · `Cli.Tests/RestorePlanCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/ClientModeTests`, `Repository.Tests/RestorePlanTests`, `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0107--a-plan-from-the-shell) |
 | [0108](adr/0108-a-restores-plan-can-be-kept-in-a-file.md) | A restore's plan can be kept in a file: `restore --export <file>` keeps the plan as JSON, in the contract's own words beside the run it was made for, implies `--plan` so nothing is restored, and refuses a file already there; a kept plan is not run | **Built** | `Cli/CliApplication` · `Cli/RestorePlanExport` · `Cli/RestorePlanReport` · `Cli.Tests/RestorePlanCommandTests`, `Cli.Tests/GatewayRestoreReportTests` · [notes](#0108--a-plan-kept) |
 | [0109](adr/0109-a-restore-cut-short-is-resumed.md) | A restore cut short is resumed: `restore --resume` leaves each file already holding the snapshot's content, by length and whole-file hash, as it stands, reads none of its content, applies its metadata again and lands the rest, measured for what is left; through the service it continues the run it names in that run's folder (contract 1.67), and the receipt (schema 8) says what was found in place | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Repository.Tests/RestoreResumeTests`, `Repository.Tests/RestoreSpaceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/RestoreResumeServiceTests`, `Hosts.Tests/ClientModeTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0109--a-restore-resumed) |
+| [0110](adr/0110-the-console-resumes-a-restore-cut-short.md) | The console resumes a restore cut short: a restore's result names the run a resume of it gives (contract 1.68), the wizard offers to restore what is left of a run that failed or was stopped, as it was confirmed and naming that run, and says what was found in place; the command line says how to resume such a run | **Built** | `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Web.DomTests/RestoreWizardDomTests`, `Web.Tests/ConsoleRestoreResultScriptTests`, `Hosts.Tests/RestoreResumeServiceTests`, `Cli.Tests/GatewayRestoreReportTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0110--a-restore-resumed-from-the-console) |
 
 ---
 
@@ -3393,3 +3394,19 @@ listed once a run for this.
 What remains is recorded rather than done. A file cut short mid-write is
 restored whole, the console's wizard resumes nothing, and through the service
 the run is named rather than found.
+
+### 0110 — a restore resumed from the console
+
+The console could not resume a restore: its result step offered only Close,
+and a run's name could be read only out of a path. A restore's result now
+names the run a resume of it gives (contract 1.68's `run`), its own or, for a
+resumed quarantined run, the run it continued, so a run cut short twice is
+resumed by one name. The wizard offers to restore what is left of a run that
+failed or was stopped, asking for it exactly as it was confirmed with that run
+named, and the result that comes back says how many files were found in
+place. Through the service the command line prints the same name with how to
+use it.
+
+What remains is recorded rather than done. A run cut short before it answers
+is resumed by its folder's name, from the command line, and a kept plan is not
+run.
