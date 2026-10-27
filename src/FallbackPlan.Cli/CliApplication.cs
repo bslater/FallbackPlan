@@ -1598,6 +1598,52 @@ public static class CliApplication
             }));
         }
 
+        // ------------------------------------------------------ restore-resume
+
+        {
+            var runArgument = new Argument<string?>("run")
+            {
+                Description = "The run to resume, as the list names it; omit to list the runs left unfinished.",
+                Arity = ArgumentArity.ZeroOrOne,
+            };
+            var forgetOption = new Option<bool>("--forget")
+            {
+                Description = "Let the run go rather than resume it: the service names it no more, and what it landed "
+                    + "stays where it landed.",
+            };
+            var ignoreFreeSpaceOption = new Option<bool>("--ignore-free-space")
+            {
+                Description = "Resume even when the destination looks too small, as restore takes it.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "restore-resume",
+                "Resume a restore the service began and has not seen finish, by its name alone: it is run again as it "
+                + "was asked, leaving what it landed. With no run, list the runs left unfinished. Through the service only."));
+            command.Arguments.Add(runArgument);
+            command.Options.Add(forgetOption);
+            command.Options.Add(ignoreFreeSpaceOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() =>
+            {
+                var run = parse.GetValue(runArgument);
+                var forget = parse.GetValue(forgetOption);
+                if (run is null && forget)
+                {
+                    throw new CliFailureException(Strings.CliApplication_ForgetNamesTheRun);
+                }
+
+                return ReadThroughGatewayAsync(
+                    parse,
+                    (gateway, token) => run is null
+                        ? gateway.RestoreRunsAsync(token)
+                        : forget
+                            ? gateway.ForgetRestoreRunAsync(run, token)
+                            : gateway.ResumeRestoreAsync(run, parse.GetValue(ignoreFreeSpaceOption), token),
+                    cancellationToken);
+            }));
+        }
+
         // --------------------------------------------------------------- check
 
         {

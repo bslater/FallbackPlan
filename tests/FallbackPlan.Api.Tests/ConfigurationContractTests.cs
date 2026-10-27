@@ -34,11 +34,60 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_WhatAStoreArchivedOfTheReplicasMetadata_IsRecordedAtOneSeventy()
+    public void ContractVersion_ARestoreRunLeftUnfinished_IsRecordedAtOneSeventyOne()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.70", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.71", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void TheRestoreRunsLeftUnfinished_CrossUnderTheirWireNames_AndNameNoneOfTheBackupsFiles()
+    {
+        // Contract 1.71 (FR-RST-008, ADR-0115): each run the service began
+        // and has not seen finish, with what it was asked but the paths.
+        Assert.AreEqual(
+            """{"command":"list_restore_runs"}""",
+            JsonSerializer.Serialize<ServiceCommand>(new ListRestoreRunsCommand(), FrameCodec.SerializerOptions));
+
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreRunsResult(
+            [
+                new RestoreRunDescriptor(
+                    "0123456789abcdef", new string('e', 32), "docs", "/srv/restored", 1_000, Target: "folder",
+                    Existing: "rename", InPlace: true),
+            ]),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"result\":\"restore_runs\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"run\":\"0123456789abcdef\"", listed, StringComparison.Ordinal);
+        Assert.Contains($"\"snapshot_id\":\"{new string('e', 32)}\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"set\":\"docs\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"output_directory\":\"/srv/restored\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"began_at\":1000", listed, StringComparison.Ordinal);
+        Assert.Contains("\"existing\":\"rename\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"in_place\":true", listed, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"path", listed, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RestoreRunsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(listed, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual("0123456789abcdef", Assert.ContainsSingle(read.Runs).Run);
+    }
+
+    [TestMethod]
+    public void ARunLeftUnfinished_IsResumedAndLetGo_ByItsNameAlone_UnderTheirWireNames()
+    {
+        var resume = JsonSerializer.Serialize<ServiceCommand>(
+            new ResumeRestoreCommand("0123456789abcdef", "src-1", IgnoreFreeSpace: true), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"command\":\"resume_restore\"", resume, StringComparison.Ordinal);
+        Assert.Contains("\"run\":\"0123456789abcdef\"", resume, StringComparison.Ordinal);
+        Assert.Contains("\"source\":\"src-1\"", resume, StringComparison.Ordinal);
+        Assert.Contains("\"ignore_free_space\":true", resume, StringComparison.Ordinal);
+
+        Assert.AreEqual(
+            """{"command":"forget_restore_run","run":"0123456789abcdef"}""",
+            JsonSerializer.Serialize<ServiceCommand>(new ForgetRestoreRunCommand("0123456789abcdef"), FrameCodec.SerializerOptions));
     }
 
     [TestMethod]

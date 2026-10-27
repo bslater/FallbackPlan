@@ -303,6 +303,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>The durable notices ledger (architecture 10 §3.1's third channel).</summary>
     public NoticeStore Notices { get; private set; } = null!;
 
+    /// <summary>The restore runs this service began and has not seen finish (FR-RST-008, ADR-0115).</summary>
+    public RestoreRunJournal RestoreRuns { get; private set; } = null!;
+
     /// <summary>Where progress goes.</summary>
     public ProgressHub Progress { get; }
 
@@ -640,6 +643,16 @@ public sealed class ServiceRuntime : IAsyncDisposable
                     nowMs);
             }
 
+            // Restore runs a previous process began and never saw finish
+            // (ADR-0115): one cut short with the machine ended before it could
+            // say so, so it is said here, and once acknowledged not again.
+            var restoreRuns = RestoreRunJournal.Open(options.StateDirectory);
+            foreach (var run in restoreRuns.Runs)
+            {
+                notices.RaiseUnlessAcknowledged(
+                    UnfinishedRestoreNotice.KeyOf(run.Run), UnfinishedRestoreNotice.MessageOf(run), nowMs);
+            }
+
             // Crash leftovers: per-source catalogue caches are worthless
             // without their (gone) handles, and a failed purge is only noise.
             try
@@ -682,6 +695,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                     StagingSweeps = StagingSweepStore.Open(options.StateDirectory),
                     StoreRequests = StoreRequestLedger.Open(options.StateDirectory),
                     Notices = notices,
+                    RestoreRuns = restoreRuns,
                 });
         }
         catch

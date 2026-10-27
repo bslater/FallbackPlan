@@ -43,6 +43,9 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ListDirectoryCommand), "list_directory")]
 [JsonDerivedType(typeof(PlanRestoreCommand), "plan_restore")]
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
+[JsonDerivedType(typeof(ListRestoreRunsCommand), "list_restore_runs")]
+[JsonDerivedType(typeof(ResumeRestoreCommand), "resume_restore")]
+[JsonDerivedType(typeof(ForgetRestoreRunCommand), "forget_restore_run")]
 [JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
 [JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
 [JsonDerivedType(typeof(ProvisionInstallationCommand), "provision_installation")]
@@ -610,6 +613,36 @@ public sealed record RunRestoreCommand(
     bool InPlace = false,
     bool IgnoreFreeSpace = false,
     string? Resume = null) : ServiceCommand;
+
+/// <summary>
+/// Lists the restore runs the service began and has not seen finish
+/// (contract 1.71, FR-RST-008, ADR-0115): each one stopped, failed files, or
+/// was cut short with the service, and none under way.
+/// </summary>
+/// <remarks>
+/// It names none of the backup's files, so it needs no restore source: what
+/// each run was asked stays with the service, which asks it again on a
+/// resume.
+/// </remarks>
+public sealed record ListRestoreRunsCommand : ServiceCommand;
+
+/// <summary>
+/// Resumes a restore run left unfinished by its name alone (contract 1.71,
+/// FR-RST-008, ADR-0115): the service runs it again as it was asked, as a
+/// resume (ADR-0109), and answers as <see cref="RunRestoreCommand"/> does.
+/// </summary>
+/// <param name="Run">The run, as <see cref="ListRestoreRunsCommand"/> or the run's own result names it.</param>
+/// <param name="Source">An open restore source of the run's snapshot to read from; null reads the staging archives.</param>
+/// <param name="IgnoreFreeSpace">Whether to run although the volume looks too small, as <see cref="RunRestoreCommand"/> takes it.</param>
+public sealed record ResumeRestoreCommand(string Run, string? Source = null, bool IgnoreFreeSpace = false) : ServiceCommand;
+
+/// <summary>
+/// Lets a restore run left unfinished go (contract 1.71, ADR-0115): the
+/// service names it no more and resolves its notice. What it landed stays
+/// where it landed, and is still resumed by its folder's name (ADR-0109).
+/// </summary>
+/// <param name="Run">The run, as <see cref="ListRestoreRunsCommand"/> names it.</param>
+public sealed record ForgetRestoreRunCommand(string Run) : ServiceCommand;
 
 /// <summary>
 /// Opens a restore source (ADR-0041): the place a guided restore reads from —

@@ -398,4 +398,46 @@ internal static class Strings
     /// </summary>
     internal static string FormatServiceGateway_ResumeNamesTheRun(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, ServiceGateway_ResumeNamesTheRun, arg0);
+
+    /// <summary>
+    /// Only the service names a restore run. A restore in direct mode lands in place and names none, so resume one with restore --resume, naming its snapshot and its --output again. Connect to the service with --connect, or run this on the hub while it runs.
+    /// </summary>
+    internal static string DirectGateway_RestoreRunsNeedTheService => Get(nameof(DirectGateway_RestoreRunsNeedTheService));
+
+    /// <summary>
+    /// No restore run is left unfinished.
+    /// </summary>
+    internal static string ServiceGateway_NoRestoreRunUnfinished => Get(nameof(ServiceGateway_NoRestoreRunUnfinished));
+
+    /// <summary>
+    /// Restore what is left of one with restore-resume &lt;run&gt;, or let it go with restore-resume &lt;run&gt; --forget.
+    /// </summary>
+    internal static string ServiceGateway_RestoreRunsHint => Get(nameof(ServiceGateway_RestoreRunsHint));
+
+    /// <summary>
+    /// No restore run {0} is left unfinished on this service. restore-resume with no run lists those that are; a run left before the service named its runs is resumed with restore --resume and its folder's name.
+    /// </summary>
+    private static string ServiceGateway_NoSuchRestoreRun => Get(nameof(ServiceGateway_NoSuchRestoreRun));
+
+    /// <summary>
+    /// No restore run {0} is left unfinished on this service. restore-resume with no run lists those that are; a run left before the service named its runs is resumed with restore --resume and its folder's name.
+    /// </summary>
+    internal static string FormatServiceGateway_NoSuchRestoreRun(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ServiceGateway_NoSuchRestoreRun, arg0);
+
+    /// <summary>
+    /// Restore run {0} is let go: the service names it no more, and what it landed stays where it landed.
+    /// </summary>
+    private static string ServiceGateway_RestoreRunLetGo => Get(nameof(ServiceGateway_RestoreRunLetGo));
+
+    /// <summary>
+    /// Restore run {0} is let go: the service names it no more, and what it landed stays where it landed.
+    /// </summary>
+    internal static string FormatServiceGateway_RestoreRunLetGo(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ServiceGateway_RestoreRunLetGo, arg0);
+
+    /// <summary>
+    /// --forget lets one run go, so name it: restore-resume &lt;run&gt; --forget.
+    /// </summary>
+    internal static string CliApplication_ForgetNamesTheRun => Get(nameof(CliApplication_ForgetNamesTheRun));
 }

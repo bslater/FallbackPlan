@@ -653,6 +653,66 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RestoreResume_RoutedThroughTheService_NamesARunLeftUnfinished_AndResumesItByThatNameAlone()
+    {
+        // FR-RST-008, ADR-0115: a run that failed files is named by the
+        // service, listed without asking the passphrase, and resumed by its
+        // name with nothing else said of it; another is let go.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        var destination = Path.Combine(_harness.WorkPath, "unfinished-restore");
+        var blobs = Directory.GetFiles(Path.Combine(_harness.RepositoryPath, "blobs", "data"), "*", SearchOption.AllDirectories);
+        var sound = blobs.ToDictionary(path => path, File.ReadAllBytes);
+        foreach (var path in blobs)
+        {
+            var bytes = File.ReadAllBytes(path);
+            for (var i = 200; i < bytes.Length; i++)
+            {
+                bytes[i] ^= 0xFF;
+            }
+
+            File.WriteAllBytes(path, bytes);
+        }
+
+        var failed = await RunCliAsync("restore", snapshots.Snapshots[0].SnapshotId, "--output", destination);
+        Assert.AreNotEqual(0, failed.ExitCode, failed.All);
+        var run = Assert.ContainsSingle(runtime.RestoreRuns.Unfinished).Run;
+        var elsewhere = Path.Combine(_harness.WorkPath, "abandoned-restore");
+        Assert.AreNotEqual(0, (await RunCliAsync("restore", snapshots.Snapshots[0].SnapshotId, "--output", elsewhere)).ExitCode);
+        var abandoned = runtime.RestoreRuns.Unfinished.Single(candidate => candidate.Run != run).Run;
+
+        var listed = await RunCliAsync("restore-resume");
+        Assert.AreEqual(0, listed.ExitCode, listed.All);
+        Assert.Contains(run, listed.Output, StringComparison.Ordinal);
+        Assert.Contains(destination, listed.Output, StringComparison.Ordinal);
+        Assert.Contains(abandoned, listed.Output, StringComparison.Ordinal);
+
+        var forgotten = await RunCliAsync("restore-resume", abandoned, "--forget");
+        Assert.AreEqual(0, forgotten.ExitCode, forgotten.All);
+        Assert.AreEqual(run, Assert.ContainsSingle(runtime.RestoreRuns.Runs).Run, "the run let go is named no more");
+
+        foreach (var (path, bytes) in sound)
+        {
+            await File.WriteAllBytesAsync(path, bytes, _timeout.Token);
+        }
+
+        var resumed = await RunCliAsync("restore-resume", run);
+
+        Assert.AreEqual(0, resumed.ExitCode, resumed.All);
+        Assert.Contains("mode: service", resumed.All, StringComparison.Ordinal);
+        Assert.AreEqual("hello", await File.ReadAllTextAsync(Path.Combine(destination, ".fbp-quarantine", run, "notes.txt"), _timeout.Token));
+        Assert.IsEmpty(runtime.RestoreRuns.Runs, "a run that finished is named no more");
+    }
+
+    [TestMethod]
     public async Task RetentionApply_RoutedThroughTheService_DerivesTheReclaimGrantHere()
     {
         // FR-GC-008: the service holds the key that publishes and not the key

@@ -191,6 +191,32 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="cancellationToken">Cancels the look.</param>
     /// <returns>The names, one a line, or that the notice names no files.</returns>
     ValueTask<OperationReport> NoticeNamesAsync(string noticeId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lists the restore runs the service began and has not seen finish
+    /// (FR-RST-008, ADR-0115), without the backup's file names. Only a
+    /// service names a run.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the look.</param>
+    /// <returns>A line per run, or that none is left.</returns>
+    ValueTask<OperationReport> RestoreRunsAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Resumes a restore run left unfinished by its name alone (FR-RST-008,
+    /// ADR-0115): the service runs it again as it was asked, through a source
+    /// of its snapshot the passphrase unlocked.
+    /// </summary>
+    /// <param name="run">The run, as the list names it.</param>
+    /// <param name="ignoreFreeSpace">Whether to restore although the volume looks too small.</param>
+    /// <param name="cancellationToken">Cancels the resume.</param>
+    /// <returns>What the restore says; not ok when a file failed.</returns>
+    ValueTask<OperationReport> ResumeRestoreAsync(string run, bool ignoreFreeSpace, CancellationToken cancellationToken);
+
+    /// <summary>Lets a restore run left unfinished go (ADR-0115): the service names it no more.</summary>
+    /// <param name="run">The run, as the list names it.</param>
+    /// <param name="cancellationToken">Cancels the ask.</param>
+    /// <returns>A line saying so.</returns>
+    ValueTask<OperationReport> ForgetRestoreRunAsync(string run, CancellationToken cancellationToken);
 }
 
 /// <summary>What a restore was asked to write, and where.</summary>
@@ -617,44 +643,112 @@ internal sealed class ServiceGateway(
                 "a restore",
                 cancellationToken).ConfigureAwait(false);
 
-            List<string> lines =
-            [
-                string.Create(CultureInfo.InvariantCulture,
-                    $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
-            ];
-
-            if (result.FoundInPlace > 0)
-            {
-                lines.Add(OperationGateway.FoundInPlace(result.FoundInPlace));
-            }
-
-            // What --resume takes, where a run was cut short (ADR-0110). A
-            // partial run skipped what this target cannot hold, which a
-            // resume would skip again.
-            if (result.Run is { } run && result.Outcome is "failed" or "cancelled")
-            {
-                lines.Add($"to restore what is left, run it again with --resume {run}");
-            }
-
-            // A person restoring hears that a copy of their backup is damaged
-            // from the restore that met it (FR-RST-007), and which copy.
-            if (result.ReadAround > 0)
-            {
-                lines.Add(string.Create(CultureInfo.InvariantCulture,
-                    $"{result.ReadAround} file(s) came from another copy, because a copy they were first read from was damaged or would not read; each was verified like any other:"));
-                lines.AddRange(result.ReadAroundSample ?? []);
-            }
-
-            // What the files came back without, which the receipt names file
-            // by file (FR-RST-004).
-            lines.AddRange(result.NotApplied ?? []);
-
-            return new OperationReport(result.Failed == 0, lines);
+            return Restored(result, run => $"to restore what is left, run it again with --resume {run}");
         }
         finally
         {
             await GrantedSources.CloseAsync(client, source).ConfigureAwait(false);
         }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> RestoreRunsAsync(CancellationToken cancellationToken)
+    {
+        var listed = await SendAsync<RestoreRunsResult>(
+            new ListRestoreRunsCommand(), "the restore runs left unfinished", cancellationToken).ConfigureAwait(false);
+        if (listed.Runs.Count == 0)
+        {
+            return new OperationReport(true, [Strings.ServiceGateway_NoRestoreRunUnfinished]);
+        }
+
+        return new OperationReport(true, [.. listed.Runs.Select(Describe), Strings.ServiceGateway_RestoreRunsHint]);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> ResumeRestoreAsync(
+        string run, bool ignoreFreeSpace, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(run);
+
+        // Which snapshot the run restores is the service's to say, and a run
+        // it does not name is refused before the passphrase is asked.
+        var listed = await SendAsync<RestoreRunsResult>(
+            new ListRestoreRunsCommand(), "the restore runs left unfinished", cancellationToken).ConfigureAwait(false);
+        var named = listed.Runs.FirstOrDefault(candidate => string.Equals(candidate.Run, run, StringComparison.Ordinal))
+            ?? throw new CliFailureException(Strings.FormatServiceGateway_NoSuchRestoreRun(run));
+
+        var source = (await GrantedSources.OpenHoldingAsync(
+            client, passphraseEnvironmentVariable, "A restore", named.SnapshotId, cancellationToken)
+            .ConfigureAwait(false)).SourceId;
+        try
+        {
+            var result = await SendAsync<RestoreResult>(
+                new ResumeRestoreCommand(run, source, ignoreFreeSpace), "a restore", cancellationToken).ConfigureAwait(false);
+            return Restored(result, again => $"to restore what is left, run restore-resume {again}");
+        }
+        finally
+        {
+            await GrantedSources.CloseAsync(client, source).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> ForgetRestoreRunAsync(string run, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(run);
+
+        await SendAsync<AcknowledgedResult>(
+            new ForgetRestoreRunCommand(run), "letting a restore run go", cancellationToken).ConfigureAwait(false);
+        return new OperationReport(true, [Strings.FormatServiceGateway_RestoreRunLetGo(run)]);
+    }
+
+    /// <summary>A run left unfinished, as a person chooses whether to resume it.</summary>
+    private static string Describe(RestoreRunDescriptor run)
+    {
+        var began = DateTimeOffset.FromUnixTimeMilliseconds((long)run.BeganAt).UtcDateTime;
+        var of = run.Set is { } set ? $" of set '{set}'" : string.Empty;
+        var to = string.IsNullOrEmpty(run.OutputDirectory) ? "where its files came from" : run.OutputDirectory;
+        var how = (run.InPlace ? ", in place" : string.Empty) + (run.Existing is { } existing ? $", {existing} where a file is in the way" : string.Empty);
+        return string.Create(
+            CultureInfo.InvariantCulture, $"{run.Run}  snapshot {run.SnapshotId}{of} to {to}{how}, begun {began:yyyy-MM-dd HH:mm} UTC");
+    }
+
+    /// <summary>What a restore through the service says, with how to resume it where it did not finish.</summary>
+    private static OperationReport Restored(RestoreResult result, Func<string, string> resumeLine)
+    {
+        List<string> lines =
+        [
+            string.Create(CultureInfo.InvariantCulture,
+                $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
+        ];
+
+        if (result.FoundInPlace > 0)
+        {
+            lines.Add(OperationGateway.FoundInPlace(result.FoundInPlace));
+        }
+
+        // How to resume a run that did not finish (ADR-0110). A partial
+        // run skipped what this target cannot hold, which a resume would
+        // skip again.
+        if (result.Run is { } run && result.Outcome is "failed" or "cancelled")
+        {
+            lines.Add(resumeLine(run));
+        }
+
+        // A person restoring hears that a copy of their backup is damaged
+        // from the restore that met it (FR-RST-007), and which copy.
+        if (result.ReadAround > 0)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{result.ReadAround} file(s) came from another copy, because a copy they were first read from was damaged or would not read; each was verified like any other:"));
+            lines.AddRange(result.ReadAroundSample ?? []);
+        }
+
+        // What the files came back without, which the receipt names file
+        // by file (FR-RST-004).
+        lines.AddRange(result.NotApplied ?? []);
+
+        return new OperationReport(result.Failed == 0, lines);
     }
 
     /// <inheritdoc/>
@@ -1496,6 +1590,20 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     public ValueTask<OperationReport> NoticeNamesAsync(string noticeId, CancellationToken cancellationToken) =>
         // The notices are the service's ledger: nothing here was raised.
         throw new CliFailureException(Strings.DirectGateway_NoticeNamesNeedsTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> RestoreRunsAsync(CancellationToken cancellationToken) =>
+        // A run here lands in place and names none (ADR-0109): only the
+        // service keeps its runs.
+        throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> ResumeRestoreAsync(string run, bool ignoreFreeSpace, CancellationToken cancellationToken) =>
+        throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> ForgetRestoreRunAsync(string run, CancellationToken cancellationToken) =>
+        throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> DrillAsync(

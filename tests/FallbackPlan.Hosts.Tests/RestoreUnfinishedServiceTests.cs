@@ -1,0 +1,399 @@
+using System.CommandLine;
+using FallbackPlan.Agent;
+using FallbackPlan.Api;
+using FallbackPlan.Api.Transport;
+using FallbackPlan.TestSupport;
+
+namespace FallbackPlan.Hosts.Tests;
+
+/// <summary>
+/// A restore cut short is named, and resumed by its name alone (FR-RST-008,
+/// ADR-0115). The service keeps each run it began until a run of it
+/// finishes: one stopped, one that failed files, and one the service itself
+/// did not see end. Each is listed without the backup's file names, and
+/// noticed, so a person learns of it however it ended, and once a notice is
+/// acknowledged a restart does not say it again. A resume names only the
+/// run, and the service runs it as it was asked, under the name its result
+/// gives and the caller's session, refusing one that will not fit unless the
+/// command line says to go on; one that finishes resolves the notice. A run
+/// let go is named no more, and a run not on record is refused before
+/// anything is written.
+/// </summary>
+[TestClass]
+public sealed partial class RestoreUnfinishedServiceTests : IDisposable
+{
+    private const string NoSuchRun = "0123456789abcdef";
+    private const string NoticeKind = "restore-unfinished:";
+
+    private readonly HostHarness _harness = new();
+    private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(2));
+
+    /// <summary>Cancelled as the run measures its room, so it stops before its first file.</summary>
+    private CancellationTokenSource? _cutShortAt;
+
+    /// <summary>What the volume a run writes to has free, as the probe says it; null for unknown.</summary>
+    private long? _available;
+
+    [TestMethod]
+    public async Task ARunThatFinishes_LeavesNoRunNamed_AndNothingNoticed()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var restored = await RestoreAsync(handler, Destination, _timeout.Token);
+
+        Assert.AreEqual("complete", restored.Outcome);
+        Assert.IsEmpty(await RunsAsync(handler));
+        Assert.IsFalse(runtime.Notices.Notices.Any(notice => notice.Key.StartsWith(NoticeKind, StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a FIFO is a POSIX entry kind, captured and never materialised")]
+    public async Task ARunThatSkipsOnlyWhatTheTargetCannotHold_IsFinished()
+    {
+        // A partial run skipped what this target cannot hold, which a resume
+        // would skip again (ADR-0110), so it is not left unfinished.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        if (MkFifo(Path.Combine(_harness.SourceRoot, "pipe"), 0x1B6 /* 0666 */) != 0)
+        {
+            return; // filesystem refuses FIFOs (some CI mounts) — nothing to assert
+        }
+
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        await _harness.SetupAsync();
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var restored = await RestoreAsync(handler, Destination, _timeout.Token);
+
+        Assert.AreEqual("partial", restored.Outcome);
+        Assert.IsEmpty(await RunsAsync(handler));
+        Assert.IsFalse(runtime.Notices.Notices.Any(notice => notice.Key.StartsWith(NoticeKind, StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task ARunCutShort_IsNamed_AndNoticed_AndResumedByItsNameAlone()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler);
+
+        var named = Assert.ContainsSingle(await RunsAsync(handler));
+        Assert.AreEqual(cut.Run, named.Run);
+        Assert.AreEqual(await SnapshotIdAsync(handler), named.SnapshotId);
+        Assert.AreEqual("docs", named.Set);
+        Assert.AreEqual(Destination, named.OutputDirectory);
+        Assert.IsGreaterThan(0UL, named.BeganAt);
+        var notice = Assert.ContainsSingle(candidate => candidate.Key == NoticeKind + cut.Run, runtime.Notices.Unacknowledged);
+        Assert.Contains($"restore-resume {cut.Run}", notice.Message, StringComparison.Ordinal);
+
+        var resumed = await ResumeAsync(handler, cut.Run!);
+
+        Assert.AreEqual("complete", resumed.Outcome);
+        Assert.AreEqual(cut.Run, resumed.Run, "a quarantined run is resumed in its own folder, under its own name");
+        Assert.AreEqual(cut.OutputDirectory, resumed.OutputDirectory);
+        Assert.AreEqual("deeper", await File.ReadAllTextAsync(Path.Combine(resumed.OutputDirectory, "nested", "deeper.txt"), _timeout.Token));
+        Assert.IsEmpty(await RunsAsync(handler), "a run that finished is named no more");
+        Assert.IsFalse(runtime.Notices.Unacknowledged.Any(notice => notice.Key == NoticeKind + cut.Run), "and no longer noticed");
+    }
+
+    [TestMethod]
+    public async Task ARunThatFailedFiles_IsNamed_AndResumedAsItWasAsked_UntilARunOfItFinishes()
+    {
+        // The console's shape, in place under rename, kept with the run and
+        // asked again by the resume that names it: a file in the way stays,
+        // and the restored copy is written beside it.
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var notes = Path.Combine(Destination, "notes.txt");
+        Directory.CreateDirectory(Destination);
+        await File.WriteAllTextAsync(notes, "the live file", _timeout.Token);
+        var sound = Tamper(_harness.RepositoryPath);
+
+        var failed = await RestoreAsync(handler, Destination, _timeout.Token, existing: "rename", inPlace: true);
+        Assert.AreEqual("failed", failed.Outcome);
+        var named = Assert.ContainsSingle(await RunsAsync(handler));
+        Assert.AreEqual(failed.Run, named.Run);
+        Assert.AreEqual("rename", named.Existing);
+        Assert.IsTrue(named.InPlace);
+        Assert.ContainsSingle(candidate => candidate.Key == NoticeKind + failed.Run, runtime.Notices.Unacknowledged);
+
+        foreach (var (path, bytes) in sound)
+        {
+            await File.WriteAllBytesAsync(path, bytes, _timeout.Token);
+        }
+
+        var resumed = await ResumeAsync(handler, failed.Run!);
+
+        Assert.AreEqual("complete", resumed.Outcome);
+        Assert.AreEqual("the live file", await File.ReadAllTextAsync(notes, _timeout.Token), "the run is asked as it was: under rename");
+        Assert.AreEqual(
+            "hello",
+            await File.ReadAllTextAsync(Assert.ContainsSingle(Directory.EnumerateFiles(Destination, "notes (restored *).txt")), _timeout.Token));
+        Assert.IsFalse(Directory.Exists(Path.Combine(Destination, ".fbp-quarantine")), "and in place");
+        Assert.IsEmpty(await RunsAsync(handler));
+        Assert.IsFalse(runtime.Notices.Unacknowledged.Any(notice => notice.Key.StartsWith(NoticeKind, StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task ARunTheServiceDidNotSeeEnd_IsNoticedWhenTheServiceStartsAgain()
+    {
+        // A machine that stops mid-run ends the process before it can say so:
+        // the run is on record, and nothing has noticed it.
+        string run;
+        await using (var first = await BackUpAndStartAsync())
+        {
+            run = (await CutShortAsync(new ServiceCommandHandler(first, RemoteBindingState.Off))).Run!;
+        }
+
+        File.Delete(Path.Combine(_harness.StateDirectory, "notices.json"));
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.AreEqual(run, Assert.ContainsSingle(await RunsAsync(handler)).Run);
+        var notice = Assert.ContainsSingle(candidate => candidate.Key == NoticeKind + run, runtime.Notices.Unacknowledged);
+        Assert.Contains($"restore-resume {run}", notice.Message, StringComparison.Ordinal);
+        Assert.AreEqual("complete", (await ResumeAsync(handler, run)).Outcome);
+    }
+
+    [TestMethod]
+    public async Task ARunNoticedAndAcknowledged_IsNotSaidAgain_WhenTheServiceStarts()
+    {
+        string run;
+        await using (var first = await BackUpAndStartAsync())
+        {
+            run = (await CutShortAsync(new ServiceCommandHandler(first, RemoteBindingState.Off))).Run!;
+            var notice = Assert.ContainsSingle(candidate => candidate.Key == NoticeKind + run, first.Notices.Unacknowledged);
+            Assert.IsTrue(first.Notices.Acknowledge(notice.Id, 1));
+        }
+
+        await using var runtime = await StartAsync();
+
+        Assert.IsFalse(runtime.Notices.Unacknowledged.Any(notice => notice.Key == NoticeKind + run), "a person who has seen it is not asked again");
+        Assert.AreEqual(run, Assert.ContainsSingle(await RunsAsync(new ServiceCommandHandler(runtime, RemoteBindingState.Off))).Run);
+    }
+
+    [TestMethod]
+    public async Task AResume_IsAskedUnderTheSessionThatAsksIt()
+    {
+        // A source serves only the session that unlocked it (FR-WOR-007),
+        // and the run a resume asks again is that session's.
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var run = (await CutShortAsync(handler)).Run!;
+        var source = await _harness.OpenGrantedSourceAsync(
+            (command, token) => handler.ExecuteAsync(command with { SessionId = "session-7" }, token), "docs", null, _timeout.Token);
+
+        var resumed = await handler.ExecuteAsync(
+            new ResumeRestoreCommand(run, source.SourceId) { SessionId = "session-7" }, _timeout.Token);
+
+        Assert.IsInstanceOfType<RestoreResult>(resumed, (resumed as ServiceError)?.Message);
+    }
+
+    [TestMethod]
+    public async Task AResumeThatWillNotFit_IsRefused_UnlessTheCommandLineSaysToGoOn()
+    {
+        // The run's own refusal of a restore that will not fit holds for its
+        // resume, and restore-resume's --ignore-free-space reaches it.
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var run = (await CutShortAsync(handler)).Run!;
+        _available = 1;
+
+        var refused = await CliAsync("restore-resume", run);
+        Assert.AreNotEqual(0, refused.ExitCode, refused.Output + refused.Error);
+        Assert.Contains("would not fit", refused.Output + refused.Error, StringComparison.Ordinal);
+        Assert.AreEqual(run, Assert.ContainsSingle(await RunsAsync(handler)).Run, "a refused resume leaves the run as it was");
+
+        var resumed = await CliAsync("restore-resume", run, "--ignore-free-space");
+        Assert.AreEqual(0, resumed.ExitCode, resumed.Output + resumed.Error);
+        Assert.IsEmpty(await RunsAsync(handler));
+    }
+
+    [TestMethod]
+    public async Task ARunLetGo_IsNamedNoMore_NorNoticed()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var run = (await CutShortAsync(handler)).Run!;
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new ForgetRestoreRunCommand(run), _timeout.Token));
+
+        Assert.IsEmpty(await RunsAsync(handler));
+        Assert.IsFalse(runtime.Notices.Unacknowledged.Any(notice => notice.Key == NoticeKind + run));
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ForgetRestoreRunCommand(run), _timeout.Token), out var again);
+        Assert.AreEqual(ServiceErrorReason.NotFound, again.Reason);
+    }
+
+    [TestMethod]
+    public async Task AResumeOfARunNotOnRecord_IsRefused_AndWritesNothing()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ResumeRestoreCommand(NoSuchRun, source.SourceId), _timeout.Token), out var refused);
+
+        Assert.AreEqual(ServiceErrorReason.NotFound, refused.Reason);
+        Assert.Contains(NoSuchRun, refused.Message, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(Destination));
+    }
+
+    [TestMethod]
+    [DataRow("../../escaped")]
+    [DataRow("0123456789ABCDEF")]
+    public async Task AResumeOrALettingGo_NamingWhatIsNotARun_IsRefused(string named)
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ResumeRestoreCommand(named), _timeout.Token), out var resumed);
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ForgetRestoreRunCommand(named), _timeout.Token), out var forgotten);
+
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, resumed.Reason);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, forgotten.Reason);
+    }
+
+    public void Dispose()
+    {
+        _cutShortAt?.Dispose();
+        _timeout.Dispose();
+        _harness.Dispose();
+    }
+
+    private string Destination => Path.Combine(_harness.WorkPath, "restored");
+
+    /// <summary>Runs a restore stopped once it is named, as a caller hanging up stops one.</summary>
+    private async Task<RestoreResult> CutShortAsync(ServiceCommandHandler handler)
+    {
+        _cutShortAt = CancellationTokenSource.CreateLinkedTokenSource(_timeout.Token);
+        try
+        {
+            var cut = await RestoreAsync(handler, Destination, _cutShortAt.Token);
+            Assert.AreEqual("cancelled", cut.Outcome);
+            Assert.IsNotNull(cut.Run);
+            return cut;
+        }
+        finally
+        {
+            _cutShortAt.Dispose();
+            _cutShortAt = null;
+        }
+    }
+
+    private async Task<RestoreResult> RestoreAsync(
+        ServiceCommandHandler handler, string destination, CancellationToken cancellationToken,
+        string? existing = null, bool inPlace = false)
+    {
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        var answer = await handler.ExecuteAsync(
+            new RunRestoreCommand(
+                await SnapshotIdAsync(handler), null, destination, Source: source.SourceId, Existing: existing,
+                InPlace: inPlace),
+            cancellationToken);
+        Assert.IsInstanceOfType<RestoreResult>(answer, out var restored, (answer as ServiceError)?.Message);
+        return restored;
+    }
+
+    /// <summary>Runs a CLI verb as a client of the running service.</summary>
+    private Task<HostHarness.Invocation> CliAsync(params string[] verbAndArguments) =>
+        HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            [
+                .. verbAndArguments,
+                "--repo", _harness.RepositoryPath,
+                "--passphrase-env", _harness.PassphraseVariable,
+                "--state", _harness.StateDirectory,
+            ]);
+
+    private async Task<RestoreResult> ResumeAsync(ServiceCommandHandler handler, string run)
+    {
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        var answer = await handler.ExecuteAsync(new ResumeRestoreCommand(run, source.SourceId), _timeout.Token);
+        Assert.IsInstanceOfType<RestoreResult>(answer, out var resumed, (answer as ServiceError)?.Message);
+        return resumed;
+    }
+
+    private async Task<IReadOnlyList<RestoreRunDescriptor>> RunsAsync(ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<RestoreRunsResult>(
+            await handler.ExecuteAsync(new ListRestoreRunsCommand(), _timeout.Token), out var listed);
+        return listed.Runs;
+    }
+
+    private async Task<string> SnapshotIdAsync(ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        return Assert.ContainsSingle(snapshots.Snapshots).SnapshotId;
+    }
+
+    /// <summary>
+    /// Flips every data blob's bytes past its envelope, so every file fails
+    /// to read and none is written.
+    /// </summary>
+    /// <returns>Each blob's path and its sound bytes, to put back.</returns>
+    private static List<(string Path, byte[] Bytes)> Tamper(string repositoryRoot)
+    {
+        var files = Directory.GetFiles(Path.Combine(repositoryRoot, "blobs", "data"), "*", SearchOption.AllDirectories);
+        Assert.IsNotEmpty(files, "the archive must hold data blobs for this to test anything");
+
+        var sound = new List<(string, byte[])>();
+        foreach (var path in files)
+        {
+            var bytes = File.ReadAllBytes(path);
+            sound.Add((path, [.. bytes]));
+            for (var i = 200; i < bytes.Length; i++)
+            {
+                bytes[i] ^= 0xFF;
+            }
+
+            File.WriteAllBytes(path, bytes);
+        }
+
+        return sound;
+    }
+
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "mkfifo", SetLastError = true,
+        StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
+    private static partial int MkFifo(string path, uint mode);
+
+    private async Task<ServiceRuntime> BackUpAndStartAsync()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteSourceFile("nested/deeper.txt", "deeper");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        await _harness.SetupAsync();
+        return await StartAsync();
+    }
+
+    private async Task<ServiceRuntime> StartAsync() =>
+        await ServiceRuntime.StartAsync(
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+
+                // Asked as a run measures its room, before it writes: the
+                // seam a test stops a run at, as its caller hanging up would.
+                AvailableBytesProbe = _ =>
+                {
+                    _cutShortAt?.Cancel();
+                    return _available;
+                },
+            },
+            _timeout.Token);
+}
