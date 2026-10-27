@@ -94,6 +94,31 @@ public sealed class RecoveryDrillTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Drill_AWriteOnlySetWhosePlanFindsObjectsMissing_Fails_NamingNoFile()
+    {
+        // A restore stops at the first segment it cannot open, so on a
+        // write-only set every restore stops at sealed content, and a later
+        // segment gone from the replica is found by the plan alone (ADR-0054
+        // Amendment 2). The plan names what is missing by path, and a drill's
+        // words go where anyone signed in reads them (ADR-0105).
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        _harness.WriteSourceFile("docs/content.txt", new string('c', 90_000) + "the bytes a restore needs");
+
+        await using var runtime = await StartAsync();
+        await PassAsync(runtime, DateTimeOffset.Now);
+
+        var outcome = await DrillThroughAsync(
+            runtime, DateTimeOffset.Now.AddDays(40), command => command is PlanRestoreCommand,
+            () => ValueTask.FromResult<ServiceResult>(new RestorePlanResult(1, 0, ["docs/content.txt"])), once: false);
+
+        Assert.IsNotNull(outcome.Failure, "a missing object is damage, whatever stopped the restore first");
+        Assert.Contains("missing", outcome.Failure, StringComparison.Ordinal);
+        Assert.DoesNotContain("content.txt", outcome.Failure, StringComparison.Ordinal);
+        Assert.AreEqual("docs/content.txt", outcome.FailedPath, "the path is kept for whoever unlocks the set");
+    }
+
+    [TestMethod]
     public async Task Drill_NothingRestoredFromTheReplica_IsRecordedAsAFailure()
     {
         Directory.CreateDirectory(Vault);

@@ -80,12 +80,22 @@ internal static class RecoveryDrillJob
     }
 
     /// <summary>What one drill found.</summary>
-    /// <param name="Files">Files restored whole — or, under <paramref name="Limit"/>, proved as far as the sealed content.</param>
-    /// <param name="Bytes">What they amounted to; zero under a limit, since nothing was written.</param>
+    /// <param name="Files">
+    /// Files restored whole — or, under <paramref name="Limit"/>, proved as far
+    /// as the sealed content, or as far as content held only in an archival tier.
+    /// </param>
+    /// <param name="Bytes">What the files restored whole amounted to; nothing proved only part of the way counts.</param>
     /// <param name="Failure">Why it did not work, or null when it did.</param>
     /// <param name="Limit">What a passing drill could not prove, or null when it proved everything.</param>
     public sealed record DrillOutcome(int Files, long Bytes, string? Failure, string? Limit = null)
     {
+        /// <summary>
+        /// Sampled files whose content the store holds only in an archival
+        /// tier, proved as far as that content and not read
+        /// ([ADR-0105](../../docs/adr/0105-a-drill-takes-archived-content-as-a-stated-limit.md)).
+        /// </summary>
+        public int Archived { get; init; }
+
         /// <summary>
         /// Whether the drill stated anything. False for a drill the service
         /// stopping cut short, which records nothing and raises nothing
@@ -339,6 +349,7 @@ internal static class RecoveryDrillJob
         {
             var outcome = await DrillAsync(
                 handler, set, destinationName, scratch, budget, draw, id => sourceId = id, path => at = path,
+                plansFirst: runtime.Configuration.FindDestination(destinationName)?.Kind.IsObjectStore() == true,
                 cancellationToken)
                 .ConfigureAwait(false);
 
@@ -354,6 +365,16 @@ internal static class RecoveryDrillJob
             runtime.DestinationSync.RecordDrill(
                 set.Id, destinationName, outcome.Files, outcome.Bytes, outcome.Failure, outcome.Limit, nowMs);
             Announce(runtime, set, destinationName, outcome, nowMs);
+
+            // The drill is one of the replica's readers, so what it met held
+            // only in an archival tier is said in the pair's one notice for it.
+            if (outcome.Archived > 0)
+            {
+                ArchivedReplicaNotice.Reflect(
+                    runtime, set, destinationName, runtime.DestinationSync.RecordArchived(set.Id, destinationName, nowMs),
+                    nowMs);
+            }
+
             return outcome;
         }
         catch (Exception) when (Stopping(runtime, cancellationToken))
@@ -497,6 +518,7 @@ internal static class RecoveryDrillJob
         Random draw,
         Action<string> keepSourceId,
         Action<string> keepPath,
+        bool plansFirst,
         CancellationToken cancellationToken)
     {
         var opened = await handler.ExecuteAsync(
@@ -551,9 +573,34 @@ internal static class RecoveryDrillJob
         var files = 0;
         var bytes = 0L;
         var sealedFiles = 0;
+        var archivedFiles = 0;
         foreach (var path in paths)
         {
             keepPath(path);
+
+            // A store with an archival tier refuses a read of what it holds
+            // only there, which is no damage (ADR-0105). A plan says so from
+            // the store's answers to a HEAD of each object, so what it names
+            // archived is not asked for.
+            var planned = false;
+            if (plansFirst)
+            {
+                var (plan, unplanned) = await PlanAsync(handler, newest.SnapshotId, path, source.SourceId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (unplanned is not null)
+                {
+                    return unplanned;
+                }
+
+                if (plan!.ArchivedObjects is { Count: > 0 })
+                {
+                    archivedFiles++;
+                    continue;
+                }
+
+                planned = true;
+            }
+
             var restored = await handler.ExecuteAsync(
                 new RunRestoreCommand(
                     newest.SnapshotId, path, Path.Combine(scratch, $"{files}"), source.SourceId, InPlace: true),
@@ -583,29 +630,14 @@ internal static class RecoveryDrillJob
                 // every segment the manifest names, which a missing or
                 // unreadable record would fail.
                 case RestoreResult sealedOnly when SealedOnly(sealedOnly):
-                    var planned = await handler.ExecuteAsync(
-                        new PlanRestoreCommand(newest.SnapshotId, path, Source: source.SourceId), cancellationToken)
-                        .ConfigureAwait(false);
-                    switch (planned)
+                    if (!planned
+                        && (await PlanAsync(handler, newest.SnapshotId, path, source.SourceId, cancellationToken)
+                            .ConfigureAwait(false)).Failure is { } unplanned)
                     {
-                        case ServiceError error:
-                            ThrowIfCancelled(error, "planning a sampled file");
-                            return Failed($"a sampled file would not plan: {Unnamed(error.Message, path)}", path);
-
-                        case RestorePlanResult { MissingObjects.Count: 0 }:
-                            sealedFiles++;
-                            break;
-
-                        case RestorePlanResult missing:
-                            return Failed(
-                                $"a sampled file is missing {missing.MissingObjects.Count} object(s) at the replica: "
-                                + $"{missing.MissingObjects[0]}",
-                                path);
-
-                        default:
-                            return Failed($"planning a sampled file answered {planned.GetType().Name}.", path);
+                        return unplanned;
                     }
 
+                    sealedFiles++;
                     break;
 
                 case RestoreResult other:
@@ -619,10 +651,15 @@ internal static class RecoveryDrillJob
             }
         }
 
-        var limits = new List<string>(2);
+        var limits = new List<string>(3);
         if (sealedFiles > 0)
         {
             limits.Add(SealedContentLimit);
+        }
+
+        if (archivedFiles > 0)
+        {
+            limits.Add(ArchivedLimit(archivedFiles));
         }
 
         if (skipped > 0)
@@ -630,7 +667,38 @@ internal static class RecoveryDrillJob
             limits.Add(CapLimit(skipped, budget!));
         }
 
-        return new DrillOutcome(files + sealedFiles, bytes, null, limits.Count == 0 ? null : string.Join(" ", limits));
+        return new DrillOutcome(
+            files + sealedFiles + archivedFiles, bytes, null, limits.Count == 0 ? null : string.Join(" ", limits))
+        {
+            Archived = archivedFiles,
+        };
+    }
+
+    /// <summary>
+    /// Plans one sampled file: the plan when the replica holds every object it
+    /// needs, archived or not, and otherwise the drill's failure. A plan names
+    /// what is missing by path, so the failure says only that something is.
+    /// </summary>
+    private static async Task<(RestorePlanResult? Plan, DrillOutcome? Failure)> PlanAsync(
+        IFallbackPlanService handler, string snapshotId, string path, string sourceId, CancellationToken cancellationToken)
+    {
+        var planned = await handler.ExecuteAsync(
+            new PlanRestoreCommand(snapshotId, path, Source: sourceId), cancellationToken).ConfigureAwait(false);
+        switch (planned)
+        {
+            case ServiceError error:
+                ThrowIfCancelled(error, "planning a sampled file");
+                return (null, Failed($"a sampled file would not plan: {Unnamed(error.Message, path)}", path));
+
+            case RestorePlanResult { MissingObjects.Count: 0 } plan:
+                return (plan, null);
+
+            case RestorePlanResult:
+                return (null, Failed("a sampled file is missing objects at the replica.", path));
+
+            default:
+                return (null, Failed($"planning a sampled file answered {planned.GetType().Name}.", path));
+        }
     }
 
     /// <summary>A drill that failed at <paramref name="path"/>, which the failure does not name.</summary>
@@ -698,6 +766,17 @@ internal static class RecoveryDrillJob
         $"{skipped} file(s) the descent reached were not sampled under the peer drill's byte cap "
         + $"({budget.FileCap / (1024 * 1024)} MiB per file, {budget.TotalCap / (1024 * 1024)} MiB per drill); "
         + "a file over the cap is proved by the manual drill, not on a cadence over a peer's link (ADR-0054 Amendment 3).";
+
+    /// <summary>
+    /// The limit a drill states when the store holds what sampled files need
+    /// only in an archival tier (ADR-0105): how many, how far the road back
+    /// was proved to them, and what a restore of them needs first.
+    /// </summary>
+    private static string ArchivedLimit(int archived) =>
+        $"content archived: the store holds what {archived} sampled file(s) need only in an archival tier, which "
+        + "serves nothing of it until it is rehydrated there, so the drill proved the road back to them as far as their "
+        + "content — the replica opens, its index and catalogue rebuild, and the store holds every object they need — "
+        + "and did not read it. A restore of them needs it rehydrated first (ADR-0105).";
 
     /// <summary>
     /// Whether a restore failed for no reason other than sealed content:

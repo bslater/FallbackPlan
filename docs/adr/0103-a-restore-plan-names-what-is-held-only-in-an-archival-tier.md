@@ -77,6 +77,8 @@ A run that reaches an archived record reads around it to a copy that holds it re
 - **Keep a backup's objects out of an archival tier, or change how the other readers of a replica take one.** Which objects move is the store's lifecycle rule, which its owner sets. A sync's read-back, the deep sweep and a drill read a replica back and meet the same refusal; this record does not change how they report it.
 
   > **2026-10 ([ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md)).** A sync's read-back now counts an archived sample neither proven nor failed, and the deep sweep passes over an archived blob and closes its circuit. One notice for the pair says so. A drill is as it was.
+
+  > **2026-10 ([ADR-0105](0105-a-drill-takes-archived-content-as-a-stated-limit.md)).** A drill now plans each sampled file at such a store, and takes a file whose content is archived as a stated limit rather than a failure.
 - **Report an archival tier at a local path or a peer.** Neither has one.
 - **Export a plan or resume one**, which architecture 08 §2 still asks for.
 

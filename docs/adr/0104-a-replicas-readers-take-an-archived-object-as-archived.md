@@ -67,6 +67,8 @@ A person's `verify-destination` names how many objects it confirmed and how many
 - **Say it in the status row.** The row's sweep still says when a circuit last closed. A circuit that passed over archived blobs closes too, so the closing no longer means every stored object was read back. The notice says that, and the contract is unchanged.
 - **Count it per object or per snapshot.** The notice names no object and no file. A restore's plan names the files ([ADR-0103](0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md)).
 - **Take a drill's restore as archived.** A drill restores sample files from the destination, and a file whose content is archived fails it, saying why in the provider's words. Telling a drill that met only archived content from one that met damage is not done here.
+
+  > **2026-10 ([ADR-0105](0105-a-drill-takes-archived-content-as-a-stated-limit.md)).** A drill at a store with an archival tier now plans each sampled file first. One whose content the store holds only archived is proved as far as that content under a stated limit, and the drill says it in this record's notice.
 - **Read other objects around their tier.** An index object a lifecycle rule archived is met by whatever reads it, as before.
 
 ## Alternatives considered
@@ -81,3 +83,4 @@ A person's `verify-destination` names how many objects it confirmed and how many
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A sync's read-back counts an archived sample neither proven nor failed, and the deep sweep passes over an archived blob and closes its circuit, repairing nothing. One notice for the pair, dated from when the run of such meetings began, says so until a circuit meets none (ledger schema 11). A person's `verify-destination` says how many it could not read. |
+| 2026-10 | Accepted | [ADR-0105](0105-a-drill-takes-archived-content-as-a-stated-limit.md) takes up the drill this record left as it was: a drill takes archived content as a stated limit, and is a third reader that raises the pair's notice. |

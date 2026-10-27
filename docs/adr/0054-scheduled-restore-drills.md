@@ -291,6 +291,12 @@ can prove without the passphrase, and states what it cannot:
   segment fails the plan: both record a failure and raise the notice exactly
   as before. The limit is reserved for the one case where the only thing
   between the drill and the bytes is the passphrase.
+
+  > **2026-10 ([ADR-0105](0105-a-drill-takes-archived-content-as-a-stated-limit.md)).**
+  > A second case earns a limit: a store that holds a sampled file's content
+  > only in an archival tier. At such a store the drill plans each file
+  > first, does not read one the plan names archived, and states how many.
+  > A missing object still fails the drill.
 - The **content drill** on a write-only set is the manual one: the recovery
   tool with the passphrase, `eng/recovery-drill.sh` and
   `Hosts.Tests/RecoveryHostTests`. §5's list gains that item for the
@@ -520,3 +526,4 @@ person who asked give up while the drill finishes.
 | 2026-09 | Amended | [Amendment 4](#amendment-4--a-drill-that-did-not-complete-says-so-2026-09): a drill states nothing only when the service is stopping or its pass is cancelled; any other ending is a drill that did not complete, recorded as a failure and retried on a back-off from an hour, never later than the interval. `Agent/RecoveryDrillJob` decides silence from the stopping state of `Agent/ServiceRuntime`; `Application/DestinationSyncStore` counts the drills that did not complete; `Agent/Scheduler` backs off; `Hosts.Tests/RecoveryDrillTests` puts each fault between the drill and the service |
 | 2026-10 | Amended | [Amendment 5](#amendment-5--a-set-with-no-snapshot-is-not-drilled-and-a-failed-drill-is-checked-again-once-its-replica-has-synced-2026-10): the pass copies, sweeps and drills only a set whose archive holds a snapshot, and a failed drill is checked again on the back-off once a sync has succeeded since it with no damage standing there. `Agent/ServiceRuntime` and `Agent/Scheduler` gate the phases; `Agent/RecoveryDrillJob` holds the wait; `Application/DestinationSyncStore` counts failed drills in schema 10; `Hosts.Tests/RecoveryDrillTests` runs a pass over an archive with no snapshot and clears a false notice |
 | 2026-10 | Amended | [Amendment 6](#amendment-6--a-person-can-drill-now-2026-10): a person runs a pair's drill now, outside its cadence, from the console, the CLI and the service's own command line, contract 1.58's `run_drill`. A peer with no stated cadence may be drilled by asking; a pair with nothing there to restore is said and not drilled; an ask joins the pair's drill under way; the drill runs on the service's lifetime. `Agent/DrillFlights` holds the drills under way; `Agent/RecoveryDrillJob` runs every drill through it; `Agent/ServiceCommandHandler` answers the command; `Hosts.Tests/DrillNowTests` pins it |
+| 2026-10 | Amended | [ADR-0105](0105-a-drill-takes-archived-content-as-a-stated-limit.md): at a store with an archival tier a drill plans each sampled file first, and one whose content the store holds only archived is proved as far as that content under a stated limit, not read and not failed; Amendment 2's bullet on what earns a limit gains a blockquote. |
