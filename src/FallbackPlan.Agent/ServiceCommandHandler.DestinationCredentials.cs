@@ -169,6 +169,11 @@ public sealed partial class ServiceCommandHandler
         }
 
         runtime.DestinationCredentials.Save(destination.Id, credential);
+
+        // At once rather than at the next pass: a renewal clears the notice
+        // the person stored it to answer, and a signature already within the
+        // lead time is named now.
+        SignatureLapseWatch.Observe(runtime, runtime.Configuration.Destinations, DateTimeOffset.UtcNow);
         return new ConfigurationChangeResult(
         [
             !signature
