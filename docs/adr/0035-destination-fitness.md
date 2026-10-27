@@ -581,6 +581,12 @@ read back in full last night from one never read back at all (FR-VER-003).
    `deep_sweep` holds:
    - `circuit_closed_at`, when a circuit last closed: the one fact that
      supports "every stored object was read back and matched its seal";
+
+     > **2026-10 ([ADR-0106](0106-a-closed-circuit-says-what-it-did-not-read.md)).**
+     > It supports that only with `circuit_archived` at zero. A circuit
+     > closes past what the store holds only in an archival tier
+     > ([ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md)),
+     > and contract 1.66 counts what it passed over.
    - `read_this_circuit` and `last_read_at`, for the circuit under way;
    - `stalls` and `stalled_on`, for a circuit stopped at a blob that will not
      read;
@@ -628,3 +634,4 @@ read back in full last night from one never read back at all (FR-VER-003).
 | 2026-10 | Amended | [ADR-0095](0095-the-staging-archive-heals.md) amends §4: the sweep binds every blob to its key rather than leaning on the length comparison to catch a blob stored under another's key, and a length that differs is the source's copy to prove, so the staging archive's damage is repaired there and never blamed on the destination (`Repository/ReplicaSweep`, `Repository/VerifyEngine`, `Agent/ReplicaSweepJob`). Held by `Repository.Tests/ReplicaSweepTests` and `Hosts.Tests/StagingSweepTests` |
 | 2026-10 | Amended (related) | [ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md) discharges Amendment 1's and Amendment 2's "does not do": damage the sweep finds at a peer whose build takes a repair is replaced from a copy here proven sound, which the peer takes only where its own keyless check of its copy finds the copy damaged and the replacement states that copy's locator, and is proven again over the retrieval session where it landed; each sync offers what remains held, and what the peer will not take stays under decision 4. `Agent/ReplicaSweepJob`, `Agent/FanOut`, `Agent/RepairResponder`; `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/PeerRepairTests` |
 | 2026-10 | Amended (related) | [ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md): a blob the store holds only in an archival tier is no stall. The deep sweep passes over it and closes its circuit, a sync's read-back counts it neither proven nor failed, and one notice for the pair says so until a circuit meets none (ledger schema 11). |
+| 2026-10 | Amended | [ADR-0106](0106-a-closed-circuit-says-what-it-did-not-read.md): Amendment 3's `circuit_closed_at` supports every stored object read back only where contract 1.66's `circuit_archived` is zero, since a circuit closes past archived blobs; a blockquote at decision 1. |
