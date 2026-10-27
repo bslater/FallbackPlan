@@ -214,6 +214,10 @@ public static class WebConsoleHost
             TimedAsync(context, log, "/api/destination-credentials", () => DestinationCredentialsAsync(context, clients, auth)));
         app.MapPost("/api/restore-plan-file", (HttpContext context) =>
             TimedAsync(context, log, "/api/restore-plan-file", () => RestorePlanFileAsync(context, clients, auth)));
+        app.MapPost("/api/restore-plan-read", (HttpContext context) =>
+            TimedAsync(context, log, "/api/restore-plan-read", () => RestorePlanReadAsync(context, auth)));
+        app.MapPost("/api/restore-plan-held", (HttpContext context) =>
+            TimedAsync(context, log, "/api/restore-plan-held", () => RestorePlanHeldAsync(context, clients, auth)));
         app.MapPost("/api/delete-snapshots", (HttpContext context) =>
             TimedAsync(context, log, "/api/delete-snapshots", () => DeleteSnapshotsAsync(context, clients, auth)));
         app.MapPost("/api/setup", (HttpContext context) =>
@@ -410,6 +414,133 @@ public static class WebConsoleHost
         context.Response.Headers.ContentDisposition = string.Create(
             CultureInfo.InvariantCulture, $"attachment; filename=\"restore-plan-{snapshot}-{at:yyyyMMdd-HHmmss}.json\"");
         await context.Response.WriteAsync(RestorePlanFile.Serialize(asked, plan, at), context.RequestAborted)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>What the kept-plan endpoints read from the page.</summary>
+    /// <param name="Text">The kept plan's file, as the browser read it.</param>
+    /// <param name="Source">The restore source to plan the kept run through; read only when holding.</param>
+    private sealed record KeptPlanRequest(string? Text, string? Source);
+
+    /// <summary>The run a kept plan was kept for, as the page asks the service it.</summary>
+    private sealed record KeptRun(
+        string SnapshotId, string? Path, IReadOnlyList<string>? Paths, string? OutputDirectory, string? Target,
+        string? Existing, bool InPlace);
+
+    /// <summary>A kept plan as read: the run, when it was planned, and the plan.</summary>
+    private sealed record KeptPlanRead(KeptRun Run, string? PlannedAt, RestorePlanResult Plan);
+
+    /// <summary>A plan made now, held to the kept one: what changed, and the plan.</summary>
+    private sealed record KeptPlanHeld(IReadOnlyList<string> Changes, RestorePlanResult Plan);
+
+    /// <summary>
+    /// Reads a kept plan (FR-RST-003, ADR-0118) with the reader the command
+    /// line uses, so the console takes the file both clients keep, and
+    /// refuses one that is not a kept plan in the words the command line
+    /// refuses it. The service is asked nothing.
+    /// </summary>
+    private static async Task RestorePlanReadAsync(HttpContext context, ConsoleAuth auth)
+    {
+        if (await KeptPlanOfAsync(context, auth).ConfigureAwait(false) is not var (kept, _))
+        {
+            return;
+        }
+
+        var asked = kept.Request;
+        await WriteJsonAsync(
+            context,
+            new KeptPlanRead(
+                new KeptRun(asked.SnapshotId, asked.Path, asked.Paths, asked.OutputDirectory, asked.Target, asked.Existing, asked.InPlace),
+                kept.PlannedAt?.ToString("O", CultureInfo.InvariantCulture),
+                kept.Plan)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Holds a plan made now to a kept one (FR-RST-003, ADR-0118): the kept
+    /// run asked of the service again, through the source the person
+    /// unlocked and under their session, and compared with the comparison the
+    /// command line uses. Only a plan is asked; nothing here runs.
+    /// </summary>
+    private static async Task RestorePlanHeldAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (await KeptPlanOfAsync(context, auth).ConfigureAwait(false) is not var (kept, source))
+        {
+            return;
+        }
+
+        ServiceResult result;
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+            var presented = context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session
+                ? await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                    .ConfigureAwait(false)
+                : null;
+            result = presented is ServiceError { Reason: ServiceErrorReason.Refused } dead
+                ? dead
+                : await client.ExecuteAsync(kept.Request with { Source = source }, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+            return;
+        }
+
+        if (result is RestorePlanResult now)
+        {
+            await WriteJsonAsync(context, new KeptPlanHeld(RestorePlanFile.Changes(kept.Plan, now), now)).ConfigureAwait(false);
+            return;
+        }
+
+        await WriteJsonAsync(context, result).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The kept plan the page sent, read, and the source it named; null where
+    /// the request was refused, which is then already answered.
+    /// </summary>
+    private static async Task<(RestorePlanFile.Kept Kept, string? Source)?> KeptPlanOfAsync(HttpContext context, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return null;
+        }
+
+        KeptPlanRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<KeptPlanRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_request",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return null;
+        }
+
+        try
+        {
+            return (RestorePlanFile.Read(request?.Text ?? string.Empty), request?.Source);
+        }
+        catch (InvalidDataException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "not_a_kept_plan", exception.Message)
+                .ConfigureAwait(false);
+            return null;
+        }
+    }
+
+    /// <summary>Answers the page, uncached: what is written names a backup's files.</summary>
+    private static async Task WriteJsonAsync<T>(HttpContext context, T value)
+    {
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-store";
+        await JsonSerializer.SerializeAsync(context.Response.Body, value, SerializerOptions, context.RequestAborted)
             .ConfigureAwait(false);
     }
 

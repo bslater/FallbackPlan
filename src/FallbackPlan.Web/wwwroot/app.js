@@ -1155,6 +1155,9 @@ function renderSnapshots() {
     <h2>Snapshots</h2>
     <p class="view-sub">Every committed point in time. Restores write on the service's machine — content never streams to this page.</p>
     ${renderUnfinishedRuns()}
+    <div class="actions-row">
+      <label class="btn small" for="kept-plan-file">Run a kept plan…</label>
+    </div>
     ${filter}
     ${snapshots.length === 0
       ? `<div class="card empty mt"><span class="big">📸</span>No snapshots yet. The first backup creates one.</div>`
@@ -1198,6 +1201,69 @@ function renderUnfinishedRuns() {
           <button type="button" class="btn small" data-action="forget-run" data-run="${esc(runDescriptor.run)}">Let it go…</button>
         </div>`).join("")}
     </div>`;
+}
+
+/* ----- a kept plan run as it was approved (ADR-0118) ----- */
+
+// The console process reads the file with the reader the command line uses,
+// and holds a plan made now to it with the same comparison, so a file and a
+// change read the same from either client.
+async function keptPlanPost(endpoint, body) {
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: session
+        ? { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-FallbackPlan-Session": session }
+        : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    toast("warn", "The console process stopped answering.");
+    return null;
+  }
+  const answer = await safeJson(response);
+  if (!response.ok || answer?.result === "error") {
+    toast("bad", answer?.message ?? "The kept plan could not be read.");
+    return null;
+  }
+  return answer;
+}
+
+async function keptPlanChosen(input) {
+  const file = input.files?.[0];
+  // Cleared, so the same file chosen again is read again.
+  input.value = "";
+  if (!file) return;
+  const text = await file.text();
+  const read = await keptPlanPost("/api/restore-plan-read", { text });
+  if (!read) return;
+  // Asked again before a plan is called foreign: the list may not have come
+  // yet, or may be older than the backup the plan is of.
+  let row = S.snapshots.find(candidate => candidate.snapshotId === read.run.snapshotId);
+  if (!row) {
+    await refreshSnapshots();
+    row = S.snapshots.find(candidate => candidate.snapshotId === read.run.snapshotId);
+  }
+  if (!row) {
+    toast("warn", `'${file.name}' plans snapshot ${read.run.snapshotId.slice(0, 16)}, and there is no backup here that holds it.`);
+    return;
+  }
+  if (B) { run({ command: "close_restore_source", sourceId: B.source }); B = null; }
+  openRestoreWizard({ kept: { ...read, text, name: file.name, setId: row.backupSetId } });
+}
+
+/* The kept run, in words: what it restores, where, and how. */
+function describeKeptRun(kept) {
+  const runShape = kept.run;
+  const paths = runShape.paths?.length ? runShape.paths : runShape.path ? [runShape.path] : [];
+  const what = paths.length ? paths.map(path => `<span class="mono">${esc(path)}</span>`).join(", ") : "all of it";
+  const where = runShape.target === "original"
+    ? "where its files came from"
+    : `<span class="mono">${esc(runShape.outputDirectory ?? "")}</span>`;
+  const how = [runShape.inPlace ? "in place" : "", runShape.existing ? `${esc(runShape.existing)} where a file is in the way` : ""]
+    .filter(Boolean).join(", ");
+  return `${what} of the backup <span class="mono">${esc(runShape.snapshotId.slice(0, 16))}</span> to ${where}${how ? `, ${how}` : ""}`;
 }
 
 /* A restore run, as a person chooses whether to resume it. */
@@ -5728,6 +5794,11 @@ function openRestoreWizard(prefill) {
     // A run left unfinished, resumed by its name alone (ADR-0116): asked
     // again as it was asked, so the date, files and target are not chosen.
     resume: prefill?.resume ?? null,
+    // A kept plan run as it was approved (ADR-0118): the run as kept, planned
+    // again through the source opened, and run only where nothing changed.
+    kept: prefill?.kept ?? null,
+    held: null,
+    heldFailed: false,
   };
   dialog.classList.add("wide");
   rstRender();
@@ -5804,7 +5875,7 @@ function rstStep2() {
     <p class="dlg-sub">Where to restore <b>from</b>. A destination's replica serves when this machine's own
     archive is damaged or gone — a peer's travels the paired connection, a store's its endpoint.</p>
     <label class="field" for="rst-set">Backup set</label>
-    <select id="rst-set" ${W.resume ? "disabled" : ""}>${W.sets.map(set =>
+    <select id="rst-set" ${W.resume || W.kept ? "disabled" : ""}>${W.sets.map(set =>
       `<option ${set.name === W.setName ? "selected" : ""}>${esc(set.name)}</option>`).join("")}</select>
     <label class="field">Source</label>
     ${options.join("")}
@@ -6019,6 +6090,46 @@ function rstStep6() {
       </div>`;
   }
 
+  // A kept plan runs only as it was approved: planned again, and offered
+  // under the typed word only where nothing the plan said has changed.
+  if (W.kept) {
+    const planned = W.kept.plannedAt ? `, planned ${esc(fmtWhen(Date.parse(W.kept.plannedAt)))}` : "";
+    const actions = (go) => `
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn" data-action="rst-back">‹ Back</button>
+        ${go}
+      </div>`;
+    if (!W.held) {
+      return `
+        <p class="dlg-sub">${W.heldFailed
+          ? "The plan was not made again — see the message above. Nothing can be run without it."
+          : "Planning the kept run again, to hold it to the plan…"}</p>
+        ${actions("")}`;
+    }
+    if (W.held.changes.length) {
+      return `
+        <div id="rst-kept-changes">
+          <p class="dlg-sub">The plan is no longer as kept in <b>${esc(W.kept.name)}</b>${planned}:</p>
+          <ul class="warnings">${W.held.changes.map(change => `<li>${esc(change)}</li>`).join("")}</ul>
+          <p class="dlg-sub">Nothing can be run: the plan has changed since it was approved. Plan the restore again.</p>
+        </div>
+        ${actions("")}`;
+    }
+    const now = W.held.plan;
+    return `
+      <p class="dlg-sub" id="rst-kept-summary">The plan is as kept in <b>${esc(W.kept.name)}</b>${planned}:
+        ${fmtCount(now.files)} file(s), ${fmtCount(now.missingObjects.length)} missing, ${fmtCount(now.archivedObjects?.length ?? 0)} archived,
+        ${fmtCount(now.conflicts)} conflict(s).</p>
+      <p class="dlg-sub">It restores ${describeKeptRun(W.kept)}.</p>
+      <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
+        small — a volume that compresses what it stores can hold more than the estimate</label>
+      <label class="field" for="confirm-word">Type <b>restore</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="restore" data-enables="rst-kept-go">
+      ${actions(`<button type="button" class="btn primary" id="rst-kept-go" data-action="rst-kept-go" disabled>Restore as planned</button>`)}`;
+  }
+
   // A resume repeats a run that was confirmed when it began, as it was
   // asked; the service measures what it still writes.
   if (W.resume) {
@@ -6151,7 +6262,14 @@ const rstActions = {
     W.sets = sets?.result === "backup_sets" ? sets.sets : [];
     W.dests = dests?.result === "destinations" ? dests.destinations : [];
     if (W.sets.length === 0) { toast("warn", "No backup sets are configured."); return; }
-    if (W.resume) {
+    if (W.kept) {
+      const set = W.sets.find(candidate => candidate.id === W.kept.setId);
+      if (!set) {
+        toast("warn", "The set this plan's backup is of is not configured.");
+        return;
+      }
+      W.setName = set.name;
+    } else if (W.resume) {
       if (!W.sets.some(candidate => candidate.name === W.resume.set)) {
         toast("warn", `The set this restore was of, '${W.resume.set ?? "unknown"}', is not configured.`);
         return;
@@ -6170,6 +6288,24 @@ const rstActions = {
 
   async continue2() {
     if (!await rstOpenSource()) { rstRender(); return; }
+    if (W.kept) {
+      if (!W.source.snapshots.some(row => row.snapshotId === W.kept.run.snapshotId)) {
+        W.sourceError = "This source does not hold the backup this plan restores; choose another.";
+        rstRender();
+        return;
+      }
+      W.step = 6;
+      W.result = null;
+      W.held = null;
+      W.heldFailed = false;
+      rstRender();
+      const held = await keptPlanPost("/api/restore-plan-held", { text: W.kept.text, source: W.source.sourceId });
+      if (!W || W.step !== 6) return;
+      if (held) W.held = held;
+      else W.heldFailed = true;
+      rstRender();
+      return;
+    }
     if (W.resume) {
       if (!W.source.snapshots.some(row => row.snapshotId === W.resume.snapshotId)) {
         W.sourceError = "This source does not hold the backup this run restores; choose another.";
@@ -6251,7 +6387,7 @@ const rstActions = {
 Object.assign(actions, {
   "rst-back"() {
     // A resume chooses no date, files or target, so it goes back to its source.
-    W.step = W.resume && W.step === 6 ? 2 : Math.max(1, W.step - 1);
+    W.step = (W.resume || W.kept) && W.step === 6 ? 2 : Math.max(1, W.step - 1);
     W.result = null;
     rstRender();
   },
@@ -6318,7 +6454,14 @@ Object.assign(actions, {
   async "rst-resume"(el) {
     await withBusy(el, async () => {
       if (W.resume) await rstResumeRun(W.result.run, false);
+      else if (W.kept) await rstRunKept({ resume: W.result.run }, "Resume refused");
       else await rstRunRestore({ resume: W.result.run }, "Resume refused");
+    });
+  },
+
+  async "rst-kept-go"(el) {
+    await withBusy(el, async () => {
+      await rstRunKept({ ignoreFreeSpace: document.getElementById("rst-ignore-space")?.checked ?? false }, "Restore refused");
     });
   },
 
@@ -6328,6 +6471,29 @@ Object.assign(actions, {
     });
   },
 });
+
+/* The run a kept plan was kept for, asked exactly as it was kept (ADR-0118). */
+async function rstRunKept(extra, refused) {
+  const runShape = W.kept.run;
+  const result = await run({
+    command: "run_restore",
+    snapshotId: runShape.snapshotId,
+    path: runShape.path,
+    paths: runShape.paths,
+    outputDirectory: runShape.outputDirectory ?? "",
+    source: W.source.sourceId,
+    target: runShape.target,
+    existing: runShape.existing,
+    inPlace: runShape.inPlace,
+    ...extra,
+  }, { errToast: refused });
+  if (result?.result === "restore") {
+    W.result = result;
+    rstRender();
+    refreshJobs();
+    refreshSnapshots();
+  }
+}
 
 /* A run left unfinished, asked again by the service by its name alone (ADR-0116). */
 async function rstResumeRun(name, ignoreFreeSpace) {
@@ -6465,6 +6631,11 @@ function boot() {
     if (event.target.matches("[data-action-change='filter-snapshots']")) {
       S.snapshotFilter = event.target.value;
       renderSnapshots();
+    }
+
+    if (event.target.matches("[data-action-change='kept-plan-chosen']")) {
+      keptPlanChosen(event.target);
+      return;
     }
 
     // The restore wizard's file picker, before the set-editor guard below —

@@ -107,6 +107,49 @@ public static class RestorePlanFile
     /// <param name="PlannedAt">When it was planned; null where the file says no time this build reads.</param>
     public sealed record Kept(int Version, string? Contract, PlanRestoreCommand Request, RestorePlanResult Plan, DateTimeOffset? PlannedAt);
 
+    /// <summary>
+    /// What a plan made now says that the kept one did not (ADR-0114 §3,
+    /// ADR-0118): the files it restores, a name missing or held archived each
+    /// way, and the conflicts. One comparison for both clients, so each says a
+    /// change in the same words.
+    /// </summary>
+    /// <remarks>
+    /// What the kept plan already said would fail was part of what was
+    /// approved, so it is not a change; nor are the bytes, which follow from
+    /// the files, or the room, which moves by the minute and which the run
+    /// itself refuses where it is short.
+    /// </remarks>
+    /// <param name="then">The plan as kept.</param>
+    /// <param name="now">The plan made now, of the same run.</param>
+    /// <returns>One line a change, in no line's own order of importance; none where nothing changed.</returns>
+    public static IReadOnlyList<string> Changes(RestorePlanResult then, RestorePlanResult now)
+    {
+        ArgumentNullException.ThrowIfNull(then);
+        ArgumentNullException.ThrowIfNull(now);
+
+        List<string> changed = [];
+        if (now.Files != then.Files)
+        {
+            changed.Add(string.Create(CultureInfo.InvariantCulture, $"files: {then.Files} kept, {now.Files} now"));
+        }
+
+        Differ(changed, "missing", then.MissingObjects, now.MissingObjects);
+        Differ(changed, "archived", then.ArchivedObjects ?? [], now.ArchivedObjects ?? []);
+        if (now.Conflicts != then.Conflicts)
+        {
+            changed.Add(string.Create(CultureInfo.InvariantCulture, $"conflicts: {then.Conflicts} kept, {now.Conflicts} now"));
+        }
+
+        return changed;
+    }
+
+    /// <summary>The names one plan says and another does not, each way.</summary>
+    private static void Differ(List<string> changed, string what, IReadOnlyList<string> then, IReadOnlyList<string> now)
+    {
+        changed.AddRange(now.Except(then, StringComparer.Ordinal).Select(path => $"{what} now: {path}"));
+        changed.AddRange(then.Except(now, StringComparer.Ordinal).Select(path => $"{what} no longer: {path}"));
+    }
+
     private static Document DocumentOf(PlanRestoreCommand request, RestorePlanResult plan, DateTimeOffset plannedAt)
     {
         ArgumentNullException.ThrowIfNull(request);

@@ -241,8 +241,8 @@ public sealed class GatewayRestoreReportTests
         Assert.IsFalse(report.Ok, "a plan that changed since it was kept is not the run that was approved");
         var said = string.Join(" | ", report.Lines);
         Assert.Contains("no longer as kept in /plans/approved.json", said, StringComparison.Ordinal);
-        Assert.Contains("docs/gone.txt", said, StringComparison.Ordinal);
-        Assert.Contains("docs/cold.txt", said, StringComparison.Ordinal);
+        CollectionAssert.Contains(report.Lines.ToList(), "  missing now: docs/gone.txt", "each change is said under the line that says the plan changed");
+        CollectionAssert.Contains(report.Lines.ToList(), "  archived now: docs/cold.txt");
         Assert.IsEmpty(client.Received.OfType<RunRestoreCommand>());
     }
 
