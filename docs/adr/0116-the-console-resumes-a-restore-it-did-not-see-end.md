@@ -54,6 +54,8 @@ Each run on the list can be let go, once the person confirms it. The service nam
 - **Plan the resume.** A resume is not planned (ADR-0109 §5). The service measures what it still writes, and refuses one that will not fit unless told to go on.
 
   > **2026-10 ([ADR-0120](0120-a-resume-is-planned.md)).** The command line plans a resume, for the run it continues or by a run's name alone, and the service answers it. The console still plans none.
+  >
+  > **2026-10 ([ADR-0121](0121-the-console-plans-a-resume.md)).** The console's resume mode plans the run before it resumes it, and shows the plan as a restore's plan is shown.
 - **Show what a run left unfinished was asked for, file by file.** That needs the passphrase. The run's receipt names its files.
 - **Run a kept plan from the console** ([ADR-0114](0114-a-kept-plan-is-run-as-it-was-approved.md)).
 
@@ -72,3 +74,4 @@ Each run on the list can be let go, once the person confirms it. The service nam
 | 2026-10 | Accepted | Built in one slice, tests first. The snapshots page lists the restores left unfinished without their files; that list and each run's notice offer to restore what is left, which unlocks the passphrase, opens a source of the run's own set, and has the service resume it by its name; a run can be let go. |
 | 2026-10 | Accepted | [ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md): the console runs a kept plan, which this record left to another. |
 | 2026-10 | Accepted | [ADR-0120](0120-a-resume-is-planned.md): a resume is planned from the command line, which this record left owed; the console plans none. |
+| 2026-10 | Accepted | [ADR-0121](0121-the-console-plans-a-resume.md): the resume mode plans the run before it resumes it. |
