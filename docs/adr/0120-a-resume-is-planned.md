@@ -55,6 +55,8 @@ A kept plan is of a run a person approves before it begins ([ADR-0108](0108-a-re
 
 - **Hash what the run landed.** The plan says what lies there at its length. A file of that length whose content differs is landed under the policy when the resume reaches it, as ADR-0109 §4 says.
 - **Plan a resume from the console.** The console resumes a run by its name alone, and plans none.
+
+  > **2026-10 ([ADR-0121](0121-the-console-plans-a-resume.md)).** The console plans the resume before it runs it, by the run's name alone, and arms one that will not fit only when the person says to go on.
 - **Keep the plan of a resume** (§3).
 
 ## Alternatives considered
@@ -68,3 +70,4 @@ A kept plan is of a run a person approves before it begins ([ADR-0108](0108-a-re
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first, at contract 1.72. A plan of a resume is measured where its run landed, by length, as the resume is, and says how many files the run already landed. `restore --resume --plan` plans the run asked, through the service or in direct mode, and `restore-resume <run> --plan` plans a run left unfinished by its name alone; neither restores anything, and a plan of a resume is not kept. |
+| 2026-10 | Accepted | [ADR-0121](0121-the-console-plans-a-resume.md): the console plans a resume too, which this record left owed. |

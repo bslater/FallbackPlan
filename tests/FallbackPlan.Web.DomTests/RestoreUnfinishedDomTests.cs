@@ -16,7 +16,10 @@ namespace FallbackPlan.Web.DomTests;
 /// that does not finish offers to resume again under the name its result
 /// gives, and going back from the resume returns to its source. A run can be
 /// let go. A source that does not hold the run's backup resumes nothing, and a
-/// service before contract 1.71 names no run.
+/// service before contract 1.71 names no run. Before it runs, the resume is
+/// planned (ADR-0121): what the run already landed, what is left to write,
+/// and whether it fits, and one that will not fit is armed only when the
+/// person says to go on; a service that cannot plan it still resumes it.
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -29,10 +32,16 @@ public sealed class RestoreUnfinishedDomTests
     private static readonly RestoreRunDescriptor Unfinished =
         new(Run, "snap-1", "docs", "/restore/out", Now - 3_600_000, Existing: "rename", InPlace: true);
 
+    /// <summary>A resume's plan that fits, one file already landed.</summary>
+    private static readonly RestorePlanResult Fits = new(
+        2, 42, [], WriteBytes: 21, Space: [new RestoreSpaceDescriptor("/restore/out", 8_192, 1L << 30, false)], Landed: 1);
+
     private static Func<ServiceCommand, ServiceResult> Fakes(
-        Func<ResumeRestoreCommand, ServiceResult>? resume = null, IReadOnlyList<SnapshotDescriptor>? held = null) =>
+        Func<ResumeRestoreCommand, ServiceResult>? resume = null, IReadOnlyList<SnapshotDescriptor>? held = null,
+        Func<PlanResumeRestoreCommand, ServiceResult>? plan = null) =>
         command => command switch
         {
+            PlanResumeRestoreCommand asked => plan?.Invoke(asked) ?? Fits,
             DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
             ListBackupSetsCommand => new BackupSetsResult([Wire.Set("other", new string('b', 32)), Wire.Set()]),
             ListDestinationsCommand => new DestinationsResult([]),
@@ -94,6 +103,15 @@ public sealed class RestoreUnfinishedDomTests
         var summary = page.Locator("#rst-resume-summary");
         await Expect(summary).ToContainTextAsync(Run);
         await Expect(summary).ToContainTextAsync("/restore/out");
+
+        // Planned first, by the run's name, through the source just opened.
+        var planned = await harness.ReceivedAsync<PlanResumeRestoreCommand>();
+        Assert.AreEqual(Run, planned.Run);
+        Assert.AreEqual("src-1", planned.Source);
+        await Expect(page.Locator("#rst-landed")).ToContainTextAsync("already landed");
+        await Expect(page.Locator("#rst-landed b")).ToHaveTextAsync("1");
+        await Expect(page.Locator("#rst-space")).ToContainTextAsync("/restore/out");
+        await Expect(page.Locator("#rst-space-short")).ToHaveCountAsync(0);
         await page.ClickAsync("#rst-resume-go");
 
         var resumed = await harness.ReceivedAsync<ResumeRestoreCommand>();
@@ -110,16 +128,55 @@ public sealed class RestoreUnfinishedDomTests
     public async Task AResumeThatWillNotFit_IsAskedToGoOn_OnlyWhenThePersonSaysSo()
     {
         await using var harness = await DomHarness.StartAsync();
-        harness.Clients.Client.Respond = Fakes();
+        harness.Clients.Client.Respond = Fakes(plan: _ => Fits with
+        {
+            Space = [new RestoreSpaceDescriptor("/restore/out", 8_192, 100, false)],
+        });
 
         await using var context = await BrowserSession.NewContextAsync();
         var page = await context.NewPageAsync();
         await WalkToTheResumeAsync(page, harness);
 
+        await Expect(page.Locator("#rst-space-short")).ToBeVisibleAsync();
+        var go = page.Locator("#rst-resume-go");
+        await Expect(go).ToBeDisabledAsync();
         await page.CheckAsync("#rst-ignore-space");
-        await page.ClickAsync("#rst-resume-go");
+        await Expect(go).ToBeEnabledAsync();
+        await go.ClickAsync();
 
         Assert.IsTrue((await harness.ReceivedAsync<ResumeRestoreCommand>()).IgnoreFreeSpace);
+    }
+
+    [TestMethod]
+    public async Task AResumeNamingFilesThatCannotComeBack_SaysSoBeforeItRuns()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Fakes(plan: _ => Fits with { MissingObjects = ["notes.txt"] });
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToTheResumeAsync(page, harness);
+
+        await Expect(page.Locator("#dialog")).ToContainTextAsync("cannot be found");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ResumeRestoreCommand>(), "a plan resumes nothing");
+    }
+
+    [TestMethod]
+    public async Task AResumeTheServiceCannotPlan_IsStillOffered_AsBefore()
+    {
+        // Before contract 1.72 the service does not know the command.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Fakes(plan: _ => new ServiceError(ServiceErrorReason.InvalidArgument, "Unknown command."));
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToTheResumeAsync(page, harness);
+
+        await Expect(page.Locator("#rst-resume-go")).ToBeEnabledAsync();
+        await Expect(page.Locator("#rst-landed")).ToHaveCountAsync(0);
+        await page.ClickAsync("#rst-resume-go");
+
+        Assert.AreEqual(Run, (await harness.ReceivedAsync<ResumeRestoreCommand>()).Run);
     }
 
     [TestMethod]

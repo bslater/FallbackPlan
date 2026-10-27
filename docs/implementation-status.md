@@ -145,6 +145,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0118](adr/0118-the-console-runs-a-kept-plan-as-it-was-approved.md) | The console runs a kept plan as it was approved: the console process reads the file with the command line's reader, plans the kept run again through a source of the plan's own set, holds it to the kept plan with the comparison both clients now share, and runs it as kept only where nothing changed; otherwise it names each change and runs nothing | **Built** | `Api/RestorePlanFile` · `Web/WebConsoleHost` · `Cli/RestorePlanReport` · `Api.Tests/RestorePlanFileTests`, `Web.Tests/ConsoleKeptPlanTests`, `Web.DomTests/RestoreKeptPlanDomTests` · [notes](#0118--the-console-runs-a-kept-plan-as-it-was-approved) |
 | [0119](adr/0119-direct-mode-restores-to-the-original-location.md) | Direct mode restores to the original location: the mapping of a plan onto a set's roots, and the merge of their receipts, move into the restore library for the service and direct mode alike, and direct mode plans, measures and restores each root's slice in place from the set the state directory configures, refusing a snapshot of no configured set and a label no root carries | **Built** | `Restore/RestoreOriginalLocation` · `Cli/OperationGateway`, `Cli/RestorePlanReport` · `Agent/ServiceCommandHandler` · `Repository.Tests/RestoreOriginalLocationTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Cli.Tests/GatewayRestoreReportTests` · [notes](#0119--direct-mode-restores-to-the-original-location) |
 | [0120](adr/0120-a-resume-is-planned.md) | A resume is planned: measured where its run landed, by length as the resume is, and saying how many files the run already landed; `restore --resume --plan` plans the run asked, through the service or in direct mode, and `restore-resume <run> --plan` plans a run left unfinished by its name alone, restoring nothing; a plan of a resume is not kept (contract 1.72) | **Built** | `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/CliApplication`, `Cli/OperationGateway`, `Cli/RestorePlanReport` · `FallbackPlan.Api` · `Repository.Tests/RestoreSpaceTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0120--a-resume-is-planned) |
+| [0121](adr/0121-the-console-plans-a-resume.md) | The console plans a resume: the wizard's resume mode plans the run by its name alone once its source is open, shows the plan as a restore's plan is shown with how many files the run already landed, arms a resume that will not fit only when the person says to go on, and offers it as before where the service cannot plan it | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0121--the-console-plans-a-resume) |
 
 ---
 
@@ -3585,3 +3586,18 @@ resume restores nothing and is not kept. Contract 1.72 carries it: `resume` on
 `plan_restore`, `plan_resume_restore`, and `landed` on `restore_plan`.
 
 What remains is recorded rather than done. The console plans no resume.
+ADR-0121 has since taken it up.
+
+### 0121 — the console plans a resume
+
+The console's resume mode said a resume that will not fit is refused, and
+offered to go on regardless, without saying whether this one would fit. It
+now asks the service for the run's plan by its name alone once its source is
+open, and shows it as a restore's plan is shown, from the same function: the
+files and how many the run already landed, what is left to write and read,
+the room each volume needs, and what will not come back. A resume that will
+not fit is armed only once the person ticks to go on. A service before
+contract 1.72, which cannot plan one, still resumes it, as before.
+
+What remains is recorded rather than done. A run the wizard has just seen
+fail or stop is resumed from its result without a plan.
