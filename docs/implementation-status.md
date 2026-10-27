@@ -150,6 +150,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0123](adr/0123-the-console-plans-the-resume-a-result-offers.md) | The console plans the resume a result offers: restoring what is left of a failed or stopped run is planned by the run's name first, shown as a resume's plan is shown, and asked only from beneath the plan, armed only on the person's say where it will not fit, and offered as before where the service cannot plan it | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreWizardDomTests`, `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0123--the-console-plans-the-resume-a-result-offers) |
 | [0124](adr/0124-a-kept-restore-receipt-is-read-back.md) | A kept restore receipt is read back: the receipts a state directory keeps, the service's or direct mode's, are read newest first, each under its run, a file that does not read said to and what is not a run's passed over; `restore-receipts` lists each run with what became of its files and where it wrote them, or prints one run's receipt whole | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/CliApplication`, `Cli/RestoreReceiptReport` · `Repository.Tests/RestoreReceiptReadBackTests`, `Cli.Tests/RestoreReceiptsVerbTests`, `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0124--a-kept-restore-receipt-is-read-back) |
 | [0125](adr/0125-the-service-lists-the-restore-receipts-it-keeps.md) | The service lists the restore receipts it keeps: `list_restore_receipts` answers each, newest first under a limit with how many are kept, as its outcome, when it ended, what became of its files and where it wrote them, never the paths, which are the backup's file names; the console shows them in the Maintenance view, and a service before the listing is an empty card (contract 1.73) | **Built** | `Agent/ServiceCommandHandler` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Api.Tests/ConfigurationContractTests`, `Hosts.Tests/RestoreReceiptsServiceTests`, `Web.Tests/ConsoleRestoreReceiptsScriptTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0125--the-service-lists-the-restore-receipts-it-keeps) |
+| [0126](adr/0126-a-restore-receipt-names-the-set-it-restored.md) | A restore receipt names the set it restored: at schema 9 the receipt names the set whose snapshot its run restored, where the run knew it, through the service and in direct mode, and names none where it knew none; `restore-receipts`, the service's listing and the console say it (contract 1.74) | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway`, `Cli/RestoreReceiptReport` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Repository.Tests/RestoreReceiptKeptTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Cli.Tests/RestoreReceiptDirectTests`, `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0126--a-restore-receipt-names-the-set-it-restored) |
 
 ---
 
@@ -3668,3 +3669,16 @@ is an empty card.
 What remains is recorded rather than done. A receipt's files are not shown in
 the console, the command line does not ask the service for the receipts, and
 none is let go.
+
+### 0126 — a restore receipt names the set it restored
+
+A receipt said which snapshot its run restored, by its identifier, and nothing
+said whose. At schema 9 it names the set: through the service, the set the run
+was asked through; in direct mode, the set this state's configuration has the
+snapshot as a snapshot of. Where the run knew none it names none, and a
+configuration that does not read names none and stops no restore.
+`restore-receipts` says the set after the snapshot, the service's listing
+answers it (contract 1.74), and the console shows it.
+
+What remains is recorded rather than done. A receipt kept before schema 9
+names no set, and nothing rewrites it.
