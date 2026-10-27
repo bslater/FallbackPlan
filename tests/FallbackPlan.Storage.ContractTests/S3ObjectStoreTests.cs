@@ -18,6 +18,9 @@ namespace FallbackPlan.Storage.ContractTests;
 /// (FR-QUOTA-001); a body cut short is an IOException rather than a short
 /// object; a listing spans pages, resumes where it is asked to, and sees only
 /// its own root; and nothing is spoken in clear to anywhere but this machine.
+/// An object a lifecycle rule moved to an archival storage class is said to
+/// be archived until a restore of it finishes, and a read of it is refused as
+/// archived, never as a fault of the credentials (FR-RST-003, ADR-0103).
 /// </summary>
 [TestClass]
 public sealed class S3ObjectStoreTests : IAsyncDisposable
@@ -324,9 +327,80 @@ public sealed class S3ObjectStoreTests : IAsyncDisposable
     }
 
     [TestMethod]
+    [DataRow("GLACIER")]
+    [DataRow("DEEP_ARCHIVE")]
+    [DataRow("INTELLIGENT_TIERING")]
+    public async Task GetMetadata_AnObjectHeldOnlyInAnArchivalTier_IsArchived(string storageClass)
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/cold"), Content(new byte[10]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.Archive(Bucket, "root/blobs/data/ab/cold", tier: storageClass);
+
+        var held = await store.GetMetadataAsync(Key("blobs/data/ab/cold"), CancellationToken.None);
+
+        Assert.IsTrue(held.Found);
+        Assert.AreEqual(10L, held.Metadata!.Length);
+        Assert.IsTrue(held.Metadata.Archived);
+    }
+
+    [TestMethod]
+    public async Task GetMetadata_AnObjectWhoseRestoreIsUnderWay_IsStillArchived()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/cold"), Content(new byte[10]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.Archive(Bucket, "root/blobs/data/ab/cold", ArchiveState.Rehydrating);
+
+        var held = await store.GetMetadataAsync(Key("blobs/data/ab/cold"), CancellationToken.None);
+
+        Assert.IsTrue(held.Metadata!.Archived);
+    }
+
+    [TestMethod]
+    public async Task GetMetadata_AnObjectWhoseRestoreHasFinished_IsNotArchived_AndReads()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/cold"), Content([1, 2, 3]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.Archive(Bucket, "root/blobs/data/ab/cold", ArchiveState.Rehydrated);
+
+        var held = await store.GetMetadataAsync(Key("blobs/data/ab/cold"), CancellationToken.None);
+        using var read = await store.OpenReadAsync(Key("blobs/data/ab/cold"), range: null, CancellationToken.None);
+
+        Assert.IsFalse(held.Metadata!.Archived);
+        using var copy = new MemoryStream();
+        await read.Content!.CopyToAsync(copy);
+        CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, copy.ToArray());
+    }
+
+    [TestMethod]
+    public async Task GetMetadata_AnObjectNeverArchived_IsNotArchived()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/warm"), Content(new byte[10]), PutConditions.IfNotExists, CancellationToken.None);
+
+        Assert.IsFalse((await store.GetMetadataAsync(Key("blobs/data/ab/warm"), CancellationToken.None)).Metadata!.Archived);
+    }
+
+    [TestMethod]
+    public async Task OpenRead_AnObjectHeldOnlyInAnArchivalTier_IsRefusedAsArchived_AndAskedOnce()
+    {
+        var store = Store();
+        await store.PutAsync(Key("blobs/data/ab/cold"), Content(new byte[10]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.Archive(Bucket, "root/blobs/data/ab/cold");
+
+        var refused = await Assert.ThrowsExactlyAsync<StoreObjectArchivedException>(
+            () => store.OpenReadAsync(Key("blobs/data/ab/cold"), new ObjectRange(0, 5), CancellationToken.None).AsTask());
+
+        Assert.Contains("archival", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("blobs/data/ab/cold", refused.Message, StringComparison.Ordinal);
+        Assert.ContainsSingle(_server.Requests.Where(request => request.Method == "GET"));
+    }
+
+    [TestMethod]
     public void Capabilities_DeclareWhatTheApiPromises()
     {
         var declared = S3ObjectStore.DeclaredCapabilities;
+
+        Assert.IsTrue(declared.ArchivalTiers, "a lifecycle rule can move an object to an archival storage class");
 
         Assert.IsTrue(declared.ConditionalCreate);
         Assert.IsTrue(declared.RangedReads);

@@ -94,6 +94,9 @@
   <data name="AzureBlobObjectStore_Refused" xml:space="preserve">
     <value>The Azure Blob store refused a {0} of '{1}': {2} {3}. {4}</value>
   </data>
+  <data name="AzureBlobObjectStore_Archived" xml:space="preserve">
+    <value>The Azure Blob store holds '{1}' only in its archival tier, Archive, and will not serve it until it is rehydrated: it answered a {0} with {2} {3}. {4} Rehydrate the blob to an online tier at the store, or restore from another copy.</value>
+  </data>
   <data name="AzureBlobObjectStore_Busy" xml:space="preserve">
     <value>The Azure Blob store was too busy to serve a {0} of '{1}' on any attempt: {2} {3}. {4} The next pass asks again.</value>
   </data>

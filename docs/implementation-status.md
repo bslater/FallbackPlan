@@ -127,6 +127,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0100](adr/0100-a-peer-replaces-what-its-own-check-finds-damaged.md) | A peer replaces what its own check finds damaged: it takes a replacement for a blob only where its own copy fails the keyless locator check, with bytes of the copy's length that pass it and state the locator the copy states, over a repair session of its own served only for the owner; the source proves its copy first, from copies it reads without dialling a peer, and proves it again over retrieval where it landed, at once in the sweep and at each sync while damage is held | **Built** | `Repository.Packing/BlobLocatorCheck` · `Agent/RepairResponder`, `Agent/RemoteServiceListener` · `Protocol/PeerRepairMessages`, `Protocol/PeerSessionNegotiation`, `Protocol/PeerAuthenticator` · `Agent/PeerRepairClient`, `Agent/PeerRepairTarget`, `Repository/ReplicaRepair`, `Agent/ReplicaRepairer` · `Agent/ReplicaSweepJob`, `Agent/FanOut` · `Hosts.Tests/PeerRepairTests`, `Hosts.Tests/PeerDeepSweepTests`, `Repository.Tests/EndToEnd/BlobLocatorCheckTests`, `Repository.Tests/EndToEnd/ReplicaRepairTests`, `Protocol.Tests/RepairMessageTests` |
 | [0101](adr/0101-a-restore-gives-a-symlink-its-own-metadata-back.md) | A restore gives a symlink its own metadata back, onto the link itself: its owner and group, its extended attributes, its times on Linux and macOS, and on macOS its permissions and creation time, each by a call that changes the link and never what it points at. On Linux a link's permissions land only where they are those every link there has, and a user-namespace attribute or ACL on a link is withheld and named. The plan counts links on the lines files and folders use | **Built** | `Domain/SymlinkMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Repository.Tests/RestoreSymlinkMetadataTests`, `Domain.Tests/SymlinkMetadataTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0101--a-links-own) |
 | [0102](adr/0102-a-restore-gives-a-hard-link-group-back-as-one-file.md) | A restore gives a hard-link group back as one file: the first name of a group the run reaches lands as any file does, and each later name that agrees with it in content, length and every attribute but the access time is a link to that file, through the existing-file policy at its own destination. A name that does not agree, or that the target will not link, is restored as a file of its own and says why. Receipt schema 7 names the file a name shares, and the plan measures a group once | **Built** | `Domain/HardLinks` · `Restore/RestoreHardLinks` · `Restore/RestoreExecutor` · `Restore/RestoreSpace` · `Restore/RestoreBlobSet` · `Repository.Tests/RestoreHardLinkTests`, `Domain.Tests/HardLinksTests`, `Repository.Tests/RestoreBreadthTests`, `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0102--one-file-every-name) |
+| [0103](adr/0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md) | A restore plan names what is held only in an archival tier: the store contract's metadata says when a store holds an object only in a tier that serves nothing until it is rehydrated, and a read of one is refused as archived; the S3-compatible provider reads it from the storage class, the Intelligent-Tiering archive status and the restore status, the Azure Blob provider from the access tier, and both declare the hazard. The plan passes over an archived copy for one that holds it readable and names what every copy holds archived, apart from the missing (contract 1.65), and the console's wizard lists them before a restore is armed | **Built** | `Storage.Abstractions/StoreResults.cs` · `Storage.Abstractions/StoreObjectArchivedException` · `Storage.S3/S3ObjectStore` · `Storage.AzureBlob/AzureBlobObjectStore` · `Restore/FirstHolderStore` · `Restore/RestoreBlobSet` · `Agent/ServiceCommandHandler` · `Api/Results` · `Api/ContractVersion` · `Repository.Tests/RestoreArchiveTests`, `Storage.ContractTests/S3ObjectStoreTests`, `Storage.ContractTests/AzureBlobObjectStoreTests`, `Hosts.Tests/ObjectStoreDestinationTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0103--held-but-cold) |
 
 ---
 
@@ -2396,7 +2397,8 @@ Still owed: writing those back, which the times have since been
 for a security descriptor; hard links, which restored as separate files
 without saying so until [0102](#0102--one-file-every-name); the physical
 transfer size, until [Amendment 2](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads); plan export and resume;
-archival-tier reporting; and the recovery tool's own restore.
+archival-tier reporting, until [0103](#0103--held-but-cold); and the recovery
+tool's own restore.
 
 **What a run reads** ([Amendment 2](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads)). Architecture 08 §2 asks a plan for
 a physical transfer size beside the logical one, and said they differ when a
@@ -3211,3 +3213,37 @@ run only, never a name and a file already at the destination. The
 derivation still keys on the device and not the filesystem, so a collision
 restores as two files. The recovery tool and the CLI's `restore-file` make
 no links.
+
+### 0103 — held, but cold
+
+Both cloud stores the product writes to have a tier that costs a fraction
+of their standard one and serves nothing until an object is rehydrated, and
+a lifecycle rule moves a backup's old blobs there first. Nothing in the
+product knew. The store contract carried an `ArchivalTiers` hazard no
+provider declared, no metadata said which object was archived, and a
+restore that met one failed that file part-way through, S3's refusal
+reading as a fault of the credential.
+
+The HEAD a plan already makes for every blob a run needs now answers it.
+`Storage.S3/S3ObjectStore` calls an object archived in Glacier Flexible
+Retrieval, Deep Archive or an Intelligent-Tiering archive tier, unless a
+restore of it has finished; `Storage.AzureBlob/AzureBlobObjectStore` calls
+a blob archived while its tier is the archive's, which it stays until a
+rehydration finishes. A read of an archived object is refused as archived
+(`Storage.Abstractions/StoreObjectArchivedException`), naming both
+remedies.
+
+The plan names those paths apart from the missing, because rehydrating
+them brings them back and nothing brings back a missing one. A copy that
+holds a blob archived is passed over for one that holds it readable
+(`Restore/FirstHolderStore`), as the run reads around it, so only what every
+copy holds archived is named. A file with content lost is missing however
+much else of it is archived. The names cross as `archived_objects`
+(contract 1.65), and the console's wizard lists them before a restore is
+armed.
+
+What remains is recorded rather than done. Nothing rehydrates an object,
+which is billed to the store's owner and chosen per object and speed, and a
+sync's read-back, the deep sweep and a drill meet the same refusal without
+reporting it differently.
+

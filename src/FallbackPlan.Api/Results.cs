@@ -812,6 +812,13 @@ public sealed record DirectoryResult(
 /// is read in a little more, for its sealing. Null from a service before
 /// 1.64, which is unknown and never nothing to read.
 /// </param>
+/// <param name="ArchivedObjects">
+/// Paths whose manifest or content every copy that holds it holds only in an
+/// archival tier, which serves nothing until it is rehydrated at the store
+/// (contract 1.65, FR-RST-003). Apart from <paramref name="MissingObjects"/>:
+/// these come back once rehydrated. Null when there are none, and from a
+/// service before 1.65.
+/// </param>
 public sealed record RestorePlanResult(
     long Files,
     long Bytes,
@@ -821,7 +828,8 @@ public sealed record RestorePlanResult(
     IReadOnlyList<string>? Degradations = null,
     long? WriteBytes = null,
     IReadOnlyList<RestoreSpaceDescriptor>? Space = null,
-    long? ReadBytes = null) : ServiceResult;
+    long? ReadBytes = null,
+    IReadOnlyList<string>? ArchivedObjects = null) : ServiceResult;
 
 /// <summary>The room a restore needs on one volume it writes to (contract 1.53, FR-RST-003).</summary>
 /// <param name="Directory">

@@ -116,6 +116,8 @@ Two capabilities change engine behaviour rather than merely informing it:
 
 `MinimumStorageDuration` and `ArchivalTiers` inform retention and garbage collection about early-deletion charges and rehydration latency. They never change what is *correct* to delete — only what is *advisable*, and when.
 
+> **2026-10 ([ADR-0103](../adr/0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md)).** The S3-compatible and Azure Blob providers declare `ArchivalTiers`, and an object's metadata says whether the store holds it only in an archival tier, from which nothing is read until it is rehydrated. A read of one is refused as archived (`Storage.Abstractions/StoreObjectArchivedException`), and a restore's plan names what every copy holds archived.
+
 **Capabilities of a composed store are an open edge.** The ship sink (§4.5)
 is itself an `IObjectStore` over N provider stores, and nothing yet defines
 whether such a store reports the intersection of its members' capabilities,

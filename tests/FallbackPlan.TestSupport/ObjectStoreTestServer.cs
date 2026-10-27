@@ -89,6 +89,24 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Moves an object into the API's archival tier, as a lifecycle rule
+    /// would: it stays listed and sized, and is not read until it is
+    /// rehydrated.
+    /// </summary>
+    /// <param name="name">The bucket or container.</param>
+    /// <param name="key">The object's full key.</param>
+    /// <param name="state">Where its rehydration stands.</param>
+    /// <param name="tier">The API's own name for the tier, when not its usual archive.</param>
+    public void Archive(string name, string key, ArchiveState state = ArchiveState.Archived, string? tier = null)
+    {
+        var objects = _namespaces[name];
+        lock (objects)
+        {
+            objects[key] = objects[key] with { Archive = state, Tier = tier };
+        }
+    }
+
     /// <summary>Deletes an object behind the API's back, as anyone else holding a key to it could.</summary>
     /// <param name="name">The bucket or container.</param>
     /// <param name="key">The object's full key.</param>
@@ -475,7 +493,17 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     /// <summary>One stored object.</summary>
     /// <param name="Bytes">What it holds.</param>
     /// <param name="LastModified">When it was last written.</param>
-    protected sealed record StoredObject(byte[] Bytes, DateTimeOffset LastModified);
+    protected sealed record StoredObject(byte[] Bytes, DateTimeOffset LastModified)
+    {
+        /// <summary>Where the object stands in an archival tier, or null when it was never moved to one.</summary>
+        public ArchiveState? Archive { get; init; }
+
+        /// <summary>The API's own name for the tier it is in, when not its usual archive.</summary>
+        public string? Tier { get; init; }
+
+        /// <summary>Whether a read of it is refused until it is rehydrated.</summary>
+        public bool Unreadable => Archive is ArchiveState.Archived or ArchiveState.Rehydrating;
+    }
 
     private sealed record Fault(int Status, string Code, bool Drop, bool Truncate);
 
@@ -637,4 +665,17 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
             return _end > 0;
         }
     }
+}
+
+/// <summary>Where an object an archival tier holds stands (see <see cref="ObjectStoreTestServer.Archive"/>).</summary>
+public enum ArchiveState
+{
+    /// <summary>Held only in the tier, and read only once rehydrated.</summary>
+    Archived,
+
+    /// <summary>A rehydration was asked for and has not finished, so it is still read only once it does.</summary>
+    Rehydrating,
+
+    /// <summary>Rehydrated: readable, whatever the API still says of its tier.</summary>
+    Rehydrated,
 }

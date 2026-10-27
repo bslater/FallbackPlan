@@ -59,6 +59,16 @@ public sealed record RestoreBlobSetResult(
     /// run reads them in the order they were written.
     /// </remarks>
     public ulong ReadBytes { get; init; }
+
+    /// <summary>
+    /// Paths whose manifest or content every copy that holds it holds only in
+    /// an archival tier, which serves nothing until it is rehydrated
+    /// (FR-RST-003; architecture 08 §2; ADR-0103). Apart from
+    /// <see cref="Missing"/>: rehydrating these brings them back, and nothing
+    /// brings back a path with something lost. What they need is not counted
+    /// in <see cref="ReadBytes"/>, because the run cannot read it as it is.
+    /// </summary>
+    public IReadOnlyList<string> Archived { get; init; } = [];
 }
 
 /// <summary>
@@ -131,14 +141,15 @@ public static class RestoreBlobSet
         using var keyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         using var metaReaders = new MetaReaderCache();
-        var blobKeys = new Dictionary<BlobId, (ObjectKey Key, long Length)?>();
+        var blobKeys = new Dictionary<BlobId, HeldBlob?>();
         var missing = new List<string>();
+        var archived = new List<string>();
         var needed = new HashSet<ObjectKey>();
         var facts = new Dictionary<ObjectId, RestoreItemFacts>();
         var read = new HashSet<ObjectId>();
         var readBytes = 0UL;
 
-        async ValueTask<bool> PresentAsync(ObjectId objectId, ResolvedLocation location)
+        async ValueTask<Holding> HoldingAsync(ObjectId objectId, ResolvedLocation location)
         {
             if (!blobKeys.TryGetValue(location.BlobId, out var blob))
             {
@@ -150,12 +161,17 @@ public static class RestoreBlobSet
 
             if (blob is not { } found)
             {
-                return false;
+                return Holding.Absent;
             }
 
-            if (needed.Add(found.Key))
+            if (needed.Add(found.Key) && !found.Archived)
             {
                 readBytes += (ulong)BlobReader.EnvelopeReadLength(found.Length);
+            }
+
+            if (found.Archived)
+            {
+                return Holding.Archived;
             }
 
             if (read.Add(objectId))
@@ -163,7 +179,7 @@ public static class RestoreBlobSet
                 readBytes += (ulong)RecordFraming.MaxRecordLength(location.StoredLength);
             }
 
-            return true;
+            return Holding.Readable;
         }
 
         foreach (var item in plan.Items)
@@ -174,10 +190,15 @@ public static class RestoreBlobSet
                 continue;
             }
 
-            if (!await PresentAsync(item.ObjectId, location).ConfigureAwait(false))
+            switch (await HoldingAsync(item.ObjectId, location).ConfigureAwait(false))
             {
-                missing.Add(item.Path);
-                continue;
+                case Holding.Absent:
+                    missing.Add(item.Path);
+                    continue;
+
+                case Holding.Archived:
+                    archived.Add(item.Path);
+                    continue;
             }
 
             // A manifest that is present but will not read is damage, not
@@ -216,20 +237,37 @@ public static class RestoreBlobSet
                 manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode,
                 RestoreMetadata.KindsOf(manifest.Metadata), RestoreHardLinks.KeyOf(manifest));
 
+            // A lost segment makes the path missing whatever else of it is
+            // archived, because no rehydration brings that segment back.
             var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
                 .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
+            var archivedSegment = false;
+            var lost = false;
             foreach (var referenced in references)
             {
-                if (catalogue.ResolveLocation(referenced) is not { } segmentLocation
-                    || !await PresentAsync(referenced, segmentLocation).ConfigureAwait(false))
+                var holding = catalogue.ResolveLocation(referenced) is { } segmentLocation
+                    ? await HoldingAsync(referenced, segmentLocation).ConfigureAwait(false)
+                    : Holding.Absent;
+                if (holding == Holding.Absent)
                 {
-                    missing.Add(item.Path);
+                    lost = true;
                     break;
                 }
+
+                archivedSegment |= holding == Holding.Archived;
+            }
+
+            if (lost)
+            {
+                missing.Add(item.Path);
+            }
+            else if (archivedSegment)
+            {
+                archived.Add(item.Path);
             }
         }
 
-        return new RestoreBlobSetResult(needed, missing) { Facts = facts, ReadBytes = readBytes };
+        return new RestoreBlobSetResult(needed, missing) { Facts = facts, ReadBytes = readBytes, Archived = archived };
     }
 
     /// <summary>
@@ -297,13 +335,13 @@ public static class RestoreBlobSet
     }
 
     /// <summary>
-    /// The store key a blob actually exists under, trying both classes, and
-    /// its length — or null. A store that cannot answer reads as missing:
-    /// the plan's job is to warn before bytes move, and "unreachable"
-    /// warrants the warning as much as "absent". The found key is what the
-    /// run's targeted load opens.
+    /// The store key a blob actually exists under, trying both classes, its
+    /// length, and whether it is held only in an archival tier — or null. A
+    /// store that cannot answer reads as missing: the plan's job is to warn
+    /// before bytes move, and "unreachable" warrants the warning as much as
+    /// "absent". The found key is what the run's targeted load opens.
     /// </summary>
-    private static async ValueTask<(ObjectKey Key, long Length)?> FindBlobKeyAsync(
+    private static async ValueTask<HeldBlob?> FindBlobKeyAsync(
         IObjectStore store,
         StoreBlobKey blobKey,
         CancellationToken cancellationToken)
@@ -316,7 +354,7 @@ public static class RestoreBlobSet
                 var metadata = await store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
                 if (metadata.Found && metadata.Metadata!.Length > 0)
                 {
-                    return (key, metadata.Metadata.Length);
+                    return new HeldBlob(key, metadata.Metadata.Length, metadata.Metadata.Archived);
                 }
             }
             catch (IOException)
@@ -326,6 +364,22 @@ public static class RestoreBlobSet
 
         return null;
     }
+
+    /// <summary>Where a record the plan needs stands at the copies.</summary>
+    private enum Holding
+    {
+        /// <summary>No copy holds its blob.</summary>
+        Absent,
+
+        /// <summary>Every copy that holds its blob holds it only in an archival tier.</summary>
+        Archived,
+
+        /// <summary>A copy holds its blob where it can be read.</summary>
+        Readable,
+    }
+
+    /// <summary>A blob a copy holds: the key it is under, its length, and whether that copy holds it archived.</summary>
+    private sealed record HeldBlob(ObjectKey Key, long Length, bool Archived);
 
     /// <summary>
     /// The plan probe's open meta-blob readers: memoized, because a

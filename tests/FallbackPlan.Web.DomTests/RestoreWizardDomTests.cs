@@ -19,7 +19,8 @@ namespace FallbackPlan.Web.DomTests;
 /// asked with the run's shape, so it shows the room the run needs where it
 /// will write, and a plan that will not fit arms the restore only when the
 /// person chooses to restore anyway (ADR-0083). Where the service says what
-/// the run will read, the plan shows that too (ADR-0083 Amendment 2). The result says which
+/// the run will read, the plan shows that too (ADR-0083 Amendment 2), and it
+/// names what every copy holds only in an archival tier (ADR-0103). The result says which
 /// captured metadata the files came back without (FR-RST-004). Its file tree
 /// shows what will not be restored a shade lighter rather than struck
 /// through, with toggles large enough to hit, as the backup wizard's does.
@@ -226,6 +227,28 @@ public sealed class RestoreWizardDomTests
     }
 
     [TestMethod]
+    public async Task Wizard_APlanNamingWhatIsHeldOnlyInAnArchivalTier_SaysSoBeforeTheRestoreIsArmed()
+    {
+        // FR-RST-003: a file every copy holds only in an archival tier fails
+        // unless it is rehydrated first, which the person can do before the
+        // restore rather than learn of after it.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(2, 8_192, [], WriteBytes: 8_192, ArchivedObjects: ["docs/a.txt", "docs/b.txt"])
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        await Expect(page.Locator("#rst-archived")).ToContainTextAsync("2 file(s)");
+        await Expect(page.Locator("#rst-archived")).ToContainTextAsync("archival tier");
+        await Expect(page.Locator("#rst-archived")).ToContainTextAsync("docs/a.txt");
+    }
+
+    [TestMethod]
     public async Task Wizard_APlanThatDoesNotSayWhatItReads_ShowsNoFigureForIt()
     {
         // A service before contract 1.64 says nothing of it, which is not
@@ -243,6 +266,7 @@ public sealed class RestoreWizardDomTests
 
         await Expect(page.Locator(".plan-figures")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-read")).ToHaveCountAsync(0);
+        await Expect(page.Locator("#rst-archived")).ToHaveCountAsync(0);
     }
 
     [TestMethod]

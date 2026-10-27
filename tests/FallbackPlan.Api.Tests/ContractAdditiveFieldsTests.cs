@@ -27,8 +27,10 @@ namespace FallbackPlan.Api.Tests;
 /// half of FR-WOR-007's notices, 1.62's deleted-file duration on a
 /// retention policy, the wire half of FR-GC-014, 1.63's staging sweep on
 /// each set's status, the wire half of FR-VER-009's report of its circuit,
-/// and 1.64's bytes a restore plan says its run reads, the wire half of
-/// FR-RST-003's physical transfer size.
+/// 1.64's bytes a restore plan says its run reads, the wire half of
+/// FR-RST-003's physical transfer size, and 1.65's paths a plan names as
+/// held only in an archival tier, the wire half of FR-RST-003's report of
+/// them.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1048,6 +1050,26 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.AreEqual(0, row.VerifiedDigest);
         Assert.AreEqual(0, row.VerifiedChunk);
         Assert.AreEqual("proven", row.Verification);
+    }
+
+    [TestMethod]
+    public void WhatIsHeldOnlyInAnArchivalTier_WireNameAndPre165Default()
+    {
+        // Contract 1.65 (FR-RST-003): a plan names the paths every copy holds
+        // only in an archival tier, apart from those whose objects are gone.
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            new RestorePlanResult(2, 9_000, [], ArchivedObjects: ["docs/a.txt"]),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"archived_objects\":[\"docs/a.txt\"]", modern, StringComparison.Ordinal);
+
+        // A pre-1.65 service's plan carries none, and reads as naming none.
+        var old = modern.Replace(",\"archived_objects\":[\"docs/a.txt\"]", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions), out var read);
+        Assert.IsNull(read.ArchivedObjects);
     }
 
     [TestMethod]

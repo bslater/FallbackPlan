@@ -905,7 +905,8 @@ public sealed partial class ServiceCommandHandler(
                 degradations.Count == 0 ? null : degradations,
                 (long)writeBytes,
                 space,
-                (long)probed.ReadBytes);
+                (long)probed.ReadBytes,
+                probed.Archived.Count == 0 ? null : probed.Archived);
         }
         finally
         {

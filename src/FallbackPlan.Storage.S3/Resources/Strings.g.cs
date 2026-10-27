@@ -160,6 +160,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, S3ObjectStore_QuotaExceeded, arg0, arg1, arg2, arg3, arg4);
 
     /// <summary>
+    /// The S3-compatible store holds '{1}' only in an archival storage class, and will not serve it until it is restored: it answered a {0} with {2} {3}. {4} Restore the object at the store, or restore from another copy.
+    /// </summary>
+    private static string S3ObjectStore_Archived => Get(nameof(S3ObjectStore_Archived));
+
+    /// <summary>
+    /// The S3-compatible store holds '{1}' only in an archival storage class, and will not serve it until it is restored: it answered a {0} with {2} {3}. {4} Restore the object at the store, or restore from another copy.
+    /// </summary>
+    internal static string FormatS3ObjectStore_Archived(object? arg0, object? arg1, object? arg2, object? arg3, object? arg4) =>
+        string.Format(CultureInfo.CurrentCulture, S3ObjectStore_Archived, arg0, arg1, arg2, arg3, arg4);
+
+    /// <summary>
     /// The S3-compatible store's answer ended before the object it was sending did.
     /// </summary>
     internal static string S3ObjectStore_BodyEndedEarly => Get(nameof(S3ObjectStore_BodyEndedEarly));

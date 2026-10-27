@@ -28,7 +28,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// credential, a store that refuses it, a store that does not answer, one too
 /// busy to serve (FR-QUOTA-001) — through the faults the store contract
 /// names: a link cut partway, a credential refused partway, and listings that
-/// lag the store's writes.
+/// lag the store's writes. A restore's plan from the store names what it
+/// holds only in an archival tier, and the run says why those files fail
+/// (FR-RST-003, ADR-0103).
 /// </summary>
 /// <remarks>
 /// The credential reaches the service only as an envelope sealed to its
@@ -343,6 +345,43 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
             Assert.AreEqual("alpha", File.ReadAllText(Path.Combine(restored, "docs", "a.txt")));
             Assert.AreEqual(new string('b', 40_000), File.ReadAllText(Path.Combine(restored, "docs", "b.txt")));
         }
+    }
+
+    [TestMethod]
+    public async Task Plan_FromTheStore_NamesWhatItHoldsOnlyInAnArchivalTier_AndTheRunSaysWhyItFails()
+    {
+        // A lifecycle rule that moves old objects to an archival tier is a
+        // line in the store's settings; the restore that meets them comes
+        // months later, and a plan is where a person can still do something
+        // about it (FR-RST-003, ADR-0103).
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        Assert.AreEqual("in-sync", (await RowAsync(runtime, "cloud")).State);
+        foreach (var key in Store.KeysIn(Namespace).Where(key => key.Contains("/blobs/data/", StringComparison.Ordinal)))
+        {
+            Store.Archive(Namespace, key);
+        }
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var replica = await Harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", "cloud", Timeout);
+        var snapshotId = Assert.ContainsSingle(replica.Snapshots).SnapshotId;
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            await handler.ExecuteAsync(new PlanRestoreCommand(snapshotId, null, Source: replica.SourceId), Timeout),
+            out var plan);
+
+        Assert.IsEmpty(plan.MissingObjects, "an archived object is held, not lost");
+        CollectionAssert.AreEquivalent(new[] { "docs/a.txt", "docs/b.txt" }, plan.ArchivedObjects?.ToArray());
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, Path.Combine(Harness.WorkPath, "from-cold"), Source: replica.SourceId, InPlace: true),
+                Timeout),
+            out var restore);
+        Assert.AreNotEqual("complete", restore.Outcome);
+        Assert.Contains(line => line.Contains("archival", StringComparison.Ordinal), restore.FailedSample ?? []);
     }
 
     [TestMethod]

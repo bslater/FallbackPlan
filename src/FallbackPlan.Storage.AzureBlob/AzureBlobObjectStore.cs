@@ -100,6 +100,7 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
         RangedReads = true,
         ListingConsistency = ListingConsistency.Strong,
         MaximumObjectSize = MaximumSinglePut,
+        ArchivalTiers = true,
     };
 
     /// <inheritdoc />
@@ -118,8 +119,11 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
 
         return response.StatusCode switch
         {
+            // The archive tier keeps its name until a rehydration has copied
+            // the blob back to an online tier, so the tier alone says it.
             HttpStatusCode.OK => new GetMetadataResult(new ObjectMetadata(
-                response.Content.Headers.ContentLength ?? 0, response.Content.Headers.LastModified)),
+                response.Content.Headers.ContentLength ?? 0, response.Content.Headers.LastModified,
+                string.Equals(Header(response, "x-ms-access-tier"), "Archive", StringComparison.OrdinalIgnoreCase))),
             HttpStatusCode.NotFound when ErrorCodeHeader(response) != "ContainerNotFound" => GetMetadataResult.NotFound,
             _ => throw await RefusedAsync(response, "head", key, cancellationToken).ConfigureAwait(false),
         };
@@ -553,8 +557,10 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
         or HttpStatusCode.GatewayTimeout;
 
     /// <summary>The API's error code as its answer's header carries it — the one place a HEAD can.</summary>
-    private static string? ErrorCodeHeader(HttpResponseMessage response) =>
-        response.Headers.TryGetValues("x-ms-error-code", out var values) ? values.FirstOrDefault() : null;
+    private static string? ErrorCodeHeader(HttpResponseMessage response) => Header(response, "x-ms-error-code");
+
+    private static string? Header(HttpResponseMessage response, string name) =>
+        response.Headers.TryGetValues(name, out var values) ? values.FirstOrDefault() : null;
 
     /// <summary>
     /// The fault a refusal is: a store that stayed busy through every
@@ -570,6 +576,14 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
         var answered = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture);
         var word = code ?? response.StatusCode.ToString();
         var said = message ?? string.Empty;
+
+        // The archive tier answers a read with this until the blob is
+        // rehydrated; it is no fault of the credential that signed it.
+        if (code == "BlobArchived")
+        {
+            return new StoreObjectArchivedException(
+                Strings.FormatAzureBlobObjectStore_Archived(operation, subject, answered, word, said));
+        }
 
         // A transient answer reaches here only once the attempts have run out.
         return IsTransient(response.StatusCode)

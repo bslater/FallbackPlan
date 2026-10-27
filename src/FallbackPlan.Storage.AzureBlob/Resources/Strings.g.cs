@@ -160,6 +160,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, AzureBlobObjectStore_Refused, arg0, arg1, arg2, arg3, arg4);
 
     /// <summary>
+    /// The Azure Blob store holds '{1}' only in its archival tier, Archive, and will not serve it until it is rehydrated: it answered a {0} with {2} {3}. {4} Rehydrate the blob to an online tier at the store, or restore from another copy.
+    /// </summary>
+    private static string AzureBlobObjectStore_Archived => Get(nameof(AzureBlobObjectStore_Archived));
+
+    /// <summary>
+    /// The Azure Blob store holds '{1}' only in its archival tier, Archive, and will not serve it until it is rehydrated: it answered a {0} with {2} {3}. {4} Rehydrate the blob to an online tier at the store, or restore from another copy.
+    /// </summary>
+    internal static string FormatAzureBlobObjectStore_Archived(object? arg0, object? arg1, object? arg2, object? arg3, object? arg4) =>
+        string.Format(CultureInfo.CurrentCulture, AzureBlobObjectStore_Archived, arg0, arg1, arg2, arg3, arg4);
+
+    /// <summary>
     /// The Azure Blob store was too busy to serve a {0} of '{1}' on any attempt: {2} {3}. {4} The next pass asks again.
     /// </summary>
     private static string AzureBlobObjectStore_Busy => Get(nameof(AzureBlobObjectStore_Busy));
