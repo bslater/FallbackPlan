@@ -360,6 +360,13 @@ it, keeping what it read, and the next attempt waits the sync's back-off
 instead of meeting it again on the next pass. Three such stalls in a row are
 said, until a run reads past it.
 
+> **2026-10 ([ADR-0104](../adr/0104-a-replicas-readers-take-an-archived-object-as-archived.md)).** A blob its store holds only in an
+> archival tier is not a stall: it reads no differently next time, so the run
+> passes over it, names it and closes its circuit, and nothing repairs it. A
+> sync's read-back counts such a sample neither proven nor failed. One notice
+> for the pair, dated from when the readers first met one, says so until a
+> circuit meets none.
+
 A peer's replica is swept only on a cadence its source's operator states for
 it, because re-reading all of it is a standing cost on somebody else's link
 (Amendment 2, FR-VER-008). The read runs over the retrieval session, paced by
