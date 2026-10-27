@@ -140,6 +140,9 @@ internal sealed class RestoreSourceRegistry : IAsyncDisposable
 
     private readonly ConcurrentDictionary<string, OpenRestoreSourceHandle> _sources = new(StringComparer.Ordinal);
 
+    /// <summary>How many sources are open, the expired not yet swept among them.</summary>
+    public int Count => _sources.Count;
+
     /// <summary>Registers a freshly opened source.</summary>
     public void Add(OpenRestoreSourceHandle handle)
     {

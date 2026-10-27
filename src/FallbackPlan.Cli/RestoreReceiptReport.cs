@@ -1,4 +1,6 @@
 using System.Globalization;
+using FallbackPlan.Api;
+using FallbackPlan.Api.Transport;
 using FallbackPlan.Cli.Resources;
 using FallbackPlan.Restore;
 
@@ -8,7 +10,9 @@ namespace FallbackPlan.Cli;
 /// What <c>restore-receipts</c> prints (FR-RST-004, ADR-0124): the restore
 /// receipts a state directory keeps, by the service or in direct mode alike,
 /// each run newest first with what it did and where it wrote, or one run's
-/// receipt whole as it was kept.
+/// receipt whole as it was kept. Through a paired service (ADR-0128), the
+/// receipts it keeps, and one run's files it did not restore through the
+/// passphrase.
 /// </summary>
 internal static class RestoreReceiptReport
 {
@@ -35,12 +39,20 @@ internal static class RestoreReceiptReport
                 continue;
             }
 
-            var ended = DateTimeOffset.FromUnixTimeMilliseconds((long)receipt.CompletedAt)
-                .ToString("u", CultureInfo.InvariantCulture);
-            var of = receipt.Set is { } set ? $" of {set}" : string.Empty;
-            output.WriteLine($"{entry.Run}  {receipt.Outcome}  ended {ended}  snapshot {receipt.SnapshotId}{of}");
-            output.WriteLine($"  {Counts(receipt.Items)}");
-            output.WriteLine($"  written to {receipt.WrittenTo}");
+            WriteHead(
+                output,
+                entry.Run,
+                receipt.Outcome.ToString(),
+                receipt.CompletedAt,
+                receipt.SnapshotId,
+                receipt.Set,
+                Counts(
+                    receipt.Items.Count(item => item.Outcome == "restored"),
+                    receipt.Items.Count(item => item.FoundInPlace),
+                    receipt.Items.Count(item => item.Outcome == "skipped"),
+                    receipt.Items.Count(item => item.Outcome == "failed"),
+                    receipt.Items.Count(item => item.Outcome == "degraded")),
+                receipt.WrittenTo);
         }
 
         output.WriteLine(shown.Count == kept.Count
@@ -57,10 +69,7 @@ internal static class RestoreReceiptReport
     {
         // Checked before it is joined to a path: what is not a run's name
         // could name any file the state directory holds, or one outside it.
-        if (!RestoreReceipt.IsRunName(run))
-        {
-            throw new CliFailureException(Strings.RestoreReceiptReport_NotARunsName);
-        }
+        RefuseUnlessARun(run);
 
         var directory = Path.Combine(stateDirectory, "receipts");
         var path = Path.Combine(directory, $"{run}.json");
@@ -72,18 +81,172 @@ internal static class RestoreReceiptReport
         output.WriteLine(File.ReadAllText(path).TrimEnd());
     }
 
+    /// <summary>Refuses what is not a run's name.</summary>
+    /// <exception cref="CliFailureException">When it is not.</exception>
+    public static void RefuseUnlessARun(string run)
+    {
+        if (!RestoreReceipt.IsRunName(run))
+        {
+            throw new CliFailureException(Strings.RestoreReceiptReport_NotARunsName);
+        }
+    }
+
+    /// <summary>
+    /// Writes the receipts a paired service keeps (ADR-0128), the newest
+    /// <paramref name="limit"/> where one is given, as <see cref="WriteKept"/>
+    /// writes a state directory's: none of the backup's files is named, so no
+    /// passphrase is asked.
+    /// </summary>
+    /// <returns>The exit code.</returns>
+    public static async Task<int> WriteServiceKeptAsync(
+        TextWriter output, IFallbackPlanClient client, int? limit, CancellationToken cancellationToken)
+    {
+        var listed = await AskAsync<RestoreReceiptsResult>(client, new ListRestoreReceiptsCommand(limit), cancellationToken)
+            .ConfigureAwait(false);
+        if (listed.Total == 0)
+        {
+            output.WriteLine("No restore receipt is kept by the service.");
+            return 0;
+        }
+
+        foreach (var receipt in listed.Receipts)
+        {
+            WriteHead(output, receipt);
+        }
+
+        output.WriteLine(listed.Receipts.Count == listed.Total
+            ? $"{listed.Total} restore {(listed.Total == 1 ? "receipt" : "receipts")} kept by the service."
+            : $"The newest {listed.Receipts.Count} of {listed.Total} restore receipts kept by the service.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Writes what the receipt the service keeps of <paramref name="run"/>
+    /// says, and the files its run did not restore, at most
+    /// <paramref name="limit"/> of them, through a source of the set the
+    /// receipt records: its paths are the backup's file names, which only that
+    /// set's passphrase shows (FR-WOR-007). The source is closed after.
+    /// </summary>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="CliFailureException">
+    /// When the service keeps no receipt of the run, it does not read, it records no set, or the passphrase is
+    /// not named or does not open that set.
+    /// </exception>
+    public static async Task<int> WriteServiceRunAsync(
+        TextWriter output,
+        IFallbackPlanClient client,
+        string? passphraseEnvironmentVariable,
+        string run,
+        int? limit,
+        CancellationToken cancellationToken)
+    {
+        // Which set the receipt records is the service's to say, and a receipt
+        // whose set no passphrase is known to open is refused before one is asked.
+        var listed = await AskAsync<RestoreReceiptsResult>(client, new ListRestoreReceiptsCommand(), cancellationToken)
+            .ConfigureAwait(false);
+        var named = listed.Receipts.FirstOrDefault(receipt => string.Equals(receipt.Run, run, StringComparison.Ordinal))
+            ?? throw new CliFailureException(Strings.FormatRestoreReceiptReport_NoReceiptTheServiceKeeps(run));
+        if (named.Problem is { } problem)
+        {
+            throw new CliFailureException(Strings.FormatRestoreReceiptReport_ReceiptDoesNotRead(run, problem));
+        }
+
+        if (named.SetId is not { } setId)
+        {
+            throw new CliFailureException(Strings.FormatRestoreReceiptReport_ReceiptRecordsNoSet(run));
+        }
+
+        var source = (await GrantedSources.OpenAsync(
+            client,
+            passphraseEnvironmentVariable,
+            $"Run {run}'s receipt",
+            set => string.Equals(set.Id, setId, StringComparison.Ordinal),
+            cancellationToken).ConfigureAwait(false)).SourceId;
+        try
+        {
+            var read = await AskAsync<RestoreReceiptResult>(
+                client, new GetRestoreReceiptCommand(run, source, limit), cancellationToken).ConfigureAwait(false);
+            WriteHead(output, read.Receipt);
+            if (read.Items.Count == 0 && read.Unlisted == 0)
+            {
+                output.WriteLine("  every file it was asked for was restored");
+            }
+
+            foreach (var item in read.Items)
+            {
+                output.WriteLine(item.Detail is { } why
+                    ? $"  {item.Outcome}  {item.Path} — {why}"
+                    : $"  {item.Outcome}  {item.Path}");
+            }
+
+            if (read.Unlisted > 0)
+            {
+                output.WriteLine($"  …and {read.Unlisted} more");
+            }
+
+            return 0;
+        }
+        finally
+        {
+            await GrantedSources.CloseAsync(client, source).ConfigureAwait(false);
+        }
+    }
+
+    private static void WriteHead(TextWriter output, RestoreReceiptDescriptor receipt)
+    {
+        if (receipt.Problem is { } problem)
+        {
+            output.WriteLine($"{receipt.Run}  unreadable: {problem}");
+            return;
+        }
+
+        WriteHead(
+            output,
+            receipt.Run,
+            receipt.Outcome,
+            receipt.EndedAt ?? 0,
+            receipt.SnapshotId,
+            receipt.Set,
+            Counts(receipt.Restored, receipt.FoundInPlace, receipt.Skipped, receipt.Failed, receipt.Degraded),
+            receipt.WrittenTo);
+    }
+
+    private static void WriteHead(
+        TextWriter output,
+        string run,
+        string? outcome,
+        ulong endedAt,
+        string? snapshotId,
+        string? set,
+        string counts,
+        string? writtenTo)
+    {
+        var ended = DateTimeOffset.FromUnixTimeMilliseconds((long)endedAt).ToString("u", CultureInfo.InvariantCulture);
+        var of = set is { } name ? $" of {name}" : string.Empty;
+        output.WriteLine($"{run}  {outcome}  ended {ended}  snapshot {snapshotId}{of}");
+        output.WriteLine($"  {counts}");
+        output.WriteLine($"  written to {writtenTo}");
+    }
+
+    private static async Task<TResult> AskAsync<TResult>(
+        IFallbackPlanClient client, ServiceCommand command, CancellationToken cancellationToken)
+        where TResult : ServiceResult
+    {
+        var result = await client.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+        return result switch
+        {
+            ServiceError error => throw new CliFailureException(error.Message),
+            TResult expected => expected,
+            _ => throw new CliFailureException($"the service answered with {result.GetType().Name}."),
+        };
+    }
+
     /// <summary>
     /// The items' outcomes, counted. A file a resume found in place is counted
     /// restored, as its receipt counts it, and said to be.
     /// </summary>
-    private static string Counts(IReadOnlyList<ReceiptItem> items)
+    private static string Counts(long restored, long found, long skipped, long failed, long degraded)
     {
-        var restored = items.Count(item => item.Outcome == "restored");
-        var found = items.Count(item => item.FoundInPlace);
-        var skipped = items.Count(item => item.Outcome == "skipped");
-        var failed = items.Count(item => item.Outcome == "failed");
-        var degraded = items.Count(item => item.Outcome == "degraded");
-
         var counts = found > 0 ? $"{restored} restored ({found} found in place)" : $"{restored} restored";
         counts += $", {skipped} skipped, {failed} failed";
         return degraded > 0 ? $"{counts}, {degraded} degraded" : counts;

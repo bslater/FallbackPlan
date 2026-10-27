@@ -71,3 +71,4 @@ Each restore in the Maintenance view that left files behind, and whose receipt r
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The receipt at schema 10 records its set's identity. Contract 1.75's `get_restore_receipt` answers the files a run failed, skipped or degraded, under a limit, only through a source of that set unlocked by the session that asks. The console shows them behind the passphrase and closes the source after. |
+| 2026-10 | Accepted | [ADR-0128](0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md): the command line asks the same question of a paired service, through a source of the set the receipt records that `--passphrase-env` unlocks. |

@@ -185,8 +185,10 @@ public static class CliApplication
         // Resolves the remote target when --connect is given, or null for the
         // local path. Refuses the combinations that cannot mean anything: mixing
         // --connect with --direct (both claim to decide where the work runs), or
-        // omitting the --state and --fingerprint --connect depends on.
-        (string Host, int Port, string State, string Fingerprint)? ResolveRemote(ParseResult parse, bool direct)
+        // omitting the --state and --fingerprint --connect depends on. A verb
+        // whose --state is its own option names it.
+        (string Host, int Port, string State, string Fingerprint)? ResolveRemote(
+            ParseResult parse, bool direct, Option<string?>? state = null)
         {
             if (parse.GetValue(connectOption) is not { } connect)
             {
@@ -204,14 +206,14 @@ public static class CliApplication
                 throw new CliFailureException($"'{connect}' is not host:port.");
             }
 
-            var state = parse.GetValue(stateOption)
+            var consoleState = parse.GetValue(state ?? stateOption)
                 ?? throw new CliFailureException(
                     "--connect requires --state (the console's peer identity and pairings).");
             var fingerprint = parse.GetValue(fingerprintOption)
                 ?? throw new CliFailureException(
                     "--connect requires --fingerprint (the pinned service to expect).");
 
-            return (host, port, state, fingerprint);
+            return (host, port, consoleState, fingerprint);
         }
 
         // A query verb over the remote binding: dial the pinned service, send one
@@ -286,9 +288,12 @@ public static class CliApplication
         // source serves the session that opened it, which every connection
         // here presents alike.
         async Task<TResult> WithServiceAsync<TResult>(
-            ParseResult parse, Func<IFallbackPlanClient, Task<TResult>> work, CancellationToken cancellationToken)
+            ParseResult parse,
+            Func<IFallbackPlanClient, Task<TResult>> work,
+            CancellationToken cancellationToken,
+            Option<string?>? consoleState = null)
         {
-            if (ResolveRemote(parse, direct: false) is { } target)
+            if (ResolveRemote(parse, direct: false, consoleState) is { } target)
             {
                 error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
                 await using var connection = await RemotePeer.ConnectAsync(
@@ -2790,44 +2795,75 @@ public static class CliApplication
         }
 
         {
-            var receiptsStateOption = new Option<string>("--state")
+            var receiptsStateOption = new Option<string?>("--state")
             {
-                Description = "The state directory whose kept restore receipts to read: the service's, or one direct mode used.",
+                Description = "The state directory whose kept restore receipts to read: the service's, or one direct mode used. "
+                    + "With --connect, this console's own (its peer identity and pairings).",
                 Required = true,
             };
             var receiptsRunOption = new Option<string?>("--run")
             {
-                Description = "Print one run's receipt whole, as it was kept, by the run's sixteen hex digits.",
+                Description = "Print one run's receipt whole, as it was kept, by the run's sixteen hex digits. With --connect, "
+                    + "the files it did not restore, through the passphrase --passphrase-env names.",
             };
             var receiptsLimitOption = new Option<int?>("--limit")
             {
-                Description = "At most this many of the newest.",
+                Description = "At most this many of the newest; with --connect and --run, of the files it did not restore.",
             };
             var command = new Command(
                 "restore-receipts",
                 "Read back the restore receipts kept under a state directory, by the service or in direct mode "
                 + "(ADR-0124): each run, newest first, with when it ended, what became of its files and where it "
-                + "wrote them, or one run's receipt whole.");
+                + "wrote them, or one run's receipt whole. With --connect, those a paired service keeps (ADR-0128), "
+                + "and one run's files it did not restore, through the passphrase.");
             command.Options.Add(receiptsStateOption);
             command.Options.Add(receiptsRunOption);
             command.Options.Add(receiptsLimitOption);
+            command.Options.Add(connectOption);
+            command.Options.Add(fingerprintOption);
+            command.Options.Add(passphraseEnvOption);
             root.Subcommands.Add(command);
 
-            command.SetAction((parse, _) => GuardAsync(() =>
+            command.SetAction((parse, cancellationToken) => GuardAsync(() =>
             {
+                var run = parse.GetValue(receiptsRunOption);
+                var limit = parse.GetValue(receiptsLimitOption);
+                if (parse.GetValue(connectOption) is not null)
+                {
+                    // Refused before the service is dialled, as a state
+                    // directory's reading refuses them before it is read.
+                    if (run is not null)
+                    {
+                        RestoreReceiptReport.RefuseUnlessARun(run);
+                    }
+
+                    if (limit is <= 0)
+                    {
+                        throw new CliFailureException(Strings.CliApplication_LimitTakesAtLeastOne);
+                    }
+
+                    return WithServiceAsync(
+                        parse,
+                        client => run is null
+                            ? RestoreReceiptReport.WriteServiceKeptAsync(output, client, limit, cancellationToken)
+                            : RestoreReceiptReport.WriteServiceRunAsync(
+                                output, client, parse.GetValue(passphraseEnvOption), run, limit, cancellationToken),
+                        cancellationToken,
+                        receiptsStateOption);
+                }
+
                 var state = parse.GetValue(receiptsStateOption)!;
                 if (!Directory.Exists(state))
                 {
                     throw new CliFailureException(Strings.FormatCliApplication_NoStateDirectoryKeepsReceipts(state));
                 }
 
-                if (parse.GetValue(receiptsRunOption) is { } run)
+                if (run is not null)
                 {
                     RestoreReceiptReport.WriteRun(output, state, run);
                     return Task.FromResult(0);
                 }
 
-                var limit = parse.GetValue(receiptsLimitOption);
                 if (limit is <= 0)
                 {
                     throw new CliFailureException(Strings.CliApplication_LimitTakesAtLeastOne);
