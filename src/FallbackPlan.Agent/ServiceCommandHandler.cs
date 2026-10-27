@@ -904,7 +904,8 @@ public sealed partial class ServiceCommandHandler(
                 conflicts.Count == 0 ? null : [.. conflicts.Take(20)],
                 degradations.Count == 0 ? null : degradations,
                 (long)writeBytes,
-                space);
+                space,
+                (long)probed.ReadBytes);
         }
         finally
         {

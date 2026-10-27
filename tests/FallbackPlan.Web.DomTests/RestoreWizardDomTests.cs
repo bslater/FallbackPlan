@@ -18,7 +18,8 @@ namespace FallbackPlan.Web.DomTests;
 /// FR-RST-003, which puts the plan before any byte is written. The plan is
 /// asked with the run's shape, so it shows the room the run needs where it
 /// will write, and a plan that will not fit arms the restore only when the
-/// person chooses to restore anyway (ADR-0083). The result says which
+/// person chooses to restore anyway (ADR-0083). Where the service says what
+/// the run will read, the plan shows that too (ADR-0083 Amendment 2). The result says which
 /// captured metadata the files came back without (FR-RST-004). Its file tree
 /// shows what will not be restored a shade lighter rather than struck
 /// through, with toggles large enough to hit, as the backup wizard's does.
@@ -202,6 +203,46 @@ public sealed class RestoreWizardDomTests
         await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
         await Expect(page.Locator("#dialog")).ToContainTextAsync("read from another copy");
         await Expect(page.Locator("#dialog pre.report")).ToContainTextAsync("around destination 'vault'");
+    }
+
+    [TestMethod]
+    public async Task Wizard_ThePlanShowsWhatTheRunWillRead_WhereTheServiceSaysIt()
+    {
+        // FR-RST-003: what a run reads from where it restores from is not
+        // what it writes, and on a metered store it is what is paid for.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(1, 8_192, [], WriteBytes: 8_192, ReadBytes: 3_072)
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        await Expect(page.Locator("#rst-read")).ToContainTextAsync("3.0 KiB");
+        await Expect(page.Locator("#rst-read")).ToContainTextAsync("to read");
+    }
+
+    [TestMethod]
+    public async Task Wizard_APlanThatDoesNotSayWhatItReads_ShowsNoFigureForIt()
+    {
+        // A service before contract 1.64 says nothing of it, which is not
+        // the same as nothing to read.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(1, 8_192, [], WriteBytes: 8_192)
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        await Expect(page.Locator(".plan-figures")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-read")).ToHaveCountAsync(0);
     }
 
     [TestMethod]

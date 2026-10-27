@@ -5896,6 +5896,7 @@ function rstStep6() {
     <div class="plan-figures">
       <div class="fig"><b>${fmtCount(plan.files)}</b><span>files</span></div>
       <div class="fig"><b>${fmtBytes(plan.writeBytes ?? plan.bytes)}</b><span>to write</span></div>
+      ${plan.readBytes != null ? `<div class="fig" id="rst-read"><b>${fmtBytes(plan.readBytes)}</b><span>to read</span></div>` : ""}
       <div class="fig"><b>${fmtCount(plan.missingObjects?.length ?? 0)}</b><span>missing objects</span></div>
       <div class="fig"><b>${fmtCount(plan.conflicts ?? 0)}</b><span>conflicts</span></div>
     </div>

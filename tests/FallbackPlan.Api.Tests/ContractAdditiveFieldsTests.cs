@@ -25,8 +25,10 @@ namespace FallbackPlan.Api.Tests;
 /// 1.54's bytes backed up and finishing count on the progress surface,
 /// 1.59's withheld names on a notice and the look that names them, the wire
 /// half of FR-WOR-007's notices, 1.62's deleted-file duration on a
-/// retention policy, the wire half of FR-GC-014, and 1.63's staging sweep on
-/// each set's status, the wire half of FR-VER-009's report of its circuit.
+/// retention policy, the wire half of FR-GC-014, 1.63's staging sweep on
+/// each set's status, the wire half of FR-VER-009's report of its circuit,
+/// and 1.64's bytes a restore plan says its run reads, the wire half of
+/// FR-RST-003's physical transfer size.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1046,6 +1048,28 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.AreEqual(0, row.VerifiedDigest);
         Assert.AreEqual(0, row.VerifiedChunk);
         Assert.AreEqual("proven", row.Verification);
+    }
+
+    [TestMethod]
+    public void WhatARestoreReads_WireNameAndPre164Default()
+    {
+        // Contract 1.64 (FR-RST-003): a plan says what its run reads from
+        // where it restores from, beside what it writes.
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            new RestorePlanResult(2, 9_000, [], WriteBytes: 4_096, ReadBytes: 3_000),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"read_bytes\":3000", modern, StringComparison.Ordinal);
+
+        // A pre-1.64 service's plan carries none, and reads as unknown, never
+        // as nothing to read.
+        var old = modern.Replace(",\"read_bytes\":3000", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions), out var read);
+        Assert.IsNull(read.ReadBytes);
+        Assert.AreEqual(4_096L, read.WriteBytes);
     }
 
     [TestMethod]

@@ -41,6 +41,24 @@ public sealed record RestoreBlobSetResult(
     /// </summary>
     public IReadOnlyDictionary<ObjectId, RestoreItemFacts> Facts { get; init; } =
         new Dictionary<ObjectId, RestoreItemFacts>();
+
+    /// <summary>
+    /// What the run asks the store for (FR-RST-003; architecture 08 §2;
+    /// ADR-0083 Amendment 2): each record it needs that a copy holds — every
+    /// item's manifest, and a file's segments and streams — once, at the
+    /// length the reader sizes a record's read by, and the envelope of each
+    /// blob they sit in once. The store holds content compressed, once
+    /// however many files repeat it, and not at all where a file keeps a
+    /// hole, so this is seldom what the files write.
+    /// </summary>
+    /// <remarks>
+    /// The reader's coalescing bridges a short gap between two records it
+    /// wants, and reads a record again whose run it evicted before using it.
+    /// The first is bounded by its bridge and the second by its budget, and
+    /// a whole tree meets neither much: its records sit end to end, and the
+    /// run reads them in the order they were written.
+    /// </remarks>
+    public ulong ReadBytes { get; init; }
 }
 
 /// <summary>
@@ -113,28 +131,39 @@ public static class RestoreBlobSet
         using var keyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         using var metaReaders = new MetaReaderCache();
-        var blobKeys = new Dictionary<BlobId, ObjectKey?>();
+        var blobKeys = new Dictionary<BlobId, (ObjectKey Key, long Length)?>();
         var missing = new List<string>();
         var needed = new HashSet<ObjectKey>();
         var facts = new Dictionary<ObjectId, RestoreItemFacts>();
+        var read = new HashSet<ObjectId>();
+        var readBytes = 0UL;
 
-        async ValueTask<bool> PresentAsync(ResolvedLocation location)
+        async ValueTask<bool> PresentAsync(ObjectId objectId, ResolvedLocation location)
         {
-            if (!blobKeys.TryGetValue(location.BlobId, out var key))
+            if (!blobKeys.TryGetValue(location.BlobId, out var blob))
             {
-                key = await FindBlobKeyAsync(
+                blob = await FindBlobKeyAsync(
                     store, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId), cancellationToken)
                     .ConfigureAwait(false);
-                blobKeys[location.BlobId] = key;
+                blobKeys[location.BlobId] = blob;
             }
 
-            if (key is { } found)
+            if (blob is not { } found)
             {
-                needed.Add(found);
-                return true;
+                return false;
             }
 
-            return false;
+            if (needed.Add(found.Key))
+            {
+                readBytes += (ulong)BlobReader.EnvelopeReadLength(found.Length);
+            }
+
+            if (read.Add(objectId))
+            {
+                readBytes += (ulong)RecordFraming.MaxRecordLength(location.StoredLength);
+            }
+
+            return true;
         }
 
         foreach (var item in plan.Items)
@@ -145,7 +174,7 @@ public static class RestoreBlobSet
                 continue;
             }
 
-            if (!await PresentAsync(location).ConfigureAwait(false))
+            if (!await PresentAsync(item.ObjectId, location).ConfigureAwait(false))
             {
                 missing.Add(item.Path);
                 continue;
@@ -192,7 +221,7 @@ public static class RestoreBlobSet
             foreach (var referenced in references)
             {
                 if (catalogue.ResolveLocation(referenced) is not { } segmentLocation
-                    || !await PresentAsync(segmentLocation).ConfigureAwait(false))
+                    || !await PresentAsync(referenced, segmentLocation).ConfigureAwait(false))
                 {
                     missing.Add(item.Path);
                     break;
@@ -200,7 +229,7 @@ public static class RestoreBlobSet
             }
         }
 
-        return new RestoreBlobSetResult(needed, missing) { Facts = facts };
+        return new RestoreBlobSetResult(needed, missing) { Facts = facts, ReadBytes = readBytes };
     }
 
     /// <summary>
@@ -268,12 +297,13 @@ public static class RestoreBlobSet
     }
 
     /// <summary>
-    /// The store key a blob actually exists under, trying both classes — or
-    /// null. A store that cannot answer reads as missing: the plan's job is
-    /// to warn before bytes move, and "unreachable" warrants the warning as
-    /// much as "absent". The found key is what the run's targeted load opens.
+    /// The store key a blob actually exists under, trying both classes, and
+    /// its length — or null. A store that cannot answer reads as missing:
+    /// the plan's job is to warn before bytes move, and "unreachable"
+    /// warrants the warning as much as "absent". The found key is what the
+    /// run's targeted load opens.
     /// </summary>
-    private static async ValueTask<ObjectKey?> FindBlobKeyAsync(
+    private static async ValueTask<(ObjectKey Key, long Length)?> FindBlobKeyAsync(
         IObjectStore store,
         StoreBlobKey blobKey,
         CancellationToken cancellationToken)
@@ -286,7 +316,7 @@ public static class RestoreBlobSet
                 var metadata = await store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
                 if (metadata.Found && metadata.Metadata!.Length > 0)
                 {
-                    return key;
+                    return (key, metadata.Metadata.Length);
                 }
             }
             catch (IOException)
