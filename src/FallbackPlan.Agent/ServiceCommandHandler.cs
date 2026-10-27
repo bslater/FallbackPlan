@@ -1407,8 +1407,7 @@ public sealed partial class ServiceCommandHandler(
             $"'{named}' names no run: a run is named by the sixteen lowercase hex digits of the folder it landed in.");
 
     /// <summary>Whether <paramref name="name"/> is a run's: sixteen lowercase hex digits, as every run is named.</summary>
-    private static bool IsRunId(string name) =>
-        name.Length == 16 && name.All(character => char.IsAsciiDigit(character) || character is >= 'a' and <= 'f');
+    private static bool IsRunId(string name) => RestoreReceipt.IsRunName(name);
 
     /// <summary>
     /// The per-root slices of an original-location restore (ADR-0041), as

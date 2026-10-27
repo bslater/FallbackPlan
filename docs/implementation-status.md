@@ -148,6 +148,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0121](adr/0121-the-console-plans-a-resume.md) | The console plans a resume: the wizard's resume mode plans the run by its name alone once its source is open, shows the plan as a restore's plan is shown with how many files the run already landed, arms a resume that will not fit only when the person says to go on, and offers it as before where the service cannot plan it | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0121--the-console-plans-a-resume) |
 | [0122](adr/0122-direct-mode-keeps-a-restores-receipt.md) | Direct mode keeps a restore's receipt: the receipt keeps itself as its run's own file under a state directory's receipts, written whole; the service keeps its receipts through it, and direct mode keeps each run's receipt there too and says where, while a run refused before it begins and a plan keep none | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway`, `Cli/CliSession` · `Repository.Tests/RestoreReceiptKeptTests`, `Cli.Tests/RestoreReceiptDirectTests`, `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0122--direct-mode-keeps-a-restores-receipt) |
 | [0123](adr/0123-the-console-plans-the-resume-a-result-offers.md) | The console plans the resume a result offers: restoring what is left of a failed or stopped run is planned by the run's name first, shown as a resume's plan is shown, and asked only from beneath the plan, armed only on the person's say where it will not fit, and offered as before where the service cannot plan it | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreWizardDomTests`, `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0123--the-console-plans-the-resume-a-result-offers) |
+| [0124](adr/0124-a-kept-restore-receipt-is-read-back.md) | A kept restore receipt is read back: the receipts a state directory keeps, the service's or direct mode's, are read newest first, each under its run, a file that does not read said to and what is not a run's passed over; `restore-receipts` lists each run with what became of its files and where it wrote them, or prints one run's receipt whole | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/CliApplication`, `Cli/RestoreReceiptReport` · `Repository.Tests/RestoreReceiptReadBackTests`, `Cli.Tests/RestoreReceiptsVerbTests`, `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0124--a-kept-restore-receipt-is-read-back) |
 
 ---
 
@@ -3616,6 +3617,7 @@ under the run's identifier, and says where; a run of several roots keeps its
 one merged receipt. A run refused before it begins, and a plan, keep none.
 
 What remains is recorded rather than done. No verb lists the receipts kept.
+ADR-0124 has since read them back.
 
 ### 0123 — the console plans the resume a result offers
 
@@ -3630,3 +3632,21 @@ it.
 
 What remains is recorded rather than done. Nothing; every resume the console
 offers is planned before it runs.
+
+### 0124 — a kept restore receipt is read back
+
+A restore kept its receipt under the state directory, through the service and
+in direct mode alike, and nothing read the receipts back. The receipt now reads
+back those a state directory keeps, newest first by when each run ended, each
+under its run. A run's file that does not read as a receipt is listed as
+unreadable with why, beside the rest, and what is not a run's receipt is
+passed over, the peers' receipts beside included. `restore-receipts` lists each
+run with its outcome, when it ended, the snapshot, what became of its files and
+where it wrote them, or prints one run's receipt whole as it was kept. A name
+that is not a run's is refused before it reaches a path, by the rule the
+service now shares.
+
+What remains is recorded rather than done. The receipts are read from the state
+directory itself, not through the service, so a console on another machine
+still sees a run's receipt only in its result. They are not listed as JSON, and
+none is let go.

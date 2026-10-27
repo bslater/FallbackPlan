@@ -220,4 +220,16 @@
   <data name="CliApplication_OriginalTakesNoOutput" xml:space="preserve">
     <value>--target original lands each file where it was captured, so it takes no --output: use one or the other.</value>
   </data>
+  <data name="RestoreReceiptReport_NotARunsName" xml:space="preserve">
+    <value>--run takes a run's name: the sixteen lowercase hex digits its receipt is kept under. restore-receipts with no run lists those kept.</value>
+  </data>
+  <data name="RestoreReceiptReport_NoReceiptKept" xml:space="preserve">
+    <value>Run {0} has no receipt kept under '{1}'. restore-receipts with no run lists those kept.</value>
+  </data>
+  <data name="CliApplication_NoStateDirectoryKeepsReceipts" xml:space="preserve">
+    <value>no state directory at '{0}' — nothing has been kept there.</value>
+  </data>
+  <data name="CliApplication_LimitTakesAtLeastOne" xml:space="preserve">
+    <value>--limit takes at least 1.</value>
+  </data>
 </root>

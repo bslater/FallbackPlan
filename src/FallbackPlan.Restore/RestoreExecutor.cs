@@ -270,7 +270,88 @@ public sealed record RestoreReceipt
         File.Move(temporary, path, overwrite: true);
         return path;
     }
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is a run's: sixteen lowercase hex
+    /// digits, as every run is named and its receipt kept.
+    /// </summary>
+    /// <param name="name">What names the run.</param>
+    /// <returns>Whether it does.</returns>
+    public static bool IsRunName(string name)
+    {
+        ThrowHelper.ThrowIfNull(name);
+        return name.Length == 16
+            && name.All(character => char.IsAsciiDigit(character) || character is >= 'a' and <= 'f');
+    }
+
+    /// <summary>
+    /// The receipts kept under <paramref name="receiptsDirectory"/>, newest
+    /// first by when each run ended (FR-RST-004, ADR-0124), each read as it
+    /// was kept.
+    /// </summary>
+    /// <param name="receiptsDirectory">Where a state directory keeps restore receipts.</param>
+    /// <returns>Each run's kept receipt, or why its file does not read as one.</returns>
+    /// <remarks>
+    /// Only a run's own file is read, named by the run and <c>.json</c>: a
+    /// receipt half-written beside its place, the peers' receipts in the
+    /// folders beside, and anything else left there are passed over. A run's
+    /// file that does not read as a receipt is answered with why, placed by
+    /// when it was written, so that it neither hides the rest nor is lost
+    /// among them.
+    /// </remarks>
+    public static IReadOnlyList<KeptRestoreReceipt> ReadKept(string receiptsDirectory)
+    {
+        ThrowHelper.ThrowIfNull(receiptsDirectory);
+        if (!Directory.Exists(receiptsDirectory))
+        {
+            return [];
+        }
+
+        var kept = new List<(ulong EndedAt, KeptRestoreReceipt Kept)>();
+        foreach (var path in Directory.EnumerateFiles(receiptsDirectory))
+        {
+            var run = Path.GetFileNameWithoutExtension(path);
+            if (!string.Equals(Path.GetExtension(path), ".json", StringComparison.Ordinal) || !IsRunName(run))
+            {
+                continue;
+            }
+
+            RestoreReceipt? receipt = null;
+            string? problem;
+            try
+            {
+                receipt = JsonSerializer.Deserialize<RestoreReceipt>(File.ReadAllText(path));
+                problem = receipt is null ? "the file holds no receipt" : null;
+            }
+            catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
+            {
+                problem = exception.Message;
+            }
+
+            var endedAt = receipt?.CompletedAt
+                ?? (ulong)Math.Max(0L, new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeMilliseconds());
+            kept.Add((endedAt, new KeptRestoreReceipt(run, path, receipt, problem)));
+        }
+
+        return
+        [
+            .. kept
+                .OrderByDescending(entry => entry.EndedAt)
+                .ThenBy(entry => entry.Kept.Run, StringComparer.Ordinal)
+                .Select(entry => entry.Kept),
+        ];
+    }
 }
+
+/// <summary>
+/// A restore receipt as a state directory keeps it (FR-RST-004, ADR-0124):
+/// under its run's name, read back as it was kept.
+/// </summary>
+/// <param name="Run">The run it is kept under.</param>
+/// <param name="Path">The file it is kept in.</param>
+/// <param name="Receipt">The receipt, or null where the file does not read as one.</param>
+/// <param name="Problem">Why the file does not read as a receipt, or null where it does.</param>
+public sealed record KeptRestoreReceipt(string Run, string Path, RestoreReceipt? Receipt, string? Problem);
 
 /// <summary>Executor switches.</summary>
 public sealed record RestoreExecutionOptions
