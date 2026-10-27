@@ -967,6 +967,11 @@ public sealed record RestoreRunsResult(IReadOnlyList<RestoreRunDescriptor> Runs)
 /// <param name="Failed">Its files that failed.</param>
 /// <param name="Degraded">Its files restored without everything captured with them.</param>
 /// <param name="Problem">Why the receipt does not read, or null where it does.</param>
+/// <param name="Set">
+/// The name of the set whose snapshot the run restored (contract 1.74,
+/// ADR-0126); null where the receipt names none, kept before receipt schema 9
+/// or by a run that knew none.
+/// </param>
 public sealed record RestoreReceiptDescriptor(
     string Run,
     string? Outcome,
@@ -978,7 +983,8 @@ public sealed record RestoreReceiptDescriptor(
     long Skipped,
     long Failed,
     long Degraded,
-    string? Problem = null);
+    string? Problem = null,
+    string? Set = null);
 
 /// <summary>The restore receipts the service keeps, newest first (contract 1.73, ADR-0125).</summary>
 /// <param name="Receipts">The newest under the limit asked, each as <see cref="RestoreReceiptDescriptor"/> describes it.</param>

@@ -207,8 +207,11 @@ public sealed record RestoreReceipt
     /// the optional per-item <c>found_in_place</c> (ADR-0109): a resumed run
     /// leaves a file an earlier run landed as it stands, and a receipt that
     /// said it restored the file would not say this run never wrote it.
+    /// Version 9 added the optional <c>set</c> (ADR-0126): a receipt read
+    /// back long after its run said which snapshot it restored, and only a
+    /// hex identifier said whose.
     /// </remarks>
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -248,6 +251,15 @@ public sealed record RestoreReceipt
     [JsonConverter(typeof(JsonStringEnumConverter<RestoreOutcome>))]
     [JsonPropertyName("outcome")]
     public required RestoreOutcome Outcome { get; init; }
+
+    /// <summary>
+    /// The name of the set whose snapshot the run restored, as the run knew
+    /// it (ADR-0126). Null where it knew none, and in a receipt kept before
+    /// schema 9.
+    /// </summary>
+    [JsonPropertyName("set")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Set { get; init; }
 
     /// <summary>The receipt as indented JSON.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, SerializerOptions);

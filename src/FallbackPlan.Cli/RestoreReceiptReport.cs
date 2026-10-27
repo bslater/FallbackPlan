@@ -37,7 +37,8 @@ internal static class RestoreReceiptReport
 
             var ended = DateTimeOffset.FromUnixTimeMilliseconds((long)receipt.CompletedAt)
                 .ToString("u", CultureInfo.InvariantCulture);
-            output.WriteLine($"{entry.Run}  {receipt.Outcome}  ended {ended}  snapshot {receipt.SnapshotId}");
+            var of = receipt.Set is { } set ? $" of {set}" : string.Empty;
+            output.WriteLine($"{entry.Run}  {receipt.Outcome}  ended {ended}  snapshot {receipt.SnapshotId}{of}");
             output.WriteLine($"  {Counts(receipt.Items)}");
             output.WriteLine($"  written to {receipt.WrittenTo}");
         }

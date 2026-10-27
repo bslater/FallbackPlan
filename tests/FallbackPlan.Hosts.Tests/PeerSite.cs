@@ -118,13 +118,39 @@ internal sealed class PeerSite : IAsyncDisposable
     {
         // The verification stamps land with the in-sync write, so the wait
         // watches for the proven state, not merely the synced one.
-        await WaitForAsync(() =>
-            Runtime.DestinationSync.Find(Harness.DocsSetId, destination) is
+        //
+        // A backup's own fan-out is coalesced away when the pair's previous
+        // sync has stamped the ledger and not yet let the pair go, and the
+        // scheduler's next pass is what catches that up. This harness runs no
+        // pass, so once no sync of the pair has been queued or running for a
+        // while, the wait asks for the one the pass would.
+        var job = FanOut.JobIdFor(Harness.DocsSetId, destination);
+        var idlePolls = 0;
+        while (!(Runtime.DestinationSync.Find(Harness.DocsSetId, destination) is
             { State: DestinationSyncState.InSync, VerifiedAt: not null } row
             && row.SyncedSequence > after
-            && row.VerifiedSequence == row.SyncedSequence);
+            && row.VerifiedSequence == row.SyncedSequence))
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            idlePolls = Runtime.Queue.IsActive(job) ? 0 : idlePolls + 1;
+            if (idlePolls == CatchUpAfterIdlePolls)
+            {
+                await Operator.ExecuteAsync(new SyncCommand("docs", destination), _cancellationToken);
+                idlePolls = 0;
+            }
+
+            await Task.Delay(50, _cancellationToken);
+        }
+
         return Runtime.DestinationSync.Find(Harness.DocsSetId, destination)!;
     }
+
+    /// <summary>
+    /// How many polls with no sync of the pair queued or running pass before
+    /// <see cref="WaitForProvenAsync"/> asks for one: long enough that a
+    /// backup's own fan-out has been queued if it is going to be.
+    /// </summary>
+    private const int CatchUpAfterIdlePolls = 40;
 
     /// <summary>Commands a backup of "docs" and waits for the job to complete.</summary>
     public async Task RunBackupAsync()

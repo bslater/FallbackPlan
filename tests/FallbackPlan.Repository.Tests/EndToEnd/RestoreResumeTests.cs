@@ -430,10 +430,10 @@ public sealed class RestoreResumeTests : ArchiveTestHarness
 
         var receipt = await ExecuteAsync(store, keys, catalogue, target, plan, output, Resumed("receipt-run"));
 
-        // Schema 8: a file this run did not write says so, and one it did
+        // Since schema 8, a file this run did not write says so, and one it did
         // carries nothing new.
-        Assert.AreEqual(8, RestoreReceipt.CurrentSchemaVersion);
-        Assert.AreEqual(8, receipt.SchemaVersion);
+        Assert.AreEqual(9, RestoreReceipt.CurrentSchemaVersion);
+        Assert.AreEqual(9, receipt.SchemaVersion);
         var json = receipt.ToJson();
         Assert.AreEqual(1, json.Split("\"found_in_place\"").Length - 1, json);
         Assert.Contains("\"found_in_place\": true", json, StringComparison.Ordinal);

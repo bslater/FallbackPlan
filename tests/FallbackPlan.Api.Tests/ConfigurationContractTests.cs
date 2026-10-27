@@ -34,11 +34,37 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheRestoreReceiptsKept_IsRecordedAtOneSeventyThree()
+    public void ContractVersion_TheSetARestoreReceiptNames_IsRecordedAtOneSeventyFour()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.73", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.74", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void ARestoreReceiptListed_NamesTheSetItsRunRestored_UnderItsWireName()
+    {
+        // Contract 1.74 (FR-RST-004, ADR-0126): the set a receipt names; a
+        // receipt that names none, kept before 1.74 or by a run that knew
+        // none, crosses with none.
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreReceiptsResult(
+            [
+                new RestoreReceiptDescriptor(
+                    "0123456789abcdef", "complete", 2_000, new string('e', 32), "/srv/restored", 1, 0, 0, 0, 0, Set: "docs"),
+            ],
+            Total: 1),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"set\":\"docs\"", listed, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(listed, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual("docs", Assert.ContainsSingle(read.Receipts).Set);
+
+        var older = """{"result":"restore_receipts","receipts":[{"run":"0123456789abcdef","restored":1}],"total":1}""";
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(older, FrameCodec.SerializerOptions), out var before);
+        Assert.IsNull(Assert.ContainsSingle(before.Receipts).Set);
     }
 
     [TestMethod]

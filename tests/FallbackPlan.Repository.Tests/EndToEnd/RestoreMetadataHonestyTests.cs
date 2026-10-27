@@ -96,8 +96,8 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             item.NotApplied.ToArray());
 
         Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
-        Assert.AreEqual(8, receipt.SchemaVersion);
-        Assert.AreEqual(8, RestoreReceipt.CurrentSchemaVersion);
+        Assert.AreEqual(9, receipt.SchemaVersion);
+        Assert.AreEqual(9, RestoreReceipt.CurrentSchemaVersion);
         Assert.Contains("\"not_applied\"", receipt.ToJson(), StringComparison.Ordinal);
 
         // What it did apply, it applied. Nothing has read the file since, so

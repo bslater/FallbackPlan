@@ -64,3 +64,4 @@ They sit beside the peers' receipts, read on entering the view and never by the 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Contract 1.73's `list_restore_receipts` answers each restore receipt the service keeps, newest first under a limit with how many are kept, as what became of its files and where it wrote them, never the paths; the console shows them in the Maintenance view. |
+| 2026-10 | Accepted | [ADR-0126](0126-a-restore-receipt-names-the-set-it-restored.md): each receipt listed names the set its run restored (contract 1.74). |

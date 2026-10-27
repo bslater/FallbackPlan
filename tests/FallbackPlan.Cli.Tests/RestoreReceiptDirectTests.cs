@@ -35,9 +35,23 @@ public sealed class RestoreReceiptDirectTests : IDisposable
         Assert.AreEqual(snapshot, root.GetProperty("snapshot_id").GetString());
         Assert.AreEqual(destination, root.GetProperty("written_to").GetString());
         Assert.AreEqual("Complete", root.GetProperty("outcome").GetString());
+        Assert.IsFalse(root.TryGetProperty("set", out _), "a snapshot of no set configured here names none");
         var paths = root.GetProperty("items").EnumerateArray().Select(item => item.GetProperty("path").GetString()).ToList();
         CollectionAssert.Contains(paths, "one.txt");
         CollectionAssert.Contains(paths, "nested/two.txt");
+    }
+
+    [TestMethod]
+    public async Task AConfigurationThatDoesNotRead_StopsNoRestore_AndItsReceiptNamesNoSet()
+    {
+        var snapshot = await BackUpAsync();
+        await File.WriteAllTextAsync(Path.Combine(_cli.StatePath, "config.json"), "{ not a configuration");
+
+        var run = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"));
+
+        Assert.AreEqual(0, run.ExitCode, run.All);
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(Assert.ContainsSingle(Directory.GetFiles(Receipts, "*.json"))));
+        Assert.IsFalse(document.RootElement.TryGetProperty("set", out _), "naming a set never stops a restore");
     }
 
     [TestMethod]

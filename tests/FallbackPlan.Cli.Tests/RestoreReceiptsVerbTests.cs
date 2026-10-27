@@ -11,7 +11,7 @@ namespace FallbackPlan.Cli.Tests;
 /// as it was kept. A path that holds nothing because it was mistyped is not
 /// "nothing restored", a name that is not a run's is refused before it
 /// reaches a path, and a receipt that does not read is said to, beside the
-/// rest.
+/// rest. A run names the set it restored where its receipt does (ADR-0126).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsVerbTests : IDisposable
@@ -39,6 +39,7 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
         Assert.IsLessThan(firstAt, secondAt, "the newest is listed first");
         Assert.Contains("Complete", listed.Output, StringComparison.Ordinal);
         Assert.Contains($"snapshot {snapshot}", listed.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain($"snapshot {snapshot} of", listed.Output, StringComparison.Ordinal, "a run that knew no set names none");
         Assert.Contains($"written to {Path.Combine(_cli.WorkPath, "a")}", listed.Output, StringComparison.Ordinal);
         Assert.Contains($"written to {Path.Combine(_cli.WorkPath, "b")}", listed.Output, StringComparison.Ordinal);
         Assert.Contains($"{RestoredIn(first)} restored, 0 skipped, 0 failed", listed.Output, StringComparison.Ordinal);
@@ -65,13 +66,14 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
             Displaced = [],
             WrittenTo = "/srv/restored",
             Outcome = RestoreOutcome.Partial,
+            Set = "docs",
         }.Keep(Receipts, "0123456789abcdef");
 
         var listed = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath);
 
         Assert.AreEqual(0, listed.ExitCode, listed.All);
         Assert.Contains(
-            $"0123456789abcdef  Partial  ended 2023-11-14 22:13:20Z  snapshot {new string('e', 32)}",
+            $"0123456789abcdef  Partial  ended 2023-11-14 22:13:20Z  snapshot {new string('e', 32)} of docs",
             listed.Output,
             StringComparison.Ordinal);
         Assert.Contains(
