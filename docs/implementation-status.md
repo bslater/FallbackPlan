@@ -135,6 +135,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0108](adr/0108-a-restores-plan-can-be-kept-in-a-file.md) | A restore's plan can be kept in a file: `restore --export <file>` keeps the plan as JSON, in the contract's own words beside the run it was made for, implies `--plan` so nothing is restored, and refuses a file already there; a kept plan is not run | **Built** | `Cli/CliApplication` · `Cli/RestorePlanExport` · `Cli/RestorePlanReport` · `Cli.Tests/RestorePlanCommandTests`, `Cli.Tests/GatewayRestoreReportTests` · [notes](#0108--a-plan-kept) |
 | [0109](adr/0109-a-restore-cut-short-is-resumed.md) | A restore cut short is resumed: `restore --resume` leaves each file already holding the snapshot's content, by length and whole-file hash, as it stands, reads none of its content, applies its metadata again and lands the rest, measured for what is left; through the service it continues the run it names in that run's folder (contract 1.67), and the receipt (schema 8) says what was found in place | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Repository.Tests/RestoreResumeTests`, `Repository.Tests/RestoreSpaceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/RestoreResumeServiceTests`, `Hosts.Tests/ClientModeTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0109--a-restore-resumed) |
 | [0110](adr/0110-the-console-resumes-a-restore-cut-short.md) | The console resumes a restore cut short: a restore's result names the run a resume of it gives (contract 1.68), the wizard offers to restore what is left of a run that failed or was stopped, as it was confirmed and naming that run, and says what was found in place; the command line says how to resume such a run | **Built** | `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Web.DomTests/RestoreWizardDomTests`, `Web.Tests/ConsoleRestoreResultScriptTests`, `Hosts.Tests/RestoreResumeServiceTests`, `Cli.Tests/GatewayRestoreReportTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0110--a-restore-resumed-from-the-console) |
+| [0111](adr/0111-a-cloud-destination-says-what-its-store-was-asked.md) | A cloud destination says what its store was asked: each network store tells an observer of every request it sends, once an attempt, with its bytes; the service counts them by destination and by UTC day; and the destination's status row says what its store was asked over the thirty days ending today, and when counting began where that falls inside them (contract 1.69), on the command line and the console | **Built** | `Storage.Abstractions/IStoreRequestObserver` · `Storage.S3/S3ObjectStore`, `Storage.AzureBlob/AzureBlobObjectStore` · `Application/StoreRequestLedger` · `Agent/StoreComposition`, `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Storage.ContractTests/StoreRequestObserverTests`, `Application.Tests/StoreRequestLedgerTests`, `Hosts.Tests/ObjectStoreDestinationTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusRequestsLineTests`, `Web.DomTests/DestinationRequestsDomTests` · [notes](#0111--what-a-cloud-destinations-store-was-asked) |
 
 ---
 
@@ -3410,3 +3411,20 @@ use it.
 What remains is recorded rather than done. A run cut short before it answers
 is resumed by its folder's name, from the command line, and a kept plan is not
 run.
+
+### 0111 — what a cloud destination's store was asked
+
+A bucket or a container bills its owner by the request, and nothing said how
+many the service sent one. The in-box meter counted provider requests for the
+process, and nothing may listen to it. Each network store now tells an
+observer in its options of every request it sends, once an attempt, with its
+body's length and the length its answer said its body was. The service keeps
+the count by destination and by UTC day in `store-requests.json`, written at
+most every thirty seconds and on stopping. A cloud destination's status row
+says what its store was asked over the thirty days ending today (contract
+1.69's `requests`), on a line under its row of `status` and in a row of the
+console's destination card.
+
+What remains is recorded rather than done. The requests are not priced, a
+request another client sent the same account is not seen, and a service that
+dies unstopped loses at most the last thirty seconds' count.

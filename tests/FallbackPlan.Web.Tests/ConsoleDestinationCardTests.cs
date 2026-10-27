@@ -6,8 +6,10 @@ namespace FallbackPlan.Web.Tests;
 /// never re-derived, with the uncounted case drawn as uncounted rather than
 /// as empty; the deep sweep's row (contract 1.46), the console half of
 /// FR-VER-003's report of a circuit, and the staging archive's own sweep on
-/// its set's card (contract 1.63, FR-VER-009); and the drill's row with its
-/// drill-now button (contract 1.58), the console half of FR-DRL-003.
+/// its set's card (contract 1.63, FR-VER-009); the drill's row with its
+/// drill-now button (contract 1.58), the console half of FR-DRL-003; and
+/// the row saying what a cloud destination's store was asked (contract 1.69),
+/// the console half of FR-DEST-019.
 /// </summary>
 /// <remarks>
 /// Like <see cref="ConsoleProgressScriptTests"/>: no browser, just the
@@ -130,6 +132,20 @@ public sealed class ConsoleDestinationCardTests
         // "Never read back" there would claim a sweep that does not exist.
         Assert.Contains("d.deepSweep == null", body, StringComparison.Ordinal);
         Assert.Contains("return null", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Card_WhatTheStoreWasAsked_HasARowOfItsOwn_AndNoneWhereNothingIsCounted()
+    {
+        var script = AppJs();
+        Assert.Contains("requestsLabel(d)", FunctionBody(script, "renderSetCard"), StringComparison.Ordinal);
+
+        // A local path, a peer, or a service older than 1.69: a row of zeros
+        // there would say the store was asked nothing, which nobody counted.
+        var body = FunctionBody(script, "requestsLabel");
+        Assert.Contains("d.requests == null", body, StringComparison.Ordinal);
+        Assert.Contains("return null", body, StringComparison.Ordinal);
+        Assert.Contains("counted since", body, StringComparison.Ordinal);
     }
 
     [TestMethod]

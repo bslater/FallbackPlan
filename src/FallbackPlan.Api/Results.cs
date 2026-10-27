@@ -1144,6 +1144,13 @@ public sealed record DrillResult(IReadOnlyList<string> Lines, int Failed, int No
 /// <paramref name="FilesHeld"/> and <paramref name="FilesTotal"/> are that
 /// sync's own live count.
 /// </param>
+/// <param name="Requests">
+/// What the destination's store was asked over the window a bill is read in
+/// (contract 1.69, ADR-0111): every request this service sent it, for every
+/// set that uses it. Null for a destination no store bills by the request —
+/// a local path, a peer — and from services before 1.69. Null is not zero: a
+/// client draws nothing for it, never a store asked nothing.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -1170,7 +1177,43 @@ public sealed record DestinationStatusDescriptor(
     long? FilesTotal = null,
     bool HoldsNewest = false,
     bool InRun = false,
-    bool Syncing = false);
+    bool Syncing = false,
+    StoreRequestsDescriptor? Requests = null);
+
+/// <summary>
+/// What a cloud destination's store was asked, as its status row reports it
+/// (contract 1.69, FR-DEST-019, ADR-0111): the requests this service sent it,
+/// as the store would count them on its bill.
+/// </summary>
+/// <remarks>
+/// Counted once an attempt, because a store bills each attempt: a retried put
+/// is as many puts as it took, and a listing as many as it had pages. The
+/// bytes received are what each answer said its body was, read or not.
+/// </remarks>
+/// <param name="Days">The days the window spans, today among them, in UTC.</param>
+/// <param name="Puts">Puts sent.</param>
+/// <param name="Gets">Gets sent: whole objects and ranges alike.</param>
+/// <param name="Heads">Heads sent.</param>
+/// <param name="Lists">Listing pages asked for.</param>
+/// <param name="Deletes">Deletes sent.</param>
+/// <param name="BytesSent">The bodies the requests carried.</param>
+/// <param name="BytesReceived">The bodies the store said its answers carried.</param>
+/// <param name="Since">
+/// When counting began, Unix milliseconds, where that falls inside the
+/// window: what was sent before it was never counted, so a client says the
+/// count is partial rather than that the store was asked less. Null when the
+/// count covers the whole window.
+/// </param>
+public sealed record StoreRequestsDescriptor(
+    int Days,
+    long Puts,
+    long Gets,
+    long Heads,
+    long Lists,
+    long Deletes,
+    long BytesSent,
+    long BytesReceived,
+    ulong? Since = null);
 
 /// <summary>
 /// A destination's deep sweep as its status row reports it (contract 1.46,

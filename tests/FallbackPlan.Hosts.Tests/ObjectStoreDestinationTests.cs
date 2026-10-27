@@ -35,7 +35,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// so in a notice that a circuit meeting none resolves (FR-VER-002,
 /// FR-VER-001, ADR-0104). A drill proves such files as far as their content,
 /// under a stated limit, and one missing an object still fails, naming no
-/// file (FR-DRL-002, ADR-0105).
+/// file (FR-DRL-002, ADR-0105). Its status row says what the store was
+/// asked, request for request as the store received them, and a restart
+/// neither loses the count nor counts it twice (FR-DEST-019, ADR-0111).
 /// </summary>
 /// <remarks>
 /// The credential reaches the service only as an envelope sealed to its
@@ -151,6 +153,64 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.IsTrue(
             writes.All(request => request.Headers.GetValueOrDefault("if-none-match") == "*"),
             "every write is a create: nothing at the store is ever overwritten");
+    }
+
+    [TestMethod]
+    public async Task Status_SaysWhatTheStoreWasAsked_RequestForRequest()
+    {
+        // FR-DEST-019, ADR-0111: a store bills by the request, so its row
+        // says how many it was sent and of what, as the store received them,
+        // with the bytes they carried; a local path, which bills nothing by
+        // the request, says nothing of it.
+        WriteConfiguration(directShip: false, withVault: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var requests = (await RowAsync(runtime, "cloud")).Requests;
+        Assert.IsNotNull(requests);
+        Assert.AreEqual(30, requests.Days);
+        Assert.AreEqual(Store.Requests.Count(request => request.Method == "PUT"), requests.Puts);
+        Assert.AreEqual(
+            Store.Requests.Count,
+            requests.Puts + requests.Gets + requests.Heads + requests.Lists + requests.Deletes,
+            "every request the store received is counted, and nothing it did not");
+        Assert.IsGreaterThan(0L, requests.BytesSent);
+        Assert.IsNull((await RowAsync(runtime, "vault")).Requests);
+
+        // And the command line says it, under the store's row and no other.
+        await using var listener = LocalServiceListener.Start(
+            new ServiceCommandHandler(runtime, RemoteBindingState.Off), Harness.StateDirectory);
+        var status = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new System.CommandLine.InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", Harness.StateDirectory);
+        Assert.AreEqual(0, status.ExitCode, status.All);
+        Assert.HasCount(1, status.All.Split('\n').Where(line => line.Contains("requests (30 days", StringComparison.Ordinal)));
+        Assert.Contains($"{requests.Puts} put, {requests.Gets} get", status.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task WhatTheStoreWasAsked_OutlivesTheService()
+    {
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        StoreRequestsDescriptor? before;
+        await using (var runtime = await StartAsync())
+        {
+            await StoreCredentialAsync(runtime);
+            await BackUpAsync(runtime);
+            before = (await RowAsync(runtime, "cloud")).Requests;
+        }
+
+        await using var restarted = await StartAsync();
+        var after = (await RowAsync(restarted, "cloud")).Requests;
+
+        Assert.IsNotNull(before);
+        Assert.AreEqual(before, after, "a restart neither loses what was counted nor counts it twice");
     }
 
     [TestMethod]

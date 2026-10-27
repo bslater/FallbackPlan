@@ -3209,10 +3209,29 @@ public sealed partial class ServiceCommandHandler(
                 FilesTotal: figure.Total,
                 HoldsNewest: figure.Whole,
                 InRun: figure.InRun,
-                Syncing: figure.Syncing));
+                Syncing: figure.Syncing,
+                Requests: DescribeRequests(destination)));
         }
 
         return (inputs, rows, lastCompleted);
+    }
+
+    /// <summary>
+    /// What a destination's store was asked over the window (contract 1.69,
+    /// ADR-0111), or null for a destination no store bills by the request
+    /// and one no longer declared.
+    /// </summary>
+    private StoreRequestsDescriptor? DescribeRequests(DestinationConfiguration? destination)
+    {
+        if (destination is null || !DestinationKinds.IsObjectStore(destination.Kind))
+        {
+            return null;
+        }
+
+        var window = runtime.StoreRequests.Window(destination.Id);
+        return new StoreRequestsDescriptor(
+            StoreRequestLedger.WindowDays, window.Puts, window.Gets, window.Heads, window.Lists, window.Deletes,
+            window.BytesSent, window.BytesReceived, window.Since);
     }
 
     /// <summary>

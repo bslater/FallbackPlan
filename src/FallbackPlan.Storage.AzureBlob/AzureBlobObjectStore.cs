@@ -496,8 +496,10 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
 
             EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", operation));
             HttpResponseMessage response;
+            long sent;
             using (var request = build())
             {
+                sent = request.Content?.Headers.ContentLength ?? 0;
                 _signer.Sign(request, DateTimeOffset.UtcNow);
                 try
                 {
@@ -505,6 +507,7 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
                 }
                 catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested)
                 {
+                    _options.Observer?.Requested(operation, sent, 0);
                     if (attempt >= _options.MaxAttempts)
                     {
                         throw new AzureBlobStoreUnreachableException(
@@ -516,6 +519,9 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
                     continue;
                 }
             }
+
+            _options.Observer?.Requested(
+                operation, sent, operation == "head" ? 0 : response.Content.Headers.ContentLength ?? 0);
 
             if (IsTransient(response.StatusCode) && attempt < _options.MaxAttempts)
             {

@@ -30,9 +30,10 @@ namespace FallbackPlan.Api.Tests;
 /// 1.64's bytes a restore plan says its run reads, the wire half of
 /// FR-RST-003's physical transfer size, and 1.65's paths a plan names as
 /// held only in an archival tier, the wire half of FR-RST-003's report of
-/// them; and 1.66's count of blobs a closed circuit passed over held only
+/// them; 1.66's count of blobs a closed circuit passed over held only
 /// there, the wire half of FR-VER-003's report of a circuit that did not
-/// read them.
+/// read them; and 1.69's requests a cloud destination's store was sent, the
+/// wire half of FR-DEST-019.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1091,6 +1092,30 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var old = modern.Replace(",\"circuit_archived\":3", "", StringComparison.Ordinal);
         Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
         Assert.AreEqual(0, JsonSerializer.Deserialize<DeepSweepDescriptor>(old, FrameCodec.SerializerOptions)!.CircuitArchived);
+    }
+
+    [TestMethod]
+    public void WhatAStoreWasAsked_WireNamesAndPre169Default()
+    {
+        // Contract 1.69 (FR-DEST-019, ADR-0111): a cloud destination's row
+        // says what its store was sent over the window a bill is read in.
+        var modern = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "cloud", "s3", "synced", null, null, "offsite", "unverified",
+                Requests: new StoreRequestsDescriptor(
+                    Days: 30, Puts: 1, Gets: 2, Heads: 3, Lists: 4, Deletes: 5, BytesSent: 600, BytesReceived: 700,
+                    Since: 8_000)),
+            FrameCodec.SerializerOptions);
+
+        const string Wire = ",\"requests\":{\"days\":30,\"puts\":1,\"gets\":2,\"heads\":3,\"lists\":4,\"deletes\":5,"
+            + "\"bytes_sent\":600,\"bytes_received\":700,\"since\":8000}";
+        Assert.Contains(Wire, modern, StringComparison.Ordinal);
+
+        // A pre-1.69 service, or a destination no store bills by the request,
+        // carries none, and reads as nothing counted, never as nothing asked.
+        var old = modern.Replace(Wire, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!.Requests);
     }
 
     [TestMethod]

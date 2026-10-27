@@ -478,8 +478,10 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
         {
             EngineDiagnostics.StoreRequests.Add(1, new KeyValuePair<string, object?>("operation", operation));
             HttpResponseMessage response;
+            long sent;
             using (var request = build())
             {
+                sent = request.Content?.Headers.ContentLength ?? 0;
                 _signer.Sign(request, payloadSha256, DateTimeOffset.UtcNow);
                 try
                 {
@@ -487,6 +489,7 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
                 }
                 catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested)
                 {
+                    _options.Observer?.Requested(operation, sent, 0);
                     if (attempt >= _options.MaxAttempts)
                     {
                         throw new S3StoreUnreachableException(
@@ -498,6 +501,9 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
                     continue;
                 }
             }
+
+            _options.Observer?.Requested(
+                operation, sent, operation == "head" ? 0 : response.Content.Headers.ContentLength ?? 0);
 
             if (IsTransient(response.StatusCode) && attempt < _options.MaxAttempts)
             {
