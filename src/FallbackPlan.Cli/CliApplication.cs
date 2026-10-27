@@ -1559,11 +1559,13 @@ public static class CliApplication
                     throw new CliFailureException(RestorePlanExport.Refusal(export));
                 }
 
-                // A resume runs a restore, and a plan runs none.
+                // A kept plan is of a run a person approves before it begins,
+                // and a resume continues one already begun; a resume is
+                // planned, and not kept (ADR-0120).
                 var resume = parse.GetResult(resumeOption) is not null;
-                if (resume && (parse.GetValue(planOption) || export is not null))
+                if (resume && export is not null)
                 {
-                    throw new CliFailureException(Strings.CliApplication_ResumeIsNotPlanned);
+                    throw new CliFailureException(Strings.CliApplication_AResumeIsNotKept);
                 }
 
                 // Where it lands: a folder named, or where each file was
@@ -1657,6 +1659,11 @@ public static class CliApplication
             {
                 Description = "Resume even when the destination looks too small, as restore takes it.",
             };
+            var planOption = new Option<bool>("--plan")
+            {
+                Description = "Say what the resume would do and resume nothing: what it would write and read, whether it "
+                    + "fits, and how many files the run already landed.",
+            };
             var command = WithRemoteCapableSession(new Command(
                 "restore-resume",
                 "Resume a restore the service began and has not seen finish, by its name alone: it is run again as it "
@@ -1664,15 +1671,27 @@ public static class CliApplication
             command.Arguments.Add(runArgument);
             command.Options.Add(forgetOption);
             command.Options.Add(ignoreFreeSpaceOption);
+            command.Options.Add(planOption);
             command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() =>
             {
                 var run = parse.GetValue(runArgument);
                 var forget = parse.GetValue(forgetOption);
+                var plan = parse.GetValue(planOption);
                 if (run is null && forget)
                 {
                     throw new CliFailureException(Strings.CliApplication_ForgetNamesTheRun);
+                }
+
+                if (run is null && plan)
+                {
+                    throw new CliFailureException(Strings.CliApplication_PlanNamesTheRun);
+                }
+
+                if (forget && plan)
+                {
+                    throw new CliFailureException(Strings.CliApplication_ALetGoIsNotPlanned);
                 }
 
                 return ReadThroughGatewayAsync(
@@ -1681,7 +1700,9 @@ public static class CliApplication
                         ? gateway.RestoreRunsAsync(token)
                         : forget
                             ? gateway.ForgetRestoreRunAsync(run, token)
-                            : gateway.ResumeRestoreAsync(run, parse.GetValue(ignoreFreeSpaceOption), token),
+                            : plan
+                                ? gateway.PlanResumeRestoreAsync(run, token)
+                                : gateway.ResumeRestoreAsync(run, parse.GetValue(ignoreFreeSpaceOption), token),
                     cancellationToken);
             }));
         }

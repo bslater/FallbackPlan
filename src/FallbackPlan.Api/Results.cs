@@ -820,6 +820,13 @@ public sealed record DirectoryResult(
 /// these come back once rehydrated. Null when there are none, and from a
 /// service before 1.65.
 /// </param>
+/// <param name="Landed">
+/// For a plan of a resume, how many files the run it resumes already landed
+/// where the resume will look, at their length (contract 1.72, FR-RST-008,
+/// ADR-0120). The resume checks each by its whole-file hash and leaves it as
+/// it stands, and the room is measured without them. Null for a plan of a
+/// run that resumes nothing, and from a service before 1.72.
+/// </param>
 public sealed record RestorePlanResult(
     long Files,
     long Bytes,
@@ -830,7 +837,8 @@ public sealed record RestorePlanResult(
     long? WriteBytes = null,
     IReadOnlyList<RestoreSpaceDescriptor>? Space = null,
     long? ReadBytes = null,
-    IReadOnlyList<string>? ArchivedObjects = null) : ServiceResult;
+    IReadOnlyList<string>? ArchivedObjects = null,
+    long? Landed = null) : ServiceResult;
 
 /// <summary>The room a restore needs on one volume it writes to (contract 1.53, FR-RST-003).</summary>
 /// <param name="Directory">

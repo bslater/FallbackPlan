@@ -45,6 +45,15 @@ internal static class RestorePlanReport
                 $"plan: {plan.Files} file(s) {where}, {plan.WriteBytes ?? plan.Bytes} byte(s) written{reading}"),
         ];
 
+        // A resume leaves what its run landed, which needs no room (ADR-0120);
+        // the length says which, and the resume's hash check has the last word.
+        if (plan.Landed is { } landed)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"resume: {landed} file(s) already landed at their length; the resume checks each by its hash and leaves it as it stands"));
+        }
+
         var fits = true;
         foreach (var need in plan.Space ?? [])
         {

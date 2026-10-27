@@ -148,9 +148,9 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, CliApplication_AsPlannedAnotherRun, arg0, arg1, arg2, arg3);
 
     /// <summary>
-    /// --resume runs a restore, and a plan restores nothing: plan the restore without --resume, or resume it without --plan or --export.
+    /// A kept plan is of a run approved before it begins, and --resume continues one already begun: plan the resume with --plan, or keep the plan of a restore without --resume.
     /// </summary>
-    internal static string CliApplication_ResumeIsNotPlanned => Get(nameof(CliApplication_ResumeIsNotPlanned));
+    internal static string CliApplication_AResumeIsNotKept => Get(nameof(CliApplication_AResumeIsNotKept));
 
     /// <summary>
     /// snapshot {0} is not in the catalogue — check `snapshots`, or run `rebuild-index` if it is stale.
@@ -429,6 +429,16 @@ internal static class Strings
     /// --forget lets one run go, so name it: restore-resume &lt;run&gt; --forget.
     /// </summary>
     internal static string CliApplication_ForgetNamesTheRun => Get(nameof(CliApplication_ForgetNamesTheRun));
+
+    /// <summary>
+    /// --plan plans the resume of one run, so name it: restore-resume &lt;run&gt; --plan.
+    /// </summary>
+    internal static string CliApplication_PlanNamesTheRun => Get(nameof(CliApplication_PlanNamesTheRun));
+
+    /// <summary>
+    /// --forget lets a run go and --plan plans its resume: ask one or the other.
+    /// </summary>
+    internal static string CliApplication_ALetGoIsNotPlanned => Get(nameof(CliApplication_ALetGoIsNotPlanned));
 
     /// <summary>
     /// This snapshot's set is not configured in {0}, so nothing here says where its files were captured. Restore it to a folder with --output.

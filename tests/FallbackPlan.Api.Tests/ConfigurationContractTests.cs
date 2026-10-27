@@ -34,11 +34,39 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_ARestoreRunLeftUnfinished_IsRecordedAtOneSeventyOne()
+    public void ContractVersion_APlanOfAResume_IsRecordedAtOneSeventyTwo()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.71", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.72", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void APlanOfAResume_CrossesUnderItsWireNames_AndSaysWhatTheRunLanded()
+    {
+        // Contract 1.72 (FR-RST-008, ADR-0120): a plan names the run it
+        // continues, a run left unfinished is planned by its name alone, and
+        // the plan says how many files the run already landed.
+        var planned = JsonSerializer.Serialize<ServiceCommand>(
+            new PlanRestoreCommand(new string('e', 32), null, "src-1", OutputDirectory: "/srv/restored", Resume: "0123456789abcdef"),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"plan_restore\"", planned, StringComparison.Ordinal);
+        Assert.Contains("\"resume\":\"0123456789abcdef\"", planned, StringComparison.Ordinal);
+
+        var byName = JsonSerializer.Serialize<ServiceCommand>(
+            new PlanResumeRestoreCommand("0123456789abcdef", "src-1"), FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"plan_resume_restore\"", byName, StringComparison.Ordinal);
+        Assert.Contains("\"run\":\"0123456789abcdef\"", byName, StringComparison.Ordinal);
+        Assert.Contains("\"source\":\"src-1\"", byName, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<PlanResumeRestoreCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(byName, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual("0123456789abcdef", read.Run);
+
+        var plan = JsonSerializer.Serialize<ServiceResult>(new RestorePlanResult(2, 9, [], Landed: 1), FrameCodec.SerializerOptions);
+        Assert.Contains("\"landed\":1", plan, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            JsonSerializer.Deserialize<ServiceResult>(plan, FrameCodec.SerializerOptions), out var answered);
+        Assert.AreEqual(1L, answered.Landed);
     }
 
     [TestMethod]

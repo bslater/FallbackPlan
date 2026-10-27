@@ -113,7 +113,12 @@ public sealed record RestoreSpaceNeed(string Directory, ulong NeededBytes, long?
 /// <param name="Needs">Each volume the run writes to, folders first in the order the run writes them.</param>
 /// <param name="WriteBytes">What the files write, unrounded: logical lengths, or less their holes when <paramref name="Exact"/>.</param>
 /// <param name="Exact">Whether every file was measured from its manifest rather than its logical length.</param>
-public sealed record RestoreSpaceReport(IReadOnlyList<RestoreSpaceNeed> Needs, ulong WriteBytes, bool Exact)
+/// <param name="Landed">
+/// The files a resumed run already landed where it looks, at their length,
+/// which need no room (FR-RST-008, ADR-0120). None for a run that resumes
+/// nothing.
+/// </param>
+public sealed record RestoreSpaceReport(IReadOnlyList<RestoreSpaceNeed> Needs, ulong WriteBytes, bool Exact, int Landed = 0)
 {
     /// <summary>The volumes with less free than the run needs.</summary>
     public IReadOnlyList<RestoreSpaceNeed> Shortfalls => [.. Needs.Where(need => need.IsShort)];
@@ -266,6 +271,7 @@ public static class RestoreSpace
         var volumes = new List<Volume>();
         ulong writes = 0;
         ulong largest = 0;
+        var landedFiles = 0;
 
         foreach (var slice in slices)
         {
@@ -304,6 +310,7 @@ public static class RestoreSpace
                     && new FileInfo(destination) is { Exists: true } landed
                     && (ulong)landed.Length == item.Length)
                 {
+                    landedFiles++;
                     continue;
                 }
 
@@ -358,7 +365,8 @@ public static class RestoreSpace
                     volume.Working)),
             ],
             writes,
-            writtenBytes is not null);
+            writtenBytes is not null,
+            landedFiles);
     }
 
     /// <summary>

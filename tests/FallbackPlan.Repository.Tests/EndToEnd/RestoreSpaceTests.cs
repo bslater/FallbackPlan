@@ -313,6 +313,31 @@ public sealed class RestoreSpaceTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task AResume_CountsTheFilesAlreadyThereAtTheirLength_AndARunThatResumesNothingCountsNone()
+    {
+        // FR-RST-008, ADR-0120: a plan of a resume says how many files the
+        // earlier run already landed, which the resume will check by hash
+        // and leave as they stand.
+        var source = new FakeFileSystemSource();
+        source.AddFile("one.bin", Deterministic(MiB, 1));
+        source.AddFile("two.bin", Deterministic(MiB, 2));
+        source.AddFile("small.bin", Deterministic(100, 4));
+        using var published = await PublishAsync(source, 0xBC);
+        var live = Path.Combine(SpoolDirectory, "resumed");
+        Directory.CreateDirectory(live);
+        await File.WriteAllBytesAsync(Path.Combine(live, "one.bin"), new byte[MiB]);
+        await File.WriteAllBytesAsync(Path.Combine(live, "small.bin"), new byte[100]);
+        await File.WriteAllBytesAsync(Path.Combine(live, "two.bin"), new byte[10]);
+
+        Task<RestoreSpaceReport> MeasureAsync(RestoreSlice slice) => RestoreSpace.MeasureAsync(
+            [slice], RestoreDestinationMode.InPlace, ExistingDestinationPolicy.Preserve,
+            Probe(Plenty), writtenBytes: null, CancellationToken.None).AsTask();
+
+        Assert.AreEqual(2, (await MeasureAsync(new RestoreSlice(published.Plan, live, ResumedIn: live))).Landed);
+        Assert.AreEqual(0, (await MeasureAsync(new RestoreSlice(published.Plan, live))).Landed);
+    }
+
+    [TestMethod]
     public async Task TwoSlices_OnOneVolume_AddUp_AndOnTwoVolumes_AreMeasuredApart()
     {
         // An original-location restore of a set with two roots runs one slice

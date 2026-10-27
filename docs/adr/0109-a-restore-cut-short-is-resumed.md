@@ -14,6 +14,8 @@
   - `Repository.Tests/RestoreResumeTests` — a file already landed is left as the same file, and the rest restored; without a resume it is moved aside; nothing of what landed is read; a file whose content differs, at its length or another, lands under the policy, and so does a link where the file lands, whatever it points at; under fail a file already landed is the run's own; its metadata is applied again; a quarantined run is resumed in its own folder; a hard-link group's first name found in place is the file its later names link to; the receipt names what was found; under rename, the copy an earlier run wrote beside a file in the way is found there, of any day and counted or not, and no second is written, while a copy whose content differs is left and another written, a name the restore would not have written is not its copy, nothing beside is the run's own without a resume, and under another policy nothing beside is looked for
   - `Repository.Tests/RestoreSpaceTests` — a resume needs nothing for a file already there at its length, in place or in the folder of the run it continues
   - `Cli.Tests/RestoreResumeCommandTests` — in direct mode a resume leaves what landed and restores the rest, fits where only what is left fits, names no run, and is not planned
+
+    > **2026-10 ([ADR-0120](0120-a-resume-is-planned.md)).** A resume is planned now, and its plan is not kept; the suite holds both.
   - `Cli.Tests/GatewayRestoreReportTests` — through the service a resume names its run and says what was found in place, and one naming none is refused before anything is asked
   - `Hosts.Tests/RestoreResumeServiceTests` — the service continues the named run in its folder with a receipt of its own, measures it for what is left, refuses a run whose folder is not there and a name that is not a run's, and under rename finds the copy the run it continues wrote beside
   - `Hosts.Tests/ClientModeTests` — routed end to end, the CLI continues the run it names
@@ -64,6 +66,8 @@ A resume needs no room for a file already where it lands at the snapshot's lengt
 ### 5. A resume is not planned, and not under rename
 
 - **A plan of a resume is refused.** A plan is of a whole run. Saying which files a resume would find in place means hashing them, which is most of the resume's work.
+
+  > **Superseded 2026-10 ([ADR-0120](0120-a-resume-is-planned.md)).** A resume is planned. The plan goes by length, as §4's measure does, so it hashes nothing: it says how many files lie where the run lands them at their length, and that the resume checks each by its hash. A plan of a resume is still not kept.
 - **A resume under rename is refused.** The rename policy writes a copy beside a kept file under a name dated the day it was written ([ADR-0041](0041-guided-restore-and-peer-retrieval.md)). A resume cannot tell such copies from anybody's, and would write a second one beside each.
 
   > **Superseded 2026-10 ([Amendment 1](#amendment-1-2026-10--a-resume-under-rename-looks-beside)).** A resume under rename is run, and finds a copy beside under a name the restore writes there. It need not tell whose a copy is: one that holds exactly the snapshot's content is what the run would write.
@@ -122,3 +126,4 @@ A hard-link group's first name found in place is the file its later names are ma
 | 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--a-resume-under-rename-looks-beside): a resume under rename is run. With a file in the way it looks beside it, and leaves a copy there holding the snapshot's content under a name the restore writes beside, naming it in the receipt; §5's refusal is superseded. |
 | 2026-10 | Accepted (amended) | [ADR-0110](0110-the-console-resumes-a-restore-cut-short.md) takes up the console resume this record left owed: a restore's result names its run (contract 1.68), the wizard offers to restore what is left of a run that failed or was stopped, and the command line says how. |
 | 2026-10 | Accepted (amended) | [ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md) takes up finding the run, which this record left to whoever read its folder: the service names each run before it writes, keeps it until a run of it finishes, says each one left unfinished, and resumes one by its name alone (contract 1.71, `restore-resume`). |
+| 2026-10 | Amended (§5) | [ADR-0120](0120-a-resume-is-planned.md): a resume is planned, by length as §4 measures it, saying how many files the run landed, so §5's refusal of a plan is superseded; a plan of a resume is still not kept. |

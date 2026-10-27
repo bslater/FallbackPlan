@@ -212,6 +212,16 @@ public interface IOperationGateway : IAsyncDisposable
     /// <returns>What the restore says; not ok when a file failed.</returns>
     ValueTask<OperationReport> ResumeRestoreAsync(string run, bool ignoreFreeSpace, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Plans the resume of a restore run left unfinished, by its name alone
+    /// (FR-RST-008, ADR-0120): the service plans the run as it was asked, as
+    /// the resume will meet it, and restores nothing.
+    /// </summary>
+    /// <param name="run">The run, as the list names it.</param>
+    /// <param name="cancellationToken">Cancels the plan.</param>
+    /// <returns>The plan's lines; not ok unless the resume would bring back every file and fit.</returns>
+    ValueTask<OperationReport> PlanResumeRestoreAsync(string run, CancellationToken cancellationToken);
+
     /// <summary>Lets a restore run left unfinished go (ADR-0115): the service names it no more.</summary>
     /// <param name="run">The run, as the list names it.</param>
     /// <param name="cancellationToken">Cancels the ask.</param>
@@ -719,6 +729,37 @@ internal sealed class ServiceGateway(
     }
 
     /// <inheritdoc/>
+    public async ValueTask<OperationReport> PlanResumeRestoreAsync(string run, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(run);
+
+        // As the resume asks it: the snapshot is the service's to say, and a
+        // run it does not name is refused before the passphrase is asked.
+        var listed = await SendAsync<RestoreRunsResult>(
+            new ListRestoreRunsCommand(), "the restore runs left unfinished", cancellationToken).ConfigureAwait(false);
+        var named = listed.Runs.FirstOrDefault(candidate => string.Equals(candidate.Run, run, StringComparison.Ordinal))
+            ?? throw new CliFailureException(Strings.FormatServiceGateway_NoSuchRestoreRun(run));
+
+        var source = (await GrantedSources.OpenHoldingAsync(
+            client, passphraseEnvironmentVariable, "A restore's plan", named.SnapshotId, cancellationToken)
+            .ConfigureAwait(false)).SourceId;
+        try
+        {
+            var plan = await SendAsync<RestorePlanResult>(
+                new PlanResumeRestoreCommand(run, source), "a restore's plan", cancellationToken).ConfigureAwait(false);
+            return RestorePlanReport.Describe(
+                plan,
+                new RestoreRequest(
+                    named.SnapshotId, null, named.OutputDirectory ?? string.Empty, Resume: true, ResumedRun: run,
+                    Target: named.Target, Existing: named.Existing, InPlace: named.InPlace));
+        }
+        finally
+        {
+            await GrantedSources.CloseAsync(client, source).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc/>
     public async ValueTask<OperationReport> ForgetRestoreRunAsync(string run, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(run);
@@ -782,6 +823,13 @@ internal sealed class ServiceGateway(
     {
         ThrowHelper.ThrowIfNull(request);
 
+        // A plan of a resume is measured where the run it continues landed,
+        // and through the service each run lands in a folder of its own.
+        if (request.Resume && request.ResumedRun is null)
+        {
+            throw new CliFailureException(Strings.FormatServiceGateway_ResumeNamesTheRun(request.OutputDirectory));
+        }
+
         // The plan names the backup's files as the restore would, so it reads
         // through a source the passphrase unlocked (FR-WOR-007), and asks for
         // the shape the restore above runs: where it writes, under quarantine.
@@ -794,7 +842,7 @@ internal sealed class ServiceGateway(
                 new PlanRestoreCommand(
                     request.SnapshotId, request.Path, Source: source, Paths: request.Paths,
                     OutputDirectory: request.OutputDirectory, Target: request.Target, Existing: request.Existing,
-                    InPlace: request.InPlace),
+                    InPlace: request.InPlace, Resume: request.Resume ? request.ResumedRun : null),
                 "a restore's plan",
                 cancellationToken).ConfigureAwait(false);
             return RestorePlanReport.Describe(plan, request);
@@ -1561,7 +1609,13 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         // The plan the service makes, made here for the run above: its
         // manifests read and every blob it names asked for, measured where
-        // that run writes, in place under the policy asked.
+        // that run writes, in place under the policy asked, and for a resume
+        // as it will meet what the run it continues landed (ADR-0120).
+        if (request.ResumedRun is not null)
+        {
+            throw new CliFailureException(Strings.DirectGateway_ResumeLandsInPlace);
+        }
+
         var existing = PolicyOf(request.Existing);
         var snapshotId = Convert.FromHexString(request.SnapshotId);
         using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
@@ -1577,7 +1631,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             catalogue, plan, session.Store, session.Repository.RepositoryId, session.Repository.Keys, cancellationToken)
             .ConfigureAwait(false);
         var space = await RestoreSpace.MeasureAsync(
-            [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory))],
+            [.. slices.Select(slice => new RestoreSlice(
+                slice.Plan, slice.OutputDirectory, request.Resume ? slice.OutputDirectory : null))],
             RestoreDestinationMode.InPlace,
             existing,
             SpaceProbe(),
@@ -1600,7 +1655,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                         need.Directory, (long)need.NeededBytes, need.AvailableBytes, need.Working)),
                 ],
                 (long)probed.ReadBytes,
-                probed.Archived.Count == 0 ? null : probed.Archived),
+                probed.Archived.Count == 0 ? null : probed.Archived,
+                request.Resume ? space.Landed : null),
             request);
     }
 
@@ -1683,6 +1739,10 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> ResumeRestoreAsync(string run, bool ignoreFreeSpace, CancellationToken cancellationToken) =>
+        throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> PlanResumeRestoreAsync(string run, CancellationToken cancellationToken) =>
         throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
 
     /// <inheritdoc/>

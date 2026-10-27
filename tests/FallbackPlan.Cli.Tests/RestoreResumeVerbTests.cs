@@ -14,6 +14,9 @@ namespace FallbackPlan.Cli.Tests;
 /// source of its snapshot the passphrase unlocked, and says what the restore
 /// says. A run let go is named no more. A run not left unfinished is refused
 /// before the passphrase is asked, and in direct mode no run is named at all.
+/// With <c>--plan</c> it plans the run's resume and resumes nothing
+/// (ADR-0120), naming the run as a resume or a letting go does, and not
+/// beside one.
 /// </summary>
 [TestClass]
 public sealed class RestoreResumeVerbTests : IDisposable
@@ -115,18 +118,45 @@ public sealed class RestoreResumeVerbTests : IDisposable
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task InDirectMode_NoRunIsNamed_AndNothingIsAsked(bool forget)
+    [DataRow("")]
+    [DataRow("--forget")]
+    [DataRow("--plan")]
+    public async Task InDirectMode_NoRunIsNamed_AndNothingIsAsked(string option)
     {
         using var cli = new CliHarness();
         await cli.InitAsync();
 
-        string[] arguments = forget ? ["restore-resume", Run, "--forget"] : ["restore-resume", Run];
+        string[] arguments = option.Length == 0 ? ["restore-resume", Run] : ["restore-resume", Run, option];
         var refused = await cli.RunAsync(arguments);
 
         Assert.AreNotEqual(0, refused.ExitCode, refused.All);
         Assert.Contains("restore --resume", refused.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow("--plan", "restore-resume <run> --plan")]
+    [DataRow("--forget", "restore-resume <run> --forget")]
+    public async Task APlanOrALettingGo_WithNoRun_IsRefused_NamingHowToAsk(string option, string how)
+    {
+        using var cli = new CliHarness();
+        await cli.InitAsync();
+
+        var refused = await cli.RunAsync("restore-resume", option);
+
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains(how, refused.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task APlanBesideALettingGo_IsRefused()
+    {
+        using var cli = new CliHarness();
+        await cli.InitAsync();
+
+        var refused = await cli.RunAsync("restore-resume", Run, "--forget", "--plan");
+
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains("one or the other", refused.All, StringComparison.Ordinal);
     }
 
     public void Dispose() => _timeout.Dispose();

@@ -65,6 +65,8 @@ The verb succeeds only where the run would restore every file the plan names and
 - **Resume a restore.** A restore cut short is run again from the start. Its existing-file policy settles what the first run wrote.
 
   > **2026-10 ([ADR-0109](0109-a-restore-cut-short-is-resumed.md)).** A restore cut short is resumed with `restore --resume`, which leaves what the first run landed as it stands. A resume is not planned.
+  >
+  > **2026-10 ([ADR-0120](0120-a-resume-is-planned.md)).** `restore --resume --plan` plans the resume, measured as it will meet what the run landed.
 - **Plan a run with another existing-file policy, or in place.** `restore` asks for neither, so its plan does not.
 
   > **2026-10 ([ADR-0117](0117-the-command-line-asks-a-restore-as-the-console-does.md)).** `restore` asks several paths, the original location, a policy and a landing in place, and its plan is of the run asked.
@@ -83,3 +85,4 @@ The verb succeeds only where the run would restore every file the plan names and
 | 2026-10 | Accepted | [ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md) takes up the export this record left owed: `restore --export <file>` keeps the plan as JSON and implies `--plan`. |
 | 2026-10 | Accepted | [ADR-0109](0109-a-restore-cut-short-is-resumed.md) takes up the resume this record left owed: `restore --resume` leaves what a run cut short landed and restores the rest. `--plan` beside it is refused. |
 | 2026-10 | Accepted | [ADR-0117](0117-the-command-line-asks-a-restore-as-the-console-does.md): the plan the command line prints is of the run it asks, which may now be several paths, the original location, a policy or in place. |
+| 2026-10 | Accepted | [ADR-0120](0120-a-resume-is-planned.md): `restore --plan` plans a resume too, beside `--resume`. |
