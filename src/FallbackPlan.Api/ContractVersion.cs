@@ -678,8 +678,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// every stored object was read back. Additive: a pre-1.66 client ignores
     /// the field, and a pre-1.66 service's circuit reads as passing over none.
     /// </para>
+    /// <para>
+    /// 1.67 resumes a restore cut short (FR-RST-008, ADR-0109).
+    /// `RunRestoreCommand` gains `resume`: the run it continues, named as the
+    /// folder that run landed in under the quarantine is named. A file already
+    /// holding the snapshot's content is left as it stands. `RestoreResult`
+    /// gains `found_in_place`, how many were. Additive: a pre-1.67 client
+    /// sends no run and its restore resumes nothing, and a pre-1.67 service's
+    /// result reads as finding none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 66);
+    public static ContractVersion Current { get; } = new(1, 67);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

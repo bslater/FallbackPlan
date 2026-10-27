@@ -1505,6 +1505,13 @@ public static class CliApplication
                 Description = "Keep the plan in this file as JSON as well as printing it; implies --plan, so nothing is "
                     + "restored. A file already there is refused and left alone.",
             };
+            var resumeOption = new Option<string?>("--resume")
+            {
+                Description = "Resume a restore cut short: leave each file already holding the snapshot's content as it "
+                    + "stands, and restore the rest. Through the service, name the run, as the folder it landed in under "
+                    + ".fbp-quarantine is named; in direct mode it lands in place and names none.",
+                Arity = ArgumentArity.ZeroOrOne,
+            };
             var command = WithRemoteCapableSession(new Command(
                 "restore", "Restore a snapshot (or a path within it), each file verified per segment and by whole-file hash."));
             command.Arguments.Add(snapshotArgument);
@@ -1513,6 +1520,7 @@ public static class CliApplication
             command.Options.Add(ignoreFreeSpaceOption);
             command.Options.Add(planOption);
             command.Options.Add(exportOption);
+            command.Options.Add(resumeOption);
             command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() =>
@@ -1525,6 +1533,13 @@ public static class CliApplication
                     throw new CliFailureException(RestorePlanExport.Refusal(export));
                 }
 
+                // A resume runs a restore, and a plan runs none.
+                var resume = parse.GetResult(resumeOption) is not null;
+                if (resume && (parse.GetValue(planOption) || export is not null))
+                {
+                    throw new CliFailureException(Strings.CliApplication_ResumeIsNotPlanned);
+                }
+
                 return ReadThroughGatewayAsync(
                     parse,
                     (gateway, token) =>
@@ -1534,7 +1549,9 @@ public static class CliApplication
                             parse.GetValue(pathArgument),
                             parse.GetValue(outputOption)!,
                             parse.GetValue(ignoreFreeSpaceOption),
-                            export);
+                            export,
+                            resume,
+                            parse.GetValue(resumeOption));
                         return parse.GetValue(planOption) || export is not null
                             ? gateway.PlanRestoreAsync(request, token)
                             : gateway.RestoreAsync(request, token);

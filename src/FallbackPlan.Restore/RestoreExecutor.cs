@@ -1,4 +1,5 @@
 using Bodu;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain;
@@ -157,6 +158,18 @@ public sealed record ReceiptItem
     [JsonPropertyName("linked_to")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LinkedTo { get; init; }
+
+    /// <summary>
+    /// Whether the file was already at its destination holding the
+    /// snapshot's content, its length and its whole-file hash both, when a
+    /// resumed run reached it, and was left as it stood: not moved aside, not
+    /// written again, and nothing of its content read (FR-RST-008;
+    /// ADR-0109). Its captured metadata was applied again. Written only when
+    /// true.
+    /// </summary>
+    [JsonPropertyName("found_in_place")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool FoundInPlace { get; init; }
 }
 
 /// <summary>
@@ -190,9 +203,12 @@ public sealed record RestoreReceipt
     /// architecture 06 §3 always said the receipt records and which it had
     /// never once written. Version 7 added the optional per-item
     /// <c>linked_to</c> (ADR-0102): a hard-link group's later names are links
-    /// to the file its first name landed as, and say which.
+    /// to the file its first name landed as, and say which. Version 8 added
+    /// the optional per-item <c>found_in_place</c> (ADR-0109): a resumed run
+    /// leaves a file an earlier run landed as it stands, and a receipt that
+    /// said it restored the file would not say this run never wrote it.
     /// </remarks>
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -276,6 +292,26 @@ public sealed record RestoreExecutionOptions
     /// </remarks>
     public required string RunId { get; init; }
 
+    /// <summary>
+    /// Whether this run resumes one cut short (FR-RST-008; ADR-0109): a file
+    /// already at its destination holding the snapshot's content, its length
+    /// and its whole-file hash both, is left as it stands, and its metadata
+    /// applied again. Anything else lands as any run lands it.
+    /// </summary>
+    /// <remarks>
+    /// Off by default: without being told, a run cannot know that a file
+    /// like the snapshot's is its own rather than somebody's.
+    /// </remarks>
+    public bool Resume { get; init; }
+
+    /// <summary>
+    /// The earlier run whose quarantine folder this one lands in, when it
+    /// resumes a quarantined run; null lands under its own. The displaced
+    /// store stays this run's own, so nothing either run moved aside is in
+    /// the other's way.
+    /// </summary>
+    public string? ResumedRunId { get; init; }
+
     /// <summary>The wall clock for receipt timestamps.</summary>
     public required ulong NowUnixMilliseconds { get; init; }
 }
@@ -328,8 +364,15 @@ public sealed class RestoreExecutor(
     /// is its tree, read for the folder's own metadata (ADR-0086); it sits in
     /// the metadata blobs beside the files' and names no segments.
     /// </para>
+    /// <para>
+    /// A file a resumed run will leave as it stands needs none of its
+    /// content, so the wave asks <c>landed</c> and prefetches none of it.
+    /// </para>
     /// </remarks>
-    private sealed class PrefetchWave(RepositoryReader reader, RestorePlan plan)
+    private sealed class PrefetchWave(
+        RepositoryReader reader,
+        RestorePlan plan,
+        Func<int, FileVersionManifest, CancellationToken, ValueTask<bool>> landed)
     {
         private const int MaximumItems = 1024;
         private const int MaximumSegments = 512;
@@ -428,6 +471,11 @@ public sealed class RestoreExecutor(
                     continue;
                 }
 
+                if (await landed(index, manifest, cancellationToken).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
                 pending.AddRange(manifest.SegmentReferences.Select(reference => reference.ObjectId));
 
                 // Flushed by count, because the bytes are only known once
@@ -491,9 +539,10 @@ public sealed class RestoreExecutor(
         // under a directory of its own rather than directly where the operator
         // pointed, unless they said in place. Displaced files stay beside the
         // chosen output, not inside the quarantine — they are the user's
-        // current files and were never in question.
+        // current files and were never in question. A resumed quarantined
+        // run lands in the folder of the run it continues (ADR-0109).
         var root = options.DestinationMode == RestoreDestinationMode.Quarantine
-            ? Path.Combine(chosen, options.QuarantineDirectory, options.RunId)
+            ? Path.Combine(chosen, options.QuarantineDirectory, options.ResumedRunId ?? options.RunId)
             : chosen;
 
         Directory.CreateDirectory(root);
@@ -518,7 +567,27 @@ public sealed class RestoreExecutor(
         // one a blob. The wave prefetches a bounded run of upcoming items'
         // manifests and their segments together, so everything one blob owes
         // this restore is asked for at once.
-        var wave = new PrefetchWave(reader, plan);
+        var landedAt = new Dictionary<int, bool>();
+        var wave = new PrefetchWave(reader, plan, AlreadyLandedAsync);
+
+        // Whether a resumed run finds each file already landed, decided once:
+        // ahead of the loop, so none of its content is read, and in it.
+        async ValueTask<bool> AlreadyLandedAsync(int at, FileVersionManifest manifest, CancellationToken token)
+        {
+            if (!options.Resume || manifest.EntryKind != EntryKind.File)
+            {
+                return false;
+            }
+
+            if (!landedAt.TryGetValue(at, out var landed))
+            {
+                landed = TryResolve(root, plan.Items[at].Path, out var where, out _)
+                    && await HoldsAsync(where, manifest, token).ConfigureAwait(false);
+                landedAt[at] = landed;
+            }
+
+            return landed;
+        }
 
         for (var index = 0; index < plan.Items.Count; index++)
         {
@@ -642,6 +711,33 @@ public sealed class RestoreExecutor(
                         {
                             notLinked = $"not linked to {first.Path}: the target would not make a hard link here, so it was restored as a file of its own";
                         }
+                    }
+
+                    // A resumed run leaves what an earlier one landed as it
+                    // stands, whatever the policy says: the policy is about
+                    // somebody else's file, and this one holds exactly what
+                    // the run would write (ADR-0109).
+                    bool inPlace;
+                    try
+                    {
+                        inPlace = await AlreadyLandedAsync(index, manifest, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    if (inPlace)
+                    {
+                        var (kept, keptNotApplied, keptDegraded) = Settle(
+                            item, manifest, destination, manifest.LogicalLength, writtenAs: null, notLinked, foundInPlace: true);
+                        if (!keptDegraded && group is not null && notLinked is null)
+                        {
+                            groups.TryAdd(group, new LandedName(RestoreHardLinks.KeyOf(manifest)!, item.Path, destination, keptNotApplied));
+                        }
+
+                        items.Add(kept);
+                        break;
                     }
 
                     var spool = destination + ".fbp-restore-tmp";
@@ -792,47 +888,14 @@ public sealed class RestoreExecutor(
                         continue;
                     }
 
-                    // Metadata strictly AFTER content (architecture 08 §3): a
-                    // crash between the two leaves verified content with
-                    // default metadata, which is recoverable, never the
-                    // reverse. And outside the landing's catch, because a
-                    // write the platform refuses leaves that attribute not
-                    // applied; it does not undo content that landed and
-                    // verified (ADR-0084).
-                    var written = ApplyMetadata(landing, manifest.Metadata);
-                    var notApplied = RestoreMetadata.NotApplied(RestoreMetadata.Captured(manifest.Metadata), written.Applied);
-
-                    // The main stream restored and verified; alternate data
-                    // streams the manifest carries did not (RR-6's honesty
-                    // half — write-back is not implemented on any target).
-                    // "degraded", not "restored": the file on disk is not the
-                    // file that was captured, and the receipt says so per
-                    // item, exactly where the shortfall is.
-                    if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
-                    {
-                        items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
-                        {
-                            Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
-                            Detail = Joined(
-                                notLinked,
-                                $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
-                                    + "and not written back on this target (declared in the plan)"
-                                    + (written.Detail is { } left ? $"; {left}" : string.Empty)),
-                            NotApplied = notApplied,
-                        }));
-                        break;
-                    }
-
-                    if (group is not null && notLinked is null)
+                    var (settled, notApplied, degraded) = Settle(
+                        item, manifest, landing, (ulong)result.Length, writtenAs, notLinked, foundInPlace: false);
+                    if (!degraded && group is not null && notLinked is null)
                     {
                         groups.TryAdd(group, new LandedName(RestoreHardLinks.KeyOf(manifest)!, item.Path, landing, notApplied));
                     }
 
-                    items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
-                    {
-                        Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
-                        Detail = Joined(notLinked, written.Detail), NotApplied = notApplied,
-                    }));
+                    items.Add(settled);
                     break;
                 }
 
@@ -994,6 +1057,90 @@ public sealed class RestoreExecutor(
         }
 
         return receipt;
+    }
+
+    /// <summary>
+    /// The receipt's item for a file whose verified content stands at
+    /// <paramref name="landing"/>, its captured metadata written back first,
+    /// and whether it is degraded, in which case it is no hard-link group's
+    /// first name.
+    /// </summary>
+    private (ReceiptItem Item, IReadOnlyList<string>? NotApplied, bool Degraded) Settle(
+        RestorePlanItem item,
+        FileVersionManifest manifest,
+        string landing,
+        ulong length,
+        string? writtenAs,
+        string? notLinked,
+        bool foundInPlace)
+    {
+        // Metadata strictly AFTER content (architecture 08 §3): a crash
+        // between the two leaves verified content with default metadata,
+        // which is recoverable, never the reverse. And outside the landing's
+        // catch, because a write the platform refuses leaves that attribute
+        // not applied; it does not undo content that landed and verified
+        // (ADR-0084).
+        var written = ApplyMetadata(landing, manifest.Metadata);
+        var notApplied = RestoreMetadata.NotApplied(RestoreMetadata.Captured(manifest.Metadata), written.Applied);
+
+        // The main stream restored and verified; alternate data streams the
+        // manifest carries did not (RR-6's honesty half — write-back is not
+        // implemented on any target). "degraded", not "restored": the file on
+        // disk is not the file that was captured, and the receipt says so per
+        // item, exactly where the shortfall is.
+        if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
+        {
+            return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
+            {
+                Path = item.Path, Outcome = "degraded", Bytes = length, WrittenAs = writtenAs,
+                Detail = Joined(
+                    notLinked,
+                    $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
+                        + "and not written back on this target (declared in the plan)"
+                        + (written.Detail is { } left ? $"; {left}" : string.Empty)),
+                NotApplied = notApplied,
+                FoundInPlace = foundInPlace,
+            }), notApplied, true);
+        }
+
+        return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
+        {
+            Path = item.Path, Outcome = "restored", Bytes = length, WrittenAs = writtenAs,
+            Detail = Joined(notLinked, written.Detail), NotApplied = notApplied,
+            FoundInPlace = foundInPlace,
+        }), notApplied, false);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="destination"/> already holds the content
+    /// <paramref name="manifest"/> names: a file of its own, not a link, of
+    /// its length and hashing to its whole-file hash. Anything the platform
+    /// will not let be read is not.
+    /// </summary>
+    private static async ValueTask<bool> HoldsAsync(
+        string destination, FileVersionManifest manifest, CancellationToken cancellationToken)
+    {
+        var found = new FileInfo(destination);
+        if (!found.Exists || found.LinkTarget is not null || (ulong)found.Length != manifest.LogicalLength)
+        {
+            return false;
+        }
+
+        try
+        {
+            var stream = new FileStream(
+                destination, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await using (stream.ConfigureAwait(false))
+            {
+                var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+                return hash.AsSpan().SequenceEqual(manifest.WholeFileHash.Span);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

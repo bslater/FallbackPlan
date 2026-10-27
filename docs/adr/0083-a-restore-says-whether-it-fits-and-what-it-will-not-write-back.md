@@ -73,7 +73,7 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
 
 - **The plan** declares each attribute the tree carries and the target will not get back, with how many files carry it, and only when some do — ownership, security descriptors, extended attributes, creation times, access times, file attributes, and a symlink's own metadata. For ownership it names what applying it needs: root, or CAP_CHOWN. It does not repeat what the planner already says: on a target that applies no POSIX metadata, the planner's line covers permissions and ownership.
   > **2026-10 ([Amendment 1](#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor)).** The security-descriptor line had been declared on every plan over files captured off Windows, which never had one. An empty descriptor is now read as none.
-- **The receipt**, at schema 6 (schema 7 since [ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md), which adds `linked_to`), names per landed item each captured attribute not applied, in the format's order and words: `created_at`, `owner` and so on. An item's outcome does not change for metadata alone. Its content landed and verified, so it is restored; what it lacks is said beside it, as the plan said it would be. Alternate streams stay the exception they were: a file missing a stream is not the captured file, so it is degraded.
+- **The receipt**, at schema 6 (schema 7 since [ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md), which adds `linked_to`, and 8 since [ADR-0109](0109-a-restore-cut-short-is-resumed.md), which adds `found_in_place`), names per landed item each captured attribute not applied, in the format's order and words: `created_at`, `owner` and so on. An item's outcome does not change for metadata alone. Its content landed and verified, so it is restored; what it lacks is said beside it, as the plan said it would be. Alternate streams stay the exception they were: a file missing a stream is not the captured file, so it is degraded.
 - **The run's answer** summarises the receipt, one line an attribute with how many items it was left off.
 
 ## Consequences
@@ -167,6 +167,8 @@ A restore of part of a tree can meet the first, and a tree larger than the read 
 
   > **2026-10 ([ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md)).** A plan is kept in a file with `restore --export`. A restore is still not resumed.
 
+  > **2026-10 ([ADR-0109](0109-a-restore-cut-short-is-resumed.md)).** A restore cut short is resumed with `restore --resume`: what it landed is left as it stands and the rest restored, and the run is measured for what is left. Nothing this bullet left owed remains.
+
 ### Alternatives considered
 
 - **Reproduce the reader's coalescing to predict its bridges.** Rejected. The waves a run reads in depend on the reader's budgets and its order, and a figure that copied them would go wrong whenever they changed. The bound is stated instead.
@@ -187,3 +189,4 @@ A restore of part of a tree can meet the first, and a tree larger than the read 
 | 2026-10 | Accepted | [ADR-0103](0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md) names in the plan what every copy holds only in an archival tier, apart from the missing objects §2 already named (contract 1.65). Of what this record left owed, plan export and resume remain. |
 | 2026-10 | Accepted | [ADR-0107](0107-the-command-line-plans-a-restore-on-its-own.md): `restore --plan` prints this record's plan from the command line, made by the service or in direct mode alike, and restores nothing; export to a file and resume stay owed. |
 | 2026-10 | Accepted | [ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md): the command line keeps this record's plan in a file as JSON with `restore --export`; resume stays owed. |
+| 2026-10 | Accepted | [ADR-0109](0109-a-restore-cut-short-is-resumed.md) resumes a restore cut short, the last of what this record left owed. §2's measure needs nothing for a file a resume finds already where it lands at its length, and §5's receipt moves to schema 8 for `found_in_place`. |

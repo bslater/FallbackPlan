@@ -885,6 +885,11 @@ public sealed record RestoreSpaceDescriptor(
 /// <c>accessed_at not applied to 12 item(s)</c> (contract 1.53, FR-RST-004).
 /// The receipt names it item by item. Null when nothing was left out.
 /// </param>
+/// <param name="FoundInPlace">
+/// Files a resumed run found already holding the snapshot's content and left
+/// as they stood (contract 1.67, ADR-0109), counted among
+/// <paramref name="Restored"/>. The receipt names them.
+/// </param>
 public sealed record RestoreResult(
     long Restored,
     long Failed,
@@ -898,7 +903,8 @@ public sealed record RestoreResult(
     IReadOnlyList<string>? FailedSample = null,
     long ReadAround = 0,
     IReadOnlyList<string>? ReadAroundSample = null,
-    IReadOnlyList<string>? NotApplied = null) : ServiceResult;
+    IReadOnlyList<string>? NotApplied = null,
+    long FoundInPlace = 0) : ServiceResult;
 
 /// <summary>
 /// An opened restore source (ADR-0041): the handle the source-aware verbs

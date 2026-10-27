@@ -133,6 +133,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0106](adr/0106-a-closed-circuit-says-what-it-did-not-read.md) | A closed circuit says what it did not read: the ledger (schema 12) keeps how many blobs the circuit that last closed passed over held only in an archival tier, contract 1.66 carries it as `circuit_archived`, the CLI prints `sweep:partial@` for such a circuit, and the console says how many it did not read rather than every stored object | **Built** | `Application/DestinationSyncStore` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusSweepTokenTests`, `Web.Tests/ConsoleDestinationCardTests`, `Web.DomTests/ConsoleViewsDomTests`, `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0106--closed-is-not-whole) |
 | [0107](adr/0107-the-command-line-plans-a-restore-on-its-own.md) | The command line plans a restore on its own: `restore --plan` prints the plan for the run `restore` would make, through the service or in direct mode alike, restores nothing, and exits non-zero unless that run would restore every file and fit; a plan is still not exported to a file, and a restore is not resumed | **Built** | `Cli/CliApplication` · `Cli/OperationGateway` · `Cli/RestorePlanReport` · `Restore/RestorePlanFigures` · `Cli.Tests/RestorePlanCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/ClientModeTests`, `Repository.Tests/RestorePlanTests`, `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0107--a-plan-from-the-shell) |
 | [0108](adr/0108-a-restores-plan-can-be-kept-in-a-file.md) | A restore's plan can be kept in a file: `restore --export <file>` keeps the plan as JSON, in the contract's own words beside the run it was made for, implies `--plan` so nothing is restored, and refuses a file already there; a kept plan is not run | **Built** | `Cli/CliApplication` · `Cli/RestorePlanExport` · `Cli/RestorePlanReport` · `Cli.Tests/RestorePlanCommandTests`, `Cli.Tests/GatewayRestoreReportTests` · [notes](#0108--a-plan-kept) |
+| [0109](adr/0109-a-restore-cut-short-is-resumed.md) | A restore cut short is resumed: `restore --resume` leaves each file already holding the snapshot's content, by length and whole-file hash, as it stands, reads none of its content, applies its metadata again and lands the rest, measured for what is left; through the service it continues the run it names in that run's folder (contract 1.67), and the receipt (schema 8) says what was found in place | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Repository.Tests/RestoreResumeTests`, `Repository.Tests/RestoreSpaceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/RestoreResumeServiceTests`, `Hosts.Tests/ClientModeTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0109--a-restore-resumed) |
 
 ---
 
@@ -3365,3 +3366,25 @@ or not at all.
 
 What remains is recorded rather than done. A kept plan is not run, since
 running one means planning again, and the console's wizard keeps none.
+
+### 0109 — a restore resumed
+
+A restore cut short was run again from the start. In place, its existing-file
+policy met every file the first run had landed, moved each aside and wrote it
+again; quarantined, it wrote everything again into a folder of its own; and the
+free-space check counted the whole run against a disk the first run had
+filled. Now `restore --resume` runs it again and `Restore/RestoreExecutor`
+leaves each file already holding the snapshot's content, by its length and its
+whole-file hash, as it stands. Nothing of that file's content is read, ahead of
+the loop or in it, and its metadata is applied again. Everything else lands as
+any run lands it, and `Restore/RestoreSpace` measures the run for what is left.
+In direct mode the run lands in place and names no run. Through the service
+each run lands in a quarantine folder of its own, so a resume names the run it
+continues (contract 1.67's `resume`). The service refuses a name that is not a
+run's, a run whose folder is not there, and a resume under rename. The receipt
+(schema 8) says `found_in_place` for each file it left, and the answer counts
+them.
+
+What remains is recorded rather than done. A file cut short mid-write is
+restored whole, the console's wizard resumes nothing, and through the service
+the run is named rather than found.

@@ -246,8 +246,11 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        // The listener stops only once the accept loop has ended. Stopped
+        // first, a loop that read the token just before it was cancelled
+        // would ask a stopped listener to accept, which throws an exception
+        // no cancellation explains.
         await _stopping.CancelAsync().ConfigureAwait(false);
-        _listener.Stop();
         try
         {
             await _accepting.ConfigureAwait(false);
@@ -255,6 +258,8 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
         catch (Exception exception) when (exception is OperationCanceledException or SocketException or ObjectDisposedException)
         {
         }
+
+        _listener.Stop();
 
         try
         {

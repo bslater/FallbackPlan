@@ -1015,6 +1015,23 @@ public sealed partial class ServiceCommandHandler(
             return invalidShape;
         }
 
+        // A run is named by its sixteen lowercase hex digits, and the name
+        // becomes a folder's (ADR-0109): nothing else may reach the path.
+        if (command.Resume is { } named && !IsRunId(named))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                $"'{named}' names no run: a run is named by the sixteen lowercase hex digits of the folder it landed in.");
+        }
+
+        if (command.Resume is not null && existing == ExistingDestinationPolicy.WriteBeside)
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "A restore under rename cannot be resumed: a copy written beside a kept file is named for the day it "
+                + "was written, so a resume cannot tell its own copies from anybody's.");
+        }
+
         if (RefuseUnproved(command.Source, command.SessionId, setId: null, "A restore") is { } unproved)
         {
             return unproved;
@@ -1088,7 +1105,29 @@ public sealed partial class ServiceCommandHandler(
                 // made every restore of a snapshot share one.
                 RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
                 NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+
+                // A resumed quarantined run lands in the folder of the run it
+                // continues; one in place lands where any run does (ADR-0109).
+                Resume = command.Resume is not null,
+                ResumedRunId = mode == RestoreDestinationMode.Quarantine ? command.Resume : null,
             };
+
+            string? ResumedIn(string outputDirectory) => command.Resume is null
+                ? null
+                : options.ResumedRunId is { } run
+                    ? Path.Combine(outputDirectory, options.QuarantineDirectory, run)
+                    : outputDirectory;
+
+            // A run whose folder is not there left nothing to continue, and a
+            // folder made for it now would be a run under a name nobody chose.
+            if (options.ResumedRunId is { } resumed
+                && slices.Select(slice => ResumedIn(slice.OutputDirectory)!).FirstOrDefault(folder => !Directory.Exists(folder)) is { } absent)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound,
+                    $"No run {resumed} landed in '{absent}', so there is nothing there to resume. Restore without "
+                    + "naming a run to begin one.");
+            }
 
             // Whether the whole run fits, before its first slice writes a byte
             // (FR-RST-003): every slice is measured together, because two on
@@ -1096,7 +1135,7 @@ public sealed partial class ServiceCommandHandler(
             // that compresses what it stores holds more than it says, so a
             // person may go on regardless.
             var space = await RestoreSpace.MeasureRunAsync(
-                [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory))],
+                [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory, ResumedIn(slice.OutputDirectory)))],
                 options.DestinationMode, options.ExistingDestination, runtime.RestoreSpaceProbe, reader,
                 cancellationToken).ConfigureAwait(false);
             if (space.IsShort && !command.IgnoreFreeSpace)
@@ -1174,13 +1213,18 @@ public sealed partial class ServiceCommandHandler(
                     : [.. readAround.Take(20).Select(item =>
                         $"{item.Path} — read from {string.Join(", ", item.ReadFrom ?? [])}, "
                         + $"around {string.Join("; ", item.ReadAround!)}")],
-                NotApplied: notApplied.Count == 0 ? null : notApplied);
+                NotApplied: notApplied.Count == 0 ? null : notApplied,
+                FoundInPlace: receipt.Items.Count(item => item.FoundInPlace));
         }
         finally
         {
             context.Source?.Gate.Release();
         }
     }
+
+    /// <summary>Whether <paramref name="name"/> is a run's: sixteen lowercase hex digits, as every run is named.</summary>
+    private static bool IsRunId(string name) =>
+        name.Length == 16 && name.All(character => char.IsAsciiDigit(character) || character is >= 'a' and <= 'f');
 
     /// <summary>
     /// The per-root slices of an original-location restore (ADR-0041). A

@@ -589,6 +589,16 @@ public sealed record PlanRestoreCommand(
 /// estimate errs high, and a volume that compresses what it stores can hold
 /// more than it says, so a person who knows theirs does may go on.
 /// </param>
+/// <param name="Resume">
+/// The run this one resumes (contract 1.67, FR-RST-008, ADR-0109), by its
+/// sixteen lowercase hex digits: the name of the folder it landed in under
+/// the quarantine. A quarantined run lands in that folder, which must be
+/// there; one in place or at the original location lands where any run
+/// does. Either way a file already holding the snapshot's content is left as
+/// it stands, and the rest land as any run lands them. Null resumes nothing.
+/// Refused under <c>rename</c>, whose copies a resume cannot tell from
+/// anybody's.
+/// </param>
 public sealed record RunRestoreCommand(
     string SnapshotId,
     string? Path,
@@ -598,7 +608,8 @@ public sealed record RunRestoreCommand(
     string? Target = null,
     string? Existing = null,
     bool InPlace = false,
-    bool IgnoreFreeSpace = false) : ServiceCommand;
+    bool IgnoreFreeSpace = false,
+    string? Resume = null) : ServiceCommand;
 
 /// <summary>
 /// Opens a restore source (ADR-0041): the place a guided restore reads from —

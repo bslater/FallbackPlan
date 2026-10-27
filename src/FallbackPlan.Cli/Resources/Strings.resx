@@ -85,6 +85,9 @@
   <data name="CliApplication_RestoreRefused" xml:space="preserve">
     <value>Restore refused: {0}</value>
   </data>
+  <data name="CliApplication_ResumeIsNotPlanned" xml:space="preserve">
+    <value>--resume runs a restore, and a plan restores nothing: plan the restore without --resume, or resume it without --plan or --export.</value>
+  </data>
   <data name="CliApplication_SnapshotNotCatalogue" xml:space="preserve">
     <value>snapshot {0} is not in the catalogue — check `snapshots`, or run `rebuild-index` if it is stale.</value>
   </data>
@@ -105,6 +108,9 @@
   </data>
   <data name="DirectGateway_RestoreWouldNotFit" xml:space="preserve">
     <value>{0} Nothing was written. Free some space or choose another folder, or pass --ignore-free-space to restore anyway: a volume that compresses what it stores can hold more than this estimate.</value>
+  </data>
+  <data name="DirectGateway_ResumeLandsInPlace" xml:space="preserve">
+    <value>In direct mode a restore lands in place, where --output points, so there is no run to name: pass --resume alone.</value>
   </data>
   <data name="DirectGateway_NoBackupSetNamedExists" xml:space="preserve">
     <value>No backup set named '{0}' exists in {1}.</value>
@@ -162,5 +168,8 @@
   </data>
   <data name="ServiceGateway_ServiceStoppedReportingJob" xml:space="preserve">
     <value>The service stopped reporting the job: {0}</value>
+  </data>
+  <data name="ServiceGateway_ResumeNamesTheRun" xml:space="preserve">
+    <value>Through the service each restore lands in a folder of its own under '{0}', in .fbp-quarantine; name the run to resume as that folder is named: --resume &lt;run&gt;.</value>
   </data>
 </root>
