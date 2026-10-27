@@ -143,6 +143,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0116](adr/0116-the-console-resumes-a-restore-it-did-not-see-end.md) | The console resumes a restore it did not see end: the snapshots page lists the restores left unfinished without their files, the list and each run's notice offer to restore what is left, the wizard's resume mode unlocks the passphrase and opens a source of the run's own set before the service resumes the run by its name, and a run can be let go | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0116--the-console-resumes-a-restore-it-did-not-see-end) |
 | [0117](adr/0117-the-command-line-asks-a-restore-as-the-console-does.md) | The command line asks a restore as the console does: `restore` takes several paths, `--target`, `--existing` and `--in-place`, asks the service the run and its plan in that shape, restores and plans several paths under the policy in direct mode while refusing the original location there, keeps the plan of the run as asked, and holds `--as-planned` to every field, so a plan the console kept runs from the command line | **Built** | `Cli/CliApplication`, `Cli/OperationGateway`, `Cli/RestorePlanExport` · `Cli.Tests/RestoreShapeCommandTests`, `Cli.Tests/RestoreAsPlannedCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/ClientModeTests` · [notes](#0117--the-command-line-asks-a-restore-as-the-console-does) |
 | [0118](adr/0118-the-console-runs-a-kept-plan-as-it-was-approved.md) | The console runs a kept plan as it was approved: the console process reads the file with the command line's reader, plans the kept run again through a source of the plan's own set, holds it to the kept plan with the comparison both clients now share, and runs it as kept only where nothing changed; otherwise it names each change and runs nothing | **Built** | `Api/RestorePlanFile` · `Web/WebConsoleHost` · `Cli/RestorePlanReport` · `Api.Tests/RestorePlanFileTests`, `Web.Tests/ConsoleKeptPlanTests`, `Web.DomTests/RestoreKeptPlanDomTests` · [notes](#0118--the-console-runs-a-kept-plan-as-it-was-approved) |
+| [0119](adr/0119-direct-mode-restores-to-the-original-location.md) | Direct mode restores to the original location: the mapping of a plan onto a set's roots, and the merge of their receipts, move into the restore library for the service and direct mode alike, and direct mode plans, measures and restores each root's slice in place from the set the state directory configures, refusing a snapshot of no configured set and a label no root carries | **Built** | `Restore/RestoreOriginalLocation` · `Cli/OperationGateway`, `Cli/RestorePlanReport` · `Agent/ServiceCommandHandler` · `Repository.Tests/RestoreOriginalLocationTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Cli.Tests/GatewayRestoreReportTests` · [notes](#0119--direct-mode-restores-to-the-original-location) |
 
 ---
 
@@ -3532,7 +3533,8 @@ knows, is refused. `--as-planned` holds the run asked to the kept one field by
 field, so a console's plan runs where it is asked as kept.
 
 What remains is recorded rather than done. The console runs no kept plan, and
-direct mode does not restore to the original location.
+direct mode does not restore to the original location. ADR-0118 has since
+taken up the first and ADR-0119 the second.
 
 ### 0118 — the console runs a kept plan as it was approved
 
@@ -3549,3 +3551,20 @@ does not lose the file chosen.
 
 What remains is recorded rather than done. A kept plan is run as kept and
 never changed; one wanted otherwise is planned again.
+
+### 0119 — direct mode restores to the original location
+
+Direct mode refused the original location as the service's to know, though a
+set's roots are in the state directory's configuration, which the service
+reads them from and direct mode reads to back a set up. The mapping of a plan
+onto a set's roots, and the merge of each root's receipt into the run's, move
+from the service into the restore library, unchanged. Direct mode reads the
+snapshot's set from the configuration and plans, measures and restores each
+root's slice in place under the policy asked, refusing a snapshot of no set
+configured there, and a label the set no longer carries, before anything is
+written. A plan of the original location now says its files go back where
+they were captured, where its first line named an empty folder.
+
+What remains is recorded rather than done. A snapshot captured from a folder
+named on the command line has no recorded root to go back to, and direct mode
+still keeps no receipt.

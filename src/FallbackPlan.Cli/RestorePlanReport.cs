@@ -31,7 +31,9 @@ internal static class RestorePlanReport
             return HeldTo(plan, kept);
         }
 
-        var outputDirectory = request.OutputDirectory;
+        // A run to the original location names no folder: each file goes
+        // back into the root it was captured from.
+        var where = request.ToOriginal ? "back where they were captured" : $"to {request.OutputDirectory}";
 
         var reading = plan.ReadBytes is { } read
             ? string.Create(CultureInfo.InvariantCulture, $", {read} byte(s) read")
@@ -40,7 +42,7 @@ internal static class RestorePlanReport
         [
             string.Create(
                 CultureInfo.InvariantCulture,
-                $"plan: {plan.Files} file(s) to {outputDirectory}, {plan.WriteBytes ?? plan.Bytes} byte(s) written{reading}"),
+                $"plan: {plan.Files} file(s) {where}, {plan.WriteBytes ?? plan.Bytes} byte(s) written{reading}"),
         ];
 
         var fits = true;

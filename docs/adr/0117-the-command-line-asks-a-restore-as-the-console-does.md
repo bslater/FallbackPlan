@@ -8,6 +8,8 @@
 **Built:**
 - The verb: `Cli/CliApplication`'s `restore` takes several paths, `--target folder|original`, `--existing rename|overwrite` and `--in-place`, and needs `--output` only for a folder. `--as-planned` holds every field of the run to the kept plan's.
 - The gateways: `Cli/OperationGateway` asks the service the run and its plan in that shape. In direct mode it restores and plans several paths under the policy asked, and refuses the original location.
+
+  > **2026-10 ([ADR-0119](0119-direct-mode-restores-to-the-original-location.md)).** Direct mode restores and plans the original location too, from the set's configured roots.
 - The kept plan: `Cli/RestorePlanExport` keeps the run as asked, as the console keeps one.
 - The tests:
   - `Cli.Tests/RestoreShapeCommandTests` — in direct mode several paths restore each and nothing else; rename keeps a file in the way and writes beside it; overwrite replaces it; the room a run and its plan need is measured under the policy asked; in place lands where any direct run lands; the original location is refused, and so is it beside `--output`; a restore to a folder without `--output` and a choice that is not one are refused; the plan is of the paths asked, and a plan kept is of the run asked, one path kept as version 1 kept it
@@ -45,6 +47,8 @@ A direct-mode restore lands in place where `--output` points, as it always has.
 - **`--in-place`** changes nothing, since the run lands in place either way.
 - **The original location** is refused. It is a set's configured roots, which only the service knows.
 
+  > **Superseded 2026-10 ([ADR-0119](0119-direct-mode-restores-to-the-original-location.md)).** The service is not alone in knowing a set's roots: they are in the state directory's configuration, which direct mode already reads to back a set up. Direct mode restores the original location from them, with the mapping the service uses.
+
 ### 4. A kept plan is held to every field
 
 `--as-planned` holds the run asked to the kept one: the snapshot, the paths in any order, the target, where it writes for a folder, the policy and the landing. One path asked as a path or as a list of one is the same run, and so is the default target however it was spelled. Another run is refused, naming how the plan was kept. A plan the console kept therefore runs from the command line, asked as it was kept.
@@ -61,6 +65,8 @@ A direct-mode restore lands in place where `--output` points, as it always has.
 
   > **2026-10 ([ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md)).** The console runs a kept plan too, held to it with the command line's own comparison, and only where nothing it said has changed.
 - **Restore to the original location in direct mode.** It needs the set's configuration, which the service holds.
+
+  > **2026-10 ([ADR-0119](0119-direct-mode-restores-to-the-original-location.md)).** Direct mode reads the set's configuration from the state directory and restores to the original location.
 - **Read the run from the file.** The person still names the run they mean, and the file is held to it (ADR-0114).
 
 ## Alternatives considered
@@ -75,3 +81,4 @@ A direct-mode restore lands in place where `--output` points, as it always has.
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. `restore` takes several paths, `--target`, `--existing` and `--in-place`, asks the service the run and its plan in that shape, restores and plans several paths under the policy in direct mode while refusing the original location there, keeps a plan of the run as asked, and holds `--as-planned` to every field, so a plan the console kept runs from the command line. |
 | 2026-10 | Accepted | [ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md): the console runs a kept plan, which this record left to another. |
+| 2026-10 | Amended (§3) | [ADR-0119](0119-direct-mode-restores-to-the-original-location.md): direct mode restores to the original location, from the set's configured roots with the service's own mapping, so §3's refusal is superseded. |

@@ -199,8 +199,11 @@
   <data name="CliApplication_ForgetNamesTheRun" xml:space="preserve">
     <value>--forget lets one run go, so name it: restore-resume &lt;run&gt; --forget.</value>
   </data>
-  <data name="DirectGateway_OriginalNeedsTheService" xml:space="preserve">
-    <value>The original location is where each file was captured, as a set's configured roots say, and only the service knows them. Restore it through the service, or name a folder with --output.</value>
+  <data name="DirectGateway_OriginalSetNotConfigured" xml:space="preserve">
+    <value>This snapshot's set is not configured in {0}, so nothing here says where its files were captured. Restore it to a folder with --output.</value>
+  </data>
+  <data name="DirectGateway_OriginalLabelNotARoot" xml:space="preserve">
+    <value>'{0}' is not one of the set's root labels any more, so nothing says where its files were captured, and nothing was restored. Restore to a folder with --output.</value>
   </data>
   <data name="DirectGateway_NotAnExistingFilePolicy" xml:space="preserve">
     <value>'{0}' is not an existing-file policy (rename | overwrite).</value>

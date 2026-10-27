@@ -431,9 +431,26 @@ internal static class Strings
     internal static string CliApplication_ForgetNamesTheRun => Get(nameof(CliApplication_ForgetNamesTheRun));
 
     /// <summary>
-    /// The original location is where each file was captured, as a set's configured roots say, and only the service knows them. Restore it through the service, or name a folder with --output.
+    /// This snapshot's set is not configured in {0}, so nothing here says where its files were captured. Restore it to a folder with --output.
     /// </summary>
-    internal static string DirectGateway_OriginalNeedsTheService => Get(nameof(DirectGateway_OriginalNeedsTheService));
+    private static string DirectGateway_OriginalSetNotConfigured => Get(nameof(DirectGateway_OriginalSetNotConfigured));
+
+    /// <summary>
+    /// This snapshot's set is not configured in {0}, so nothing here says where its files were captured. Restore it to a folder with --output.
+    /// </summary>
+    internal static string FormatDirectGateway_OriginalSetNotConfigured(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, DirectGateway_OriginalSetNotConfigured, arg0);
+
+    /// <summary>
+    /// '{0}' is not one of the set's root labels any more, so nothing says where its files were captured, and nothing was restored. Restore to a folder with --output.
+    /// </summary>
+    private static string DirectGateway_OriginalLabelNotARoot => Get(nameof(DirectGateway_OriginalLabelNotARoot));
+
+    /// <summary>
+    /// '{0}' is not one of the set's root labels any more, so nothing says where its files were captured, and nothing was restored. Restore to a folder with --output.
+    /// </summary>
+    internal static string FormatDirectGateway_OriginalLabelNotARoot(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, DirectGateway_OriginalLabelNotARoot, arg0);
 
     /// <summary>
     /// '{0}' is not an existing-file policy (rename | overwrite).
