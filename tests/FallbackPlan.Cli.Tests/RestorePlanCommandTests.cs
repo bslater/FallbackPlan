@@ -83,7 +83,7 @@ public sealed class RestorePlanCommandTests : IDisposable
         using var document = JsonDocument.Parse(await File.ReadAllTextAsync(file));
         var root = document.RootElement;
         Assert.AreEqual("fallbackplan-restore-plan", root.GetProperty("kind").GetString());
-        Assert.AreEqual(1, root.GetProperty("version").GetInt32());
+        Assert.AreEqual(2, root.GetProperty("version").GetInt32(), "one shape whichever client keeps it (ADR-0113)");
         Assert.AreEqual(snapshot, root.GetProperty("snapshot_id").GetString());
         Assert.AreEqual(destination, root.GetProperty("output_directory").GetString());
         Assert.AreEqual(JsonValueKind.Null, root.GetProperty("path").ValueKind);
