@@ -148,17 +148,6 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, CliApplication_AsPlannedAnotherRun, arg0, arg1, arg2, arg3);
 
     /// <summary>
-    /// '{0}' keeps the plan of a run the command line does not ask: several paths, a target, an existing-file policy or a landing in place. Restore it where it was planned, or plan one path here.
-    /// </summary>
-    private static string CliApplication_AsPlannedNotAsked => Get(nameof(CliApplication_AsPlannedNotAsked));
-
-    /// <summary>
-    /// '{0}' keeps the plan of a run the command line does not ask: several paths, a target, an existing-file policy or a landing in place. Restore it where it was planned, or plan one path here.
-    /// </summary>
-    internal static string FormatCliApplication_AsPlannedNotAsked(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, CliApplication_AsPlannedNotAsked, arg0);
-
-    /// <summary>
     /// --resume runs a restore, and a plan restores nothing: plan the restore without --resume, or resume it without --plan or --export.
     /// </summary>
     internal static string CliApplication_ResumeIsNotPlanned => Get(nameof(CliApplication_ResumeIsNotPlanned));
@@ -440,4 +429,30 @@ internal static class Strings
     /// --forget lets one run go, so name it: restore-resume &lt;run&gt; --forget.
     /// </summary>
     internal static string CliApplication_ForgetNamesTheRun => Get(nameof(CliApplication_ForgetNamesTheRun));
+
+    /// <summary>
+    /// The original location is where each file was captured, as a set's configured roots say, and only the service knows them. Restore it through the service, or name a folder with --output.
+    /// </summary>
+    internal static string DirectGateway_OriginalNeedsTheService => Get(nameof(DirectGateway_OriginalNeedsTheService));
+
+    /// <summary>
+    /// '{0}' is not an existing-file policy (rename | overwrite).
+    /// </summary>
+    private static string DirectGateway_NotAnExistingFilePolicy => Get(nameof(DirectGateway_NotAnExistingFilePolicy));
+
+    /// <summary>
+    /// '{0}' is not an existing-file policy (rename | overwrite).
+    /// </summary>
+    internal static string FormatDirectGateway_NotAnExistingFilePolicy(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, DirectGateway_NotAnExistingFilePolicy, arg0);
+
+    /// <summary>
+    /// Name where to restore with --output, or restore each file where it was captured with --target original.
+    /// </summary>
+    internal static string CliApplication_RestoreNeedsAnOutput => Get(nameof(CliApplication_RestoreNeedsAnOutput));
+
+    /// <summary>
+    /// --target original lands each file where it was captured, so it takes no --output: use one or the other.
+    /// </summary>
+    internal static string CliApplication_OriginalTakesNoOutput => Get(nameof(CliApplication_OriginalTakesNoOutput));
 }

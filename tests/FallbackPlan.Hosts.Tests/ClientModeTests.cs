@@ -713,6 +713,37 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RestoreToTheOriginalLocation_RoutedThroughTheService_PutsAFileBackWhereItWasCaptured()
+    {
+        // FR-RST-001, ADR-0117: the command line asks the original location,
+        // which only the service knows, as the console does.
+        await _harness.CreateRepositoryAsync();
+        var original = _harness.WriteSourceFile("notes.txt", "as captured");
+        _harness.WriteSourceFile("more.txt", "more");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var backedUp = await ServiceCliAsync("backup", "--set", "docs", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, backedUp.ExitCode, backedUp.All);
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
+        File.WriteAllText(original, "edited since the backup");
+        File.WriteAllText(Path.Combine(_harness.SourceRoot, "more.txt"), "more, edited");
+
+        var restored = await RunCliAsync(
+            "restore", snapshots.Snapshots[0].SnapshotId, "notes.txt", "--target", "original", "--existing", "overwrite");
+
+        Assert.AreEqual(0, restored.ExitCode, restored.All);
+        Assert.Contains("mode: service", restored.All, StringComparison.Ordinal);
+        Assert.AreEqual("as captured", await File.ReadAllTextAsync(original, _timeout.Token));
+        Assert.AreEqual(
+            "more, edited", await File.ReadAllTextAsync(Path.Combine(_harness.SourceRoot, "more.txt"), _timeout.Token),
+            "a path not asked is left as it stands");
+    }
+
+    [TestMethod]
     public async Task RetentionApply_RoutedThroughTheService_DerivesTheReclaimGrantHere()
     {
         // FR-GC-008: the service holds the key that publishes and not the key

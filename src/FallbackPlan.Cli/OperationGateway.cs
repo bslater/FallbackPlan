@@ -249,6 +249,23 @@ public interface IOperationGateway : IAsyncDisposable
 /// is compared with the kept one, and the restore runs only where nothing
 /// changed. Null holds it to none.
 /// </param>
+/// <param name="Paths">
+/// Several subtrees in one run (ADR-0117), which win over <paramref name="Path"/>;
+/// null where one or none is asked.
+/// </param>
+/// <param name="Target">
+/// <c>original</c> lands each file where it was captured, which only the
+/// service knows; null or <c>folder</c> lands it under <paramref name="OutputDirectory"/>.
+/// </param>
+/// <param name="Existing">
+/// What to do about a file in the way: null moves it aside, <c>rename</c>
+/// writes the restored copy beside it, <c>overwrite</c> replaces it.
+/// </param>
+/// <param name="InPlace">
+/// Whether a run through the service lands directly where it points rather
+/// than in a quarantine folder of its own. A run in direct mode lands in place
+/// whether asked or not.
+/// </param>
 public sealed record RestoreRequest(
     string SnapshotId,
     string? Path,
@@ -257,7 +274,15 @@ public sealed record RestoreRequest(
     string? PlanExport = null,
     bool Resume = false,
     string? ResumedRun = null,
-    KeptPlan? AsPlanned = null);
+    KeptPlan? AsPlanned = null,
+    IReadOnlyList<string>? Paths = null,
+    string? Target = null,
+    string? Existing = null,
+    bool InPlace = false)
+{
+    /// <summary>Whether the run lands each file where it was captured.</summary>
+    public bool ToOriginal => string.Equals(Target, "original", StringComparison.Ordinal);
+}
 
 /// <summary>A kept plan a restore is held to (ADR-0114), and the file it was read from.</summary>
 /// <param name="File">The file, as the person named it.</param>
@@ -638,7 +663,8 @@ internal sealed class ServiceGateway(
         {
             var result = await SendAsync<RestoreResult>(
                 new RunRestoreCommand(
-                    request.SnapshotId, request.Path, request.OutputDirectory, Source: source,
+                    request.SnapshotId, request.Path, request.OutputDirectory, Source: source, Paths: request.Paths,
+                    Target: request.Target, Existing: request.Existing, InPlace: request.InPlace,
                     IgnoreFreeSpace: request.IgnoreFreeSpace, Resume: request.Resume ? request.ResumedRun : null),
                 "a restore",
                 cancellationToken).ConfigureAwait(false);
@@ -766,7 +792,9 @@ internal sealed class ServiceGateway(
         {
             var plan = await SendAsync<RestorePlanResult>(
                 new PlanRestoreCommand(
-                    request.SnapshotId, request.Path, Source: source, OutputDirectory: request.OutputDirectory),
+                    request.SnapshotId, request.Path, Source: source, Paths: request.Paths,
+                    OutputDirectory: request.OutputDirectory, Target: request.Target, Existing: request.Existing,
+                    InPlace: request.InPlace),
                 "a restore's plan",
                 cancellationToken).ConfigureAwait(false);
             return RestorePlanReport.Describe(plan, request);
@@ -1416,6 +1444,9 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             throw new CliFailureException(Strings.DirectGateway_ResumeLandsInPlace);
         }
 
+        ThrowIfOriginal(request);
+        var existing = PolicyOf(request.Existing);
+
         // Direct mode restores through the same planner and executor the
         // service uses (ADR-0028 §3: "the same operation performs identically
         // through either path"). The earlier hand-rolled walk here combined
@@ -1428,7 +1459,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
         var target = RestoreTargetProfile.ForLocalPlatform(catalogue, snapshotId, session.DeviceId);
-        var plan = RestorePlanner.Plan(catalogue, snapshotId, request.Path ?? string.Empty, target);
+        var plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(request), target);
         if (plan.Items.Count == 0)
         {
             throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
@@ -1444,12 +1475,12 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         reader.UseLocationSource(catalogue.ResolveLocation);
 
         // Whether it fits, before anything is written (FR-RST-003). The run
-        // below lands in place and preserves what it finds, so that is the
-        // run measured, less what a resume leaves where it stands.
+        // below lands in place under the policy asked, so that is the run
+        // measured, less what a resume leaves where it stands.
         var space = await RestoreSpace.MeasureRunAsync(
             [new RestoreSlice(plan, request.OutputDirectory, request.Resume ? request.OutputDirectory : null)],
             RestoreDestinationMode.InPlace,
-            ExistingDestinationPolicy.Preserve,
+            existing,
             SpaceProbe(),
             reader,
             cancellationToken).ConfigureAwait(false);
@@ -1470,6 +1501,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 // where a person's explicit `--output` points. Containment,
                 // the receipt and metadata come from the executor regardless.
                 DestinationMode = RestoreDestinationMode.InPlace,
+                ExistingDestination = existing,
                 // A fresh run identifier per invocation, so two restores of one
                 // snapshot displace into distinct stores (architecture 08 §3.1).
                 RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
@@ -1520,11 +1552,13 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         // The plan the service makes, made here for the run above: its
         // manifests read and every blob it names asked for, measured where
-        // that run writes, in place and preserving what it finds.
+        // that run writes, in place under the policy asked.
+        ThrowIfOriginal(request);
+        var existing = PolicyOf(request.Existing);
         var snapshotId = Convert.FromHexString(request.SnapshotId);
         using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
         var target = RestoreTargetProfile.ForLocalPlatform(catalogue, snapshotId, session.DeviceId);
-        var plan = RestorePlanner.Plan(catalogue, snapshotId, request.Path ?? string.Empty, target);
+        var plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(request), target);
         if (plan.Items.Count == 0)
         {
             throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
@@ -1536,7 +1570,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         var space = await RestoreSpace.MeasureAsync(
             [new RestoreSlice(plan, request.OutputDirectory)],
             RestoreDestinationMode.InPlace,
-            ExistingDestinationPolicy.Preserve,
+            existing,
             SpaceProbe(),
             RestoreSpace.WrittenBytesFrom(probed.Facts),
             cancellationToken).ConfigureAwait(false);
@@ -1560,6 +1594,28 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 probed.Archived.Count == 0 ? null : probed.Archived),
             request);
     }
+
+    /// <summary>The subtrees a request asks, as the planner takes them: several, one, or none for all of it.</summary>
+    private static IReadOnlyList<string> PrefixesOf(RestoreRequest request) =>
+        request.Paths is { Count: > 0 } paths ? paths : request.Path is { Length: > 0 } path ? [path] : [];
+
+    /// <summary>Refuses the original location, which is a set's configured roots and so the service's to know.</summary>
+    private static void ThrowIfOriginal(RestoreRequest request)
+    {
+        if (request.ToOriginal)
+        {
+            throw new CliFailureException(Strings.DirectGateway_OriginalNeedsTheService);
+        }
+    }
+
+    /// <summary>The existing-file policy asked, in the words the service takes it in, as the executor takes it.</summary>
+    private static ExistingDestinationPolicy PolicyOf(string? existing) => existing switch
+    {
+        null => ExistingDestinationPolicy.Preserve,
+        "rename" => ExistingDestinationPolicy.WriteBeside,
+        "overwrite" => ExistingDestinationPolicy.Replace,
+        _ => throw new CliFailureException(Strings.FormatDirectGateway_NotAnExistingFilePolicy(existing)),
+    };
 
     /// <summary>How this machine says how much room a directory's volume has.</summary>
     private static RestoreSpaceProbe SpaceProbe() => new()

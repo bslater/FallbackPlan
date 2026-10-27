@@ -94,9 +94,6 @@
   <data name="CliApplication_AsPlannedAnotherRun" xml:space="preserve">
     <value>'{0}' keeps the plan of another run: snapshot {1}, {2}, to {3}. Restore that run as planned, or plan this one again.</value>
   </data>
-  <data name="CliApplication_AsPlannedNotAsked" xml:space="preserve">
-    <value>'{0}' keeps the plan of a run the command line does not ask: several paths, a target, an existing-file policy or a landing in place. Restore it where it was planned, or plan one path here.</value>
-  </data>
   <data name="CliApplication_ResumeIsNotPlanned" xml:space="preserve">
     <value>--resume runs a restore, and a plan restores nothing: plan the restore without --resume, or resume it without --plan or --export.</value>
   </data>
@@ -201,5 +198,17 @@
   </data>
   <data name="CliApplication_ForgetNamesTheRun" xml:space="preserve">
     <value>--forget lets one run go, so name it: restore-resume &lt;run&gt; --forget.</value>
+  </data>
+  <data name="DirectGateway_OriginalNeedsTheService" xml:space="preserve">
+    <value>The original location is where each file was captured, as a set's configured roots say, and only the service knows them. Restore it through the service, or name a folder with --output.</value>
+  </data>
+  <data name="DirectGateway_NotAnExistingFilePolicy" xml:space="preserve">
+    <value>'{0}' is not an existing-file policy (rename | overwrite).</value>
+  </data>
+  <data name="CliApplication_RestoreNeedsAnOutput" xml:space="preserve">
+    <value>Name where to restore with --output, or restore each file where it was captured with --target original.</value>
+  </data>
+  <data name="CliApplication_OriginalTakesNoOutput" xml:space="preserve">
+    <value>--target original lands each file where it was captured, so it takes no --output: use one or the other.</value>
   </data>
 </root>
