@@ -58,6 +58,8 @@ A direct-mode restore lands in place where `--output` points, as it always has.
 ## What this does not do
 
 - **Run a kept plan from the console** ([ADR-0114](0114-a-kept-plan-is-run-as-it-was-approved.md)).
+
+  > **2026-10 ([ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md)).** The console runs a kept plan too, held to it with the command line's own comparison, and only where nothing it said has changed.
 - **Restore to the original location in direct mode.** It needs the set's configuration, which the service holds.
 - **Read the run from the file.** The person still names the run they mean, and the file is held to it (ADR-0114).
 
@@ -72,3 +74,4 @@ A direct-mode restore lands in place where `--output` points, as it always has.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. `restore` takes several paths, `--target`, `--existing` and `--in-place`, asks the service the run and its plan in that shape, restores and plans several paths under the policy in direct mode while refusing the original location there, keeps a plan of the run as asked, and holds `--as-planned` to every field, so a plan the console kept runs from the command line. |
+| 2026-10 | Accepted | [ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md): the console runs a kept plan, which this record left to another. |

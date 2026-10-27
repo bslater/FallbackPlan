@@ -65,6 +65,8 @@ The restore is planned again, through the service or in direct mode, and the pla
 
   > **2026-10 ([ADR-0117](0117-the-command-line-asks-a-restore-as-the-console-does.md)).** The command line asks several paths, the original location, a policy and a landing in place, so a console's plan runs from it where it asks the run as kept.
 - **Run a kept plan from the console.**
+
+  > **2026-10 ([ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md)).** The console runs a kept plan too, held to it with the command line's own comparison, and only where nothing it said has changed.
 - **Hold room to the kept plan.** Free space moves by the minute, and the run's own refusal of a restore that will not fit is the check that matters.
 - **Hold the bytes written or read to the kept plan.** They follow from the files, which are held.
 
@@ -80,3 +82,4 @@ The restore is planned again, through the service or in direct mode, and the pla
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. `restore --as-planned <file>` reads the kept plan back, holds it to the run asked before anything is asked, plans again through either gateway, and runs only where the files, what is missing, what is held archived and the conflicts are what the kept plan said. Otherwise it names each change and writes nothing. |
 | 2026-10 | Accepted (amended) | [ADR-0117](0117-the-command-line-asks-a-restore-as-the-console-does.md): the command line asks the run the console asks, so §2's refusal of a run it does not ask is superseded; the run asked is held to the kept one field by field, and a console's plan runs from the command line. |
+| 2026-10 | Accepted | [ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md) takes up the console's run of a kept plan, which this record left owed: §3's comparison is shared, and the console runs a kept plan only where it holds. |
