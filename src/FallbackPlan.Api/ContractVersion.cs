@@ -743,8 +743,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// never asks, and a pre-1.73 service refuses the verb, which a console
     /// reads as none listed.
     /// </para>
+    /// <para>
+    /// 1.74 names the set a restore receipt's run restored (FR-RST-004,
+    /// ADR-0126). `RestoreReceiptDescriptor` gains `set`, null where the
+    /// receipt names none: one kept before receipt schema 9, or by a run that
+    /// knew no set. Additive: a pre-1.74 client ignores the field, and a
+    /// pre-1.74 service's row names no set.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 73);
+    public static ContractVersion Current { get; } = new(1, 74);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

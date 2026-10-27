@@ -1513,6 +1513,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
 
         var slices = SlicesOf(catalogue, snapshotId, plan, request);
+        var setName = SetNameOf(catalogue, snapshotId);
         using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
 
         // No load at all: the catalogue says where every record is, so the
@@ -1565,7 +1566,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 slice.LabelPrefix));
         }
 
-        var receipt = RestoreOriginalLocation.Merge(receipts);
+        var receipt = RestoreOriginalLocation.Merge(receipts) with { Set = setName };
 
         var directories = plan.Items
             .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
@@ -1682,18 +1683,41 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             return [new RestoreRootSlice(plan, request.OutputDirectory, string.Empty)];
         }
 
-        var row = catalogue.EnumerateSnapshots()
-            .FirstOrDefault(candidate => candidate.SnapshotId.Span.SequenceEqual(snapshotId));
-        var setId = row is null ? null : Convert.ToHexStringLower(row.BackupSetId.Span);
-        var set = (setId is null
-                ? null
-                : ClientConfiguration.Load(session.ConfigurationPath, logger).BackupSets.FirstOrDefault(candidate =>
-                    string.Equals(candidate.Id, setId, StringComparison.Ordinal)))
+        var set = SetOf(catalogue, snapshotId)
             ?? throw new CliFailureException(Strings.FormatDirectGateway_OriginalSetNotConfigured(session.ConfigurationPath));
 
         return RestoreOriginalLocation.Slice(
                 plan, [.. set.Roots.Select(root => new RestoreRoot(root.Path, root.Label))], out var unmapped)
             ?? throw new CliFailureException(Strings.FormatDirectGateway_OriginalLabelNotARoot(unmapped));
+    }
+
+    /// <summary>The set this state's configuration has the snapshot as a snapshot of, or null where it has none.</summary>
+    private BackupSetConfiguration? SetOf(Catalogue catalogue, byte[] snapshotId)
+    {
+        var row = catalogue.EnumerateSnapshots()
+            .FirstOrDefault(candidate => candidate.SnapshotId.Span.SequenceEqual(snapshotId));
+        var setId = row is null ? null : Convert.ToHexStringLower(row.BackupSetId.Span);
+        return setId is null
+            ? null
+            : ClientConfiguration.Load(session.ConfigurationPath, logger).BackupSets.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, setId, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The name of the snapshot's set, for its receipt to name (ADR-0126);
+    /// null where this state's configuration has none or does not read, since
+    /// naming a set never stops a restore.
+    /// </summary>
+    private string? SetNameOf(Catalogue catalogue, byte[] snapshotId)
+    {
+        try
+        {
+            return SetOf(catalogue, snapshotId)?.Name;
+        }
+        catch (Exception exception) when (exception is ClientStateException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The existing-file policy asked, in the words the service takes it in, as the executor takes it.</summary>

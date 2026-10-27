@@ -10,7 +10,8 @@ namespace FallbackPlan.Web.DomTests;
 /// outcome, when it ended, what became of its files and where it wrote them,
 /// the newest under the limit the console asks with and how many are kept; a
 /// receipt the service could not read said to be unreadable; and a service
-/// before contract 1.73 an empty card, not an error.
+/// before contract 1.73 an empty card, not an error. Each names the set it
+/// restored where its receipt does (ADR-0126).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -29,7 +30,7 @@ public sealed class RestoreReceiptsDomTests
             [
                 new RestoreReceiptDescriptor(
                     "0123456789abcdef", "partial", 1_700_000_000_000, new string('e', 32), "/srv/restored",
-                    Restored: 3, FoundInPlace: 1, Skipped: 2, Failed: 1, Degraded: 1),
+                    Restored: 3, FoundInPlace: 1, Skipped: 2, Failed: 1, Degraded: 1, Set: "photos"),
                 new RestoreReceiptDescriptor(
                     "fedcba9876543210", null, null, null, null, 0, 0, 0, 0, 0, Problem: "not a receipt"),
             ],
@@ -43,6 +44,7 @@ public sealed class RestoreReceiptsDomTests
 
         var card = page.Locator("#restore-receipts-card");
         await Expect(card).ToContainTextAsync("0123456789abcdef");
+        await Expect(card.Locator("tr", new() { HasText = "0123456789abcdef" })).ToContainTextAsync("photos");
         await Expect(card).ToContainTextAsync("partial");
         await Expect(card).ToContainTextAsync("3 restored (1 found in place), 2 skipped, 1 failed, 1 degraded");
         await Expect(card).ToContainTextAsync("/srv/restored");

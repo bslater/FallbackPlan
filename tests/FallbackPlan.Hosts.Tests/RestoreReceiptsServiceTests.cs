@@ -13,7 +13,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// too (contract 1.73, ADR-0125), newest first under a limit with how many it
 /// keeps: what became of each run's files and where it wrote them, never the
 /// paths, which are the backup's file names, and a receipt that does not read
-/// said not to.
+/// said not to. Each names the set it restored (contract 1.74, ADR-0126).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsServiceTests : IDisposable
@@ -54,7 +54,7 @@ public sealed class RestoreReceiptsServiceTests : IDisposable
 
         Assert.AreEqual(0, listed.ExitCode, listed.Error);
         Assert.Contains($"{restored.Run}  Complete", listed.Output, StringComparison.Ordinal);
-        Assert.Contains($"snapshot {snapshotId}", listed.Output, StringComparison.Ordinal);
+        Assert.Contains($"snapshot {snapshotId} of docs", listed.Output, StringComparison.Ordinal);
         Assert.Contains("1 restore receipt kept under", listed.Output, StringComparison.Ordinal);
         Assert.AreEqual(0, shown.ExitCode, shown.Error);
         Assert.AreEqual((await File.ReadAllTextAsync(restored.ReceiptPath)).Trim(), shown.Output.Trim());
@@ -90,6 +90,7 @@ public sealed class RestoreReceiptsServiceTests : IDisposable
             "newest first, the unreadable one by when it was written");
         var newest = listed.Receipts[0];
         Assert.AreEqual("complete", newest.Outcome);
+        Assert.AreEqual("docs", newest.Set, "the run restored a snapshot of the docs set");
         Assert.AreEqual(snapshotId, newest.SnapshotId);
         Assert.AreEqual(second.OutputDirectory, newest.WrittenTo);
         Assert.IsNotNull(newest.EndedAt);
@@ -98,6 +99,7 @@ public sealed class RestoreReceiptsServiceTests : IDisposable
         Assert.IsNull(newest.Problem);
         var unreadable = listed.Receipts[2];
         Assert.IsNull(unreadable.Outcome);
+        Assert.IsNull(unreadable.Set);
         Assert.IsFalse(string.IsNullOrWhiteSpace(unreadable.Problem));
         Assert.DoesNotContain(
             "notes.txt",
@@ -157,6 +159,7 @@ public sealed class RestoreReceiptsServiceTests : IDisposable
             Displaced = [],
             WrittenTo = "/srv/restored",
             Outcome = FallbackPlan.Restore.RestoreOutcome.Partial,
+            Set = "photos",
         }.Keep(Path.Combine(_harness.StateDirectory, "receipts"), "0123456789abcdef");
 
         var answer = await handler.ExecuteAsync(new ListRestoreReceiptsCommand(), _timeout.Token);
@@ -165,7 +168,7 @@ public sealed class RestoreReceiptsServiceTests : IDisposable
         Assert.AreEqual(
             new RestoreReceiptDescriptor(
                 "0123456789abcdef", "partial", 1_700_000_000_000, new string('e', 32), "/srv/restored",
-                Restored: 2, FoundInPlace: 1, Skipped: 1, Failed: 1, Degraded: 1),
+                Restored: 2, FoundInPlace: 1, Skipped: 1, Failed: 1, Degraded: 1, Set: "photos"),
             Assert.ContainsSingle(listed.Receipts));
         Assert.AreEqual(1, listed.Total);
     }

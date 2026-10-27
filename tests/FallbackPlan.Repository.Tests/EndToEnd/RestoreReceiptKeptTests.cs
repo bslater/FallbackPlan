@@ -7,7 +7,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// A run's receipt is kept (FR-RST-004, ADR-0122): as its run's own file under
 /// the folder a state directory keeps receipts in, written whole or not at
 /// all, so the service and the command line's direct mode keep it alike and
-/// "the restore succeeded" stays a claim a person can check.
+/// "the restore succeeded" stays a claim a person can check. At schema 9 it
+/// names the set whose snapshot its run restored, where the run knew it
+/// (ADR-0126), and says nothing of a set where it did not.
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptKeptTests : IDisposable
@@ -47,6 +49,30 @@ public sealed class RestoreReceiptKeptTests : IDisposable
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         Assert.AreEqual("second.txt", document.RootElement.GetProperty("items")[0].GetProperty("path").GetString());
         Assert.HasCount(1, Directory.GetFiles(receipts));
+    }
+
+    [TestMethod]
+    public void AReceiptNamesTheSetItsRunRestored_AtSchemaNine_AndOneThatKnewNoneSaysNothingOfOne()
+    {
+        var receipts = Path.Combine(_root, "receipts");
+
+        var named = (ReceiptOf("notes.txt") with { Set = "docs" }).Keep(receipts, "0123456789abcdef");
+        var unnamed = ReceiptOf("notes.txt").Keep(receipts, "fedcba9876543210");
+
+        Assert.AreEqual(9, RestoreReceipt.CurrentSchemaVersion);
+        using (var document = JsonDocument.Parse(File.ReadAllText(named)))
+        {
+            Assert.AreEqual("docs", document.RootElement.GetProperty("set").GetString());
+        }
+
+        using (var document = JsonDocument.Parse(File.ReadAllText(unnamed)))
+        {
+            Assert.IsFalse(document.RootElement.TryGetProperty("set", out _), "a run that knew no set names none");
+        }
+
+        var kept = RestoreReceipt.ReadKept(receipts);
+        Assert.AreEqual("docs", kept.Single(entry => entry.Run == "0123456789abcdef").Receipt!.Set);
+        Assert.IsNull(kept.Single(entry => entry.Run == "fedcba9876543210").Receipt!.Set);
     }
 
     private static RestoreReceipt ReceiptOf(string path) => new()

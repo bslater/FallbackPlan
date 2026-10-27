@@ -1222,7 +1222,7 @@ public sealed partial class ServiceCommandHandler(
                         slice.LabelPrefix));
                 }
 
-                var receipt = RestoreOriginalLocation.Merge(receipts);
+                var receipt = RestoreOriginalLocation.Merge(receipts) with { Set = record.SetName };
                 var receiptPath = PersistReceipt(receipt, options.RunId);
                 if (copies is not null)
                 {
@@ -1410,7 +1410,8 @@ public sealed partial class ServiceCommandHandler(
             FoundInPlace: receipt.Items.Count(item => item.FoundInPlace),
             Skipped: receipt.Items.Count(item => item.Outcome == "skipped"),
             Failed: receipt.Items.Count(item => item.Outcome == "failed"),
-            Degraded: receipt.Items.Count(item => item.Outcome == "degraded"));
+            Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
+            Set: receipt.Set);
 
     /// <summary>Lets a run left unfinished go: named no more, and its notice resolved (ADR-0115).</summary>
     private ServiceResult ForgetRestoreRun(ForgetRestoreRunCommand command)

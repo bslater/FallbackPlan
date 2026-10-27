@@ -1692,17 +1692,19 @@ function renderRestoreReceiptsCard() {
   } else {
     body = `
       <div class="table-wrap"><table class="data">
-        <thead><tr><th>Ended</th><th>Run</th><th>Outcome</th><th>Files</th><th>Written to</th></tr></thead>
+        <thead><tr><th>Ended</th><th>Run</th><th>Set</th><th>Outcome</th><th>Files</th><th>Written to</th></tr></thead>
         <tbody>${S.restoreReceipts.map(row => row.problem ? `
           <tr>
             <td>—</td>
             <td class="mono">${esc(row.run)}</td>
+            <td>—</td>
             <td>${badge({ cls: "warn", icon: "?" }, "unreadable")}</td>
             <td colspan="2">${esc(row.problem)}</td>
           </tr>` : `
           <tr>
             <td>${esc(fmtWhen(row.endedAt))}</td>
             <td class="mono">${esc(row.run)}</td>
+            <td>${esc(row.set ?? "—")}</td>
             <td>${esc(row.outcome)}</td>
             <td>${esc(files(row))}</td>
             <td class="mono detail">${esc(row.writtenTo)}</td>

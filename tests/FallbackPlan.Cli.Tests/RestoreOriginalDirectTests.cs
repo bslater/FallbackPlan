@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FallbackPlan.Application;
 
 namespace FallbackPlan.Cli.Tests;
@@ -11,7 +12,8 @@ namespace FallbackPlan.Cli.Tests;
 /// every direct run does. A snapshot of no set configured here, or a label
 /// the set no longer carries, is refused before anything is written. The
 /// plan and the run measure the room at every root together, and a plan kept
-/// for the original location runs as kept.
+/// for the original location runs as kept. A run of a set's snapshot names
+/// the set in its receipt, wherever it lands (FR-RST-004, ADR-0126).
 /// </summary>
 [TestClass]
 public sealed class RestoreOriginalDirectTests : IDisposable
@@ -66,6 +68,23 @@ public sealed class RestoreOriginalDirectTests : IDisposable
         var kept = await File.ReadAllTextAsync(Assert.ContainsSingle(Directory.GetFiles(Path.Combine(_cli.StatePath, "receipts"), "*.json")));
         Assert.Contains("\"docs/one.txt\"", kept, StringComparison.Ordinal);
         Assert.Contains("\"media/clip.txt\"", kept, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(kept);
+        Assert.AreEqual("docs", document.RootElement.GetProperty("set").GetString(), "the merged receipt names the set");
+    }
+
+    [TestMethod]
+    public async Task ARestoreOfASetsSnapshotToAFolder_NamesTheSetInItsReceipt()
+    {
+        var root = Path.Combine(_cli.WorkPath, "docs");
+        _cli.WriteFile("docs/one.txt", "first");
+        var snapshot = await BackUpAsync((root, "docs"));
+
+        var run = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"));
+
+        Assert.AreEqual(0, run.ExitCode, run.All);
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(
+            Assert.ContainsSingle(Directory.GetFiles(Path.Combine(_cli.StatePath, "receipts"), "*.json"))));
+        Assert.AreEqual("docs", document.RootElement.GetProperty("set").GetString());
     }
 
     [TestMethod]
