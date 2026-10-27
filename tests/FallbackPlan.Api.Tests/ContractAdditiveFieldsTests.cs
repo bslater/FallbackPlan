@@ -30,7 +30,9 @@ namespace FallbackPlan.Api.Tests;
 /// 1.64's bytes a restore plan says its run reads, the wire half of
 /// FR-RST-003's physical transfer size, and 1.65's paths a plan names as
 /// held only in an archival tier, the wire half of FR-RST-003's report of
-/// them.
+/// them; and 1.66's count of blobs a closed circuit passed over held only
+/// there, the wire half of FR-VER-003's report of a circuit that did not
+/// read them.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1073,6 +1075,25 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void WhatAClosedCircuitPassedOver_WireNameAndPre166Default()
+    {
+        // Contract 1.66 (FR-VER-003, ADR-0106): a sweep says how many blobs
+        // the circuit that last closed passed over because the store holds
+        // them only in an archival tier.
+        var modern = JsonSerializer.Serialize(
+            new DeepSweepDescriptor(IntervalDays: 30, CircuitClosedAt: 5_000, CircuitArchived: 3),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"circuit_archived\":3", modern, StringComparison.Ordinal);
+
+        // A pre-1.66 service sends none, and its circuit reads as having
+        // passed over nothing.
+        var old = modern.Replace(",\"circuit_archived\":3", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.AreEqual(0, JsonSerializer.Deserialize<DeepSweepDescriptor>(old, FrameCodec.SerializerOptions)!.CircuitArchived);
+    }
+
+    [TestMethod]
     public void WhatARestoreReads_WireNameAndPre164Default()
     {
         // Contract 1.64 (FR-RST-003): a plan says what its run reads from
@@ -1111,7 +1132,7 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         // reads as none reported, never as a sweep that has not run.
         var old = modern.Replace(
             ",\"staging_sweep\":{\"interval_days\":7,\"circuit_closed_at\":5000,\"read_this_circuit\":0,"
-                + "\"last_read_at\":6000,\"stalls\":0,\"stalled_on\":null}",
+                + "\"last_read_at\":6000,\"stalls\":0,\"stalled_on\":null,\"circuit_archived\":0}",
             "",
             StringComparison.Ordinal);
         Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");

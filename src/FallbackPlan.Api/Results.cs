@@ -1194,13 +1194,20 @@ public sealed record DestinationStatusDescriptor(
 /// The store key of the blob the last stalled segment could not read; null
 /// when the replica itself could not be read, and when nothing is stalled.
 /// </param>
+/// <param name="CircuitArchived">
+/// Blobs the circuit that last closed passed over because the store holds
+/// them only in an archival tier, unread (contract 1.66, ADR-0106). Zero
+/// when it read every one; then, and only then, the close says every stored
+/// object was read back. A service before 1.66 sends none.
+/// </param>
 public sealed record DeepSweepDescriptor(
     int? IntervalDays,
     ulong? CircuitClosedAt,
     int ReadThisCircuit = 0,
     ulong? LastReadAt = null,
     int Stalls = 0,
-    string? StalledOn = null);
+    string? StalledOn = null,
+    int CircuitArchived = 0);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>

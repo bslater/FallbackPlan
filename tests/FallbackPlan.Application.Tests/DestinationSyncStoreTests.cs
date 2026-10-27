@@ -667,6 +667,53 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void Open_ASchemaElevenLedger_Migrates_WithNothingCountedForItsLastCircuit()
+    {
+        // Schema 12 (ADR-0106) added how many blobs the last closed circuit
+        // passed over. An older row counted none apart, and its next circuit
+        // to close says how many.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 11, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "synced_sequence": 42, "sweep_completed_at": 900 } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-11 ledger must migrate, not quarantine");
+        Assert.AreEqual(900UL, record.SweepCompletedAt);
+        Assert.AreEqual(0, record.SweepClosedArchived);
+    }
+
+    [TestMethod]
+    public void RecordSweep_ACircuitThatClosesPastArchivedBlobs_KeepsHowMany_UntilTheNextCloses()
+    {
+        var store = DestinationSyncStore.Open(_state);
+
+        store.RecordSweep(SetId, "vault", cursor: "blobs/b", examined: 3, completedCircuit: false, nowUnixMilliseconds: 1_000, archived: 2);
+        var under = store.RecordSweep(SetId, "vault", cursor: "blobs/d", examined: 3, completedCircuit: false, nowUnixMilliseconds: 1_500, archived: 4);
+
+        Assert.AreEqual(0, under.SweepClosedArchived, "a circuit under way has closed past nothing yet");
+
+        var closed = store.RecordSweep(SetId, "vault", cursor: null, examined: 3, completedCircuit: true, nowUnixMilliseconds: 2_000, archived: 1);
+
+        Assert.AreEqual(7, closed.SweepClosedArchived, "every segment of the circuit counts");
+
+        var next = store.RecordSweep(SetId, "vault", cursor: "blobs/b", examined: 3, completedCircuit: false, nowUnixMilliseconds: 3_000, archived: 5);
+
+        Assert.AreEqual(7, next.SweepClosedArchived, "it is the closed circuit's count until another closes");
+
+        var second = store.RecordSweep(SetId, "vault", cursor: null, examined: 9, completedCircuit: true, nowUnixMilliseconds: 4_000);
+
+        Assert.AreEqual(5, second.SweepClosedArchived, "what its first segment passed over, though its last met none");
+        Assert.AreEqual(
+            0,
+            store.RecordSweep(SetId, "vault", cursor: null, examined: 9, completedCircuit: true, nowUnixMilliseconds: 5_000).SweepClosedArchived,
+            "a circuit that met none read every stored blob");
+    }
+
+    [TestMethod]
     public void RecordSweep_ACircuitThatMetSomethingArchived_KeepsItStanding_AndTheNextThatMeetsNoneEndsIt()
     {
         var store = DestinationSyncStore.Open(_state);
@@ -713,7 +760,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 12, "destinations": [
+            { "schema_version": 13, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -766,7 +813,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 11", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 12", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

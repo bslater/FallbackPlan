@@ -34,11 +34,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_WhatIsHeldOnlyInAnArchivalTier_IsRecordedAtOneSixtyFive()
+    public void ContractVersion_WhatAClosedCircuitPassedOver_IsRecordedAtOneSixtySix()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.65", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.66", ContractVersion.Current.ToString());
     }
 
     [TestMethod]

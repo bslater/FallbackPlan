@@ -130,6 +130,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0103](adr/0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md) | A restore plan names what is held only in an archival tier: the store contract's metadata says when a store holds an object only in a tier that serves nothing until it is rehydrated, and a read of one is refused as archived; the S3-compatible provider reads it from the storage class, the Intelligent-Tiering archive status and the restore status, the Azure Blob provider from the access tier, and both declare the hazard. The plan passes over an archived copy for one that holds it readable and names what every copy holds archived, apart from the missing (contract 1.65), and the console's wizard lists them before a restore is armed | **Built** | `Storage.Abstractions/StoreResults.cs` · `Storage.Abstractions/StoreObjectArchivedException` · `Storage.S3/S3ObjectStore` · `Storage.AzureBlob/AzureBlobObjectStore` · `Restore/FirstHolderStore` · `Restore/RestoreBlobSet` · `Agent/ServiceCommandHandler` · `Api/Results` · `Api/ContractVersion` · `Repository.Tests/RestoreArchiveTests`, `Storage.ContractTests/S3ObjectStoreTests`, `Storage.ContractTests/AzureBlobObjectStoreTests`, `Hosts.Tests/ObjectStoreDestinationTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0103--held-but-cold) |
 | [0104](adr/0104-a-replicas-readers-take-an-archived-object-as-archived.md) | A replica's readers take an archived object as archived: a sync's read-back counts a sample its store holds only in an archival tier neither proven nor failed, through the comparison and the sealed proof, and the deep sweep passes over such a blob, repairs nothing and closes its circuit past it. One notice for the pair, dated from when the readers first met one (ledger schema 11), says so until a circuit meets none, and a person's full read says how many it could not read | **Built** | `Replication/ReplicaVerifier` · `Repository/RepositoryReader` · `Repository/ReplicaSweep` · `Application/DestinationSyncStore` · `Agent/ArchivedReplicaNotice` · `Agent/FanOut` · `Agent/ReplicaSweepJob` · `Agent/ServiceCommandHandler` · `Replication.Tests/ReplicaVerifierTests`, `Repository.Tests/ArchivedBlobLoadTests`, `Repository.Tests/ReplicaSweepTests`, `Application.Tests/DestinationSyncStoreTests`, `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0104--cold-is-not-broken) |
 | [0105](adr/0105-a-drill-takes-archived-content-as-a-stated-limit.md) | A drill takes archived content as a stated limit: at a store with an archival tier the drill plans each sampled file first, and one whose content the store holds only there is proved as far as that content, not read and not failed, under a limit saying how many; the drill says it in the pair's notice for archived objects, and a missing object still fails it, naming no file | **Built** | `Agent/RecoveryDrillJob` · `Agent/ArchivedReplicaNotice` · `Hosts.Tests/ObjectStoreDestinationTests`, `Hosts.Tests/RecoveryDrillTests` · [notes](#0105--a-limit-not-a-failure) |
+| [0106](adr/0106-a-closed-circuit-says-what-it-did-not-read.md) | A closed circuit says what it did not read: the ledger (schema 12) keeps how many blobs the circuit that last closed passed over held only in an archival tier, contract 1.66 carries it as `circuit_archived`, the CLI prints `sweep:partial@` for such a circuit, and the console says how many it did not read rather than every stored object | **Built** | `Application/DestinationSyncStore` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusSweepTokenTests`, `Web.Tests/ConsoleDestinationCardTests`, `Web.DomTests/ConsoleViewsDomTests`, `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0106--closed-is-not-whole) |
 
 ---
 
@@ -3281,9 +3282,9 @@ not read and does not claim every stored object was checked.
 
 What remains is recorded rather than done. The status row's sweep says when
 a circuit closed, and a circuit that passed over archived blobs closes too,
-so that no longer means every object was read; the notice says so. A drill
-whose sample is archived failed in the provider's words, until
-[0105](#0105--a-limit-not-a-failure).
+so that no longer meant every object was read, until
+[0106](#0106--closed-is-not-whole). A drill whose sample is archived failed in
+the provider's words, until [0105](#0105--a-limit-not-a-failure).
 
 ### 0105 — a limit, not a failure
 
@@ -3310,3 +3311,21 @@ and the path is kept beside the notice for whoever unlocks the set.
 What remains is recorded rather than done. The sample is drawn as before, so a
 drill that met only archived files proves no content and says so; and a
 replica whose index a rule archived is met as it was.
+
+### 0106 — closed is not whole
+
+0104 left the status row as it was, and every surface read a closed circuit
+as every stored object read back. The console's card said so, and the CLI
+printed `sweep:ok@` the day it closed, for a circuit that had passed over
+every archived data blob without reading one.
+
+Now `Application/DestinationSyncStore` keeps, at schema 12, how many blobs
+the circuit that last closed passed over, and `Agent/ServiceCommandHandler`
+sends it as contract 1.66's `circuit_archived`. `Cli/CliApplication` prints
+`sweep:partial@` for such a circuit, so a script reading `ok` stays right,
+and the console says "every stored object but N held only in an archival
+tier read back". A circuit that passes over none goes back to every stored
+object read back.
+
+What remains is recorded rather than done. A circuit that closed before
+schema 12 reads as passing over none until the next one closes.

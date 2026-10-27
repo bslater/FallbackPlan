@@ -409,6 +409,8 @@ and gives the cadence, or that only a person's request reads the destination.
 A destination nothing reads back in full reports no sweep, rather than one
 that has not run.
 
+> **2026-10 ([ADR-0106](../adr/0106-a-closed-circuit-says-what-it-did-not-read.md)).** A circuit closes past what the store holds only in an archival tier, so the row also says how many blobs the closed circuit passed over (contract 1.66). Only a circuit that passed over none supports every stored object having been read back.
+
 ### 5.6 What damage reaches
 
 Damage that stands — a peer's, which nothing here can replace, or a local
