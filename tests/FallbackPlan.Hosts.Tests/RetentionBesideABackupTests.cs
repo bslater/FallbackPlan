@@ -122,7 +122,14 @@ public sealed class RetentionBesideABackupTests : IDisposable
             await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
         var oldest = listed.Snapshots.OrderBy(snapshot => snapshot.CapturedAt).First().SnapshotId;
 
-        _harness.WriteSourceFile("many/file-00001.txt", "changed before the third backup");
+        // Every file changed, so the third backup reads each one again and
+        // scans as long as the first did: with one changed, its scan can end
+        // before the deletion arrives, and nothing is parked for it to hold.
+        for (var i = 0; i < 1500; i++)
+        {
+            _harness.WriteSourceFile($"many/file-{i:d5}.txt", $"contents of file {i}, changed before the third backup");
+        }
+
         var backup = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now.AddDays(-3), userInitiated: false);
         while (!runtime.Jobs.Jobs.Any(job =>
             job.BackupSetId == set.Id && job.State is JobState.Scanning or JobState.Publishing))
