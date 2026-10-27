@@ -33,7 +33,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// (FR-RST-003, ADR-0103); the sweep passes over such a blob rather than
 /// stopping at it, a sync's read-back counts it neither way, and either says
 /// so in a notice that a circuit meeting none resolves (FR-VER-002,
-/// FR-VER-001, ADR-0104).
+/// FR-VER-001, ADR-0104). A drill proves such files as far as their content,
+/// under a stated limit, and one missing an object still fails, naming no
+/// file (FR-DRL-002, ADR-0105).
 /// </summary>
 /// <remarks>
 /// The credential reaches the service only as an envelope sealed to its
@@ -517,6 +519,71 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         var record = runtime.DestinationSync.Find(Harness.DocsSetId, "cloud");
         Assert.IsNotNull(record?.DrilledAt);
         Assert.IsNull(record.DrillFailure, record.DrillFailure);
+        Assert.DoesNotContain("archival tier", record.DrillLimit ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Drill_OfAStoreHoldingTheSampledContentOnlyArchived_PassesWithAStatedLimit_AskingForNoneOfIt()
+    {
+        // A lifecycle rule moved the replica's data blobs to an archival tier
+        // (ADR-0105). A restore of the sample would be refused, which is no
+        // damage: the road back is proved as far as the content, and the
+        // drill says what it could not read.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        var data = Store.KeysIn(Namespace).Where(key => key.Contains("/blobs/data/", StringComparison.Ordinal)).ToList();
+        foreach (var key in data)
+        {
+            Store.Archive(Namespace, key);
+        }
+
+        var asked = Store.Requests.Count;
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<DrillResult>(
+            await handler.ExecuteAsync(new RunDrillCommand("docs", "cloud"), Timeout), out var drilled);
+
+        Assert.AreEqual(0, drilled.Failed, string.Join(" | ", drilled.Lines));
+        var record = Pair(runtime, "cloud");
+        Assert.IsNull(record.DrillFailure, record.DrillFailure);
+        Assert.IsNotNull(record.DrillLimit, "a pass that read none of the content says so");
+        Assert.Contains("archival tier", record.DrillLimit, StringComparison.Ordinal);
+        Assert.IsGreaterThan(0, record.DrillFiles, "the sampled files are proved as far as their content");
+        Assert.IsFalse(
+            Store.Requests.Skip(asked).Any(request => request.Method == "GET" && data.Any(key => request.Target.Contains(key, StringComparison.Ordinal))),
+            "nothing asks the store for what it said it will not serve");
+        Assert.IsFalse(
+            runtime.Notices.Unacknowledged.Any(notice => notice.Key.StartsWith("drill-failed:", StringComparison.Ordinal)),
+            "an archived sample is not a drill that could not restore");
+        Assert.IsNotNull(ArchivedNotice(runtime), "the drill is one of the replica's readers");
+    }
+
+    [TestMethod]
+    public async Task Drill_OfAStoreMissingAnObjectASampledFileNeeds_StillFails()
+    {
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        foreach (var key in Store.KeysIn(Namespace).Where(key => key.Contains("/blobs/data/", StringComparison.Ordinal)).ToList())
+        {
+            Store.Remove(Namespace, key);
+        }
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<DrillResult>(
+            await handler.ExecuteAsync(new RunDrillCommand("docs", "cloud"), Timeout), out var drilled);
+
+        Assert.AreEqual(1, drilled.Failed, string.Join(" | ", drilled.Lines));
+        var record = Pair(runtime, "cloud");
+        Assert.IsNotNull(record.DrillFailure, "an object gone is damage, however the drill finds it");
+        Assert.Contains("missing", record.DrillFailure, StringComparison.Ordinal);
+        Assert.DoesNotContain("a.txt", record.DrillFailure, StringComparison.Ordinal);
+        Assert.DoesNotContain("b.txt", record.DrillFailure, StringComparison.Ordinal);
+        Assert.IsNull(record.DrillLimit);
     }
 
     [TestMethod]
