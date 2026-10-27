@@ -72,6 +72,34 @@ public sealed class GatewayRestoreReportTests
     }
 
     [TestMethod]
+    public async Task APlanExported_KeepsWhatTheServiceAnswered()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 9_000, [], ArchivedObjects: ["docs/cold.txt"], ReadBytes: 3_000));
+        var file = Path.Combine(Path.GetTempPath(), $"fbp-plan-{Guid.NewGuid():N}.json");
+        try
+        {
+            var report = await ThroughAsync(
+                client,
+                (gateway, token) => gateway.PlanRestoreAsync(new RestoreRequest(SnapshotId, "docs", "/out", PlanExport: file), token),
+                timeout.Token);
+
+            Assert.IsTrue(report.Lines.Any(line => line.Contains(file, StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+            using var document = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(file, timeout.Token));
+            var plan = document.RootElement.GetProperty("plan");
+            Assert.AreEqual("docs/cold.txt", plan.GetProperty("archived_objects")[0].GetString());
+            Assert.AreEqual(3_000, plan.GetProperty("read_bytes").GetInt64());
+            Assert.AreEqual("docs", document.RootElement.GetProperty("path").GetString());
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [TestMethod]
     public async Task APlanNamingFilesHeldOnlyInAnArchivalTier_IsNotOk_AndNamesThem()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));

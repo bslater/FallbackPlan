@@ -132,6 +132,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0105](adr/0105-a-drill-takes-archived-content-as-a-stated-limit.md) | A drill takes archived content as a stated limit: at a store with an archival tier the drill plans each sampled file first, and one whose content the store holds only there is proved as far as that content, not read and not failed, under a limit saying how many; the drill says it in the pair's notice for archived objects, and a missing object still fails it, naming no file | **Built** | `Agent/RecoveryDrillJob` · `Agent/ArchivedReplicaNotice` · `Hosts.Tests/ObjectStoreDestinationTests`, `Hosts.Tests/RecoveryDrillTests` · [notes](#0105--a-limit-not-a-failure) |
 | [0106](adr/0106-a-closed-circuit-says-what-it-did-not-read.md) | A closed circuit says what it did not read: the ledger (schema 12) keeps how many blobs the circuit that last closed passed over held only in an archival tier, contract 1.66 carries it as `circuit_archived`, the CLI prints `sweep:partial@` for such a circuit, and the console says how many it did not read rather than every stored object | **Built** | `Application/DestinationSyncStore` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusSweepTokenTests`, `Web.Tests/ConsoleDestinationCardTests`, `Web.DomTests/ConsoleViewsDomTests`, `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0106--closed-is-not-whole) |
 | [0107](adr/0107-the-command-line-plans-a-restore-on-its-own.md) | The command line plans a restore on its own: `restore --plan` prints the plan for the run `restore` would make, through the service or in direct mode alike, restores nothing, and exits non-zero unless that run would restore every file and fit; a plan is still not exported to a file, and a restore is not resumed | **Built** | `Cli/CliApplication` · `Cli/OperationGateway` · `Cli/RestorePlanReport` · `Restore/RestorePlanFigures` · `Cli.Tests/RestorePlanCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/ClientModeTests`, `Repository.Tests/RestorePlanTests`, `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0107--a-plan-from-the-shell) |
+| [0108](adr/0108-a-restores-plan-can-be-kept-in-a-file.md) | A restore's plan can be kept in a file: `restore --export <file>` keeps the plan as JSON, in the contract's own words beside the run it was made for, implies `--plan` so nothing is restored, and refuses a file already there; a kept plan is not run | **Built** | `Cli/CliApplication` · `Cli/RestorePlanExport` · `Cli/RestorePlanReport` · `Cli.Tests/RestorePlanCommandTests`, `Cli.Tests/GatewayRestoreReportTests` · [notes](#0108--a-plan-kept) |
 
 ---
 
@@ -3347,7 +3348,20 @@ get back for the service's plan and this one, and `Cli/RestorePlanReport`
 renders either. The verb exits non-zero unless the run would restore every
 file and fit, so a script can plan before it restores.
 
-What remains is recorded rather than done. A plan prints but is not exported
-to a file another person or tool can run later, and a restore cut short is run
-again from the start, its existing-file policy settling what the first run
-wrote.
+What remains is recorded rather than done. A plan printed but was not kept
+in a file, until [0108](#0108--a-plan-kept); a restore cut short is run again
+from the start, its existing-file policy settling what the first run wrote.
+
+### 0108 — a plan kept
+
+`restore --plan` printed a plan that lasted as long as the shell's scrollback.
+Now `restore --export <file>` keeps it as JSON as well: `Cli/RestorePlanExport`
+writes what the file is and its version, the contract the plan was answered
+under, the snapshot, path and destination it was made for, when, and the plan
+in the contract's own words, so a reader of the file reads what a client of the
+wire does. It implies `--plan`, so nothing is restored, and a file already
+there is refused before anything is asked and left alone, the file created new
+or not at all.
+
+What remains is recorded rather than done. A kept plan is not run, since
+running one means planning again, and the console's wizard keeps none.

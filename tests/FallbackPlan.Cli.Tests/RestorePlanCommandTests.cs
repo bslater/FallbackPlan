@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FallbackPlan.Cli;
 
 namespace FallbackPlan.Cli.Tests;
@@ -7,6 +8,8 @@ namespace FallbackPlan.Cli.Tests;
 /// ADR-0107): what the run would write and read, whether it fits, and what it
 /// could not bring back, with nothing written. The exit code says whether the
 /// run would restore every file, so a script can plan before it restores.
+/// A plan exported to a file is kept as JSON, the plan's own figures beside
+/// the run it was made for (ADR-0108).
 /// </summary>
 /// <remarks>
 /// In direct mode the CLI makes the plan itself, as it runs the restore
@@ -61,6 +64,92 @@ public sealed class RestorePlanCommandTests : IDisposable
         Assert.Contains("missing", plan.All, StringComparison.Ordinal);
         Assert.Contains("one.txt", plan.All, StringComparison.Ordinal);
         Assert.Contains("two.txt", plan.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Plan_Exported_IsKeptAsJson_BesidePrintingIt()
+    {
+        var snapshot = await BackUpAsync();
+        Directory.Delete(Path.Combine(_cli.RepositoryPath, "blobs", "data"), recursive: true);
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+        var file = Path.Combine(_cli.WorkPath, "plan.json");
+
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan", "--export", file);
+
+        Assert.AreNotEqual(0, plan.ExitCode, "the plan names files a run would fail, exported or not");
+        Assert.Contains(file, plan.All, StringComparison.Ordinal);
+        Assert.Contains("missing", plan.All, StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(file));
+        var root = document.RootElement;
+        Assert.AreEqual("fallbackplan-restore-plan", root.GetProperty("kind").GetString());
+        Assert.AreEqual(1, root.GetProperty("version").GetInt32());
+        Assert.AreEqual(snapshot, root.GetProperty("snapshot_id").GetString());
+        Assert.AreEqual(destination, root.GetProperty("output_directory").GetString());
+        Assert.AreEqual(JsonValueKind.Null, root.GetProperty("path").ValueKind);
+        Assert.AreEqual(2, root.GetProperty("plan").GetProperty("files").GetInt64());
+        Assert.AreEqual(2, root.GetProperty("plan").GetProperty("missing_objects").GetArrayLength());
+        Assert.IsFalse(Directory.Exists(destination), "an exported plan restores nothing either");
+    }
+
+    [TestMethod]
+    public async Task Export_ImpliesAPlan_AndRestoresNothing()
+    {
+        var snapshot = await BackUpAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+        var file = Path.Combine(_cli.WorkPath, "plan.json");
+
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--export", file);
+
+        Assert.AreEqual(0, plan.ExitCode, plan.All);
+        Assert.IsTrue(File.Exists(file));
+        Assert.Contains("nothing was restored", plan.All, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(destination));
+    }
+
+    [TestMethod]
+    public async Task Plan_ExportedOverAFileAlreadyThere_IsRefused_AndLeavesItAlone()
+    {
+        var snapshot = await BackUpAsync();
+        var file = Path.Combine(_cli.WorkPath, "plan.json");
+        await File.WriteAllTextAsync(file, "somebody's");
+
+        var plan = await _cli.RunAsync(
+            "restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"), "--plan", "--export", file);
+
+        Assert.AreNotEqual(0, plan.ExitCode, plan.All);
+        Assert.Contains("already exists", plan.All, StringComparison.Ordinal);
+        Assert.AreEqual("somebody's", await File.ReadAllTextAsync(file));
+    }
+
+    [TestMethod]
+    public async Task Plan_ExportedOverAFileAlreadyThere_IsRefusedBeforeAnythingIsAsked()
+    {
+        // A snapshot nobody holds: had the plan been asked for, that would be
+        // the answer.
+        await _cli.InitAsync();
+        var file = _cli.WriteFile("plan.json", "somebody's");
+
+        var plan = await _cli.RunAsync(
+            "restore", new string('0', 32), "--output", Path.Combine(_cli.WorkPath, "restored"), "--export", file);
+
+        Assert.AreNotEqual(0, plan.ExitCode, plan.All);
+        Assert.Contains("already exists", plan.All, StringComparison.Ordinal);
+        Assert.DoesNotContain("knows nothing", plan.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Export_OverAFileThatAppearedSinceTheCheck_IsRefused_AndLeavesItAlone()
+    {
+        // The check before anything is asked can be outrun: the file is made
+        // new or not at all.
+        var file = _cli.WriteFile("late.json", "somebody's");
+
+        var refused = Assert.ThrowsExactly<CliFailureException>(() => RestorePlanExport.Write(
+            file, new RestoreRequest(new string('e', 32), null, "/out"), new Api.RestorePlanResult(1, 1, [])));
+
+        Assert.Contains("already exists", refused.Message, StringComparison.Ordinal);
+        Assert.AreEqual("somebody's", File.ReadAllText(file));
     }
 
     public void Dispose() => _cli.Dispose();
