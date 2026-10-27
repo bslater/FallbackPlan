@@ -137,6 +137,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0110](adr/0110-the-console-resumes-a-restore-cut-short.md) | The console resumes a restore cut short: a restore's result names the run a resume of it gives (contract 1.68), the wizard offers to restore what is left of a run that failed or was stopped, as it was confirmed and naming that run, and says what was found in place; the command line says how to resume such a run | **Built** | `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Web.DomTests/RestoreWizardDomTests`, `Web.Tests/ConsoleRestoreResultScriptTests`, `Hosts.Tests/RestoreResumeServiceTests`, `Cli.Tests/GatewayRestoreReportTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0110--a-restore-resumed-from-the-console) |
 | [0111](adr/0111-a-cloud-destination-says-what-its-store-was-asked.md) | A cloud destination says what its store was asked: each network store tells an observer of every request it sends, once an attempt, with its bytes; the service counts them by destination and by UTC day; and the destination's status row says what its store was asked over the thirty days ending today, and when counting began where that falls inside them (contract 1.69), on the command line and the console | **Built** | `Storage.Abstractions/IStoreRequestObserver` · `Storage.S3/S3ObjectStore`, `Storage.AzureBlob/AzureBlobObjectStore` · `Application/StoreRequestLedger` · `Agent/StoreComposition`, `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Storage.ContractTests/StoreRequestObserverTests`, `Application.Tests/StoreRequestLedgerTests`, `Hosts.Tests/ObjectStoreDestinationTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusRequestsLineTests`, `Web.DomTests/DestinationRequestsDomTests` · [notes](#0111--what-a-cloud-destinations-store-was-asked) |
 | [0112](adr/0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md) | A store that archives a replica's metadata restores nothing: each sync to an object store asks after the replica's format with a head, the sync's read-back and the deep sweep tell an archived metadata blob from a data blob, the ledger keeps the first object met until it is served again (schema 13), and a notice and the status row say nothing restores from the destination until it is rehydrated and that only data blobs may be held archived (contract 1.70), on the command line and the console | **Built** | `Agent/FanOut`, `Agent/ReplicaSweepJob`, `Agent/ArchivedMetadataNotice`, `Agent/ServiceCommandHandler` · `Application/DestinationSyncStore` · `Cli/CliApplication` · `Hosts.Tests/ObjectStoreDestinationTests`, `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusArchivedMetadataLineTests`, `Web.DomTests/ArchivedMetadataDomTests` · [notes](#0112--a-replicas-metadata-held-archived) |
+| [0113](adr/0113-the-console-keeps-a-restores-plan.md) | The console keeps a restore's plan: the file's shape moves into the contract's assembly at version 2, which keeps version 1's fields and adds the run as asked, and both clients write it; the console's endpoint asks the service for the plan the wizard sends and gives back the file, and the wizard offers to keep a plan while one is on screen | **Built** | `Api/RestorePlanFile` · `Cli/RestorePlanExport` · `Web/WebConsoleHost` · `Api.Tests/RestorePlanFileTests`, `Web.Tests/ConsoleRestorePlanFileTests`, `Web.DomTests/RestoreWizardDomTests`, `Cli.Tests/RestorePlanCommandTests` · [notes](#0113--a-restores-plan-kept-from-the-console) |
 
 ---
 
@@ -3448,3 +3449,17 @@ on its summary.
 What remains is recorded rather than done. An index object archived while
 the format stays served is met by a drill or a restore, as before, and the
 store's lifecycle rule itself is not read.
+
+### 0113 — a restore's plan kept from the console
+
+The wizard showed its plan and let it go when the dialog closed, and the file
+the command line keeps held one path where the wizard asks several, a target,
+a policy and a landing in place. The file's shape now lives in the contract's
+assembly at version 2 (ADR-0108 Amendment 1): every field of version 1 with
+its meaning, the run as asked beside them, and never the restore source. The
+command line writes it, and the console's endpoint asks the service for the
+plan the wizard sends and gives the file back for the browser to save; the
+wizard offers it while a plan is on screen.
+
+What remains is recorded rather than done. A kept plan is still not run, from
+either client.

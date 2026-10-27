@@ -5982,6 +5982,8 @@ function rstStep6() {
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn" data-action="rst-back">‹ Back</button>
+      ${plan ? `<button type="button" class="btn" id="rst-keep-plan" data-action="rst-keep-plan"
+        title="Save this plan as a file, in the shape restore --export writes">Keep plan</button>` : ""}
       <button type="button" class="btn danger" id="rst-run-go" data-action="rst-run" disabled>Restore</button>
     </div>`;
 }
@@ -6113,17 +6115,7 @@ const rstActions = {
 
     // Asked with the run's shape, so the plan measures the room where the
     // run will write (FR-RST-003).
-    const plan = await run({
-      command: "plan_restore",
-      snapshotId: W.snapshot.snapshotId,
-      path: null,
-      source: W.source.sourceId,
-      paths: rstCompile(),
-      outputDirectory: W.target === "original" ? "" : W.output,
-      target: W.target,
-      existing: W.existing,
-      inPlace: true,
-    }, { errToast: "The plan refused" });
+    const plan = await run(rstPlanRequest(), { errToast: "The plan refused" });
     if (!W || W.step !== 6) return;
     if (plan?.result === "restore_plan") {
       W.plan = plan;
@@ -6164,6 +6156,43 @@ Object.assign(actions, {
     });
   },
 
+  // The plan kept as the file restore --export writes (ADR-0113): asked of
+  // the service again through this console's own endpoint, which answers in
+  // the contract's words, and saved where this browser's person chooses. The
+  // service writes no file, and neither does the console.
+  async "rst-keep-plan"(el) {
+    await withBusy(el, async () => {
+      let response;
+      try {
+        response = await fetch("/api/restore-plan-file", {
+          method: "POST",
+          headers: session
+            ? { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-FallbackPlan-Session": session }
+            : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify(rstPlanRequest()),
+        });
+      } catch {
+        toast("warn", "The console process stopped answering.");
+        return;
+      }
+      const named = /filename="([^"]+)"/.exec(response.headers.get("Content-Disposition") ?? "");
+      if (!response.ok || !named) {
+        const body = await safeJson(response);
+        toast("bad", body?.message ?? "The plan was not kept.");
+        return;
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = named[1];
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast("ok", `Plan kept as ${named[1]}.`);
+    });
+  },
+
   // The run again, as it was confirmed, naming the run it continues
   // (ADR-0110): what already landed is left, and the rest restored.
   async "rst-resume"(el) {
@@ -6172,6 +6201,21 @@ Object.assign(actions, {
     });
   },
 });
+
+/* The plan of the run the wizard is about to confirm, as the service is asked it. */
+function rstPlanRequest() {
+  return {
+    command: "plan_restore",
+    snapshotId: W.snapshot.snapshotId,
+    path: null,
+    source: W.source.sourceId,
+    paths: rstCompile(),
+    outputDirectory: W.target === "original" ? "" : W.output,
+    target: W.target,
+    existing: W.existing,
+    inPlace: true,
+  };
+}
 
 /* The restore the wizard confirmed, with what this asking adds to it. */
 async function rstRunRestore(extra, refused) {

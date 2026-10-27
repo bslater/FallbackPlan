@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -211,6 +212,8 @@ public static class WebConsoleHost
             TimedAsync(context, log, "/api/retention-apply", () => RetentionApplyAsync(context, clients, auth)));
         app.MapPost("/api/destination-credentials", (HttpContext context) =>
             TimedAsync(context, log, "/api/destination-credentials", () => DestinationCredentialsAsync(context, clients, auth)));
+        app.MapPost("/api/restore-plan-file", (HttpContext context) =>
+            TimedAsync(context, log, "/api/restore-plan-file", () => RestorePlanFileAsync(context, clients, auth)));
         app.MapPost("/api/delete-snapshots", (HttpContext context) =>
             TimedAsync(context, log, "/api/delete-snapshots", () => DeleteSnapshotsAsync(context, clients, auth)));
         app.MapPost("/api/setup", (HttpContext context) =>
@@ -327,6 +330,87 @@ public static class WebConsoleHost
         context.Response.Headers.CacheControl = "no-store";
         await JsonSerializer.SerializeAsync<ServiceResult>(
             context.Response.Body, result, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A restore's plan kept from the console (FR-RST-003, ADR-0113): the plan
+    /// the wizard shows, asked of the service again as the wizard asks it, and
+    /// given back as the file <c>restore --export</c> keeps, in the contract's
+    /// own words, for the browser to save where its person chooses.
+    /// </summary>
+    /// <remarks>
+    /// Only a plan is asked through it, never a run. A plan names a backup's
+    /// files, so it is asked under this console's token and the browser's
+    /// session, through the source the wizard unlocked; the service's refusal
+    /// of it comes back as the command relay would give it, with no file.
+    /// </remarks>
+    private static async Task RestorePlanFileAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        ServiceCommand? command;
+        try
+        {
+            command = await JsonSerializer.DeserializeAsync<ServiceCommand>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (command is not PlanRestoreCommand asked)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("only plan_restore is kept as a file"))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        ServiceResult result;
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+            var presented = context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session
+                ? await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                    .ConfigureAwait(false)
+                : null;
+            result = presented is ServiceError { Reason: ServiceErrorReason.Refused } dead
+                ? dead
+                : await client.ExecuteAsync(asked, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+            return;
+        }
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-store";
+        if (result is not RestorePlanResult plan)
+        {
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, result, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+            return;
+        }
+
+        // Named for the snapshot and the moment, from characters a header
+        // and every file system take as they are.
+        var at = DateTimeOffset.UtcNow;
+        var snapshot = string.Concat(asked.SnapshotId.Where(char.IsAsciiLetterOrDigit).Take(8));
+        context.Response.Headers.ContentDisposition = string.Create(
+            CultureInfo.InvariantCulture, $"attachment; filename=\"restore-plan-{snapshot}-{at:yyyyMMdd-HHmmss}.json\"");
+        await context.Response.WriteAsync(RestorePlanFile.Serialize(asked, plan, at), context.RequestAborted)
+            .ConfigureAwait(false);
     }
 
     /// <summary>What the restore-gate endpoint reads from the page.</summary>

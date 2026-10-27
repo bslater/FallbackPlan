@@ -23,7 +23,9 @@ namespace FallbackPlan.Web.DomTests;
 /// names what every copy holds only in an archival tier (ADR-0103). The result says which
 /// captured metadata the files came back without (FR-RST-004), and a run that
 /// failed offers to resume it, naming the run the service said it was, and
-/// says what the resume found already in place (FR-RST-008, ADR-0110). Its file tree
+/// says what the resume found already in place (FR-RST-008, ADR-0110). A
+/// plan on screen can be kept as the file the command line keeps
+/// (FR-RST-003, ADR-0113), and a refused one offers nothing to keep. Its file tree
 /// shows what will not be restored a shade lighter rather than struck
 /// through, with toggles large enough to hit, as the backup wizard's does.
 /// </summary>
@@ -525,6 +527,40 @@ public sealed class RestoreWizardDomTests
         await Expect(page.Locator("#confirm-word")).ToBeDisabledAsync();
         await Expect(page.Locator("#rst-run-go")).ToBeDisabledAsync();
         await Expect(page.Locator("#dialog [data-action=\"rst-back\"]")).ToBeEnabledAsync();
+        await Expect(page.Locator("#rst-keep-plan")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task Wizard_APlanOnScreen_CanBeKept_AsTheFileTheCommandLineKeeps()
+    {
+        // FR-RST-003, ADR-0113: the plan, kept where the person who unlocked
+        // it sits, in the shape restore --export writes, so a script reads one
+        // shape whichever client kept it.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(1, 42, [], ArchivedObjects: ["notes.txt"])
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await Expect(page.Locator("#rst-keep-plan")).ToBeEnabledAsync();
+
+        var download = await page.RunAndWaitForDownloadAsync(() => page.ClickAsync("#rst-keep-plan"));
+
+        StringAssert.StartsWith(download.SuggestedFilename, "restore-plan-");
+        using var document = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync((await download.PathAsync())!));
+        var root = document.RootElement;
+        Assert.AreEqual("fallbackplan-restore-plan", root.GetProperty("kind").GetString());
+        Assert.AreEqual("notes.txt", root.GetProperty("paths")[0].GetString());
+        Assert.AreEqual("/restore/out", root.GetProperty("output_directory").GetString());
+        Assert.AreEqual("notes.txt", root.GetProperty("plan").GetProperty("archived_objects")[0].GetString());
+        Assert.IsFalse(root.TryGetProperty("source", out _));
+        Assert.HasCount(2, harness.Clients.Client.Received.OfType<PlanRestoreCommand>(), "the file holds the service's answer, asked again");
+        await Expect(page.Locator("#rst-run-go")).ToBeVisibleAsync();
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<RunRestoreCommand>(), "keeping a plan restores nothing");
     }
 
     [TestMethod]
