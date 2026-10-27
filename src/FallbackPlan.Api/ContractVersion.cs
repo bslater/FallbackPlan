@@ -670,8 +670,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// `missing_objects`. Additive: a pre-1.65 client ignores the field, and
     /// a pre-1.65 service's plan names none.
     /// </para>
+    /// <para>
+    /// 1.66 says what a closed circuit did not read (FR-VER-003, ADR-0106).
+    /// `DeepSweepDescriptor` gains `circuit_archived`: how many blobs the
+    /// circuit that last closed passed over because the store holds them
+    /// only in an archival tier. Only a circuit that passed over none says
+    /// every stored object was read back. Additive: a pre-1.66 client ignores
+    /// the field, and a pre-1.66 service's circuit reads as passing over none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 65);
+    public static ContractVersion Current { get; } = new(1, 66);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

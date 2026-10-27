@@ -3239,7 +3239,8 @@ public sealed partial class ServiceCommandHandler(
                 ledger?.SweptThisCircuit ?? 0,
                 ledger?.SweptAt,
                 ledger?.SweepStalls ?? 0,
-                ledger?.SweepStalledOn);
+                ledger?.SweepStalledOn,
+                ledger?.SweepClosedArchived ?? 0);
 
     /// <summary>
     /// A staging set's sweep of its own staging archive, as a destination's

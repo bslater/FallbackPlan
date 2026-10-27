@@ -279,6 +279,15 @@ public sealed record DestinationSyncRecord
     public ulong? ArchivedSince { get; init; }
 
     /// <summary>
+    /// Blobs the circuit that last closed passed over because the store holds
+    /// them only in an archival tier; zero when it read every one, and until
+    /// one closes (schema 12, [ADR-0106](../../docs/adr/0106-a-closed-circuit-says-what-it-did-not-read.md)).
+    /// </summary>
+    [JsonPropertyName("sweep_closed_archived")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int SweepClosedArchived { get; init; }
+
+    /// <summary>
     /// The snapshot whose complete closure first made this destination a full
     /// replica; null while it holds none. Declared ahead of its writer
     /// (ADR-0047 §6): nothing fills it yet — the schema carries the field so
@@ -545,7 +554,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 11;
+    private const int CurrentSchemaVersion = 12;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -685,7 +694,9 @@ public sealed class DestinationSyncStore
         // standing there is taken as the first of its run. Schema 11 added what
         // the readers met held only in an archival tier, none on an older row
         // because nothing told it apart: the next reader to meet one says so.
-        // Only 1 → 2 changes a row, below.
+        // Schema 12 added how many blobs the last closed circuit passed over,
+        // none on an older row, which counted none apart: the next circuit to
+        // close says how many. Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -1070,6 +1081,9 @@ public sealed class DestinationSyncStore
             // A circuit that closes having met nothing archived ends the run
             // of such meetings; one that met some keeps it standing.
             SweepArchived = completedCircuit ? 0 : (previous?.SweepArchived ?? 0) + archived,
+            SweepClosedArchived = completedCircuit
+                ? (previous?.SweepArchived ?? 0) + archived
+                : previous?.SweepClosedArchived ?? 0,
             ArchivedSince = archived > 0
                 ? previous?.ArchivedSince ?? nowUnixMilliseconds
                 : completedCircuit && (previous?.SweepArchived ?? 0) == 0 ? null : previous?.ArchivedSince,

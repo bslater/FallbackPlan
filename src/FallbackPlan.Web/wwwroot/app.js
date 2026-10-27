@@ -817,23 +817,28 @@ function drillLabel(d) {
 // because a circuit stuck at a blob is the part that needs a person. A
 // destination only a person's request reads in full is said as such: drawn
 // as "never", it would look overdue. No sweep at all — a kind nothing reads
-// back, or a service older than 1.46 — draws no line.
+// back, or a service older than 1.46 — draws no line. A circuit closes past
+// what the store holds only in an archival tier (contract 1.66), so only one
+// that passed over none says every stored object was read back.
 function sweepLabel(d) {
   if (d.deepSweep == null) return null;
   const s = d.deepSweep;
   const cadence = s.intervalDays == null
     ? "only when asked — verify-destination reads it in full"
     : `every ${fmtCount(s.intervalDays)} day(s)`;
+  const every = s.circuitArchived > 0
+    ? `every stored object but ${fmtCount(s.circuitArchived)} held only in an archival tier`
+    : "every stored object";
 
   if (s.stalls > 0) {
     const where = s.stalledOn ? "at a blob that will not read" : "because nothing there could be read";
-    const since = s.circuitClosedAt == null ? "" : ` · every stored object last read back ${rel(s.circuitClosedAt)}`;
+    const since = s.circuitClosedAt == null ? "" : ` · ${every} last read back ${rel(s.circuitClosedAt)}`;
     return `<b class="warn">stopped</b> <span class="detail">${fmtCount(s.stalls)} time(s) in a row ${esc(where)}${esc(since)}</span>`;
   }
 
   if (s.circuitClosedAt != null) {
     const next = s.readThisCircuit > 0 ? `${fmtCount(s.readThisCircuit)} blob(s) read of the next` : null;
-    return `every stored object read back ${esc(rel(s.circuitClosedAt))} <span class="detail">${esc([next, cadence].filter(Boolean).join(" · "))}</span>`;
+    return `${esc(every)} read back ${esc(rel(s.circuitClosedAt))} <span class="detail">${esc([next, cadence].filter(Boolean).join(" · "))}</span>`;
   }
 
   if (s.lastReadAt != null) {

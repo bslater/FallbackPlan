@@ -110,6 +110,56 @@ public sealed class ConsoleViewsDomTests
     }
 
     [TestMethod]
+    public async Task Overview_ACircuitThatPassedOverArchivedBlobs_SaysHowMany_AndNotThatEveryObjectWasRead()
+    {
+        // Contract 1.66 (ADR-0106): a circuit closes past what the store
+        // holds only in an archival tier, so only one that passed over none
+        // says every stored object was read back.
+        var now = NowMs;
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            GetStatusCommand => new StatusResult(
+                "vm",
+                [
+                    new BackupSetStatusDescriptor(
+                        "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null,
+                        Destinations:
+                        [
+                            new DestinationStatusDescriptor(
+                                "cloud", "s3", "in-sync", now, null, "independent", "verified",
+                                DeepSweep: new DeepSweepDescriptor(
+                                    IntervalDays: 30, CircuitClosedAt: now - 3_600_000, LastReadAt: now - 3_600_000,
+                                    CircuitArchived: 3)),
+                            new DestinationStatusDescriptor(
+                                "vault", "local-path", "in-sync", now, null, "independent", "verified",
+                                DeepSweep: new DeepSweepDescriptor(
+                                    IntervalDays: 7, CircuitClosedAt: now - 3_600_000, LastReadAt: now - 3_600_000)),
+                        ]),
+                ],
+                now,
+                []),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync(harness.TokenedUrl);
+        await Expect(page.Locator("#view-overview").GetByText("docs")).ToBeVisibleAsync();
+
+        var cloud = page.Locator("details.dest[data-dest=\"docs|cloud\"]");
+        await cloud.Locator("> summary").ClickAsync();
+        await Expect(cloud).ToContainTextAsync("3 held only in an archival tier");
+        await Expect(cloud).Not.ToContainTextAsync("every stored object read back");
+
+        var vault = page.Locator("details.dest[data-dest=\"docs|vault\"]");
+        await vault.Locator("> summary").ClickAsync();
+        await Expect(vault).ToContainTextAsync("every stored object read back");
+    }
+
+    [TestMethod]
     public async Task Snapshots_SayHowFarTheCapturingClockStoodFromItsPeer()
     {
         // Contract 1.47 (NFR-TIME-002): three hours behind its peer is drawn

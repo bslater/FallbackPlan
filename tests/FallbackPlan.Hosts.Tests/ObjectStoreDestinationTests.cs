@@ -732,6 +732,10 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual(DestinationSyncState.InSync, swept.State, swept.LastError);
         Assert.AreEqual(0, swept.SweepStalls, "an archived blob is no stall");
         Assert.IsGreaterThan(first.SweepCompletedAt!.Value, swept.SweepCompletedAt!.Value, "the circuit closed past them");
+        Assert.AreEqual(
+            data.Count,
+            ServiceCommandHandler.DescribeSweep(runtime.Configuration.FindDestination("cloud"), swept)!.CircuitArchived,
+            "the status row says how many the closed circuit did not read");
         var notice = ArchivedNotice(runtime);
         Assert.IsNotNull(notice, "a person learns the store holds some of the set only archived");
         Assert.Contains("archival tier", notice.Message, StringComparison.Ordinal);
@@ -748,6 +752,8 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         await later.Transfers.WaitAsync(Timeout);
 
         Assert.IsNull(ArchivedNotice(runtime), "a circuit that met nothing archived resolves it");
+        Assert.AreEqual(
+            0, ServiceCommandHandler.DescribeSweep(runtime.Configuration.FindDestination("cloud"), Pair(runtime, "cloud"))!.CircuitArchived);
 
         foreach (var key in data)
         {

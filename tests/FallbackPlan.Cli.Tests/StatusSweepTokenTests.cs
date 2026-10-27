@@ -18,6 +18,8 @@ namespace FallbackPlan.Cli.Tests;
 /// only when a person asks, and a row that called it never swept would read as
 /// a sweep overdue. And a stall says so whatever closed before it, because a
 /// circuit stuck at a blob is the one thing on the row that needs a person.
+/// A circuit that closed past blobs the store holds only in an archival tier
+/// did not read every stored object, so it is not "ok" (ADR-0106).
 /// </remarks>
 [TestClass]
 public sealed class StatusSweepTokenTests
@@ -30,6 +32,16 @@ public sealed class StatusSweepTokenTests
         Assert.AreEqual(
             "sweep:ok@2026-09-25",
             CliApplication.DescribeSweep(Row(new DeepSweepDescriptor(IntervalDays: 7, CircuitClosedAt: closed))));
+    }
+
+    [TestMethod]
+    public void ACircuitThatClosedPastArchivedBlobs_PrintsPartial_NotOk()
+    {
+        var closed = (ulong)DateTimeOffset.Parse("2026-09-25T10:00:00Z", CultureInfo.InvariantCulture).ToUnixTimeMilliseconds();
+
+        Assert.AreEqual(
+            "sweep:partial@2026-09-25",
+            CliApplication.DescribeSweep(Row(new DeepSweepDescriptor(IntervalDays: 7, CircuitClosedAt: closed, CircuitArchived: 3))));
     }
 
     [TestMethod]

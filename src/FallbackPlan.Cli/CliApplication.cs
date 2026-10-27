@@ -3376,7 +3376,9 @@ public static class CliApplication
     /// A stall comes first, whatever closed before it: a circuit stuck at a
     /// blob is the one thing here that needs a person. <c>manual</c> is a
     /// destination only a person's request reads in full, which "never" would
-    /// make look overdue.
+    /// make look overdue. <c>partial</c> is a circuit that closed past blobs
+    /// the store holds only in an archival tier (ADR-0106), so not every
+    /// stored object was read back.
     /// </remarks>
     internal static string DescribeSweep(DestinationStatusDescriptor row) => SweepToken(row.DeepSweep);
 
@@ -3392,6 +3394,9 @@ public static class CliApplication
     {
         null => string.Empty,
         { Stalls: > 0 } => "sweep:STALLED",
+        { CircuitClosedAt: { } partial, CircuitArchived: > 0 } => string.Create(
+            CultureInfo.InvariantCulture,
+            $"sweep:partial@{DateTimeOffset.FromUnixTimeMilliseconds((long)partial):yyyy-MM-dd}"),
         { CircuitClosedAt: { } closed } => string.Create(
             CultureInfo.InvariantCulture,
             $"sweep:ok@{DateTimeOffset.FromUnixTimeMilliseconds((long)closed):yyyy-MM-dd}"),

@@ -160,6 +160,18 @@ public sealed class ConsoleDestinationCardTests
     }
 
     [TestMethod]
+    public void SweepLabel_ACircuitThatPassedOverArchivedBlobs_SaysHowMany_RatherThanEveryObject()
+    {
+        var body = FunctionBody(AppJs(), "sweepLabel");
+
+        // A circuit closes past what the store holds only in an archival tier
+        // (ADR-0104), so its close supports "every stored object was read
+        // back" only where it passed over none (ADR-0106).
+        Assert.Contains("circuitArchived", body, StringComparison.Ordinal);
+        Assert.Contains("held only in an archival tier", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void Card_TheStagingArchivesSweep_HasALineOfItsOwn_DrawnAsADestinationsIs()
     {
         var script = AppJs();
