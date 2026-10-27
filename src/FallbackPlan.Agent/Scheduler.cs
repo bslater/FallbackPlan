@@ -95,6 +95,10 @@ public static class Scheduler
         // works from one snapshot rather than re-reading per set.
         var configuration = runtime.LoadConfiguration();
 
+        // Ahead of the window: a signature's expiry is read from the token
+        // the service holds, and asks nothing of the machine or the link.
+        SignatureLapseWatch.Observe(runtime, configuration.Destinations, now);
+
         // The window is read from the configuration this pass loaded, not
         // pinned at service start like the pool width: a limit whose whole
         // point is that it changes during the day would be useless fixed at

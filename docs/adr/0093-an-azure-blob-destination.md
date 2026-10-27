@@ -1,15 +1,15 @@
 # ADR-0093 — An Azure Blob destination
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-10, [Amendment 1](#amendment-1-2026-10--a-signature-is-named-before-it-lapses))
 **Date:** 2026-10
-**Requirements:** FR-DEST-005 (amended: `azure-blob` is served), FR-REP-002 (amended: its Azure half, so met), NFR-PRIV-001 (amended: a second HTTP client, named and confined as the first), NFR-SEC-009 (amended: the credential verb's envelope carries an account key or a shared access signature too); keeps NFR-SEC-006, NFR-SEC-012 and NFR-OPS-003
+**Requirements:** FR-DEST-005 (amended: `azure-blob` is served; amended by [Amendment 1](#amendment-1-2026-10--a-signature-is-named-before-it-lapses): a signature is named in a notice from two weeks before it lapses), FR-REP-002 (amended: its Azure half, so met), NFR-PRIV-001 (amended: a second HTTP client, named and confined as the first), NFR-SEC-009 (amended: the credential verb's envelope carries an account key or a shared access signature too); keeps NFR-SEC-006, NFR-SEC-012 and NFR-OPS-003
 **Related:** [ADR-0091](0091-an-s3-compatible-destination.md) (the S3-compatible destination, whose every decision this one follows where the two APIs allow it), [ADR-0012](0012-storage-provider-contract.md) (the store contract as the provider seam), [ADR-0034](0034-hub-and-spoke-destinations.md) §5 (the cloud kinds reserved until a provider exists), [ADR-0042](0042-write-only-repositories.md) decision 6 (the sealed envelope), [ADR-0027](0027-services-scheduling-status-telemetry.md) §3 and [ADR-0043](0043-structured-logging-and-diagnostics.md) (the HTTP clients in the build), [ADR-0035](0035-destination-fitness.md) Amendment 2 and [ADR-0054](0054-scheduled-restore-drills.md) Amendment 3 (cadences on a link somebody else pays for), [ADR-0061](0061-adopt-a-destinations-archives.md) (adoption), [architecture 05](../architecture/05-storage-providers.md), [threat model T-6 and T-19](../threat-model.md#t-6-deletion-by-compromised-store-credentials)
 
 **Built:**
 - The provider: `Storage.AzureBlob/AzureBlobObjectStore` over the platform's HTTP client, `Storage.AzureBlob/AzureBlobRequestSigner`, `Storage.AzureBlob/AzureBlobLocation`, `Storage.AzureBlob/AzureBlobCredentials`, `Storage.AzureBlob/AzureBlobStoreUnreachableException`.
 - What the two object stores share, in the contract's assembly: `Storage.Abstractions/IPrefixedObjectStore` and `Storage.Abstractions/StoreUnreachableException`, which `Storage.S3/S3ObjectStore` now implements too.
 - The credential: `Repository.Crypto/WriteOnlyProvisioning` seals and opens an account key and a shared access signature, `Agent/DestinationCredentialStore` holds either beside an access key, and `Agent/ServiceCommandHandler` stores it on `set_destination_credentials` (contract 1.61).
-- The service: `Agent/StoreComposition` opens either object store through one method, and every site that served a bucket serves a container through it: `Agent/FanOut`, `Agent/DestinationShipSink`, `Agent/DestinationProbe`, `Agent/RecoveryDrillJob`, `Agent/Scheduler`, `Agent/ReplicaSweepJob`, `Agent/SetCopies`, and adoption and restore sources in `Agent/ServiceCommandHandler`.
+- The service: `Agent/StoreComposition` opens either object store through one method, and every site that served a bucket serves a container through it: `Agent/FanOut`, `Agent/DestinationShipSink`, `Agent/DestinationProbe`, `Agent/RecoveryDrillJob`, `Agent/Scheduler`, `Agent/ReplicaSweepJob`, `Agent/SetCopies`, and adoption and restore sources in `Agent/ServiceCommandHandler`. `Agent/SignatureLapseWatch` names a signature in a notice from two weeks before it lapses, on every pass `Agent/Scheduler` runs and whenever one is stored ([Amendment 1](#amendment-1-2026-10--a-signature-is-named-before-it-lapses)).
 - The configuration: `Application/DestinationConfiguration`, `Application/ClientConfiguration` (schema 10).
 - The surfaces: `Cli/CliApplication` (`destination-credentials` with `--account-key-env` or `--sas-env`), `Web/WebConsoleHost` and `Web/ConsoleRestoreGate` (`/api/destination-credentials` takes a kind), and the console's destination editor and table.
 - The tests:
@@ -18,7 +18,7 @@
   - `Storage.ContractTests/AzureBlobObjectStoreTests` — a create of a held blob is a 409 read as `AlreadyExists`; every put carries its body's `Content-MD5`; a delete of nothing is answered in one request; a range past the end is refused as the contract says; a missing container is a fault, not an empty store; a lapsed signature is refused before it is sent; listings page from markers only the store can read
   - `Application.Tests/AzureBlobDestinationConfigurationTests` — the address round-trips at schema 10 with no secret in the file; what an `azure-blob` destination needs and what no other kind may carry; a schema-9 file loads unchanged
   - `Repository.Tests/Crypto/AzureCredentialEnvelopeTests` — each envelope opens only for the destination it was sealed for, and neither opens as the other, as an access key or as any other envelope
-  - `Hosts.Tests/ObjectStoreDestinationTests`, run by `Hosts.Tests/AzureBlobDestinationTests` and `Hosts.Tests/S3DestinationTests` — every host case of ADR-0091 against a container as against a bucket; and for a container alone, a signature carried end to end and reported with its expiry, refused when it has already lapsed, and failed with nothing sent once it lapses after storing
+  - `Hosts.Tests/ObjectStoreDestinationTests`, run by `Hosts.Tests/AzureBlobDestinationTests` and `Hosts.Tests/S3DestinationTests` — every host case of ADR-0091 against a container as against a bucket; and for a container alone, a signature carried end to end and reported with its expiry, refused when it has already lapsed, and failed with nothing sent once it lapses after storing; named in a notice from two weeks before it lapses, by the pass even with the window shut, and as lapsed once it has, the notice not asked again once acknowledged until the lapse, and resolved by a new signature, the account key or the destination's removal but not by a credential that will not read, and never for a destination whose kind no longer uses it
   - `Hosts.Tests/ObjectStoreAdoptionTests`, run by `Hosts.Tests/AzureBlobAdoptionTests` and `Hosts.Tests/S3AdoptionTests` — discovery and adoption from a container, read under a signature
   - `Hosts.Tests/ClientModeTests` — the CLI seals an account key or a signature from a named variable, exactly one per call, and says a store with no cadence is never drilled
   - `Hosts.Tests/DirectShipTests`, `Hosts.Tests/DeepSweepCadenceTests` — a direct-ship set cannot ship to a container alone; a container is swept only on a stated cadence
@@ -63,6 +63,8 @@ The Blob API is the S3 API's problem again, with different answers in places tha
 
    A signature's expiry is read from the token itself and kept to. One that has already lapsed is refused when it is stored. One that lapses later is failed at the next sync, saying when it lapsed and how to store a new one, and no request is sent under it. The listing reports when it lapses, and the console marks it once it has.
 
+   > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--a-signature-is-named-before-it-lapses)).** A notice names the signature from two weeks before it lapses, and again once it has, until a new one is stored.
+
    The held file says which credential it holds, and each destination kind reads only the credentials it can use. A destination whose kind is changed after a credential was stored is told it holds none rather than being handed another API's secret.
 
    The new members are named for what they say, not for the secret. `KeyMaterialConfinementTests` refuses any contract member whose name contains "credential" unless it is argued for by name. These carry no key material, and a name that keeps the guard as narrow as it was is better than an exception to it.
@@ -80,6 +82,8 @@ The Blob API is the S3 API's problem again, with different answers in places tha
 - **What a store learns.** Object keys, which are keyed identifiers and never file names; their sizes and timing; the account's name; and under a signature, the signature, which the account issued. Every object is sealed before it leaves the machine (T-9 unchanged).
 - **The account key is the widest credential this product holds for anyone.** It opens every container in the account, not one bucket, and does not lapse. The service never overwrites, but whoever holds the service account can use the key directly (T-6, T-19). A signature issued for the one container, with only the permissions the sync needs and an expiry, is the narrower thing to give the service. The console and the CLI accept both, because a person may have only the key.
 - **A signature lapses, and the service only says so after it has.** Until then the listing and the console report when it will. A notice ahead of the lapse is not built.
+
+  > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--a-signature-is-named-before-it-lapses)).** Built: a notice from two weeks before the lapse.
 - **The recovery tool does not dial a container.** A container's replica has a local path's layout under its prefix, so a copy of that folder brought to local disk opens as any replica does ([architecture 08 §5](../architecture/08-restore-and-recovery.md)).
 - **FR-REP-002 is met.** Both halves pass the shared contract suite, in process and against a real store when one is named.
 
@@ -92,9 +96,49 @@ The Blob API is the S3 API's problem again, with different answers in places tha
 - **One `object-store` kind with a field naming the API.** Rejected. The two addresses share only an endpoint and a prefix, and one kind would make every validation rule a branch. The configuration keeps a kind per API; the runtime treats them alike through `IsObjectStore`.
 - **The credential members named for what they protect.** Rejected, see decision 4: the guard against key material on the wire is worth more than the more obvious name.
 
+## Amendment 1 (2026-10) — a signature is named before it lapses
+
+Decision 4 read a signature's expiry, reported it in the listing, and failed the sync once it passed. Ahead of the lapse, only the person who stored the signature was told, once, in the answer to the store. A signature issued for months lapses on a day nobody remembers. The first sign was a failed sync. For a destination nothing is synced to for weeks, or one kept only to restore from, there was no sign until the restore was refused.
+
+### 1 From fourteen days ahead, a notice
+
+Every scheduler pass asks, of each declared `azure-blob` destination holding a signature, when the signature lapses. So does every store of a credential. From fourteen days before the lapse, a notice keyed `signature-lapsing:` and the destination's id names three things: the destination, when the signature lapses in UTC, and both ways to store a new one. Fourteen days spans two weekends. A signature is issued by whoever administers the account, who may not be the person who reads the notices.
+
+The expiry is in the token the service holds, so the question sends nothing and loads nothing. A shut background window ([ADR-0069](0069-the-background-window.md)) does not hold it back.
+
+### 2 Again once it has lapsed
+
+Once the expiry passes, the same notice says the signature expired and that nothing is sent under it. It is raised for a destination no set references as well, since a restore from that destination would be refused.
+
+### 3 An acknowledgement holds until there is news
+
+A person who acknowledged that the signature lapses on a date is not asked again on every pass. The lapse is news, and so is a signature with another expiry. Each has a text of its own, the same on every pass, so the notice is raised again only when one of them is new.
+
+### 4 Resolved when it is no longer true
+
+The notice is resolved, and kept on record as resolved, by any of three things:
+- storing a signature that lapses more than fourteen days out;
+- storing the account key instead;
+- removing the destination.
+
+A store resolves it at once rather than at the next pass. A credential file that will not read leaves the notice as it stands. That damage is said where the credential is used, as a failed sync, and is not a renewal.
+
+### What this amendment does not do
+
+- **Make the lead time a setting.** It is one constant, `Agent/SignatureLapseWatch`'s.
+- **Renew the signature.** Only the account key or the account's directory can issue one, and the service is given a signature so that it holds neither.
+- **Change the wire.** Notices already cross. The contract stays at the version it was.
+
+### Alternatives considered
+
+- **A lead time in proportion to the signature's lifetime.** Rejected. A token need not state when it started, and a one-day signature warned a fraction of a day ahead has had no warning.
+- **A warning in the status derivation instead of a notice.** Rejected. Status recomputes from current facts, so it is for conditions that clear themselves. A lapsing signature clears only when a person stores a new one, and must reach that person even if nobody opens the status on the day it lapses.
+- **Only for destinations a set references.** Rejected. A destination kept only to restore from is the one whose lapse nothing else reveals.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built end to end: the provider over the platform's HTTP client with a Shared Key signer of its own, the shared contract suite against an in-process store under both credentials, the account key or shared access signature sealed into the state directory (contract 1.61, schema 10), every site that served a bucket serving a container through one check, the CLI's options and the console's editor; [ADR-0091](0091-an-s3-compatible-destination.md), [ADR-0012](0012-storage-provider-contract.md), [ADR-0027](0027-services-scheduling-status-telemetry.md) §3, [ADR-0034](0034-hub-and-spoke-destinations.md) §5, [ADR-0035](0035-destination-fitness.md), [ADR-0042](0042-write-only-repositories.md) decision 6, [ADR-0043](0043-structured-logging-and-diagnostics.md) and [ADR-0061](0061-adopt-a-destinations-archives.md) amended |
 | 2026-10 | Amended (related) | [ADR-0012](0012-storage-provider-contract.md#amendment-5-2026-10--the-revisit-three-providers-and-the-faults-this-record-named) Amendment 5: a resumed listing starts at the store (`startFrom`) rather than reading the pages before the key, and a throttle that outlasts the attempts is a busy store, unavailable rather than failed |
+| 2026-10 | Accepted; built (amended) | [Amendment 1](#amendment-1-2026-10--a-signature-is-named-before-it-lapses): a signature is named in a notice from two weeks before it lapses, and again once it has, until a new one, the account key or the destination's removal resolves it (`Agent/SignatureLapseWatch`, `Agent/Scheduler`; `Hosts.Tests/AzureBlobDestinationTests`) |

@@ -16,8 +16,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// FR-DRL-002, FR-DEST-003) — against a container, signed with the account
 /// key; and what only a container has: a second credential, a shared access
 /// signature carried in each request as issued, whose expiry the service
-/// reads, reports and holds to before a request is sent; and an address the
-/// configuration and the provider must agree on.
+/// reads, reports and holds to before a request is sent, and names in a
+/// notice from two weeks before it lapses until a new one is stored (ADR-0093
+/// Amendment 1); and an address the configuration and the provider must agree
+/// on.
 /// </summary>
 /// <remarks>
 /// Either credential reaches the service only as an envelope sealed to its
@@ -162,6 +164,256 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
         Assert.Contains("expired", cloud.Detail!, StringComparison.Ordinal);
         Assert.Contains("destination-credentials", cloud.Detail!, StringComparison.Ordinal);
         Assert.IsEmpty(Store.Requests);
+    }
+
+    [TestMethod]
+    public async Task StoringASignatureThatLapsesWithinTwoWeeks_RaisesANotice_NamingTheDestinationAndWhen()
+    {
+        // The answer to the store says when it lapses, once, to whoever
+        // stored it. The notice is for whoever looks after the installation
+        // in the days that are left.
+        var expires = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(10), TimeSpan.Zero);
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await StoreSignatureAsync(handler, Azure.IssueSas(Namespace, expires: expires)));
+
+        var notice = LapseNotice(runtime);
+        Assert.IsNotNull(notice, "a signature with ten days left is named before it lapses");
+        Assert.Contains("'cloud'", notice.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            expires.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " UTC",
+            notice.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("destination-credentials cloud --sas-env", notice.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("expired", notice.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task APass_NamesASignature_OnlyOnceItIsWithinTwoWeeksOfItsLapse()
+    {
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await StoreSignatureAsync(handler, Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(15))));
+        await BackUpAsync(runtime);
+        Assert.IsNull(LapseNotice(runtime), "fifteen days ahead is more than two weeks");
+
+        await PassAtAsync(runtime, DateTimeOffset.Now.AddDays(2));
+
+        Assert.IsNotNull(LapseNotice(runtime), "thirteen days ahead is within them");
+    }
+
+    [TestMethod]
+    public async Task AShutBackgroundWindow_StillNamesASignatureAboutToLapse()
+    {
+        // The window holds back work that loads the machine or the link. A
+        // signature's expiry is read from the token the service holds, and
+        // asks nothing of either.
+        WriteConfiguration(directShip: false);
+        var opens = DateTimeOffset.Now.AddHours(3);
+        var configuration = Path.Combine(Harness.StateDirectory, "config.json");
+        (ClientConfiguration.Load(configuration) with
+        {
+            BackgroundWindow = string.Create(
+                System.Globalization.CultureInfo.InvariantCulture, $"{opens:HH\\:mm}-{opens.AddHours(1):HH\\:mm}"),
+        }).Save(configuration);
+
+        await using var runtime = await StartAsync();
+        runtime.DestinationCredentials.Save(
+            CloudId, AzureBlobCredentials.SharedAccessSignature(Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(10))));
+        Assert.IsNull(LapseNotice(runtime));
+
+        await PassAtAsync(runtime, DateTimeOffset.Now);
+
+        Assert.IsNotNull(LapseNotice(runtime));
+        Assert.IsEmpty(Store.Requests, "the window still held the sync");
+    }
+
+    [TestMethod]
+    public async Task StoringANewSignature_ResolvesTheNotice_AndKeepsItOnRecord()
+    {
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await StoreSignatureAsync(handler, Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(10))));
+        Assert.IsNotNull(LapseNotice(runtime));
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await StoreSignatureAsync(handler, Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(90))));
+
+        Assert.IsNull(LapseNotice(runtime), "a signature with ninety days left is not about to lapse");
+        Assert.IsNotNull(
+            Assert.ContainsSingle(runtime.Notices.Notices.Where(notice => notice.Key == LapseNoticeKey)).AcknowledgedAt,
+            "resolved, and still on record");
+    }
+
+    [TestMethod]
+    public async Task StoringTheAccountKeyInstead_ResolvesTheNotice()
+    {
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await StoreSignatureAsync(handler, Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(10))));
+        Assert.IsNotNull(LapseNotice(runtime));
+
+        await StoreCredentialAsync(runtime);
+
+        Assert.IsNull(LapseNotice(runtime), "an account key does not lapse");
+    }
+
+    [TestMethod]
+    public async Task AnAcknowledgedNotice_IsNotAskedAgain_UntilTheSignatureLapses_AndThenSaysItHas()
+    {
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await StoreSignatureAsync(handler, Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(10))));
+        Assert.IsTrue(runtime.Notices.Acknowledge(
+            LapseNotice(runtime)!.Id, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+
+        await PassAtAsync(runtime, DateTimeOffset.Now);
+        Assert.IsNull(LapseNotice(runtime), "the same warning is not asked again on every pass");
+
+        await PassAtAsync(runtime, DateTimeOffset.Now.AddDays(11));
+
+        var lapsed = LapseNotice(runtime);
+        Assert.IsNotNull(lapsed, "the lapse itself is news");
+        Assert.Contains("expired", lapsed.Message, StringComparison.Ordinal);
+        Assert.Contains("destination-credentials cloud --sas-env", lapsed.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ASignatureThatHasLapsedSinceItWasStored_IsNamedAsLapsed_AtTheNextPass()
+    {
+        // A destination nothing is synced to for weeks, or one kept only to
+        // restore from, fails nothing when its signature lapses. The notice
+        // says so all the same.
+        WriteConfiguration(directShip: false, referenced: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        runtime.DestinationCredentials.Save(
+            CloudId, AzureBlobCredentials.SharedAccessSignature(Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddMinutes(-1))));
+
+        await PassAtAsync(runtime, DateTimeOffset.Now);
+
+        var notice = LapseNotice(runtime);
+        Assert.IsNotNull(notice);
+        Assert.Contains("expired", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("nothing is sent under it", notice.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(Store.Requests);
+    }
+
+    [TestMethod]
+    public async Task ASignatureThatStatesNoExpiry_IsNeverNamed()
+    {
+        WriteConfiguration(directShip: false, referenced: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        runtime.DestinationCredentials.Save(
+            CloudId, AzureBlobCredentials.SharedAccessSignature("sv=2024-11-04&sr=c&sp=racwdl&sig=c2lnbmF0dXJl"));
+
+        await PassAtAsync(runtime, DateTimeOffset.Now.AddYears(5));
+
+        Assert.IsNull(LapseNotice(runtime));
+    }
+
+    [TestMethod]
+    public async Task RemovingTheDestination_ResolvesItsNotice()
+    {
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await StoreSignatureAsync(handler, Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(10))));
+        Assert.IsNotNull(LapseNotice(runtime));
+
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [],
+            BackupSets = [],
+        }.Save(Path.Combine(Harness.StateDirectory, "config.json"));
+        await PassAtAsync(runtime, DateTimeOffset.Now);
+
+        Assert.IsNull(LapseNotice(runtime), "nothing is sent under a credential no destination uses");
+    }
+
+    [TestMethod]
+    public async Task ASignatureHeldForADestinationThatIsNoLongerAContainer_IsNotNamed()
+    {
+        // The destination's kind was changed after its signature was
+        // stored. Nothing is sent under a credential its kind cannot use,
+        // so that credential's expiry is nobody's concern.
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        runtime.DestinationCredentials.Save(
+            CloudId, AzureBlobCredentials.SharedAccessSignature(Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(10))));
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                new DestinationConfiguration
+                {
+                    Id = CloudId, Name = "cloud", Kind = DestinationKind.LocalPath, Path = Path.Combine(Harness.WorkPath, "vault"),
+                },
+            ],
+            BackupSets = [],
+        }.Save(Path.Combine(Harness.StateDirectory, "config.json"));
+
+        await PassAtAsync(runtime, DateTimeOffset.Now);
+
+        Assert.IsNull(LapseNotice(runtime));
+    }
+
+    [TestMethod]
+    public async Task APass_ResolvesOnlyItsOwnNotices()
+    {
+        WriteConfiguration(directShip: false, referenced: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        runtime.Notices.Raise(
+            "quota-exceeded:cloud", "Destination 'cloud' refused set 'docs'.", (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        await PassAtAsync(runtime, DateTimeOffset.Now);
+
+        Assert.ContainsSingle(runtime.Notices.Unacknowledged.Where(notice => notice.Key == "quota-exceeded:cloud"));
+    }
+
+    [TestMethod]
+    public async Task ACredentialThatWillNotRead_LosesNoPass_AndLeavesTheNoticeStanding()
+    {
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await StoreSignatureAsync(handler, Azure.IssueSas(Namespace, expires: DateTimeOffset.UtcNow.AddDays(10))));
+        File.WriteAllText(HeldCredential, "{ \"kind\": \"sas\" }");
+
+        await PassAtAsync(runtime, DateTimeOffset.Now);
+
+        Assert.IsNotNull(LapseNotice(runtime), "damage is said where the credential is used, and is not a renewal");
+        Assert.Contains("damaged", Pair(runtime, "cloud").LastError!, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -324,6 +576,18 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
     }
 
     private string HeldCredential => Path.Combine(Harness.StateDirectory, "destination-credentials", $"{CloudId}.json");
+
+    private const string LapseNoticeKey = $"signature-lapsing:{CloudId}";
+
+    private static Notice? LapseNotice(ServiceRuntime runtime) =>
+        runtime.Notices.Unacknowledged.SingleOrDefault(notice => notice.Key == LapseNoticeKey);
+
+    private async Task PassAtAsync(ServiceRuntime runtime, DateTimeOffset now)
+    {
+        var pass = await Scheduler.RunPassAsync(runtime, now, Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+        await pass.Drills.WaitAsync(Timeout);
+    }
 
     private async Task<ServiceResult> StoreSignatureAsync(ServiceCommandHandler handler, string token)
     {
