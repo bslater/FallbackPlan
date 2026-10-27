@@ -139,6 +139,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0112](adr/0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md) | A store that archives a replica's metadata restores nothing: each sync to an object store asks after the replica's format with a head, the sync's read-back and the deep sweep tell an archived metadata blob from a data blob, the ledger keeps the first object met until it is served again (schema 13), and a notice and the status row say nothing restores from the destination until it is rehydrated and that only data blobs may be held archived (contract 1.70), on the command line and the console | **Built** | `Agent/FanOut`, `Agent/ReplicaSweepJob`, `Agent/ArchivedMetadataNotice`, `Agent/ServiceCommandHandler` · `Application/DestinationSyncStore` · `Cli/CliApplication` · `Hosts.Tests/ObjectStoreDestinationTests`, `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusArchivedMetadataLineTests`, `Web.DomTests/ArchivedMetadataDomTests` · [notes](#0112--a-replicas-metadata-held-archived) |
 | [0113](adr/0113-the-console-keeps-a-restores-plan.md) | The console keeps a restore's plan: the file's shape moves into the contract's assembly at version 2, which keeps version 1's fields and adds the run as asked, and both clients write it; the console's endpoint asks the service for the plan the wizard sends and gives back the file, and the wizard offers to keep a plan while one is on screen | **Built** | `Api/RestorePlanFile` · `Cli/RestorePlanExport` · `Web/WebConsoleHost` · `Api.Tests/RestorePlanFileTests`, `Web.Tests/ConsoleRestorePlanFileTests`, `Web.DomTests/RestoreWizardDomTests`, `Cli.Tests/RestorePlanCommandTests` · [notes](#0113--a-restores-plan-kept-from-the-console) |
 | [0114](adr/0114-a-kept-plan-is-run-as-it-was-approved.md) | A kept plan is run as it was approved: `restore --as-planned <file>` reads the kept plan back, holds it to the run asked before anything is asked, plans again through either gateway, and runs only where the files, what is missing, what is held archived and the conflicts are what it said; otherwise it names each change and writes nothing | **Built** | `Api/RestorePlanFile` · `Cli/CliApplication`, `Cli/RestorePlanReport` · `Cli.Tests/RestoreAsPlannedCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Api.Tests/RestorePlanFileTests` · [notes](#0114--a-kept-plan-run-as-approved) |
+| [0115](adr/0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md) | A restore cut short is named, and resumed by its name alone: the service names each restore run in `restore-runs.json` before it writes and keeps it until a run of it finishes, says each one left unfinished, at start too, lists them without the backup's file names, resumes one as it was asked by its name alone, and lets one go (contract 1.71, `restore-resume`) | **Built** | `Application/RestoreRunJournal` · `Agent/ServiceCommandHandler`, `Agent/UnfinishedRestoreNotice`, `Agent/ServiceRuntime` · `Cli/CliApplication`, `Cli/OperationGateway` · `Application.Tests/RestoreRunJournalTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Hosts.Tests/ClientModeTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0115--a-restore-cut-short-named-and-resumed-by-name) |
 
 ---
 
@@ -3478,3 +3479,21 @@ a name at a time, and nothing is written.
 What remains is recorded rather than done. The command line asks one path, so
 a console's plan of several paths, a target or a policy is refused there by
 name, and the console runs no kept plan.
+
+### 0115 — a restore cut short, named and resumed by name
+
+The runs most in need of a resume were the ones whose result nobody read: a
+caller that hung up, a service that stopped, a machine that stopped. Each was
+resumed only by someone who found its folder and asked the restore again
+whole. The service now names each run in `restore-runs.json` before it
+writes, under the name its result gives, and keeps it until a run of it
+completes or skips only what the target cannot hold. A run that ends
+otherwise is said in a notice, and one the service did not see end is said
+when it next starts. Contract 1.71 lists such runs without the paths they
+were asked for, resumes one by its name alone, asked again as it was asked,
+and lets one go; `restore-resume` does each from the command line.
+
+What remains is recorded rather than done. The console's wizard still offers
+a resume only for the result in front of it, so a run it did not see end is
+resumed from the command line, and a quarantined run whose folder is gone is
+refused, and can be let go.

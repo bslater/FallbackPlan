@@ -88,12 +88,16 @@ A hard-link group's first name found in place is the file its later names are ma
 
   > **2026-10 ([ADR-0110](0110-the-console-resumes-a-restore-cut-short.md)).** A run's result names the run a resume of it gives (contract 1.68), so a client need not read it out of the folder's path. A run cut short before it answers is still resumed by its folder's name.
 
+  > **2026-10 ([ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md)).** The service names each run before it writes and keeps it until a run of it finishes, so a run cut short before it answers is named too, and said in a notice. `restore-resume` lists such runs and resumes one by its name alone, as it was asked (contract 1.71).
+
 ## Alternatives considered
 
 - **Leave a file like the snapshot's on every run.** Rejected. A run not asked to resume cannot tell a file it landed from one a person kept, and the policy exists for the second.
 - **Trust the earlier run's receipt.** Rejected. A run cut short by its machine stopping has no receipt, and a receipt says what was true when it was written, not what the disk holds now.
 - **Compare lengths and times, not content.** Rejected. A restore is a claim about content (FR-RST-002), and a file of the right length is not the right file.
 - **The service finds the run.** Rejected for now. The newest folder under the quarantine may be another snapshot's restore, and its files are somebody's too.
+
+  > **2026-10 ([ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md)).** The service finds no run among the folders. It names each run it began, before the run writes, and so knows which it began and what each was asked.
 
 ## Amendment 1 (2026-10) — a resume under rename looks beside
 
@@ -117,3 +121,4 @@ A hard-link group's first name found in place is the file its later names are ma
 | 2026-10 | Accepted | Built in one slice, tests first. A resumed restore leaves each file already holding the snapshot's content, by length and whole-file hash, as it stands, reads none of its content, applies its metadata again, and lands the rest; it is measured for what is left. Through the service it continues the run it names, in that run's folder (contract 1.67), and the receipt (schema 8) says what was found in place. A resume is not planned, and not under rename. |
 | 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--a-resume-under-rename-looks-beside): a resume under rename is run. With a file in the way it looks beside it, and leaves a copy there holding the snapshot's content under a name the restore writes beside, naming it in the receipt; §5's refusal is superseded. |
 | 2026-10 | Accepted (amended) | [ADR-0110](0110-the-console-resumes-a-restore-cut-short.md) takes up the console resume this record left owed: a restore's result names its run (contract 1.68), the wizard offers to restore what is left of a run that failed or was stopped, and the command line says how. |
+| 2026-10 | Accepted (amended) | [ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md) takes up finding the run, which this record left to whoever read its folder: the service names each run before it writes, keeps it until a run of it finishes, says each one left unfinished, and resumes one by its name alone (contract 1.71, `restore-resume`). |
