@@ -1,14 +1,15 @@
 # ADR-0083 — A restore says whether it fits, and what it will not write back
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-10: [Amendment 1](#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor), [Amendment 2](#amendment-2-2026-10--a-plan-says-what-its-run-reads))
 **Date:** 2026-10
-**Requirements:** FR-RST-003, FR-RST-004
+**Requirements:** FR-RST-003 (amended by [Amendment 2](#amendment-2-2026-10--a-plan-says-what-its-run-reads): a plan says what its run reads), FR-RST-004
 **Related:** [architecture 08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning) (the plan's free-space assessment, privileges and unpreservable metadata), [architecture 08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) ("reports every skipped or degraded attribute"), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (no silent drop), [ADR-0079](0079-sparse-restore.md) (a hole is not written), [ADR-0068](0068-the-catalogue-directed-restore-read.md) (what a run may read), [ADR-0041](0041-guided-restore-and-peer-retrieval.md) (the plan, the slices, the wizard)
 
 **Built:**
 - The measure: `Restore/RestoreSpace`, asking the platform through a `RestoreSpaceProbe`. The service's probe is on `Agent/ServiceRuntime`, the CLI's in `Cli/OperationGateway`.
 - The rule for metadata: `Restore/RestoreMetadata`. The plan probe, `Restore/RestoreBlobSet`, reports what each file writes and carries, and `Restore/RestoreExecutor` records receipt schema 6.
 - The surfaces: `Agent/ServiceCommandHandler` plans and runs; `Api/Commands`, `Api/Results` and `Api/ContractVersion` carry contract 1.53; `Cli/CliApplication` takes `--ignore-free-space`; and the console's restore wizard shows the room and arms a short run only by choice.
+- The read ([Amendment 2](#amendment-2-2026-10--a-plan-says-what-its-run-reads)): `Restore/RestoreBlobSet` adds up what the run will read, `Agent/ServiceCommandHandler` sends it as contract 1.64's `read_bytes`, and the console's restore wizard shows it beside what the run writes.
 - The tests:
   - `Repository.Tests/RestoreSpaceTests` — the measure
   - `Repository.Tests/RestoreMetadataHonestyTests` — the rule, the declarations and receipt schema 6
@@ -16,7 +17,9 @@
   - `Hosts.Tests/RestoreHonestyServiceTests` — the plan, the refusal, the override and the summary through the service
   - `Api.Tests/ConfigurationContractTests` — contract 1.53's wire names
   - `Cli.Tests/RestoreHonestyCommandTests` — the direct restore's refusal, its override and its summary
-  - `Web.DomTests/RestoreWizardDomTests` — the wizard
+  - `Web.DomTests/RestoreWizardDomTests` — the wizard, and what the run will read where the service says it
+  - `Repository.Tests/RestoreReadTests` — what the run will read: exactly each record once as the reader sizes it and each blob's envelope once; less than it writes for content that compresses or repeats or keeps holes, a little more for content that does none of those, and nothing of what no copy holds; and for a whole tree read as a run reads it, no less than the run reads and not 1% more, or 0.3% for one file across many blobs
+  - `Api.Tests/ContractAdditiveFieldsTests` — contract 1.64's wire name, and a pre-1.64 plan reading as not saying
 
 ---
 
@@ -95,6 +98,8 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
   > **2026-10 ([ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md)).** Built: a group's later names are links to the file its first name landed as, where they agree with it, and a name restored as a file of its own says why. The plan measures a group once, and the receipt moves to schema 7 for `linked_to`.
 - It does not refuse for a security descriptor that cannot be applied. Architecture 06 §3 reserves that refusal for a descriptor whose absence would grant broader access, and that needs a descriptor to apply first.
 - It does not estimate the physical transfer size, which differs from the logical size when a store lacks range reads. It does not export a plan or resume one. And it does not report an object held only in an archival tier. All three are architecture 08 §2's, and all three stay owed.
+
+  > **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--a-plan-says-what-its-run-reads)).** The physical transfer size is estimated: a plan says what its run will read. Export, resume and archival-tier reporting stay owed.
 - It does not measure the standalone recovery tool's restore, which has its own engine and writes where a person points it.
 - It does not remove the engine's double write. Each file is written once into the working copy and once where it lands, which is why the working directory needs room for the largest file. A restore that verified into the file it lands would need no working space at all, and would read and write half as much. That is a change to the verified write path and is not made here.
 - It does not account for filesystem metadata beyond a directory's cluster, nor for allocation units other than 4 KiB. The error is a cluster per file at most, and errs high.
@@ -117,6 +122,50 @@ A restore's receipt on Linux listed `security_descriptor` as not applied on ever
 
 Two alternatives were weighed. Fixing capture alone was rejected for the rewrite it would cost every installation once. Treating empty as none only at restore was rejected because it would leave every new manifest carrying a key the specification does not allow. The manifest codec still reads an empty key 7, which every repository written so far holds.
 
+## Amendment 2 (2026-10) — a plan says what its run reads
+
+[Architecture 08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning) asks a plan for an estimated logical and physical transfer size, and this record left the physical one owed. It described the two as differing when a store lacks range reads. No store the product admits lacks them now, because `Repository/StoreAdmission` refuses one by name. The two still differ, often greatly, for other reasons:
+- a store holds content compressed;
+- it holds content once, however many files repeat it;
+- it holds nothing where a file keeps a hole;
+- it holds every record sealed.
+
+On a store that bills for what is read, the physical figure is what a restore costs, and the plan said only what the files write.
+
+### 1 The figure is what the run asks the store for
+
+The plan probe already resolves the location of every record a run needs, to name what no copy holds. It now adds up what the run will ask for:
+- each record a copy holds, once: every item's manifest, and a file's segments and streams;
+- each at the length the reader sizes a record's read by;
+- the envelope of each blob they sit in, once.
+
+A record no copy holds is not counted, because the run will not read it.
+
+### 2 It crosses as `read_bytes` (contract 1.64)
+
+The plan result gains `read_bytes` beside `write_bytes`. A service before 1.64 sends none, which a client reads as not said, never as nothing to read. The console's restore wizard shows the figure beside what the run writes, and only when the service says it.
+
+### 3 What the figure is held to
+
+A whole tree read the way a run reads it takes no more than the figure, and not 1% less. That is from the catalogue's locations, through the reader's coalescing. The suite's tree read 0.2% under it.
+
+The reader sizes a record's read by the longest framing any container uses, which errs high by up to 80 bytes for each metadata record. The figure counts each envelope at the longest any blob has, which errs high by 80 bytes for a blob whose envelope carries no sealed key. A file spread across many blobs read 0.11% under the figure. The reader may also read further than the figure, in two ways:
+- it bridges a short gap between two records it wants;
+- it reads a record again whose run it evicted before using it.
+
+A restore of part of a tree can meet the first, and a tree larger than the read budget the second. Neither is counted, so the figure is an estimate and is called one.
+
+### What this amendment does not do
+
+- **Say in the receipt what the run read.** The figure is the plan's, given before the person decides.
+- **Count the plan's own reads.** The probe reads each manifest to find what it names, before anything is decided.
+- **Export a plan, resume one, or report an object held only in an archival tier.** These stay owed, as architecture 08 §2's.
+
+### Alternatives considered
+
+- **Reproduce the reader's coalescing to predict its bridges.** Rejected. The waves a run reads in depend on the reader's budgets and its order, and a figure that copied them would go wrong whenever they changed. The bound is stated instead.
+- **Count each blob a run touches whole.** Rejected. The reader reads ranges. For a tree restored in part, a whole-blob figure would overstate what is paid for by every stretch of a blob the run never asks for.
+
 ## Status history
 
 | Date | Status | Note |
@@ -128,3 +177,4 @@ Two alternatives were weighed. Fixing capture alone was rejected for the rewrite
 | 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor): an empty security descriptor, which capture had recorded for every entry it read none for, is no descriptor. Capture records none, a restore reads an empty one as none, and the metadata digest does not tell them apart, so no manifest is rewritten for it. |
 | 2026-10 | Accepted | [ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md) gives a symlink its own metadata back, onto the link itself. §5's plan counts links beside files and folders, and loses its one line for every link. |
 | 2026-10 | Accepted | [ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md) gives a hard-link group back as one file. §5's receipt moves to schema 7 for `linked_to`, and §2's measure counts a group once. |
+| 2026-10 | Accepted (amended) | [Amendment 2](#amendment-2-2026-10--a-plan-says-what-its-run-reads): a plan says what its run will read, each record a copy holds once as the reader sizes it and each blob's envelope once, as contract 1.64's `read_bytes`, shown by the console's wizard. A whole tree read as a run reads it takes no more and not 1% less (`Restore/RestoreBlobSet`; `Repository.Tests/RestoreReadTests`). |

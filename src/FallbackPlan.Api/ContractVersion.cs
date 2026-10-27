@@ -654,8 +654,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// ignores the field, and a pre-1.63 service's sets read as reporting no
     /// staging sweep.
     /// </para>
+    /// <para>
+    /// 1.64 says what a restore will read (FR-RST-003, ADR-0083 Amendment
+    /// 2). `RestorePlanResult` gains `read_bytes`: the bytes the run will
+    /// read from where it restores from, each record it needs once as stored
+    /// and each blob's envelope once, beside `write_bytes`. Additive: a
+    /// pre-1.64 client ignores the field, and a pre-1.64 service's plan
+    /// reads as not saying, never as nothing to read.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 63);
+    public static ContractVersion Current { get; } = new(1, 64);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

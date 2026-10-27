@@ -803,6 +803,15 @@ public sealed record DirectoryResult(
 /// where the run would write. A volume short of room is a conflict too, so
 /// a client that predates this field still hears of it.
 /// </param>
+/// <param name="ReadBytes">
+/// The bytes the run will read from where it restores from: each record it
+/// needs that a copy holds, once, as stored, and the envelope of each blob
+/// they sit in (contract 1.64, FR-RST-003). Content stored compressed, once
+/// however many files repeat it, and not at all where a file keeps a hole,
+/// is read in fewer bytes than it writes; content that does none of those
+/// is read in a little more, for its sealing. Null from a service before
+/// 1.64, which is unknown and never nothing to read.
+/// </param>
 public sealed record RestorePlanResult(
     long Files,
     long Bytes,
@@ -811,7 +820,8 @@ public sealed record RestorePlanResult(
     IReadOnlyList<string>? ConflictSample = null,
     IReadOnlyList<string>? Degradations = null,
     long? WriteBytes = null,
-    IReadOnlyList<RestoreSpaceDescriptor>? Space = null) : ServiceResult;
+    IReadOnlyList<RestoreSpaceDescriptor>? Space = null,
+    long? ReadBytes = null) : ServiceResult;
 
 /// <summary>The room a restore needs on one volume it writes to (contract 1.53, FR-RST-003).</summary>
 /// <param name="Directory">

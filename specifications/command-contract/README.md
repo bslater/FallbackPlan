@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.63
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.64
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.63 — 65 commands. One line each; parameters, results
+The register as of 1.64 — 65 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -130,6 +130,8 @@ room the run needs on each volume it writes to (`space`) and what its files
 write (`write_bytes`); `run_restore` refuses a run that will not fit before
 writing anything unless told `ignore_free_space`, and `restore` says which
 captured metadata was not applied (`not_applied`) ([ADR-0083](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).
+Since 1.64 the plan also says what its run will read from where it restores
+from (`read_bytes`) ([ADR-0083 Amendment 2](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads)).
 Since 1.45, a `run_restore` of a set's
 own archive that read some files from another copy, because a copy passed
 over was damaged or would not read, says how many (`read_around`) and which
@@ -245,3 +247,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.61 | An Azure Blob destination ([ADR-0093](../../docs/adr/0093-an-azure-blob-destination.md), FR-DEST-005, FR-REP-002). `DestinationDescriptor` gains `account` and `container`, which address an `azure-blob` destination with the `prefix` and `endpoint` it already had, an absent endpoint being the account's host at the public service; `authorised_by`, which credential the service holds (`access-key`, `shared-key` or `sas`); and `signature_expires`, when a held shared access signature stops being honoured, ISO 8601 in UTC. `access_key_stored` now answers for both object-store kinds. `set_destination_credentials` gains `kind`: `access-key`, which is what a request naming none means, `shared-key` for the account key, or `sas` for a shared access signature, each sealed under a purpose of its own and bound to the destination; `access_key_id` is required for an access key and refused for the other two, and a signature already past its expiry is refused. No member is named for the secret, which keeps the key-material guard as narrow as it was. Additive: a pre-1.61 client sends none of the fields, and its access key is stored as before. |
 | 1.62 | Deleted-file history ([ADR-0094](../../docs/adr/0094-a-deleted-file-stays-restorable.md), FR-GC-014). `RetentionPolicyDescriptor` gains `keep_deleted_days`, on a set's retention and on a destination's override alike: how many days a file deleted from the sources stays restorable. On `upsert_backup_set`, null keeps what stands, because a pre-1.62 client cannot see the field to send it back, and zero clears it; a descriptor holding only a zero is still the empty "no policy". `list_backup_sets`, `archive_adopted` and `adoption_preview` carry it back. Additive: a pre-1.62 client's edits leave the duration as they found it. |
 | 1.63 | The staging archive's own sweep ([ADR-0095](../../docs/adr/0095-the-staging-archive-heals.md), FR-VER-009). `BackupSetStatusDescriptor` gains `staging_sweep`, a `DeepSweepDescriptor` read as a destination row's `deep_sweep` is: when the circuit over the set's staging archive last closed, how far the one under way has read, whether it has stopped, and its cadence. A set with no staging archive reports none. Damage found there that no destination's copy has yet replaced is said in the set's `warnings`, which already crossed. Additive: a pre-1.63 client ignores the field, and a pre-1.63 service's sets read as reporting no staging sweep. |
+| 1.64 | What a restore will read ([ADR-0083 Amendment 2](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads), FR-RST-003). `restore_plan` gains `read_bytes`, beside `write_bytes`: the bytes the run will read from where it restores from, each record it needs that a copy holds once, as the reader sizes it, and the envelope of each blob they sit in once. Content stored compressed, once however many files repeat it, or not at all where a file keeps a hole is read in fewer bytes than it writes. Additive: a pre-1.64 client ignores the field, and a pre-1.64 service's plan reads as not saying, never as nothing to read. |

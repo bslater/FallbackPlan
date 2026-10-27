@@ -7,8 +7,8 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// A restore commanded through the contract tells the truth about the disk it
-/// writes to and the metadata it will not apply (FR-RST-003, FR-RST-004;
-/// ADR-0083). Given the run's shape, the plan measures the volume the run
+/// writes to, what it will read, and the metadata it will not apply
+/// (FR-RST-003, FR-RST-004; ADR-0083). Given the run's shape, the plan measures the volume the run
 /// would write to against what is free there, and says when it will not fit.
 /// The run refuses before it writes anything, unless it is told to restore
 /// anyway. Both say which captured metadata will not be applied. The plan
@@ -262,6 +262,29 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         // plan answers as it always did, plus what its files will write.
         Assert.IsNull(plan.Space);
         Assert.AreEqual(plan.Bytes, plan.WriteBytes);
+    }
+
+    [TestMethod]
+    public async Task Plan_SaysWhatTheRunWillRead_WhichForContentThatCompressesIsLessThanItWrites()
+    {
+        // On a store that bills for what is read, this is the figure a
+        // person is paying for, and it is not the one the files write.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", string.Concat(Enumerable.Repeat("the same line, over and over\n", 40_000)));
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartAsync(availableBytes: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            await handler.ExecuteAsync(
+                new PlanRestoreCommand(snapshotId, null, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token),
+            out var plan);
+
+        Assert.IsNotNull(plan.ReadBytes);
+        Assert.IsGreaterThan(0L, plan.ReadBytes.Value);
+        Assert.IsLessThan(plan.Bytes / 4, plan.ReadBytes.Value);
     }
 
     /// <summary>user::rw-, user:54321:r--, group::r--, mask::r--, other::---: an ACL naming an account by number.</summary>
