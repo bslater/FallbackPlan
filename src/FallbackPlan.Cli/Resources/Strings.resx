@@ -226,6 +226,15 @@
   <data name="RestoreReceiptReport_NoReceiptKept" xml:space="preserve">
     <value>Run {0} has no receipt kept under '{1}'. restore-receipts with no run lists those kept.</value>
   </data>
+  <data name="RestoreReceiptReport_NoReceiptTheServiceKeeps" xml:space="preserve">
+    <value>Run {0} has no receipt the service keeps. restore-receipts with no run lists those it keeps.</value>
+  </data>
+  <data name="RestoreReceiptReport_ReceiptDoesNotRead" xml:space="preserve">
+    <value>Run {0}'s receipt does not read: {1}</value>
+  </data>
+  <data name="RestoreReceiptReport_ReceiptRecordsNoSet" xml:space="preserve">
+    <value>Run {0}'s receipt records no set, so no passphrase here is known to be its own. It is read on the service's machine: restore-receipts --state &lt;the service's state directory&gt; --run {0}.</value>
+  </data>
   <data name="CliApplication_NoStateDirectoryKeepsReceipts" xml:space="preserve">
     <value>no state directory at '{0}' — nothing has been kept there.</value>
   </data>

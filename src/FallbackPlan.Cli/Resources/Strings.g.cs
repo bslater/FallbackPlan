@@ -500,6 +500,39 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, RestoreReceiptReport_NoReceiptKept, arg0, arg1);
 
     /// <summary>
+    /// Run {0} has no receipt the service keeps. restore-receipts with no run lists those it keeps.
+    /// </summary>
+    private static string RestoreReceiptReport_NoReceiptTheServiceKeeps => Get(nameof(RestoreReceiptReport_NoReceiptTheServiceKeeps));
+
+    /// <summary>
+    /// Run {0} has no receipt the service keeps. restore-receipts with no run lists those it keeps.
+    /// </summary>
+    internal static string FormatRestoreReceiptReport_NoReceiptTheServiceKeeps(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, RestoreReceiptReport_NoReceiptTheServiceKeeps, arg0);
+
+    /// <summary>
+    /// Run {0}'s receipt does not read: {1}
+    /// </summary>
+    private static string RestoreReceiptReport_ReceiptDoesNotRead => Get(nameof(RestoreReceiptReport_ReceiptDoesNotRead));
+
+    /// <summary>
+    /// Run {0}'s receipt does not read: {1}
+    /// </summary>
+    internal static string FormatRestoreReceiptReport_ReceiptDoesNotRead(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, RestoreReceiptReport_ReceiptDoesNotRead, arg0, arg1);
+
+    /// <summary>
+    /// Run {0}'s receipt records no set, so no passphrase here is known to be its own. It is read on the service's machine: restore-receipts --state &lt;the service's state directory&gt; --run {0}.
+    /// </summary>
+    private static string RestoreReceiptReport_ReceiptRecordsNoSet => Get(nameof(RestoreReceiptReport_ReceiptRecordsNoSet));
+
+    /// <summary>
+    /// Run {0}'s receipt records no set, so no passphrase here is known to be its own. It is read on the service's machine: restore-receipts --state &lt;the service's state directory&gt; --run {0}.
+    /// </summary>
+    internal static string FormatRestoreReceiptReport_ReceiptRecordsNoSet(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, RestoreReceiptReport_ReceiptRecordsNoSet, arg0);
+
+    /// <summary>
     /// no state directory at '{0}' — nothing has been kept there.
     /// </summary>
     private static string CliApplication_NoStateDirectoryKeepsReceipts => Get(nameof(CliApplication_NoStateDirectoryKeepsReceipts));

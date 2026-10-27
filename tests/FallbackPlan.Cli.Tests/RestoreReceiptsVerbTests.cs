@@ -12,6 +12,8 @@ namespace FallbackPlan.Cli.Tests;
 /// "nothing restored", a name that is not a run's is refused before it
 /// reaches a path, and a receipt that does not read is said to, beside the
 /// rest. A run names the set it restored where its receipt does (ADR-0126).
+/// Through a paired service (ADR-0128), a name that is not a run's and a
+/// limit below one are refused before the service is dialled.
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsVerbTests : IDisposable
@@ -187,6 +189,21 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
 
         Assert.AreEqual(0, listed.ExitCode, listed.All);
         Assert.Contains("No restore receipt is kept under", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ThroughAPairedService_WhatIsNotARunsName_AndALimitBelowOne_AreRefusedBeforeItIsDialled()
+    {
+        // Nothing listens on the port: a refusal that dialled first would say that instead.
+        string[] connect = ["--connect", "127.0.0.1:1", "--state", _cli.StatePath, "--fingerprint", new string('f', 64)];
+
+        var notARun = await CliHarness.RunRawAsync(["restore-receipts", "--run", Path.Combine("..", "config"), .. connect]);
+        var belowOne = await CliHarness.RunRawAsync(["restore-receipts", "--limit", "0", .. connect]);
+
+        Assert.AreEqual(1, notARun.ExitCode, notARun.All);
+        Assert.Contains("sixteen", notARun.Error, StringComparison.Ordinal);
+        Assert.AreEqual(1, belowOne.ExitCode, belowOne.All);
+        Assert.Contains("--limit takes at least 1", belowOne.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]
