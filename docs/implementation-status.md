@@ -3381,9 +3381,14 @@ any run lands it, and `Restore/RestoreSpace` measures the run for what is left.
 In direct mode the run lands in place and names no run. Through the service
 each run lands in a quarantine folder of its own, so a resume names the run it
 continues (contract 1.67's `resume`). The service refuses a name that is not a
-run's, a run whose folder is not there, and a resume under rename. The receipt
-(schema 8) says `found_in_place` for each file it left, and the answer counts
-them.
+run's and a run whose folder is not there. The receipt (schema 8) says
+`found_in_place` for each file it left, and the answer counts them.
+
+Amendment 1 lets a resume run under rename, the console wizard's default, which
+the slice had refused. With a file in the way, the executor looks beside it as
+well, at the names the restore writes there, and leaves a copy that holds the
+snapshot's content, naming it in the receipt as `written_as`. Each folder is
+listed once a run for this.
 
 What remains is recorded rather than done. A file cut short mid-write is
 restored whole, the console's wizard resumes nothing, and through the service

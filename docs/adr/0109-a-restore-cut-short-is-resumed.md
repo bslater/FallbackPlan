@@ -1,21 +1,21 @@
 # ADR-0109 — A restore cut short is resumed
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-10: [Amendment 1](#amendment-1-2026-10--a-resume-under-rename-looks-beside))
 **Date:** 2026-10
-**Requirements:** FR-RST-008 (new: a restore cut short is resumed, leaving what it landed and landing the rest), FR-RST-004 (amended: the receipt says which files a resumed run found in place)
+**Requirements:** FR-RST-008 (new: a restore cut short is resumed, leaving what it landed and landing the rest; amended by Amendment 1 for rename), FR-RST-004 (amended: the receipt says which files a resumed run found in place)
 **Related:** [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (the room a run needs, and the record that left resume owed), [ADR-0107](0107-the-command-line-plans-a-restore-on-its-own.md) and [ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md) (the plan from the command line, each leaving resume owed), [ADR-0041](0041-guided-restore-and-peer-retrieval.md) (the existing-file policies, the write-beside copy among them), [ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md) (a hard-link group made one file again), [architecture 08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning), [§3.1](../architecture/08-restore-and-recovery.md#31-quarantine-by-default)
 
 **Built:**
-- The run: `Restore/RestoreExecutor` takes a resume, leaving each file already holding the snapshot's content as it stands, and reads none of its content ahead of the loop or in it. A resumed quarantined run lands in the folder of the run it continues. `Restore/RestoreSpace` measures a resume for what it still writes.
+- The run: `Restore/RestoreExecutor` takes a resume, leaving each file already holding the snapshot's content as it stands, and reads none of its content ahead of the loop or in it. Under rename it looks beside a file in the way too (Amendment 1). A resumed quarantined run lands in the folder of the run it continues. `Restore/RestoreSpace` measures a resume for what it still writes.
 - The receipt: schema 8, whose items say `found_in_place`.
-- The contract: 1.67's `RunRestoreCommand.Resume` and `RestoreResult.FoundInPlace`. `Agent/ServiceCommandHandler` refuses a name that is not a run's, a run whose folder is not there, and a resume under rename.
+- The contract: 1.67's `RunRestoreCommand.Resume` and `RestoreResult.FoundInPlace`. `Agent/ServiceCommandHandler` refuses a name that is not a run's and a run whose folder is not there.
 - The verb: `Cli/CliApplication`'s `restore` takes `--resume`, naming the run through the service and none in direct mode.
 - The tests:
-  - `Repository.Tests/RestoreResumeTests` — a file already landed is left as the same file, and the rest restored; without a resume it is moved aside; nothing of what landed is read; a file whose content differs, at its length or another, lands under the policy, and so does a link where the file lands, whatever it points at; under fail a file already landed is the run's own; its metadata is applied again; a quarantined run is resumed in its own folder; a hard-link group's first name found in place is the file its later names link to; the receipt names what was found
+  - `Repository.Tests/RestoreResumeTests` — a file already landed is left as the same file, and the rest restored; without a resume it is moved aside; nothing of what landed is read; a file whose content differs, at its length or another, lands under the policy, and so does a link where the file lands, whatever it points at; under fail a file already landed is the run's own; its metadata is applied again; a quarantined run is resumed in its own folder; a hard-link group's first name found in place is the file its later names link to; the receipt names what was found; under rename, the copy an earlier run wrote beside a file in the way is found there, of any day and counted or not, and no second is written, while a copy whose content differs is left and another written, a name the restore would not have written is not its copy, nothing beside is the run's own without a resume, and under another policy nothing beside is looked for
   - `Repository.Tests/RestoreSpaceTests` — a resume needs nothing for a file already there at its length, in place or in the folder of the run it continues
   - `Cli.Tests/RestoreResumeCommandTests` — in direct mode a resume leaves what landed and restores the rest, fits where only what is left fits, names no run, and is not planned
   - `Cli.Tests/GatewayRestoreReportTests` — through the service a resume names its run and says what was found in place, and one naming none is refused before anything is asked
-  - `Hosts.Tests/RestoreResumeServiceTests` — the service continues the named run in its folder with a receipt of its own, measures it for what is left, and refuses a run whose folder is not there, a name that is not a run's, and a resume under rename
+  - `Hosts.Tests/RestoreResumeServiceTests` — the service continues the named run in its folder with a receipt of its own, measures it for what is left, refuses a run whose folder is not there and a name that is not a run's, and under rename finds the copy the run it continues wrote beside
   - `Hosts.Tests/ClientModeTests` — routed end to end, the CLI continues the run it names
   - `Api.Tests/ConfigurationContractTests` — the wire names, and what an older peer's frames read as
 
@@ -37,6 +37,8 @@ A resumed run is the same run asked again. For each file, it looks at the place 
 - **A file there already holds the snapshot's content** when it is a file and not a link, its length is the manifest's, and it hashes to the manifest's whole-file hash. Such a file is left as it stands. It is not moved aside or written again, and nothing of its content is read from the store, ahead of the loop or in it.
 - **Its captured metadata is applied again.** A run cut short between a file's content and its metadata leaves the content with whatever it landed with (architecture 08 §3).
 - **Anything else** is restored as any run restores it. That covers a file not there, one whose content differs at any length, and a link. A file in the way meets the existing-file policy.
+
+  > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--a-resume-under-rename-looks-beside)).** Under rename the place a file would land, with a file in the way, is beside it, so a resume looks there too.
 
 The policy is about somebody else's file. One holding exactly what the run would write is the run's own result, so even the policy that fails on any file found does not fail on it.
 
@@ -64,6 +66,8 @@ A resume needs no room for a file already where it lands at the snapshot's lengt
 - **A plan of a resume is refused.** A plan is of a whole run. Saying which files a resume would find in place means hashing them, which is most of the resume's work.
 - **A resume under rename is refused.** The rename policy writes a copy beside a kept file under a name dated the day it was written ([ADR-0041](0041-guided-restore-and-peer-retrieval.md)). A resume cannot tell such copies from anybody's, and would write a second one beside each.
 
+  > **Superseded 2026-10 ([Amendment 1](#amendment-1-2026-10--a-resume-under-rename-looks-beside)).** A resume under rename is run, and finds a copy beside under a name the restore writes there. It need not tell whose a copy is: one that holds exactly the snapshot's content is what the run would write.
+
 ### 6. Hard links
 
 A hard-link group's first name found in place is the file its later names are made from, as one the run writes is ([ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md)). A later name is made again as any run makes it, under the policy.
@@ -87,8 +91,24 @@ A hard-link group's first name found in place is the file its later names are ma
 - **Compare lengths and times, not content.** Rejected. A restore is a claim about content (FR-RST-002), and a file of the right length is not the right file.
 - **The service finds the run.** Rejected for now. The newest folder under the quarantine may be another snapshot's restore, and its files are somebody's too.
 
+## Amendment 1 (2026-10) — a resume under rename looks beside
+
+**Context.** Rename is the console wizard's default policy, and §5 refused a resume under it. A console that could resume would then resume only under overwrite. §5's reason was that a resume cannot tell a copy an earlier run wrote beside from anybody's. It need not. A copy that holds exactly the snapshot's content, under a name the restore writes beside, is what this run would write there, whoever wrote it.
+
+**Decision.**
+- **Under rename, with a file in the way,** a resume looks beside it as well as at it. That file differs from the snapshot's, or it would be found itself.
+  - The copies it looks at are those named as the restore names one: the file's stem, ` (restored `, a date of any day, optionally a counter from 2 to 100 as the restore writes one, `)`, and the file's extension.
+  - The first, in name order, that is a file holding the snapshot's content (§1's test) is left as it stands, its metadata applied again, and the receipt names it as `written_as` beside `found_in_place`.
+  - A copy whose content differs is left too, and the restored copy is written beside it under a new name, as any run under rename writes one.
+- **A folder is listed once a run** for this, so a folder of many files is not listed again for each.
+- **The measure is unchanged.** It counts a copy found beside as still to write, so for such a file the estimate errs high, which is the side it errs on.
+- **Under another policy** nothing is looked for beside a file, since nothing else writes there.
+
+**Consequences.** The service no longer refuses a resume under rename. A run cut short under rename, resumed, leaves both the file in the way and the copy beside it as they stand, and writes no second copy.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A resumed restore leaves each file already holding the snapshot's content, by length and whole-file hash, as it stands, reads none of its content, applies its metadata again, and lands the rest; it is measured for what is left. Through the service it continues the run it names, in that run's folder (contract 1.67), and the receipt (schema 8) says what was found in place. A resume is not planned, and not under rename. |
+| 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--a-resume-under-rename-looks-beside): a resume under rename is run. With a file in the way it looks beside it, and leaves a copy there holding the snapshot's content under a name the restore writes beside, naming it in the receipt; §5's refusal is superseded. |
