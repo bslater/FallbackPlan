@@ -395,6 +395,61 @@ public sealed class ReadFaultingObjectStore(IObjectStore inner) : IObjectStore
 }
 
 /// <summary>
+/// A store whose matching objects a lifecycle rule has moved to an archival
+/// tier: listed and sized as before, said to be archived, and refused as
+/// archived when read, as the providers that have such a tier refuse them
+/// (ADR-0103).
+/// </summary>
+/// <param name="inner">The store that holds the bytes.</param>
+/// <param name="archived">Which keys are archived.</param>
+/// <param name="movedAfterHead">
+/// Whether the rule moves them after the store has answered a HEAD, which
+/// then says they are not archived while a read is refused.
+/// </param>
+public sealed class ArchivingObjectStore(IObjectStore inner, Func<string, bool> archived, bool movedAfterHead = false)
+    : IObjectStore
+{
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities => inner.Capabilities with { ArchivalTiers = true };
+
+    /// <inheritdoc />
+    public async ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken)
+    {
+        var held = await inner.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
+        return held.Found && archived(key.Value) && !movedAfterHead
+            ? new GetMetadataResult(held.Metadata! with { Archived = true })
+            : held;
+    }
+
+    /// <inheritdoc />
+    public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken)
+    {
+        if (archived(key.Value))
+        {
+            throw new StoreObjectArchivedException($"'{key.Value}' is held only in an archival tier");
+        }
+
+        return inner.OpenReadAsync(key, range, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<PutResult> PutAsync(
+        ObjectKey key,
+        Func<CancellationToken, ValueTask<Stream>> openContent,
+        PutConditions conditions,
+        CancellationToken cancellationToken) =>
+        inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<ObjectEntry> ListAsync(ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+        inner.ListAsync(prefix, options, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+        inner.DeleteAsync(key, conditions, cancellationToken);
+}
+
+/// <summary>
 /// Deletes normally until armed, then refuses matching keys — either by
 /// throwing an <see cref="IOException"/> or by reporting
 /// <see cref="DeleteOutcome.NotFound"/> without removing anything.

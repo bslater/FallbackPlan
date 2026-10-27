@@ -45,6 +45,15 @@ public sealed record ReplicaSweepResult(
     public IReadOnlyList<string> ExaminedKeys { get; init; } = [];
 
     /// <summary>
+    /// The blobs this segment passed over because the store holds them only
+    /// in an archival tier, which serves nothing until they are rehydrated
+    /// (ADR-0104). Not read, so neither sound nor damaged, and not a stall:
+    /// the next attempt would meet the same refusal, and stopping there would
+    /// leave everything after them unread for good.
+    /// </summary>
+    public IReadOnlyList<string> ArchivedKeys { get; init; } = [];
+
+    /// <summary>
     /// The blob this segment stopped at because it could not be read; null
     /// when the segment was not stopped short. The segment ends there, and
     /// <see cref="NextCursor"/> is the last blob read before it, so the next
@@ -222,6 +231,7 @@ public static class ReplicaSweep
         var sourceDamaged = new List<string>();
         var sourceFindings = new List<string>();
         var read = new List<string>();
+        var archived = new List<string>();
         using var verifier = new VerifyEngine(repositoryId, keys, replica);
         string? lastExamined = null;
         var examined = 0;
@@ -246,6 +256,16 @@ public static class ReplicaSweep
                     .VerifyBlobAsync(storeKey, length, VerifyLevel.FooterAndDigest, bindKey: true, cancellationToken)
                     .ConfigureAwait(false);
             }
+            catch (StoreObjectArchivedException)
+            {
+                // Passed over, not stopped at: the next attempt would meet the
+                // same refusal until a person rehydrates it.
+                examined--;
+                bytesRead -= length;
+                archived.Add(key);
+                lastExamined = key;
+                continue;
+            }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 // Stopped here, keeping what was read before: the next attempt
@@ -256,6 +276,7 @@ public static class ReplicaSweep
                     SourceDamagedKeys = sourceDamaged,
                     SourceFindings = sourceFindings,
                     ExaminedKeys = read,
+                    ArchivedKeys = archived,
                     StalledOn = key,
                     Stall = exception.Message,
                 };
@@ -285,13 +306,14 @@ public static class ReplicaSweep
         // segment reached the end, so the circuit is closed and the next one
         // starts over. Fewer — the count or the bytes ended the segment — and
         // the next resumes after the last blob read.
-        var completed = examined == candidates.Count && !more;
+        var completed = examined + archived.Count == candidates.Count && !more;
         return new ReplicaSweepResult(examined, findings, completed ? null : lastExamined, completed)
         {
             DamagedKeys = damaged,
             SourceDamagedKeys = sourceDamaged,
             SourceFindings = sourceFindings,
             ExaminedKeys = read,
+            ArchivedKeys = archived,
         };
     }
 

@@ -172,6 +172,99 @@ public sealed class ReplicaSweepTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Sweep_ABlobTheStoreHoldsOnlyInAnArchivalTier_IsPassedOver_AndTheCircuitCloses()
+    {
+        // An archived blob reads no differently on the next attempt: its
+        // store serves nothing of it until a person rehydrates it (ADR-0104).
+        // Stopping there would stop the circuit there for good, and nothing
+        // after it would ever be re-read. So it is passed over, named, and
+        // neither read nor shown to be altered.
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var all = (await BlobKeysAsync(replica)).Select(key => key.Value).Order(StringComparer.Ordinal).ToList();
+        Assert.IsGreaterThanOrEqualTo(3, all.Count, "the archive must span several blobs");
+        var cold = new ArchivingObjectStore(replica, key => key == all[1]);
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, cold, source, cursor: null, budget: 1_000, CancellationToken.None);
+
+        Assert.IsNull(result.StalledOn);
+        Assert.IsNull(result.Stall);
+        Assert.IsTrue(result.CompletedCircuit, "the circuit reaches the end past the archived blob");
+        CollectionAssert.AreEqual(new[] { all[1] }, result.ArchivedKeys.ToArray());
+        Assert.AreEqual(all.Count - 1, result.Examined, "an archived blob is not read");
+        Assert.DoesNotContain(all[1], result.ExaminedKeys);
+        Assert.IsEmpty(result.Findings);
+        Assert.IsEmpty(result.DamagedKeys, "nothing archived is repaired");
+    }
+
+    [TestMethod]
+    public async Task Sweep_ASegmentEndingAtAnArchivedBlob_ResumesAfterIt()
+    {
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var all = (await BlobKeysAsync(replica)).Select(key => key.Value).Order(StringComparer.Ordinal).ToList();
+        Assert.IsGreaterThanOrEqualTo(3, all.Count, "the archive must span several blobs");
+        var cold = new ArchivingObjectStore(replica, key => key == all[1]);
+
+        var first = await ReplicaSweep.RunAsync(
+            Repo, keys, cold, source, cursor: null, budget: 2, CancellationToken.None);
+
+        Assert.IsFalse(first.CompletedCircuit);
+        Assert.AreEqual(all[1], first.NextCursor, "the next segment does not meet it again");
+
+        var next = await ReplicaSweep.RunAsync(
+            Repo, keys, cold, source, cursor: first.NextCursor, budget: 1_000, CancellationToken.None);
+
+        Assert.IsEmpty(next.ArchivedKeys);
+        Assert.AreEqual(all.Count - 2, next.Examined);
+        Assert.IsTrue(next.CompletedCircuit);
+    }
+
+    [TestMethod]
+    public async Task Sweep_AnArchivedBlob_SpendsNoneOfTheSegmentsByteBudget()
+    {
+        // Nothing of it is read, so a segment bounded in bytes reads as much
+        // of what is readable as it would with the archived blob gone.
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var lengths = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        await foreach (var entry in replica.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
+        {
+            lengths[entry.Key.Value] = entry.Length;
+        }
+
+        Assert.IsGreaterThanOrEqualTo(3, lengths.Count, "the archive must span several blobs");
+        var coldKey = lengths.Keys.First();
+        var cold = new ArchivingObjectStore(replica, key => key == coldKey);
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, cold, source, cursor: null, budget: 1_000,
+            byteBudget: lengths.Where(pair => pair.Key != coldKey).Sum(pair => pair.Value), CancellationToken.None);
+
+        Assert.AreEqual(lengths.Count - 1, result.Examined);
+        Assert.IsTrue(result.CompletedCircuit);
+    }
+
+    [TestMethod]
+    public async Task Sweep_ASegmentThatPassesOverAnArchivedBlobAndThenStalls_NamesIt_AndResumesPastIt()
+    {
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var all = (await BlobKeysAsync(replica)).Select(key => key.Value).Order(StringComparer.Ordinal).ToList();
+        Assert.IsGreaterThanOrEqualTo(3, all.Count, "the archive must span several blobs");
+        var cold = new ArchivingObjectStore(new UnreadableObjectStore(replica, key => key == all[1]), key => key == all[0]);
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, cold, source, cursor: null, budget: 1_000, CancellationToken.None);
+
+        Assert.AreEqual(all[1], result.StalledOn);
+        CollectionAssert.AreEqual(new[] { all[0] }, result.ArchivedKeys.ToArray());
+        Assert.AreEqual(0, result.Examined);
+        Assert.AreEqual(all[0], result.NextCursor, "the next attempt begins at the blob that would not read");
+    }
+
+    [TestMethod]
     public async Task Sweep_TheFirstBlobWillNotRead_LeavesTheCursorWhereItWas()
     {
         var (source, replica, keys) = await SeedAsync();

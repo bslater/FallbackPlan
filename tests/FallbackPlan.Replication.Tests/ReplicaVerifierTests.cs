@@ -103,6 +103,39 @@ public sealed class ReplicaVerifierTests
     }
 
     [TestMethod]
+    public async Task Verify_ASampleTheReplicaHoldsOnlyInAnArchivalTier_IsArchived_NeitherProvedNorFailed()
+    {
+        // An archived object is held, and its store will not serve it until
+        // it is rehydrated (ADR-0104). That is no proof, and no finding: a
+        // lifecycle rule moved it, and nothing says its bytes changed.
+        var source = new LocalFileSystemObjectStore(_sourcePath);
+        var samples = await SeedAsync(source, new LocalFileSystemObjectStore(_replicaPath), count: 3);
+        var cold = samples[1].Key;
+        var replica = new ArchivingObjectStore(new LocalFileSystemObjectStore(_replicaPath), key => key == cold);
+
+        var outcome = await ReplicaVerifier.VerifyAsync(source, replica, samples, CancellationToken.None);
+
+        Assert.AreEqual(2, outcome.Passed);
+        Assert.IsEmpty(outcome.Failed);
+        CollectionAssert.AreEqual(new[] { cold }, outcome.Archived.ToArray());
+    }
+
+    [TestMethod]
+    public async Task Verify_EverySampleArchived_ProvesNothing()
+    {
+        var source = new LocalFileSystemObjectStore(_sourcePath);
+        var samples = await SeedAsync(source, new LocalFileSystemObjectStore(_replicaPath), count: 3);
+        var replica = new ArchivingObjectStore(new LocalFileSystemObjectStore(_replicaPath), _ => true);
+
+        var outcome = await ReplicaVerifier.VerifyAsync(source, replica, samples, CancellationToken.None);
+
+        Assert.AreEqual(0, outcome.Passed);
+        Assert.IsEmpty(outcome.Failed);
+        Assert.HasCount(3, outcome.Archived);
+        Assert.IsFalse(outcome.ProvedSomething, "an archived replica has proven nothing");
+    }
+
+    [TestMethod]
     public async Task Verify_TheReplicaHoldsDifferentBytes_NamesTheKey()
     {
         var source = new LocalFileSystemObjectStore(_sourcePath);
@@ -216,6 +249,45 @@ public sealed class ReplicaVerifierTests
             Assert.AreEqual(0, outcome.Digest);
             Assert.IsEmpty(outcome.Failed);
             Assert.IsFalse(outcome.ProvedSomething);
+        }
+    }
+
+    [TestMethod]
+    public async Task ProveSealed_ABlobTheReplicaHoldsOnlyInAnArchivalTier_IsArchived_NotFailed()
+    {
+        var store = new LocalFileSystemObjectStore(_replicaPath);
+        var (repository, key, blobId, digest) = await SeedSealedBlobAsync(store);
+        using (repository)
+        {
+            var replica = new ArchivingObjectStore(store, candidate => candidate == key.Value);
+
+            var outcome = await ReplicaVerifier.ProveSealedAsync(
+                replica, [key.Value], repository, CancellationToken.None,
+                signedDigestOf: id => id.Equals(blobId) ? digest : null);
+
+            Assert.AreEqual(0, outcome.Passed);
+            Assert.IsEmpty(outcome.Failed, "a blob its store will not serve until rehydrated is not damaged");
+            CollectionAssert.AreEqual(new[] { key.Value }, outcome.Archived.ToArray());
+        }
+    }
+
+    [TestMethod]
+    public async Task Verify_ABlobArchivedAtTheReplica_IsArchived_OnTheSealedProofToo()
+    {
+        // The sync's own call: the sealed proof first, then the comparison
+        // for what it left. An archived blob is said once, by the first.
+        var store = new LocalFileSystemObjectStore(_replicaPath);
+        var (repository, key, blobId, digest) = await SeedSealedBlobAsync(store);
+        using (repository)
+        {
+            var replica = new ArchivingObjectStore(store, candidate => candidate == key.Value);
+
+            var outcome = await ReplicaVerifier.VerifyAsync(
+                store, replica, [new VerificationSample(key.Value, 0, 16)], CancellationToken.None, repository,
+                id => id.Equals(blobId) ? digest : null);
+
+            Assert.IsEmpty(outcome.Failed);
+            CollectionAssert.AreEqual(new[] { key.Value }, outcome.Archived.ToArray());
         }
     }
 

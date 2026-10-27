@@ -47,6 +47,12 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     /// </summary>
     public int ListPageLimit { get; set; } = 1000;
 
+    /// <summary>
+    /// Which objects are archived as they arrive, by full key, as in a bucket
+    /// or container whose objects under a prefix land in an archival tier.
+    /// </summary>
+    public Func<string, bool>? ArchiveOnArrival { get; set; }
+
     /// <summary>Every request answered so far, in order.</summary>
     public IReadOnlyList<RecordedRequest> Requests => [.. _requests];
 
@@ -170,11 +176,12 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     /// <param name="status">The HTTP status, e.g. 503.</param>
     /// <param name="code">The API's error code.</param>
     /// <param name="method">The method refused, or null for every request.</param>
-    public void FailFrom(int servedFirst, int status, string code, string? method = null)
+    /// <param name="targetContains">Only requests whose target contains this count and are refused, when it is given.</param>
+    public void FailFrom(int servedFirst, int status, string code, string? method = null, string? targetContains = null)
     {
         lock (_gate)
         {
-            _standing = new StandingFault(status, code, Drop: false, method, servedFirst);
+            _standing = new StandingFault(status, code, Drop: false, method, servedFirst, targetContains);
         }
     }
 
@@ -189,7 +196,7 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     {
         lock (_gate)
         {
-            _standing = new StandingFault(0, string.Empty, Drop: true, method, servedFirst);
+            _standing = new StandingFault(0, string.Empty, Drop: true, method, servedFirst, TargetContains: null);
         }
     }
 
@@ -390,7 +397,8 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
                 return fault;
             }
 
-            if (_standing is not { } standing || (standing.Method is { } method && method != request.Method))
+            if (_standing is not { } standing || (standing.Method is { } method && method != request.Method)
+                || (standing.TargetContains is { } part && !request.Target.Contains(part, StringComparison.Ordinal)))
             {
                 return null;
             }
@@ -507,7 +515,8 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
 
     private sealed record Fault(int Status, string Code, bool Drop, bool Truncate);
 
-    private sealed record StandingFault(int Status, string Code, bool Drop, string? Method, int ServedFirst);
+    private sealed record StandingFault(
+        int Status, string Code, bool Drop, string? Method, int ServedFirst, string? TargetContains);
 
     /// <summary>An answer, before it is written to the wire.</summary>
     /// <param name="Status">The HTTP status.</param>

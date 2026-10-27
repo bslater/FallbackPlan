@@ -259,6 +259,26 @@ public sealed record DestinationSyncRecord
     public string? SweepStalledOn { get; init; }
 
     /// <summary>
+    /// Blobs the deep sweep has passed over in the current circuit because
+    /// the store holds them only in an archival tier; zero once a circuit
+    /// closes (schema 11, [ADR-0104](../../docs/adr/0104-a-replicas-readers-take-an-archived-object-as-archived.md)).
+    /// </summary>
+    [JsonPropertyName("sweep_archived")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int SweepArchived { get; init; }
+
+    /// <summary>
+    /// When a reader of this replica, a sync's read-back or the deep sweep,
+    /// first met an object the store holds only in an archival tier, in the
+    /// run of such meetings that has not ended; null when none stands
+    /// (schema 11, ADR-0104). A sweep circuit that closes having met none
+    /// ends it, and the next meeting starts another.
+    /// </summary>
+    [JsonPropertyName("archived_since")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? ArchivedSince { get; init; }
+
+    /// <summary>
     /// The snapshot whose complete closure first made this destination a full
     /// replica; null while it holds none. Declared ahead of its writer
     /// (ADR-0047 §6): nothing fills it yet — the schema carries the field so
@@ -525,7 +545,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 10;
+    private const int CurrentSchemaVersion = 11;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -662,8 +682,10 @@ public sealed class DestinationSyncStore
         // because none had run: a pending deletion then waits for one, which is
         // the cautious reading. Schema 10 added the count of failed drills in a
         // row, zero on an older row because nothing counted them: a failure
-        // standing there is taken as the first of its run. Only 1 → 2 changes a
-        // row, below.
+        // standing there is taken as the first of its run. Schema 11 added what
+        // the readers met held only in an archival tier, none on an older row
+        // because nothing told it apart: the next reader to meet one says so.
+        // Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -1038,12 +1060,19 @@ public sealed class DestinationSyncStore
     /// <param name="examined">Blobs this segment read.</param>
     /// <param name="completedCircuit">Whether this segment reached the end of the key space.</param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <param name="archived">Blobs this segment passed over because the store holds them only in an archival tier.</param>
     public DestinationSyncRecord RecordSweep(
         string setId, string destination, string? cursor, int examined, bool completedCircuit,
-        ulong nowUnixMilliseconds)
+        ulong nowUnixMilliseconds, int archived = 0)
     {
         return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
+            // A circuit that closes having met nothing archived ends the run
+            // of such meetings; one that met some keeps it standing.
+            SweepArchived = completedCircuit ? 0 : (previous?.SweepArchived ?? 0) + archived,
+            ArchivedSince = archived > 0
+                ? previous?.ArchivedSince ?? nowUnixMilliseconds
+                : completedCircuit && (previous?.SweepArchived ?? 0) == 0 ? null : previous?.ArchivedSince,
             SweepCursor = cursor,
             SweptAt = nowUnixMilliseconds,
             // The tally resets with the circuit, so it always answers "how far
@@ -1077,9 +1106,10 @@ public sealed class DestinationSyncStore
     /// <param name="stalledOn">The blob that would not read; null when the replica itself could not be read.</param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
     /// <returns>The row as written, carrying the stall count the caller decides on.</returns>
+    /// <param name="archived">Blobs this segment passed over, before it stopped, because the store holds them only in an archival tier.</param>
     public DestinationSyncRecord RecordSweepStall(
         string setId, string destination, string? cursor, int examined, string? stalledOn,
-        ulong nowUnixMilliseconds)
+        ulong nowUnixMilliseconds, int archived = 0)
     {
         ThrowHelper.ThrowIfLessThan(examined, 0);
 
@@ -1103,9 +1133,26 @@ public sealed class DestinationSyncStore
                 SweepStalls = examined > 0 ? 1 : (previous?.SweepStalls ?? 0) + 1,
                 SweepStalledAt = nowUnixMilliseconds,
                 SweepStalledOn = stalledOn,
+                SweepArchived = (previous?.SweepArchived ?? 0) + archived,
+                ArchivedSince = archived > 0 ? previous?.ArchivedSince ?? nowUnixMilliseconds : previous?.ArchivedSince,
             };
         });
     }
+
+    /// <summary>
+    /// Records that a sync's read-back met an object the store holds only in
+    /// an archival tier (ADR-0104): the run of such meetings starts now unless
+    /// one already stands.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <returns>The row, with <see cref="DestinationSyncRecord.ArchivedSince"/> set.</returns>
+    public DestinationSyncRecord RecordArchived(string setId, string destination, ulong nowUnixMilliseconds) =>
+        Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            ArchivedSince = previous?.ArchivedSince ?? nowUnixMilliseconds,
+        });
 
     /// <summary>
     /// Records what a deep sweep or a sync found about damaged objects at a
