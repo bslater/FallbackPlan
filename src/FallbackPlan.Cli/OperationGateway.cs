@@ -1444,7 +1444,6 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             throw new CliFailureException(Strings.DirectGateway_ResumeLandsInPlace);
         }
 
-        ThrowIfOriginal(request);
         var existing = PolicyOf(request.Existing);
 
         // Direct mode restores through the same planner and executor the
@@ -1465,6 +1464,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
         }
 
+        var slices = SlicesOf(catalogue, snapshotId, plan, request);
         using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
 
         // No load at all: the catalogue says where every record is, so the
@@ -1476,9 +1476,11 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         // Whether it fits, before anything is written (FR-RST-003). The run
         // below lands in place under the policy asked, so that is the run
-        // measured, less what a resume leaves where it stands.
+        // measured, at every root it writes to together, less what a resume
+        // leaves where it stands.
         var space = await RestoreSpace.MeasureRunAsync(
-            [new RestoreSlice(plan, request.OutputDirectory, request.Resume ? request.OutputDirectory : null)],
+            [.. slices.Select(slice => new RestoreSlice(
+                slice.Plan, slice.OutputDirectory, request.Resume ? slice.OutputDirectory : null))],
             RestoreDestinationMode.InPlace,
             existing,
             SpaceProbe(),
@@ -1489,26 +1491,33 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             throw new CliFailureException(Strings.FormatDirectGateway_RestoreWouldNotFit(space.Refusal()));
         }
 
-        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
-            plan,
-            request.OutputDirectory,
-            new RestoreExecutionOptions
-            {
-                // The user named the output directory, so content lands there
-                // rather than in quarantine — quarantine is the default when a
-                // service restores onto a live machine it did not choose
-                // (architecture 08 §3.1), which is a distinct control from
-                // where a person's explicit `--output` points. Containment,
-                // the receipt and metadata come from the executor regardless.
-                DestinationMode = RestoreDestinationMode.InPlace,
-                ExistingDestination = existing,
-                // A fresh run identifier per invocation, so two restores of one
-                // snapshot displace into distinct stores (architecture 08 §3.1).
-                RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
-                NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Resume = request.Resume,
-            },
-            cancellationToken).ConfigureAwait(false);
+        var executor = new RestoreExecutor(reader, target);
+        var options = new RestoreExecutionOptions
+        {
+            // The user named the output directory, or asked for the original
+            // location, which the service restores in place too, so content
+            // lands there rather than in quarantine — quarantine is the
+            // default when a service restores onto a live machine it did not
+            // choose (architecture 08 §3.1), which is a distinct control from
+            // where a person's explicit `--output` points. Containment, the
+            // receipt and metadata come from the executor regardless.
+            DestinationMode = RestoreDestinationMode.InPlace,
+            ExistingDestination = existing,
+            // A fresh run identifier per invocation, so two restores of one
+            // snapshot displace into distinct stores (architecture 08 §3.1).
+            RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
+            NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Resume = request.Resume,
+        };
+        var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
+        foreach (var slice in slices)
+        {
+            receipts.Add((
+                await executor.ExecuteAsync(slice.Plan, slice.OutputDirectory, options, cancellationToken).ConfigureAwait(false),
+                slice.LabelPrefix));
+        }
+
+        var receipt = RestoreOriginalLocation.Merge(receipts);
 
         var directories = plan.Items
             .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
@@ -1553,7 +1562,6 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         // The plan the service makes, made here for the run above: its
         // manifests read and every blob it names asked for, measured where
         // that run writes, in place under the policy asked.
-        ThrowIfOriginal(request);
         var existing = PolicyOf(request.Existing);
         var snapshotId = Convert.FromHexString(request.SnapshotId);
         using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
@@ -1564,11 +1572,12 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
         }
 
+        var slices = SlicesOf(catalogue, snapshotId, plan, request);
         var probed = await RestoreBlobSet.ResolveAsync(
             catalogue, plan, session.Store, session.Repository.RepositoryId, session.Repository.Keys, cancellationToken)
             .ConfigureAwait(false);
         var space = await RestoreSpace.MeasureAsync(
-            [new RestoreSlice(plan, request.OutputDirectory)],
+            [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory))],
             RestoreDestinationMode.InPlace,
             existing,
             SpaceProbe(),
@@ -1599,13 +1608,32 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     private static IReadOnlyList<string> PrefixesOf(RestoreRequest request) =>
         request.Paths is { Count: > 0 } paths ? paths : request.Path is { Length: > 0 } path ? [path] : [];
 
-    /// <summary>Refuses the original location, which is a set's configured roots and so the service's to know.</summary>
-    private static void ThrowIfOriginal(RestoreRequest request)
+    /// <summary>
+    /// Where the run lands: the folder asked, or each root of the snapshot's
+    /// set as this state's configuration has them, which is the file the
+    /// service reads them from (ADR-0119). Refused before anything is read or
+    /// written where nothing says where a file was captured.
+    /// </summary>
+    private IReadOnlyList<RestoreRootSlice> SlicesOf(
+        Catalogue catalogue, byte[] snapshotId, RestorePlan plan, RestoreRequest request)
     {
-        if (request.ToOriginal)
+        if (!request.ToOriginal)
         {
-            throw new CliFailureException(Strings.DirectGateway_OriginalNeedsTheService);
+            return [new RestoreRootSlice(plan, request.OutputDirectory, string.Empty)];
         }
+
+        var row = catalogue.EnumerateSnapshots()
+            .FirstOrDefault(candidate => candidate.SnapshotId.Span.SequenceEqual(snapshotId));
+        var setId = row is null ? null : Convert.ToHexStringLower(row.BackupSetId.Span);
+        var set = (setId is null
+                ? null
+                : ClientConfiguration.Load(session.ConfigurationPath, logger).BackupSets.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Id, setId, StringComparison.Ordinal)))
+            ?? throw new CliFailureException(Strings.FormatDirectGateway_OriginalSetNotConfigured(session.ConfigurationPath));
+
+        return RestoreOriginalLocation.Slice(
+                plan, [.. set.Roots.Select(root => new RestoreRoot(root.Path, root.Label))], out var unmapped)
+            ?? throw new CliFailureException(Strings.FormatDirectGateway_OriginalLabelNotARoot(unmapped));
     }
 
     /// <summary>The existing-file policy asked, in the words the service takes it in, as the executor takes it.</summary>

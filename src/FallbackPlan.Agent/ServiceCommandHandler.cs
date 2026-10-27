@@ -846,7 +846,7 @@ public sealed partial class ServiceCommandHandler(
             // Measured only against where the run would write, which a
             // pre-1.53 client never names: without it there is nothing to
             // measure against.
-            IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)>? slices = null;
+            IReadOnlyList<RestoreRootSlice>? slices = null;
             var mode = RestoreDestinationMode.Quarantine;
             var policy = ExistingDestinationPolicy.Preserve;
             if (command.OutputDirectory is { Length: > 0 } || command.Target == "original")
@@ -964,7 +964,7 @@ public sealed partial class ServiceCommandHandler(
     /// The run's slices: the whole plan into the folder, or one slice per
     /// captured root for the original location (ADR-0041).
     /// </summary>
-    private (IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)>? Slices, ServiceError? Refusal)
+    private (IReadOnlyList<RestoreRootSlice>? Slices, ServiceError? Refusal)
         SlicesFor(
             Repository.Catalogue.Catalogue catalogue,
             byte[] snapshotId,
@@ -973,7 +973,7 @@ public sealed partial class ServiceCommandHandler(
             string? outputDirectory) =>
         toOriginal
             ? SliceForOriginal(catalogue, snapshotId, plan)
-            : ([(plan, outputDirectory!, string.Empty)], null);
+            : ([new RestoreRootSlice(plan, outputDirectory!, string.Empty)], null);
 
     /// <summary>
     /// What a plan is for: the objects it needs and cannot find, reported
@@ -1172,14 +1172,14 @@ public sealed partial class ServiceCommandHandler(
                 // caller is told what happened, never sent the files (ADR-0028 §6).
                 var executor = new RestoreExecutor(reader, target, runtime.LoggerFor<RestoreExecutor>());
                 var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
-                foreach (var (slice, outputDirectory, labelPrefix) in slices)
+                foreach (var slice in slices)
                 {
                     receipts.Add((
-                        await executor.ExecuteAsync(slice, outputDirectory, options, cancellationToken).ConfigureAwait(false),
-                        labelPrefix));
+                        await executor.ExecuteAsync(slice.Plan, slice.OutputDirectory, options, cancellationToken).ConfigureAwait(false),
+                        slice.LabelPrefix));
                 }
 
-                var receipt = MergeReceipts(receipts);
+                var receipt = RestoreOriginalLocation.Merge(receipts);
                 var receiptPath = PersistReceipt(receipt, options.RunId);
                 if (copies is not null)
                 {
@@ -1339,14 +1339,11 @@ public sealed partial class ServiceCommandHandler(
         name.Length == 16 && name.All(character => char.IsAsciiDigit(character) || character is >= 'a' and <= 'f');
 
     /// <summary>
-    /// The per-root slices of an original-location restore (ADR-0041). A
-    /// single-root set restores the whole plan into its root; a multi-root
-    /// set's plan paths are label-prefixed (ADR-0040), so the items group by
-    /// first component, each slice's paths shed the label, and each runs
-    /// into its root — refused whole, naming the label, when any slice's
-    /// label no longer maps to a configured root.
+    /// The per-root slices of an original-location restore (ADR-0041), as
+    /// the set's configuration has its roots now: refused whole, naming the
+    /// label, when any slice's label no longer maps to a configured root.
     /// </summary>
-    private (IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)>? Slices, ServiceError? Refusal)
+    private (IReadOnlyList<RestoreRootSlice>? Slices, ServiceError? Refusal)
         SliceForOriginal(Repository.Catalogue.Catalogue catalogue, byte[] snapshotId, RestorePlan plan)
     {
         var row = catalogue.EnumerateSnapshots()
@@ -1363,72 +1360,13 @@ public sealed partial class ServiceCommandHandler(
                 "This snapshot's set is no longer configured — restore to a chosen folder instead."));
         }
 
-        if (set.Roots.Count == 1)
-        {
-            return ([(plan, set.Roots[0].Path, string.Empty)], null);
-        }
-
-        var byLabel = plan.Items
-            .GroupBy(item => item.Path.Split('/')[0], StringComparer.Ordinal)
-            .ToList();
-        var slices = new List<(RestorePlan, string, string)>();
-        foreach (var group in byLabel)
-        {
-            var root = set.Roots.FirstOrDefault(candidate =>
-                string.Equals(candidate.Label, group.Key, StringComparison.Ordinal));
-            if (root is null)
-            {
-                return (null, new ServiceError(
-                    ServiceErrorReason.InvalidArgument,
-                    $"'{group.Key}' is not one of the set's root labels any more — restore to a chosen folder instead."));
-            }
-
-            var prefix = group.Key + "/";
-            var items = group
-                .Where(item => item.Path.Length > prefix.Length)
-                .Select(item => item with { Path = item.Path[prefix.Length..] })
-                .ToList();
-            slices.Add((
-                new RestorePlan
-                {
-                    SnapshotId = plan.SnapshotId,
-                    Items = items,
-                    Conflicts = plan.Conflicts,
-                    Degradations = plan.Degradations,
-                },
-                root.Path,
-                prefix));
-        }
-
-        return (slices, null);
-    }
-
-    /// <summary>One receipt for the run, whichever way it was sliced.</summary>
-    private static RestoreReceipt MergeReceipts(List<(RestoreReceipt Receipt, string LabelPrefix)> receipts)
-    {
-        if (receipts.Count == 1 && receipts[0].LabelPrefix.Length == 0)
-        {
-            return receipts[0].Receipt;
-        }
-
-        static string Prefixed(string prefix, string path) => prefix.Length == 0 ? path : prefix + path;
-        var worst = receipts.Max(entry => entry.Receipt.Outcome);
-        return new RestoreReceipt
-        {
-            SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
-            SnapshotId = receipts[0].Receipt.SnapshotId,
-            StartedAt = receipts.Min(entry => entry.Receipt.StartedAt),
-            CompletedAt = receipts.Max(entry => entry.Receipt.CompletedAt),
-            Items = [.. receipts.SelectMany(entry => entry.Receipt.Items.Select(item => item with
-            {
-                Path = Prefixed(entry.LabelPrefix, item.Path),
-                WrittenAs = item.WrittenAs is null ? null : Prefixed(entry.LabelPrefix, item.WrittenAs),
-            }))],
-            Displaced = [.. receipts.SelectMany(entry =>
-                entry.Receipt.Displaced.Select(path => Prefixed(entry.LabelPrefix, path)))],
-            WrittenTo = string.Join("; ", receipts.Select(entry => entry.Receipt.WrittenTo)),
-            Outcome = worst,
-        };
+        var slices = RestoreOriginalLocation.Slice(
+            plan, [.. set.Roots.Select(root => new RestoreRoot(root.Path, root.Label))], out var unmapped);
+        return slices is null
+            ? (null, new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                $"'{unmapped}' is not one of the set's root labels any more — restore to a chosen folder instead."))
+            : (slices, null);
     }
 
     /// <summary>

@@ -1493,7 +1493,7 @@ public static class CliApplication
             var targetOption = new Option<string?>("--target")
             {
                 Description = "folder, the default, restores under --output; original puts each file back where it was "
-                    + "captured, as the set's configured roots say, which only the service knows.",
+                    + "captured, as the snapshot's set's configured roots say.",
             };
             targetOption.AcceptOnlyFromAmong("folder", "original");
             var existingOption = new Option<string?>("--existing")

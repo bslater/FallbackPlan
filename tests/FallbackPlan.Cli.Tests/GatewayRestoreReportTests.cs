@@ -162,6 +162,25 @@ public sealed class GatewayRestoreReportTests
     }
 
     [TestMethod]
+    public async Task APlanOfTheOriginalLocation_SaysTheFilesGoBackWhereTheyWereCaptured()
+    {
+        // The run names no folder, so a plan that said where by the folder
+        // asked would say nothing.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(1, 0, "/docs", "complete"), new RestorePlanResult(1, 5, [], WriteBytes: 4_096));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.PlanRestoreAsync(
+                new RestoreRequest(SnapshotId, "docs/a.txt", string.Empty, Target: "original"), token),
+            timeout.Token);
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        StringAssert.StartsWith(report.Lines[0], "plan: 1 file(s) back where they were captured, 4096 byte(s) written");
+    }
+
+    [TestMethod]
     public async Task AResumeNamingNoRun_IsRefusedBeforeAnythingIsAsked()
     {
         // Through the service each run lands in a folder of its own, so a

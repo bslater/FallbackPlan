@@ -7,10 +7,10 @@ namespace FallbackPlan.Cli.Tests;
 /// <c>restore</c> asks a run as the console asks one (FR-RST-001, ADR-0117):
 /// several paths of a snapshot, what to do about a file in the way, a landing
 /// in place, and the original location. In direct mode the CLI restores in
-/// place, as it always has, so it takes several paths and a policy, and
-/// refuses the original location, which only the service knows. A plan, and
-/// a plan kept, is of the run asked, so the file keeps what the console's
-/// does.
+/// place, as it always has, so it takes several paths and a policy; the
+/// original location it restores from the set's configured roots, which
+/// <see cref="RestoreOriginalDirectTests"/> holds (ADR-0119). A plan, and a
+/// plan kept, is of the run asked, so the file keeps what the console's does.
 /// </summary>
 [TestClass]
 public sealed class RestoreShapeCommandTests : IDisposable
@@ -101,18 +101,6 @@ public sealed class RestoreShapeCommandTests : IDisposable
 
         Assert.AreEqual(0, run.ExitCode, run.All);
         Assert.AreEqual("first", File.ReadAllText(Path.Combine(destination, "one.txt")));
-    }
-
-    [TestMethod]
-    public async Task TheOriginalLocation_InDirectMode_IsRefused_AndRestoresNothing()
-    {
-        var snapshot = await BackUpAsync();
-
-        var run = await _cli.RunAsync("restore", snapshot, "one.txt", "--target", "original");
-
-        Assert.AreNotEqual(0, run.ExitCode, run.All);
-        Assert.Contains("service", run.All, StringComparison.Ordinal);
-        Assert.Contains("original", run.All, StringComparison.Ordinal);
     }
 
     [TestMethod]
