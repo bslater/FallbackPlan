@@ -41,6 +41,7 @@ A restore refused before it begins wrote nothing, and keeps no receipt. A plan r
 ## What this does not do
 
 - **List the receipts.** Each is a file a person or a script reads; no verb reads them back.
+  > **2026-10 ([ADR-0124](0124-a-kept-restore-receipt-is-read-back.md)).** `restore-receipts` reads them back: each run newest first, with what it did and where it wrote, or one run's receipt whole.
 - **Keep a run in the service's journal.** A direct run lands in place and names no run to resume (ADR-0109), so it is not listed as left unfinished.
 
 ## Alternatives considered
@@ -53,3 +54,4 @@ A restore refused before it begins wrote nothing, and keeps no receipt. A plan r
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The receipt keeps itself as its run's own file under a state directory's receipts, written whole; the service keeps its receipts through it, and direct mode now keeps each run's receipt there too and says where, while a run refused before it begins and a plan keep none. |
+| 2026-10 | Accepted | [ADR-0124](0124-a-kept-restore-receipt-is-read-back.md): the receipts kept are read back by `restore-receipts`, which this record left undone. |
