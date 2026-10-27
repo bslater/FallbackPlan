@@ -13,9 +13,10 @@ namespace FallbackPlan.Cli.Tests;
 /// </summary>
 /// <remarks>
 /// In direct mode the CLI plans and runs itself, as <c>restore</c> does. A
-/// kept plan of a run the command line does not ask — several paths, a
-/// target, a policy, a landing in place, which the console asks — is refused
-/// by name, as is a file that is not a kept plan.
+/// plan the console kept — several paths, a policy, a landing in place —
+/// runs where the command line asks the run as it was kept (ADR-0117), and is
+/// refused as another run, naming how it was kept, where it asks otherwise. A
+/// file that is not a kept plan is refused.
 /// </remarks>
 [TestClass]
 public sealed class RestoreAsPlannedCommandTests : IDisposable
@@ -93,21 +94,74 @@ public sealed class RestoreAsPlannedCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task AsPlanned_APlanOfARunTheCommandLineDoesNotAsk_IsRefused()
+    public async Task AsPlanned_AConsolesPlan_AskedAsItWasKept_Restores()
     {
-        // The console keeps plans of several paths, a target and a policy.
+        // The console keeps plans of several paths, a policy and in place.
+        var snapshot = await BackUpAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+        var file = await KeepAConsolesPlanAsync(snapshot, destination);
+
+        var run = await _cli.RunAsync(
+            "restore", snapshot, "nested", "one.txt", "--output", destination, "--existing", "overwrite", "--in-place",
+            "--as-planned", file);
+
+        Assert.AreEqual(0, run.ExitCode, run.All);
+        Assert.Contains("as kept in", run.All, StringComparison.Ordinal);
+        Assert.AreEqual("first", File.ReadAllText(Path.Combine(destination, "one.txt")));
+        Assert.AreEqual("second", File.ReadAllText(Path.Combine(destination, "nested", "two.txt")));
+    }
+
+    [TestMethod]
+    [DataRow("--in-place")]
+    [DataRow("--existing")]
+    [DataRow("paths")]
+    public async Task AsPlanned_AConsolesPlan_AskedOtherwise_IsRefused_NamingHowItWasKept(string unlike)
+    {
+        var snapshot = await BackUpAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+        var file = await KeepAConsolesPlanAsync(snapshot, destination);
+        List<string> arguments = ["restore", snapshot, unlike == "paths" ? "nested" : "one.txt"];
+        if (unlike != "paths")
+        {
+            arguments.Add("nested");
+        }
+
+        arguments.AddRange(["--output", destination]);
+        arguments.AddRange(unlike == "--existing" ? ["--existing", "rename"] : ["--existing", "overwrite"]);
+        if (unlike != "--in-place")
+        {
+            arguments.Add("--in-place");
+        }
+
+        arguments.AddRange(["--as-planned", file]);
+
+        var run = await _cli.RunAsync([.. arguments]);
+
+        Assert.AreNotEqual(0, run.ExitCode, run.All);
+        Assert.Contains("another run", run.All, StringComparison.Ordinal);
+        Assert.Contains("one.txt", run.All, StringComparison.Ordinal);
+        Assert.Contains("overwrite", run.All, StringComparison.Ordinal);
+        Assert.Contains("in place", run.All, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(destination));
+    }
+
+    [TestMethod]
+    public async Task AsPlanned_APlanKeptForTheOriginalLocation_AskedToAFolder_IsRefused()
+    {
         var snapshot = await BackUpAsync();
         var destination = Path.Combine(_cli.WorkPath, "restored");
         var file = Path.Combine(_cli.WorkPath, "console-plan.json");
         await File.WriteAllTextAsync(file, RestorePlanFile.Serialize(
-            new PlanRestoreCommand(snapshot, null, Paths: ["one.txt", "nested"], OutputDirectory: destination, Existing: "overwrite"),
-            new RestorePlanResult(2, 11, []),
+            new PlanRestoreCommand(snapshot, null, Paths: ["one.txt"], OutputDirectory: string.Empty, Target: "original", InPlace: true),
+            new RestorePlanResult(1, 5, []),
             DateTimeOffset.UtcNow));
 
-        var run = await _cli.RunAsync("restore", snapshot, "--output", destination, "--as-planned", file);
+        var run = await _cli.RunAsync(
+            "restore", snapshot, "one.txt", "--output", destination, "--in-place", "--as-planned", file);
 
         Assert.AreNotEqual(0, run.ExitCode, run.All);
-        Assert.Contains("the command line does not ask", run.All, StringComparison.Ordinal);
+        Assert.Contains("another run", run.All, StringComparison.Ordinal);
+        Assert.Contains("where its files came from", run.All, StringComparison.Ordinal);
         Assert.IsFalse(Directory.Exists(destination));
     }
 
@@ -144,6 +198,19 @@ public sealed class RestoreAsPlannedCommandTests : IDisposable
     }
 
     public void Dispose() => _cli.Dispose();
+
+    /// <summary>A plan of the shape the console asks, kept as the console keeps one.</summary>
+    private async Task<string> KeepAConsolesPlanAsync(string snapshot, string destination)
+    {
+        var file = Path.Combine(_cli.WorkPath, "console-plan.json");
+        await File.WriteAllTextAsync(file, RestorePlanFile.Serialize(
+            new PlanRestoreCommand(
+                snapshot, null, Paths: ["one.txt", "nested"], OutputDirectory: destination, Target: "folder",
+                Existing: "overwrite", InPlace: true),
+            new RestorePlanResult(2, 11, []),
+            DateTimeOffset.UtcNow));
+        return file;
+    }
 
     private async Task<string> BackUpAsync()
     {

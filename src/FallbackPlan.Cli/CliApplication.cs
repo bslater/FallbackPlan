@@ -1484,12 +1484,29 @@ public static class CliApplication
 
         {
             var snapshotArgument = new Argument<string>("snapshot") { Description = "Hex snapshot id." };
-            var pathArgument = new Argument<string?>("path")
+            var pathArgument = new Argument<string[]>("path")
             {
-                Description = "Path within the snapshot to restore; omit for everything.",
-                Arity = ArgumentArity.ZeroOrOne,
+                Description = "Paths within the snapshot to restore, one or several; omit for everything.",
+                Arity = ArgumentArity.ZeroOrMore,
             };
-            var outputOption = new Option<string>("--output") { Description = "Destination directory. With --connect this is a path on the service's machine (ADR-0028 §6) — the console is told where, never sent the files.", Required = true };
+            var outputOption = new Option<string?>("--output") { Description = "Destination directory, needed unless --target original. With --connect this is a path on the service's machine (ADR-0028 §6) — the console is told where, never sent the files." };
+            var targetOption = new Option<string?>("--target")
+            {
+                Description = "folder, the default, restores under --output; original puts each file back where it was "
+                    + "captured, as the set's configured roots say, which only the service knows.",
+            };
+            targetOption.AcceptOnlyFromAmong("folder", "original");
+            var existingOption = new Option<string?>("--existing")
+            {
+                Description = "What to do about a file in the way: moved aside by default; rename keeps it and writes the "
+                    + "restored copy beside it; overwrite replaces it.",
+            };
+            existingOption.AcceptOnlyFromAmong("rename", "overwrite");
+            var inPlaceOption = new Option<bool>("--in-place")
+            {
+                Description = "Through the service, land where --output points rather than in a quarantine folder of the "
+                    + "run's own. In direct mode a restore lands in place either way.",
+            };
             var ignoreFreeSpaceOption = new Option<bool>("--ignore-free-space")
             {
                 Description = "Restore even when the destination looks too small. Without it, a restore that will not fit "
@@ -1522,6 +1539,9 @@ public static class CliApplication
             command.Arguments.Add(snapshotArgument);
             command.Arguments.Add(pathArgument);
             command.Options.Add(outputOption);
+            command.Options.Add(targetOption);
+            command.Options.Add(existingOption);
+            command.Options.Add(inPlaceOption);
             command.Options.Add(ignoreFreeSpaceOption);
             command.Options.Add(planOption);
             command.Options.Add(exportOption);
@@ -1546,6 +1566,36 @@ public static class CliApplication
                     throw new CliFailureException(Strings.CliApplication_ResumeIsNotPlanned);
                 }
 
+                // Where it lands: a folder named, or where each file was
+                // captured, never both.
+                var target = parse.GetValue(targetOption);
+                var output = parse.GetValue(outputOption);
+                if (target == "original" && output is not null)
+                {
+                    throw new CliFailureException(Strings.CliApplication_OriginalTakesNoOutput);
+                }
+
+                if (target != "original" && output is null)
+                {
+                    throw new CliFailureException(Strings.CliApplication_RestoreNeedsAnOutput);
+                }
+
+                // One path is asked as version 1 of a kept plan asked it, so
+                // a plan of one path reads back the same to an older reader.
+                var paths = parse.GetValue(pathArgument) ?? [];
+                var asked = new RestoreRequest(
+                    parse.GetValue(snapshotArgument)!,
+                    paths.Length == 1 ? paths[0] : null,
+                    output ?? string.Empty,
+                    parse.GetValue(ignoreFreeSpaceOption),
+                    export,
+                    resume,
+                    parse.GetValue(resumeOption),
+                    Paths: paths.Length > 1 ? paths : null,
+                    Target: target,
+                    Existing: parse.GetValue(existingOption),
+                    InPlace: parse.GetValue(inPlaceOption));
+
                 // A kept plan is read and held to the run asked before
                 // anything is asked of the repository or the service.
                 KeptPlan? asPlanned = null;
@@ -1556,22 +1606,14 @@ public static class CliApplication
                         throw new CliFailureException(Strings.CliApplication_AsPlannedIsARun);
                     }
 
-                    asPlanned = ReadKeptPlan(
-                        keptFile, parse.GetValue(snapshotArgument)!, parse.GetValue(pathArgument), parse.GetValue(outputOption)!);
+                    asPlanned = ReadKeptPlan(keptFile, asked);
                 }
 
                 return ReadThroughGatewayAsync(
                     parse,
                     async (gateway, token) =>
                     {
-                        var request = new RestoreRequest(
-                            parse.GetValue(snapshotArgument)!,
-                            parse.GetValue(pathArgument),
-                            parse.GetValue(outputOption)!,
-                            parse.GetValue(ignoreFreeSpaceOption),
-                            export,
-                            resume,
-                            parse.GetValue(resumeOption));
+                        var request = asked;
                         if (parse.GetValue(planOption) || export is not null)
                         {
                             return await gateway.PlanRestoreAsync(request, token).ConfigureAwait(false);
@@ -3548,15 +3590,13 @@ public static class CliApplication
 
     /// <summary>
     /// Reads the plan a restore is held to (ADR-0114), and holds it to the run
-    /// asked before anything else is: the same snapshot, path and destination,
-    /// and a run the command line asks at all.
+    /// asked before anything else is: the same snapshot, paths, target and
+    /// destination, policy and landing (ADR-0117).
     /// </summary>
     /// <param name="file">The kept plan's file.</param>
-    /// <param name="snapshotId">The snapshot asked.</param>
-    /// <param name="path">The path within it asked, if any.</param>
-    /// <param name="outputDirectory">Where the run asked writes.</param>
+    /// <param name="asked">The run the command line asks.</param>
     /// <exception cref="CliFailureException">The file is not a plan of this run.</exception>
-    private static KeptPlan ReadKeptPlan(string file, string snapshotId, string? path, string outputDirectory)
+    private static KeptPlan ReadKeptPlan(string file, RestoreRequest asked)
     {
         RestorePlanFile.Kept kept;
         try
@@ -3568,23 +3608,37 @@ public static class CliApplication
             throw new CliFailureException(Strings.FormatCliApplication_AsPlannedUnreadable(file, exception.Message));
         }
 
-        var asked = kept.Request;
-        if (asked.Paths is { Count: > 0 } || asked.Target is not null || asked.Existing is not null || asked.InPlace)
+        // The run as kept, field by field, as the command line asks one
+        // (ADR-0117): the same paths in any order, one path as one or as a
+        // list of one, and the default target however it was spelled.
+        var plan = kept.Request;
+        var keptPaths = PathsOf(plan.Paths, plan.Path);
+        var keptOriginal = string.Equals(plan.Target, "original", StringComparison.Ordinal);
+        if (!string.Equals(plan.SnapshotId, asked.SnapshotId, StringComparison.OrdinalIgnoreCase)
+            || !keptPaths.SetEquals(PathsOf(asked.Paths, asked.Path))
+            || keptOriginal != asked.ToOriginal
+            || (!keptOriginal && !SamePlace(plan.OutputDirectory, asked.OutputDirectory))
+            || !string.Equals(plan.Existing, asked.Existing, StringComparison.Ordinal)
+            || plan.InPlace != asked.InPlace)
         {
-            throw new CliFailureException(Strings.FormatCliApplication_AsPlannedNotAsked(file));
-        }
-
-        if (!string.Equals(asked.SnapshotId, snapshotId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(asked.Path ?? string.Empty, path ?? string.Empty, StringComparison.Ordinal)
-            || !SamePlace(asked.OutputDirectory, outputDirectory))
-        {
-            throw new CliFailureException(Strings.FormatCliApplication_AsPlannedAnotherRun(
-                file, asked.SnapshotId, asked.Path is { Length: > 0 } within ? $"path {within}" : "all of it",
-                asked.OutputDirectory ?? "nowhere named"));
+            var what = keptPaths.Count switch
+            {
+                0 => "all of it",
+                1 => $"path {keptPaths.Single()}",
+                _ => $"paths {string.Join(", ", plan.Paths!)}",
+            };
+            var where = (keptOriginal ? "where its files came from" : plan.OutputDirectory ?? "nowhere named")
+                + (plan.Existing is { } existing ? $", --existing {existing}" : string.Empty)
+                + (plan.InPlace ? ", in place" : string.Empty);
+            throw new CliFailureException(Strings.FormatCliApplication_AsPlannedAnotherRun(file, plan.SnapshotId, what, where));
         }
 
         return new KeptPlan(file, kept);
     }
+
+    /// <summary>The subtrees a run asks, whichever way it spelled them.</summary>
+    private static HashSet<string> PathsOf(IReadOnlyList<string>? paths, string? path) =>
+        new(paths is { Count: > 0 } ? paths : path is { Length: > 0 } ? [path] : [], StringComparer.Ordinal);
 
     /// <summary>Whether a kept plan's destination is the one asked, as typed or as the full path it names here.</summary>
     private static bool SamePlace(string? kept, string asked)

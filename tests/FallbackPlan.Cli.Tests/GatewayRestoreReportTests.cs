@@ -3,6 +3,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Cli;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
 
@@ -113,6 +114,51 @@ public sealed class GatewayRestoreReportTests
         var report = await RestoreAsync(client, timeout.Token);
 
         Assert.IsFalse(report.Lines.Any(printed => printed.Contains("--resume", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
+    public async Task ARunAndItsPlan_AreAskedOfTheServiceAsTheCommandLineAsksThem()
+    {
+        // ADR-0117: several paths, a policy and a landing in place, as the
+        // console asks them.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"), new RestorePlanResult(2, 11, []));
+        var request = new RestoreRequest(SnapshotId, null, "/out", Paths: ["docs/a.txt", "docs/b"], Existing: "rename", InPlace: true);
+
+        await ThroughAsync(client, (gateway, token) => gateway.RestoreAsync(request, token), timeout.Token);
+        await ThroughAsync(client, (gateway, token) => gateway.PlanRestoreAsync(request, token), timeout.Token);
+
+        var run = Assert.ContainsSingle(client.Received.OfType<RunRestoreCommand>());
+        SequenceAssert.AreEqual(["docs/a.txt", "docs/b"], run.Paths!);
+        Assert.IsNull(run.Path);
+        Assert.AreEqual("rename", run.Existing);
+        Assert.IsTrue(run.InPlace);
+        Assert.IsNull(run.Target);
+        var plan = Assert.ContainsSingle(client.Received.OfType<PlanRestoreCommand>());
+        SequenceAssert.AreEqual(["docs/a.txt", "docs/b"], plan.Paths!);
+        Assert.AreEqual("rename", plan.Existing);
+        Assert.IsTrue(plan.InPlace);
+        Assert.AreEqual("/out", plan.OutputDirectory);
+    }
+
+    [TestMethod]
+    public async Task TheOriginalLocation_IsAskedOfTheService_WithNoFolder()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(1, 0, "/docs", "complete"));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.RestoreAsync(
+                new RestoreRequest(SnapshotId, "docs/a.txt", string.Empty, Target: "original", Existing: "overwrite"), token),
+            timeout.Token);
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        var run = Assert.ContainsSingle(client.Received.OfType<RunRestoreCommand>());
+        Assert.AreEqual("original", run.Target);
+        Assert.AreEqual("overwrite", run.Existing);
+        Assert.AreEqual(string.Empty, run.OutputDirectory);
     }
 
     [TestMethod]

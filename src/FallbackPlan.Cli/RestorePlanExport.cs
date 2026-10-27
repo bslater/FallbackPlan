@@ -29,7 +29,9 @@ internal static class RestorePlanExport
     {
         // The run this command plans, in the words the service is asked in,
         // so the file is the one the console keeps too (ADR-0113).
-        var asked = new PlanRestoreCommand(request.SnapshotId, request.Path, OutputDirectory: request.OutputDirectory);
+        var asked = new PlanRestoreCommand(
+            request.SnapshotId, request.Path, Paths: request.Paths, OutputDirectory: request.OutputDirectory,
+            Target: request.Target, Existing: request.Existing, InPlace: request.InPlace);
         try
         {
             using var stream = new FileStream(file, FileMode.CreateNew, FileAccess.Write);
