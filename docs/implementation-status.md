@@ -141,6 +141,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0114](adr/0114-a-kept-plan-is-run-as-it-was-approved.md) | A kept plan is run as it was approved: `restore --as-planned <file>` reads the kept plan back, holds it to the run asked before anything is asked, plans again through either gateway, and runs only where the files, what is missing, what is held archived and the conflicts are what it said; otherwise it names each change and writes nothing | **Built** | `Api/RestorePlanFile` · `Cli/CliApplication`, `Cli/RestorePlanReport` · `Cli.Tests/RestoreAsPlannedCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Api.Tests/RestorePlanFileTests` · [notes](#0114--a-kept-plan-run-as-approved) |
 | [0115](adr/0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md) | A restore cut short is named, and resumed by its name alone: the service names each restore run in `restore-runs.json` before it writes and keeps it until a run of it finishes, says each one left unfinished, at start too, lists them without the backup's file names, resumes one as it was asked by its name alone, and lets one go (contract 1.71, `restore-resume`) | **Built** | `Application/RestoreRunJournal` · `Agent/ServiceCommandHandler`, `Agent/UnfinishedRestoreNotice`, `Agent/ServiceRuntime` · `Cli/CliApplication`, `Cli/OperationGateway` · `Application.Tests/RestoreRunJournalTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Hosts.Tests/ClientModeTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0115--a-restore-cut-short-named-and-resumed-by-name) |
 | [0116](adr/0116-the-console-resumes-a-restore-it-did-not-see-end.md) | The console resumes a restore it did not see end: the snapshots page lists the restores left unfinished without their files, the list and each run's notice offer to restore what is left, the wizard's resume mode unlocks the passphrase and opens a source of the run's own set before the service resumes the run by its name, and a run can be let go | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0116--the-console-resumes-a-restore-it-did-not-see-end) |
+| [0117](adr/0117-the-command-line-asks-a-restore-as-the-console-does.md) | The command line asks a restore as the console does: `restore` takes several paths, `--target`, `--existing` and `--in-place`, asks the service the run and its plan in that shape, restores and plans several paths under the policy in direct mode while refusing the original location there, keeps the plan of the run as asked, and holds `--as-planned` to every field, so a plan the console kept runs from the command line | **Built** | `Cli/CliApplication`, `Cli/OperationGateway`, `Cli/RestorePlanExport` · `Cli.Tests/RestoreShapeCommandTests`, `Cli.Tests/RestoreAsPlannedCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/ClientModeTests` · [notes](#0117--the-command-line-asks-a-restore-as-the-console-does) |
 
 ---
 
@@ -3479,7 +3480,9 @@ a name at a time, and nothing is written.
 
 What remains is recorded rather than done. The command line asks one path, so
 a console's plan of several paths, a target or a policy is refused there by
-name, and the console runs no kept plan.
+name, and the console runs no kept plan. ADR-0117 has since taken up the
+first: the command line asks those runs, and runs such a plan where it asks
+it as kept.
 
 ### 0115 — a restore cut short, named and resumed by name
 
@@ -3514,3 +3517,18 @@ A run can be let go from the list.
 What remains is recorded rather than done. A resume is still not planned, and
 what a run left unfinished was asked for is not shown file by file, which
 would need the passphrase.
+
+### 0117 — the command line asks a restore as the console does
+
+The console asked runs of several paths, to the original location, under a
+policy for a file in the way, in place; the command line asked one path to a
+folder, so a plan kept from the console could not run from it. `restore` now
+takes several paths, `--target`, `--existing` and `--in-place`, and needs
+`--output` only for a folder. Through the service the run, its plan and a kept
+plan are asked in that shape. In direct mode several paths and the policy are
+restored and planned, and the original location, which only the service
+knows, is refused. `--as-planned` holds the run asked to the kept one field by
+field, so a console's plan runs where it is asked as kept.
+
+What remains is recorded rather than done. The console runs no kept plan, and
+direct mode does not restore to the original location.

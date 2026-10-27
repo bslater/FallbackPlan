@@ -12,6 +12,9 @@
 - The tests:
   - `Api.Tests/RestorePlanFileTests` — a kept plan reads back as its run and its plan, never a source; a version-1 file reads back as a run of one path; a file of another kind, a newer version, no plan, or not JSON is refused, saying why
   - `Cli.Tests/RestoreAsPlannedCommandTests` — in direct mode the run a plan was kept for restores; one whose content has gone since names what is missing now and writes nothing; another run, a console's plan of several paths, a file that is not a plan, and the flag beside `--plan` or `--resume` are refused
+
+    > **2026-10 ([ADR-0117](0117-the-command-line-asks-a-restore-as-the-console-does.md)).** A console's plan asked as it was kept now runs, and asked otherwise is refused as another run, naming how it was kept.
+
   - `Cli.Tests/GatewayRestoreReportTests` — through the service a plan held to a kept one names each change and runs nothing, and an unchanged one says so even where it would fail files
 
 ---
@@ -33,6 +36,8 @@ The flag names a kept plan, and the restore it goes with runs only as that plan 
 - **Read back,** of either version, as the run it was kept for and the plan. A file that is not a kept plan, is of a version this build does not read, or holds no plan is refused, saying which.
 - **The run must be the run it was kept for:** the same snapshot, the same path within it, and the same destination. Another run is refused, naming the one the file keeps.
 - **A run the command line does not ask is refused by name:** several paths, a target, an existing-file policy, a landing in place. The console keeps plans of such runs.
+
+  > **Superseded 2026-10 ([ADR-0117](0117-the-command-line-asks-a-restore-as-the-console-does.md)).** The command line asks each of those, so no kept run is refused for its shape. The run asked is held to the kept one field by field, and another is refused as another run, naming how the plan was kept.
 
 ### 3. It is planned again, and held to what the kept plan said
 
@@ -57,6 +62,8 @@ The restore is planned again, through the service or in direct mode, and the pla
 ## What this does not do
 
 - **Run a console's plan from the command line.** The command line asks one path, so a plan of several paths, a target, a policy or a landing in place is refused rather than run as some other run.
+
+  > **2026-10 ([ADR-0117](0117-the-command-line-asks-a-restore-as-the-console-does.md)).** The command line asks several paths, the original location, a policy and a landing in place, so a console's plan runs from it where it asks the run as kept.
 - **Run a kept plan from the console.**
 - **Hold room to the kept plan.** Free space moves by the minute, and the run's own refusal of a restore that will not fit is the check that matters.
 - **Hold the bytes written or read to the kept plan.** They follow from the files, which are held.
@@ -72,3 +79,4 @@ The restore is planned again, through the service or in direct mode, and the pla
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. `restore --as-planned <file>` reads the kept plan back, holds it to the run asked before anything is asked, plans again through either gateway, and runs only where the files, what is missing, what is held archived and the conflicts are what the kept plan said. Otherwise it names each change and writes nothing. |
+| 2026-10 | Accepted (amended) | [ADR-0117](0117-the-command-line-asks-a-restore-as-the-console-does.md): the command line asks the run the console asks, so §2's refusal of a run it does not ask is superseded; the run asked is held to the kept one field by field, and a console's plan runs from the command line. |
