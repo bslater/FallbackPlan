@@ -5796,6 +5796,7 @@ function openRestoreWizard(prefill) {
     resume: prefill?.resume ?? null,
     resumePlan: null,         // the resume's plan, as the service made it (ADR-0121)
     resumePlanFailed: false,  // the resume's plan was asked for and did not come
+    resumeOffer: null,        // the resume a result offers, being planned (ADR-0123)
     // A kept plan run as it was approved (ADR-0118): the run as kept, planned
     // again through the source opened, and run only where nothing changed.
     kept: prefill?.kept ?? null,
@@ -6063,6 +6064,9 @@ function rstStep6() {
     // gave it (ADR-0110). A partial one skipped what this target cannot
     // hold, which a resume would skip again.
     const resumable = W.result.run && (W.result.outcome === "failed" || W.result.outcome === "cancelled");
+    // The resume of this result, planned by the run's name before it is
+    // asked (ADR-0123), once the person chooses to restore what is left.
+    const offer = resumable && W.resumeOffer?.run === W.result.run ? W.resumeOffer : null;
     return `
       <h3>${clean ? "✔ Restore complete" : "◐ Restore " + esc(W.result.outcome)}</h3>
       <div class="plan-figures">
@@ -6086,8 +6090,11 @@ function rstStep6() {
         already in place, holding the snapshot's content, and were left as they stood.</p>` : ""}
       ${resumable ? `<p class="dlg-sub">A resume restores what is left: each file already holding the snapshot's
         content stays as it stands.</p>` : ""}
+      ${offer ? rstResumeOffer(offer) : ""}
       <div class="dlg-actions">
-        ${resumable ? `<button type="button" class="btn" id="rst-resume" data-action="rst-resume">Restore what is left</button>` : ""}
+        ${resumable && !offer ? `<button type="button" class="btn" id="rst-resume" data-action="rst-resume">Restore what is left</button>` : ""}
+        ${offer ? `<button type="button" class="btn" id="rst-resume-confirm" data-action="rst-resume-confirm"${
+          (offer.plan || offer.failed) && !rstShort(offer.plan) ? "" : " disabled"}>Restore what is left</button>` : ""}
         <button type="button" class="btn primary" data-action="close-dialog">Close</button>
       </div>`;
   }
@@ -6183,6 +6190,17 @@ function rstStep6() {
         title="Save this plan as a file, in the shape restore --export writes">Keep plan</button>` : ""}
       <button type="button" class="btn danger" id="rst-run-go" data-action="rst-run" disabled>Restore</button>
     </div>`;
+}
+
+/* The plan of the resume a result offers, as a resume's plan is shown (ADR-0123). */
+function rstResumeOffer(offer) {
+  if (offer.plan) return rstPlanDetails(offer.plan, 'data-action-change="rst-resume-arm" data-arms-button="rst-resume-confirm"');
+  if (offer.failed) {
+    return `<p class="subtle">The resume was not planned; it is still measured before it writes anything.</p>
+      <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
+        small — a volume that compresses what it stores can hold more than the estimate</label>`;
+  }
+  return `<p class="subtle">Planning the resume…</p>`;
 }
 
 /* Whether a volume the run writes to has less free than it needs (FR-RST-003). */
@@ -6485,13 +6503,33 @@ Object.assign(actions, {
     });
   },
 
-  // The run again, as it was confirmed, naming the run it continues
-  // (ADR-0110): what already landed is left, and the rest restored.
+  // Restoring what is left of a result is planned first, by the run's
+  // name, as the service will resume it (ADR-0123).
   async "rst-resume"(el) {
     await withBusy(el, async () => {
-      if (W.resume) await rstResumeRun(W.result.run, false);
-      else if (W.kept) await rstRunKept({ resume: W.result.run }, "Resume refused");
-      else await rstRunRestore({ resume: W.result.run }, "Resume refused");
+      const name = W.result.run;
+      W.resumeOffer = { run: name, plan: null, failed: false };
+      rstRender();
+      const plan = await run(
+        { command: "plan_resume_restore", run: name, source: W.source.sourceId },
+        { errToast: "The resume was not planned" });
+      if (!W || W.resumeOffer?.run !== name) return;
+      if (plan?.result === "restore_plan") W.resumeOffer.plan = plan;
+      else W.resumeOffer.failed = true;
+      rstRender();
+    });
+  },
+
+  // The run again, as it was confirmed, naming the run it continues
+  // (ADR-0110): what already landed is left, and the rest restored.
+  async "rst-resume-confirm"(el) {
+    await withBusy(el, async () => {
+      const name = W.resumeOffer.run;
+      const ignoreFreeSpace = document.getElementById("rst-ignore-space")?.checked ?? false;
+      W.resumeOffer = null;
+      if (W.resume) await rstResumeRun(name, ignoreFreeSpace);
+      else if (W.kept) await rstRunKept({ resume: name, ignoreFreeSpace }, "Resume refused");
+      else await rstRunRestore({ resume: name, ignoreFreeSpace }, "Resume refused");
     });
   },
 
@@ -6676,7 +6714,7 @@ function boot() {
 
     // A resume that will not fit is asked only when the person says to go on.
     if (W && event.target.matches("[data-action-change='rst-resume-arm']")) {
-      const go = document.getElementById("rst-resume-go");
+      const go = document.getElementById(event.target.dataset.armsButton ?? "rst-resume-go");
       if (go) go.disabled = !event.target.checked;
       return;
     }

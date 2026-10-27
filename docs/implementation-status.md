@@ -147,6 +147,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0120](adr/0120-a-resume-is-planned.md) | A resume is planned: measured where its run landed, by length as the resume is, and saying how many files the run already landed; `restore --resume --plan` plans the run asked, through the service or in direct mode, and `restore-resume <run> --plan` plans a run left unfinished by its name alone, restoring nothing; a plan of a resume is not kept (contract 1.72) | **Built** | `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/CliApplication`, `Cli/OperationGateway`, `Cli/RestorePlanReport` · `FallbackPlan.Api` · `Repository.Tests/RestoreSpaceTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0120--a-resume-is-planned) |
 | [0121](adr/0121-the-console-plans-a-resume.md) | The console plans a resume: the wizard's resume mode plans the run by its name alone once its source is open, shows the plan as a restore's plan is shown with how many files the run already landed, arms a resume that will not fit only when the person says to go on, and offers it as before where the service cannot plan it | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0121--the-console-plans-a-resume) |
 | [0122](adr/0122-direct-mode-keeps-a-restores-receipt.md) | Direct mode keeps a restore's receipt: the receipt keeps itself as its run's own file under a state directory's receipts, written whole; the service keeps its receipts through it, and direct mode keeps each run's receipt there too and says where, while a run refused before it begins and a plan keep none | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway`, `Cli/CliSession` · `Repository.Tests/RestoreReceiptKeptTests`, `Cli.Tests/RestoreReceiptDirectTests`, `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0122--direct-mode-keeps-a-restores-receipt) |
+| [0123](adr/0123-the-console-plans-the-resume-a-result-offers.md) | The console plans the resume a result offers: restoring what is left of a failed or stopped run is planned by the run's name first, shown as a resume's plan is shown, and asked only from beneath the plan, armed only on the person's say where it will not fit, and offered as before where the service cannot plan it | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreWizardDomTests`, `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0123--the-console-plans-the-resume-a-result-offers) |
 
 ---
 
@@ -3601,7 +3602,8 @@ not fit is armed only once the person ticks to go on. A service before
 contract 1.72, which cannot plan one, still resumes it, as before.
 
 What remains is recorded rather than done. A run the wizard has just seen
-fail or stop is resumed from its result without a plan.
+fail or stop is resumed from its result without a plan. ADR-0123 has since
+planned it.
 
 ### 0122 — direct mode keeps a restore's receipt
 
@@ -3614,3 +3616,17 @@ under the run's identifier, and says where; a run of several roots keeps its
 one merged receipt. A run refused before it begins, and a plan, keep none.
 
 What remains is recorded rather than done. No verb lists the receipts kept.
+
+### 0123 — the console plans the resume a result offers
+
+A result that failed or was stopped offered to restore what is left, and its
+button resumed at once, while the resume mode planned first. Choosing it now
+asks the service for the run's plan by its name, through the source the run
+read from, and shows it beneath the result as a resume's plan is shown. The
+resume is asked only from the button beneath the plan, as it was asked
+before, armed only once the person ticks to go on where it will not fit,
+which that choice then carries. A service that cannot plan it still resumes
+it.
+
+What remains is recorded rather than done. Nothing; every resume the console
+offers is planned before it runs.

@@ -48,6 +48,8 @@ A service before contract 1.72 does not know the command. The wizard says the re
 - **Change what is resumed.** The run is still asked again by its name alone, as it was asked.
 - **Plan the resume offered from a result.** A run the wizard has just seen fail, or stop, is resumed from its result without a plan, as before.
 
+  > **2026-10 ([ADR-0123](0123-the-console-plans-the-resume-a-result-offers.md)).** The resume a result offers is planned too, by the run's name, before it runs.
+
 ## Alternatives considered
 
 - **Show the plan's figures without arming.** Rejected. A plan that says the resume will not fit, beside a button that runs it anyway, says one thing and offers another.
@@ -58,3 +60,4 @@ A service before contract 1.72 does not know the command. The wizard says the re
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The wizard's resume mode plans the run by its name alone once its source is open, shows the plan as a restore's plan is shown, with how many files the run already landed, arms a resume that will not fit only when the person says to go on, and offers the resume as before where the service cannot plan it. |
+| 2026-10 | Accepted | [ADR-0123](0123-the-console-plans-the-resume-a-result-offers.md): the resume a result offers is planned too, which this record left undone. |

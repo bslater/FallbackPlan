@@ -213,3 +213,4 @@ and the service's half. For this record:
 | 2026-10 | Accepted | [ADR-0119](0119-direct-mode-restores-to-the-original-location.md): the original-location mapping moves into the restore library, unchanged, so the command line's direct mode puts files back with the service's own mapping. |
 | 2026-10 | Accepted | [ADR-0121](0121-the-console-plans-a-resume.md): the guided restore's resume mode plans the run before it resumes it, in the words its plan step uses, and arms a resume that will not fit only when the person says to go on. |
 | 2026-10 | Accepted | [ADR-0122](0122-direct-mode-keeps-a-restores-receipt.md): the service's receipts are kept through a keeper the command line's direct mode shares, in the same place. |
+| 2026-10 | Accepted | [ADR-0123](0123-the-console-plans-the-resume-a-result-offers.md): the guided restore plans the resume its result offers before it runs it. |

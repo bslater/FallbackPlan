@@ -209,6 +209,9 @@ public sealed class RestoreUnfinishedDomTests
         await page.ClickAsync("#rst-resume-go");
 
         await page.ClickAsync("#rst-resume");
+        var replanned = await harness.ReceivedAsync<PlanResumeRestoreCommand>(asked => asked.Run == "fedcba9876543210");
+        Assert.AreEqual("src-1", replanned.Source, "the resume offered from its result is planned under the name it gives");
+        await page.ClickAsync("#rst-resume-confirm");
 
         var again = await harness.ReceivedAsync<ResumeRestoreCommand>(asked => asked.Run == "fedcba9876543210");
         Assert.AreEqual("src-1", again.Source);

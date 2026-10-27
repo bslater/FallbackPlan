@@ -45,12 +45,15 @@ public sealed class MultiRootSetTests : IDisposable
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
         // The set first earns an anchored rule under single-root coordinates,
-        // and a baseline to compare later listings against.
+        // and a baseline to compare later listings against. Each save here
+        // queues the backup that captures it, and that is the one waited for:
+        // a backup commanded beside it would join it or follow it by timing
+        // alone, and leave the count of snapshots to the machine's speed.
         Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 _harness.DocsSetId, "docs", _harness.SourceRoot, "every 1h", [], ["photos/raw"], ["vault"])),
-            _timeout.Token));
-        await RunBackupAndWaitAsync(handler, runtime);
+            _timeout.Token), out var anchored);
+        await WaitForQueuedBackupAsync(runtime, anchored);
 
         // Growing to two roots. The client sends the rules as it knows them —
         // old coordinates — and the service re-anchors the saved ones.
@@ -83,9 +86,10 @@ public sealed class MultiRootSetTests : IDisposable
         Assert.AreEqual(_harness.SourceRoot, descriptor.Root);
         Assert.AreEqual("media", descriptor.Roots?[1].Label);
 
-        // The next backup captures both roots into one snapshot whose top
-        // level is the labels — and the re-anchored exclude still prunes.
-        await RunBackupAndWaitAsync(handler, runtime);
+        // The backup the save queued captures both roots into one snapshot
+        // whose top level is the labels — and the re-anchored exclude still
+        // prunes.
+        await WaitForQueuedBackupAsync(runtime, answer);
         Assert.IsInstanceOfType<SnapshotsResult>(
             await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
 
@@ -217,6 +221,24 @@ public sealed class MultiRootSetTests : IDisposable
                 _timeout.Token),
             out var missing);
         Assert.Contains("does not exist", missing.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Waits for the backup a save said it queued, which must complete.</summary>
+    private async Task WaitForQueuedBackupAsync(ServiceRuntime runtime, ConfigurationChangeResult answer)
+    {
+        var queued = Scheduler.LatestJobFor(runtime, _harness.DocsSetId);
+        Assert.IsNotNull(queued);
+        Assert.Contains(line => line.Contains($"queued as job {queued}", StringComparison.Ordinal), answer.Lines);
+
+        JobRecord run;
+        while ((run = runtime.Jobs.Jobs.Last(job => job.Id == queued)).State is not (
+            JobState.Complete or JobState.CompletedWithFailures or JobState.Cancelled
+            or JobState.FailedRecoverable or JobState.FailedPermanent))
+        {
+            await Task.Delay(10, _timeout.Token);
+        }
+
+        Assert.AreEqual(JobState.Complete, run.State, run.Detail);
     }
 
     /// <summary>Commands a backup and waits for the state <paramref name="until"/> accepts (completion by default).</summary>
