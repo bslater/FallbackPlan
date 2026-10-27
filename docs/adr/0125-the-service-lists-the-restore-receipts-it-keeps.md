@@ -53,6 +53,7 @@ They sit beside the peers' receipts, read on entering the view and never by the 
 - **Show a receipt's files.** Which files a run restored, and what became of each, stay in the receipt on the service's machine, read with `restore-receipts --run`.
   > **2026-10 ([ADR-0127](0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md)).** The files a run did not restore are shown, through a source of the set the receipt records, behind its passphrase.
 - **Let the command line ask the service for them.** `restore-receipts` reads the state directory, as before.
+  > **2026-10 ([ADR-0128](0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md)).** `restore-receipts --connect` asks a paired service for the receipts it keeps, and for what one run did not restore through the passphrase.
 - **Let receipts go.** Every receipt kept stays until a person removes it.
 
 ## Alternatives considered
@@ -67,3 +68,4 @@ They sit beside the peers' receipts, read on entering the view and never by the 
 | 2026-10 | Accepted | Built in one slice, tests first. Contract 1.73's `list_restore_receipts` answers each restore receipt the service keeps, newest first under a limit with how many are kept, as what became of its files and where it wrote them, never the paths; the console shows them in the Maintenance view. |
 | 2026-10 | Accepted | [ADR-0126](0126-a-restore-receipt-names-the-set-it-restored.md): each receipt listed names the set its run restored (contract 1.74). |
 | 2026-10 | Accepted | [ADR-0127](0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md): the files a run did not restore are shown through the passphrase, which this record left undone. |
+| 2026-10 | Accepted | [ADR-0128](0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md): the command line asks a paired service for the receipts it keeps, which this record left undone. |

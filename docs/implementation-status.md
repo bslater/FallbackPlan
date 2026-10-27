@@ -152,6 +152,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0125](adr/0125-the-service-lists-the-restore-receipts-it-keeps.md) | The service lists the restore receipts it keeps: `list_restore_receipts` answers each, newest first under a limit with how many are kept, as its outcome, when it ended, what became of its files and where it wrote them, never the paths, which are the backup's file names; the console shows them in the Maintenance view, and a service before the listing is an empty card (contract 1.73) | **Built** | `Agent/ServiceCommandHandler` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Api.Tests/ConfigurationContractTests`, `Hosts.Tests/RestoreReceiptsServiceTests`, `Web.Tests/ConsoleRestoreReceiptsScriptTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0125--the-service-lists-the-restore-receipts-it-keeps) |
 | [0126](adr/0126-a-restore-receipt-names-the-set-it-restored.md) | A restore receipt names the set it restored: at schema 9 the receipt names the set whose snapshot its run restored, where the run knew it, through the service and in direct mode, and names none where it knew none; `restore-receipts`, the service's listing and the console say it (contract 1.74) | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway`, `Cli/RestoreReceiptReport` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Repository.Tests/RestoreReceiptKeptTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Cli.Tests/RestoreReceiptDirectTests`, `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0126--a-restore-receipt-names-the-set-it-restored) |
 | [0127](adr/0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md) | What a restore did not restore is shown through the passphrase: at schema 10 a receipt records its set's identity, and `get_restore_receipt` answers the files its run failed, skipped or degraded, under a limit with a count of the rest, only through a source of that set unlocked by the session that asks; the console shows them behind the passphrase and closes the source after (contract 1.75) | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Repository.Tests/RestoreReceiptKeptTests`, `Hosts.Tests/RestoreReceiptFilesServiceTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleRestoreReceiptsScriptTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0127--what-a-restore-did-not-restore-is-shown-through-the-passphrase) |
+| [0128](adr/0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md) | The command line asks a paired service for its restore receipts: `restore-receipts --connect` lists the receipts the service keeps as a state directory's are listed, naming no file, and with `--run` the files that run did not restore, through a source of the set its receipt records that `--passphrase-env` unlocks, closed after; `--state` then names the console's own state | **Built** | `Cli/CliApplication` · `Cli/RestoreReceiptReport` · `Hosts.Tests/RestoreReceiptsRemoteTests`, `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0128--the-command-line-asks-a-paired-service-for-its-restore-receipts) |
 
 ---
 
@@ -3669,7 +3670,8 @@ is an empty card.
 
 What remains is recorded rather than done. A receipt's files are not shown in
 the console, the command line does not ask the service for the receipts, and
-none is let go. ADR-0127 has since shown the files a run did not restore.
+none is let go. ADR-0127 has since shown the files a run did not restore, and
+ADR-0128 has the command line ask a paired service for the receipts.
 
 ### 0126 — a restore receipt names the set it restored
 
@@ -3700,3 +3702,22 @@ the source after.
 What remains is recorded rather than done. The files a run restored, and where
 each landed, are not shown in the console, and a receipt kept before schema 10
 is not shown there at all.
+
+### 0128 — the command line asks a paired service for its restore receipts
+
+`restore-receipts` read the folder its `--state` named, which is on the
+service's machine. With `--connect` it now asks the paired service, and
+`--state` names the console's own state, as it does for every verb that dials
+one. It lists the receipts the service keeps as a state directory's are
+listed, newest first under `--limit`, naming no file and asking no passphrase.
+With `--run` it writes what the receipt says and the files its run failed,
+skipped or degraded, under `--limit` with a count of the rest, through a source
+of the set the receipt records that `--passphrase-env` unlocks, and closes the
+source after. A receipt that records no set is refused before any passphrase is
+asked, saying where it is read; a run the service keeps no receipt of is refused
+naming it; a name that is not a run's and a limit below one are refused before
+the service is dialled. No contract change.
+
+What remains is recorded rather than done. Without `--connect` the verb reads
+the folder as before, so a service on this machine is read through its state
+directory, and a receipt is printed whole only from the folder.
