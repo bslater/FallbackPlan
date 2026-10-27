@@ -17,7 +17,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// gives and the caller's session, refusing one that will not fit unless the
 /// command line says to go on; one that finishes resolves the notice. A run
 /// let go is named no more, and a run not on record is refused before
-/// anything is written.
+/// anything is written. A resume is planned as well (FR-RST-003, ADR-0120),
+/// for the run it continues or by the run's name alone: measured where the
+/// run landed, saying how many files it already landed, and running nothing.
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -263,6 +265,131 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         Assert.AreEqual(ServiceErrorReason.InvalidArgument, forgotten.Reason);
     }
 
+    [TestMethod]
+    public async Task APlanOfAResume_IsMeasuredWhereTheRunLanded_AndSaysWhatItLanded_AndRunsNothing()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler);
+        Directory.CreateDirectory(cut.OutputDirectory);
+        await File.WriteAllTextAsync(Path.Combine(cut.OutputDirectory, "notes.txt"), "hello", _timeout.Token);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        var answer = await handler.ExecuteAsync(
+            new PlanRestoreCommand(
+                await SnapshotIdAsync(handler), null, source.SourceId, OutputDirectory: Destination, Resume: cut.Run),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(answer, out var plan, (answer as ServiceError)?.Message);
+        Assert.AreEqual(2L, plan.Files);
+        Assert.AreEqual(1L, plan.Landed, "the file the run landed at its length");
+        Assert.IsFalse(File.Exists(Path.Combine(cut.OutputDirectory, "nested", "deeper.txt")), "a plan restores nothing");
+        Assert.AreEqual(cut.Run, Assert.ContainsSingle(await RunsAsync(handler)).Run, "and leaves the run unfinished");
+
+        var afresh = await handler.ExecuteAsync(
+            new PlanRestoreCommand(await SnapshotIdAsync(handler), null, source.SourceId, OutputDirectory: Destination),
+            _timeout.Token);
+        Assert.IsInstanceOfType<RestorePlanResult>(afresh, out var unresumed, (afresh as ServiceError)?.Message);
+        Assert.IsNull(unresumed.Landed, "a plan of a run that resumes nothing names nothing landed");
+    }
+
+    [TestMethod]
+    public async Task APlanOfARunByItsName_IsAskedUnderTheSessionThatAsksIt()
+    {
+        // A source serves only the session that unlocked it (FR-WOR-007).
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var run = (await CutShortAsync(handler)).Run!;
+        var source = await _harness.OpenGrantedSourceAsync(
+            (command, token) => handler.ExecuteAsync(command with { SessionId = "session-7" }, token), "docs", null, _timeout.Token);
+
+        var planned = await handler.ExecuteAsync(
+            new PlanResumeRestoreCommand(run, source.SourceId) { SessionId = "session-7" }, _timeout.Token);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(planned, (planned as ServiceError)?.Message);
+    }
+
+    [TestMethod]
+    public async Task ARunLeftUnfinished_IsPlannedByItsNameAlone_AsItWasAsked()
+    {
+        // Asked in place, so what it landed is in the folder itself: a plan
+        // that took the run as quarantined would look where it never wrote.
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Directory.CreateDirectory(Destination);
+        var failed = await RestoreAsync(handler, Destination, _timeout.Token, inPlace: true, tampered: true);
+        Assert.AreEqual("failed", failed.Outcome);
+        await File.WriteAllTextAsync(Path.Combine(Destination, "notes.txt"), "hello", _timeout.Token);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        var answer = await handler.ExecuteAsync(new PlanResumeRestoreCommand(failed.Run!, source.SourceId), _timeout.Token);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(answer, out var plan, (answer as ServiceError)?.Message);
+        Assert.AreEqual(1L, plan.Landed);
+        Assert.IsFalse(File.Exists(Path.Combine(Destination, "nested", "deeper.txt")), "a plan restores nothing");
+        Assert.AreEqual(failed.Run, Assert.ContainsSingle(await RunsAsync(handler)).Run);
+    }
+
+    [TestMethod]
+    public async Task APlanOfAResumeWhoseFolderIsGone_IsRefused_AsTheResumeWouldBe()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler);
+        if (Directory.Exists(cut.OutputDirectory))
+        {
+            Directory.Delete(cut.OutputDirectory, recursive: true);
+        }
+
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new PlanResumeRestoreCommand(cut.Run!, source.SourceId), _timeout.Token), out var refused);
+
+        Assert.AreEqual(ServiceErrorReason.NotFound, refused.Reason);
+        Assert.Contains(cut.Run!, refused.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task APlanOfARunNotOnRecord_OrOfWhatIsNotARun_IsRefused()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new PlanResumeRestoreCommand(NoSuchRun, source.SourceId), _timeout.Token), out var unknown);
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new PlanResumeRestoreCommand("../../escaped", source.SourceId), _timeout.Token), out var named);
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new PlanRestoreCommand(
+                    await SnapshotIdAsync(handler), null, source.SourceId, OutputDirectory: Destination, Resume: "../../escaped"),
+                _timeout.Token),
+            out var asked);
+
+        Assert.AreEqual(ServiceErrorReason.NotFound, unknown.Reason);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, named.Reason);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, asked.Reason);
+    }
+
+    [TestMethod]
+    public async Task RestoreResume_WithAPlan_SaysWhatTheRunLanded_AndResumesNothing()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var cut = await CutShortAsync(handler);
+        Directory.CreateDirectory(cut.OutputDirectory);
+        await File.WriteAllTextAsync(Path.Combine(cut.OutputDirectory, "notes.txt"), "hello", _timeout.Token);
+
+        var planned = await CliAsync("restore-resume", cut.Run!, "--plan");
+
+        Assert.AreEqual(0, planned.ExitCode, planned.Output + planned.Error);
+        Assert.Contains("resume: 1 file(s) already landed", planned.Output, StringComparison.Ordinal);
+        Assert.AreEqual(cut.Run, Assert.ContainsSingle(await RunsAsync(handler)).Run, "a plan resumes nothing");
+    }
+
     public void Dispose()
     {
         _cutShortAt?.Dispose();
@@ -292,16 +419,26 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
 
     private async Task<RestoreResult> RestoreAsync(
         ServiceCommandHandler handler, string destination, CancellationToken cancellationToken,
-        string? existing = null, bool inPlace = false)
+        string? existing = null, bool inPlace = false, bool tampered = false)
     {
         var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
-        var answer = await handler.ExecuteAsync(
-            new RunRestoreCommand(
-                await SnapshotIdAsync(handler), null, destination, Source: source.SourceId, Existing: existing,
-                InPlace: inPlace),
-            cancellationToken);
-        Assert.IsInstanceOfType<RestoreResult>(answer, out var restored, (answer as ServiceError)?.Message);
-        return restored;
+        var snapshot = await SnapshotIdAsync(handler);
+        List<(string Path, byte[] Bytes)> sound = tampered ? Tamper(_harness.RepositoryPath) : [];
+        try
+        {
+            var answer = await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshot, null, destination, Source: source.SourceId, Existing: existing, InPlace: inPlace),
+                cancellationToken);
+            Assert.IsInstanceOfType<RestoreResult>(answer, out var restored, (answer as ServiceError)?.Message);
+            return restored;
+        }
+        finally
+        {
+            foreach (var (path, bytes) in sound)
+            {
+                await File.WriteAllBytesAsync(path, bytes, _timeout.Token);
+            }
+        }
     }
 
     /// <summary>Runs a CLI verb as a client of the running service.</summary>

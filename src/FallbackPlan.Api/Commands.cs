@@ -45,6 +45,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
 [JsonDerivedType(typeof(ListRestoreRunsCommand), "list_restore_runs")]
 [JsonDerivedType(typeof(ResumeRestoreCommand), "resume_restore")]
+[JsonDerivedType(typeof(PlanResumeRestoreCommand), "plan_resume_restore")]
 [JsonDerivedType(typeof(ForgetRestoreRunCommand), "forget_restore_run")]
 [JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
 [JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
@@ -546,6 +547,13 @@ public sealed record ListDirectoryCommand(
 /// <param name="Target">The run's target, as <see cref="RunRestoreCommand"/> takes it.</param>
 /// <param name="Existing">The run's existing-file policy, as <see cref="RunRestoreCommand"/> takes it.</param>
 /// <param name="InPlace">Whether the run would land in place, as <see cref="RunRestoreCommand"/> takes it.</param>
+/// <param name="Resume">
+/// The run the planned run resumes, as <see cref="RunRestoreCommand"/> takes
+/// it (contract 1.72, FR-RST-008, ADR-0120): the plan is measured where that
+/// run landed, as the resume will meet it, crediting each file already there
+/// at its length, and says how many there are. A quarantined run's folder
+/// must be there. Null plans a run that resumes nothing.
+/// </param>
 public sealed record PlanRestoreCommand(
     string SnapshotId,
     string? Path,
@@ -554,7 +562,8 @@ public sealed record PlanRestoreCommand(
     string? OutputDirectory = null,
     string? Target = null,
     string? Existing = null,
-    bool InPlace = false) : ServiceCommand;
+    bool InPlace = false,
+    string? Resume = null) : ServiceCommand;
 
 /// <summary>
 /// Performs a restore. The output directory is a path <b>on the machine running
@@ -635,6 +644,17 @@ public sealed record ListRestoreRunsCommand : ServiceCommand;
 /// <param name="Source">An open restore source of the run's snapshot to read from; null reads the staging archives.</param>
 /// <param name="IgnoreFreeSpace">Whether to run although the volume looks too small, as <see cref="RunRestoreCommand"/> takes it.</param>
 public sealed record ResumeRestoreCommand(string Run, string? Source = null, bool IgnoreFreeSpace = false) : ServiceCommand;
+
+/// <summary>
+/// Plans the resume of a restore run left unfinished, by its name alone
+/// (contract 1.72, FR-RST-008, ADR-0120): the service plans the run as it was
+/// asked, as <see cref="PlanRestoreCommand"/> with <c>resume</c> naming it,
+/// and answers as that does. Nothing is restored, and the run stays
+/// unfinished.
+/// </summary>
+/// <param name="Run">The run, as <see cref="ListRestoreRunsCommand"/> names it.</param>
+/// <param name="Source">An open restore source of the run's snapshot to read from; null reads the staging archives.</param>
+public sealed record PlanResumeRestoreCommand(string Run, string? Source = null) : ServiceCommand;
 
 /// <summary>
 /// Lets a restore run left unfinished go (contract 1.71, ADR-0115): the

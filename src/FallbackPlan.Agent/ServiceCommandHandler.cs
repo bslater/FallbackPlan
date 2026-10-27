@@ -92,6 +92,7 @@ public sealed partial class ServiceCommandHandler(
             return command switch
             {
                 PlanRestoreCommand plan => await PlanRestoreAsync(plan, cancellationToken).ConfigureAwait(false),
+                PlanResumeRestoreCommand planResume => await PlanResumeRestoreAsync(planResume, cancellationToken).ConfigureAwait(false),
                 RunRestoreCommand restore => await OnReaderLaneAsync(
                     $"restore {restore.SnapshotId}",
                     token => RunRestoreAsync(restore, token),
@@ -812,6 +813,11 @@ public sealed partial class ServiceCommandHandler(
             return invalid!;
         }
 
+        if (command.Resume is { } named && !IsRunId(named))
+        {
+            return NamesNoRun(named);
+        }
+
         if (RefuseUnproved(command.Source, command.SessionId, setId: null, "Planning a restore") is { } unproved)
         {
             return unproved;
@@ -865,6 +871,11 @@ public sealed partial class ServiceCommandHandler(
                     return refusal!;
                 }
 
+                if (RefuseAbsentRun(resolved, command.Resume, mode, RestoreExecutionOptions.DefaultQuarantineDirectory) is { } absent)
+                {
+                    return absent;
+                }
+
                 slices = resolved;
             }
 
@@ -877,12 +888,21 @@ public sealed partial class ServiceCommandHandler(
             var degradations = RestorePlanFigures.Degradations(plan, probed, target);
 
             IReadOnlyList<RestoreSpaceDescriptor>? space = null;
+            long? landed = null;
             if (slices is not null)
             {
+                // A plan of a resume is measured where the run it continues
+                // landed, as the resume will meet it (ADR-0120).
                 var report = await RestoreSpace.MeasureAsync(
-                    [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory))],
+                    [
+                        .. slices.Select(slice => new RestoreSlice(
+                            slice.Plan,
+                            slice.OutputDirectory,
+                            ResumedIn(slice.OutputDirectory, command.Resume, mode, RestoreExecutionOptions.DefaultQuarantineDirectory))),
+                    ],
                     mode, policy, runtime.RestoreSpaceProbe, RestoreSpace.WrittenBytesFrom(probed.Facts),
                     cancellationToken).ConfigureAwait(false);
+                landed = command.Resume is null ? null : report.Landed;
                 space =
                 [
                     .. report.Needs.Select(need => new RestoreSpaceDescriptor(
@@ -905,13 +925,44 @@ public sealed partial class ServiceCommandHandler(
                 (long)writeBytes,
                 space,
                 (long)probed.ReadBytes,
-                probed.Archived.Count == 0 ? null : probed.Archived);
+                probed.Archived.Count == 0 ? null : probed.Archived,
+                landed);
         }
         finally
         {
             context.Source?.Gate.Release();
         }
     }
+
+    /// <summary>
+    /// Where a resume of <paramref name="run"/> finds what it landed (ADR-0109):
+    /// a quarantined run's own folder, or the output itself in place. Null
+    /// resumes nothing.
+    /// </summary>
+    private static string? ResumedIn(
+        string outputDirectory, string? run, RestoreDestinationMode mode, string quarantineDirectory) =>
+        run is null
+            ? null
+            : mode == RestoreDestinationMode.Quarantine
+                ? Path.Combine(outputDirectory, quarantineDirectory, run)
+                : outputDirectory;
+
+    /// <summary>
+    /// Refuses a resume of a quarantined run whose folder is not there: it
+    /// left nothing to continue, and a folder made for it now would be a run
+    /// under a name nobody chose. One in place lands where any run does.
+    /// </summary>
+    private static ServiceError? RefuseAbsentRun(
+        IReadOnlyList<RestoreRootSlice> slices, string? run, RestoreDestinationMode mode, string quarantineDirectory) =>
+        run is not null
+        && mode == RestoreDestinationMode.Quarantine
+        && slices.Select(slice => ResumedIn(slice.OutputDirectory, run, mode, quarantineDirectory)!)
+            .FirstOrDefault(folder => !Directory.Exists(folder)) is { } absent
+            ? new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"No run {run} landed in '{absent}', so there is nothing there to resume. Restore without "
+                + "naming a run to begin one.")
+            : null;
 
     /// <summary>
     /// The run's shape, as a plan or a run names it: whether it writes back
@@ -1108,21 +1159,12 @@ public sealed partial class ServiceCommandHandler(
                 ResumedRunId = mode == RestoreDestinationMode.Quarantine ? command.Resume : null,
             };
 
-            string? ResumedIn(string outputDirectory) => command.Resume is null
-                ? null
-                : options.ResumedRunId is { } run
-                    ? Path.Combine(outputDirectory, options.QuarantineDirectory, run)
-                    : outputDirectory;
+            string? ResumedInFolder(string outputDirectory) =>
+                ResumedIn(outputDirectory, command.Resume, mode, options.QuarantineDirectory);
 
-            // A run whose folder is not there left nothing to continue, and a
-            // folder made for it now would be a run under a name nobody chose.
-            if (options.ResumedRunId is { } resumed
-                && slices.Select(slice => ResumedIn(slice.OutputDirectory)!).FirstOrDefault(folder => !Directory.Exists(folder)) is { } absent)
+            if (RefuseAbsentRun(slices, command.Resume, mode, options.QuarantineDirectory) is { } absent)
             {
-                return new ServiceError(
-                    ServiceErrorReason.NotFound,
-                    $"No run {resumed} landed in '{absent}', so there is nothing there to resume. Restore without "
-                    + "naming a run to begin one.");
+                return absent;
             }
 
             // Whether the whole run fits, before its first slice writes a byte
@@ -1131,7 +1173,7 @@ public sealed partial class ServiceCommandHandler(
             // that compresses what it stores holds more than it says, so a
             // person may go on regardless.
             var space = await RestoreSpace.MeasureRunAsync(
-                [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory, ResumedIn(slice.OutputDirectory)))],
+                [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory, ResumedInFolder(slice.OutputDirectory)))],
                 options.DestinationMode, options.ExistingDestination, runtime.RestoreSpaceProbe, reader,
                 cancellationToken).ConfigureAwait(false);
             if (space.IsShort && !command.IgnoreFreeSpace)
@@ -1297,6 +1339,36 @@ public sealed partial class ServiceCommandHandler(
             new RunRestoreCommand(
                 record.SnapshotId, record.Path, record.OutputDirectory ?? string.Empty, command.Source, record.Paths,
                 record.Target, record.Existing, record.InPlace, command.IgnoreFreeSpace, Resume: command.Run)
+            {
+                SessionId = command.SessionId,
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Plans the resume of a run left unfinished, by its name alone (ADR-0120):
+    /// the run as it was asked, planned as the resume will meet it.
+    /// </summary>
+    private async ValueTask<ServiceResult> PlanResumeRestoreAsync(
+        PlanResumeRestoreCommand command, CancellationToken cancellationToken)
+    {
+        if (!IsRunId(command.Run))
+        {
+            return NamesNoRun(command.Run);
+        }
+
+        if (runtime.RestoreRuns.Find(command.Run) is not { } record)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"No restore run {command.Run} is left unfinished: a run that finished, or was let go, is named no "
+                + "more, so there is no resume of it to plan.");
+        }
+
+        return await PlanRestoreAsync(
+            new PlanRestoreCommand(
+                record.SnapshotId, record.Path, command.Source, record.Paths, record.OutputDirectory ?? string.Empty,
+                record.Target, record.Existing, record.InPlace, Resume: command.Run)
             {
                 SessionId = command.SessionId,
             },

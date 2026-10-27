@@ -722,8 +722,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// Additive: a pre-1.71 client never asks, and a pre-1.71 service names
     /// no run, so its runs are resumed by their folders' names as before.
     /// </para>
+    /// <para>
+    /// 1.72 plans a resume (FR-RST-008, ADR-0120). `plan_restore` gains
+    /// `resume`, the run the planned run continues: the plan is measured where
+    /// that run landed, as the resume will meet it. `plan_resume_restore`
+    /// takes a run's name and a source and plans the run as it was asked, as
+    /// a resume, answering `restore_plan`, which gains `landed`: how many
+    /// files the run already landed at their length. Nothing is restored.
+    /// Additive: a pre-1.72 client never asks, and a pre-1.72 service plans a
+    /// resume as a run afresh and names nothing landed.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 71);
+    public static ContractVersion Current { get; } = new(1, 72);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

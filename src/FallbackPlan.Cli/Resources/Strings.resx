@@ -94,8 +94,8 @@
   <data name="CliApplication_AsPlannedAnotherRun" xml:space="preserve">
     <value>'{0}' keeps the plan of another run: snapshot {1}, {2}, to {3}. Restore that run as planned, or plan this one again.</value>
   </data>
-  <data name="CliApplication_ResumeIsNotPlanned" xml:space="preserve">
-    <value>--resume runs a restore, and a plan restores nothing: plan the restore without --resume, or resume it without --plan or --export.</value>
+  <data name="CliApplication_AResumeIsNotKept" xml:space="preserve">
+    <value>A kept plan is of a run approved before it begins, and --resume continues one already begun: plan the resume with --plan, or keep the plan of a restore without --resume.</value>
   </data>
   <data name="CliApplication_SnapshotNotCatalogue" xml:space="preserve">
     <value>snapshot {0} is not in the catalogue — check `snapshots`, or run `rebuild-index` if it is stale.</value>
@@ -198,6 +198,12 @@
   </data>
   <data name="CliApplication_ForgetNamesTheRun" xml:space="preserve">
     <value>--forget lets one run go, so name it: restore-resume &lt;run&gt; --forget.</value>
+  </data>
+  <data name="CliApplication_PlanNamesTheRun" xml:space="preserve">
+    <value>--plan plans the resume of one run, so name it: restore-resume &lt;run&gt; --plan.</value>
+  </data>
+  <data name="CliApplication_ALetGoIsNotPlanned" xml:space="preserve">
+    <value>--forget lets a run go and --plan plans its resume: ask one or the other.</value>
   </data>
   <data name="DirectGateway_OriginalSetNotConfigured" xml:space="preserve">
     <value>This snapshot's set is not configured in {0}, so nothing here says where its files were captured. Restore it to a folder with --output.</value>

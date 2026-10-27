@@ -18,7 +18,10 @@ namespace FallbackPlan.Cli.Tests;
 /// <c>restore --resume</c> asks of the service (FR-RST-008, ADR-0109): the
 /// run it continues, named, and what that run found already in place. And a
 /// plan held to a kept one through the service (FR-RST-003, ADR-0114): what
-/// changed since it was kept, or that nothing did.
+/// changed since it was kept, or that nothing did. And a resume's plan
+/// through the service (FR-RST-008, ADR-0120): asked for the run it
+/// continues, or for a run left unfinished by its name alone, saying how many
+/// files the run already landed.
 /// </summary>
 [TestClass]
 public sealed class GatewayRestoreReportTests
@@ -26,6 +29,8 @@ public sealed class GatewayRestoreReportTests
     private const string ThePassphrase = "the scripted installation's passphrase";
 
     private static readonly string SnapshotId = new('e', 32);
+
+    private const string UnfinishedRun = "0123456789abcdef";
 
     [TestMethod]
     public async Task ARestoreThatReadAroundDamage_SaysSo_AndNamesTheCopies()
@@ -178,6 +183,79 @@ public sealed class GatewayRestoreReportTests
 
         Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
         StringAssert.StartsWith(report.Lines[0], "plan: 1 file(s) back where they were captured, 4096 byte(s) written");
+    }
+
+    [TestMethod]
+    public async Task APlanOfAResume_AsksForTheRunItContinues_AndSaysHowManyFilesItLanded()
+    {
+        // FR-RST-008, ADR-0120: planned where the run landed, and only planned.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"), new RestorePlanResult(2, 9, [], Landed: 1));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.PlanRestoreAsync(
+                new RestoreRequest(SnapshotId, null, "/out", Resume: true, ResumedRun: UnfinishedRun), token),
+            timeout.Token);
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        Assert.AreEqual(UnfinishedRun, Assert.ContainsSingle(client.Received.OfType<PlanRestoreCommand>()).Resume);
+        Assert.IsTrue(
+            report.Lines.Any(line => line.StartsWith("resume: 1 file(s) already landed", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
+        Assert.IsEmpty(client.Received.OfType<RunRestoreCommand>(), "a plan restores nothing");
+    }
+
+    [TestMethod]
+    public async Task APlanOfAResumeNamingNoRun_IsRefusedBeforeAnythingIsAsked()
+    {
+        // Through the service each run lands in a folder of its own, so a plan
+        // of a resume that names none has nowhere to be measured.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(2, 0, "/out", "complete"), new RestorePlanResult(2, 9, []));
+
+        var refused = await Assert.ThrowsExactlyAsync<CliFailureException>(() => ThroughAsync(
+            client,
+            (gateway, token) => gateway.PlanRestoreAsync(new RestoreRequest(SnapshotId, null, "/out", Resume: true), token),
+            timeout.Token));
+
+        Assert.Contains(".fbp-quarantine", refused.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(client.Received);
+    }
+
+    [TestMethod]
+    public async Task ARunLeftUnfinished_IsPlannedByItsNameAlone_ThroughASourceOfItsSnapshot()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"), new RestorePlanResult(2, 9, [], Landed: 2));
+
+        var report = await ThroughAsync(
+            client, (gateway, token) => gateway.PlanResumeRestoreAsync(UnfinishedRun, token), timeout.Token);
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        var asked = Assert.ContainsSingle(client.Received.OfType<PlanResumeRestoreCommand>());
+        Assert.AreEqual(UnfinishedRun, asked.Run);
+        Assert.IsNotNull(asked.Source, "the plan names the backup's files, so it reads through an unlocked source");
+        Assert.IsTrue(
+            report.Lines.Any(line => line.StartsWith("resume: 2 file(s) already landed", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
+        Assert.IsEmpty(client.Received.OfType<ResumeRestoreCommand>(), "a plan resumes nothing");
+    }
+
+    [TestMethod]
+    public async Task APlanOfARunNotLeftUnfinished_IsRefused_BeforeThePassphraseIsAsked()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(2, 0, "/out", "complete"), new RestorePlanResult(2, 9, []));
+
+        var refused = await Assert.ThrowsExactlyAsync<CliFailureException>(() => ThroughAsync(
+            client, (gateway, token) => gateway.PlanResumeRestoreAsync("fedcba9876543210", token), timeout.Token));
+
+        Assert.Contains("fedcba9876543210", refused.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(client.Received.OfType<OpenRestoreSourceCommand>());
+        Assert.IsEmpty(client.Received.OfType<PlanResumeRestoreCommand>());
     }
 
     [TestMethod]
@@ -433,6 +511,10 @@ public sealed class GatewayRestoreReportTests
                 RunRestoreCommand => new ServiceError(ServiceErrorReason.Refused, "a restore needs an unlocked source"),
                 PlanRestoreCommand { Source: SourceId } when planned is not null => planned,
                 PlanRestoreCommand => new ServiceError(ServiceErrorReason.Refused, "a plan needs an unlocked source"),
+                ListRestoreRunsCommand => new RestoreRunsResult(
+                    [new RestoreRunDescriptor(UnfinishedRun, SnapshotId, "docs", "/out", 1_000, Existing: "rename")]),
+                PlanResumeRestoreCommand { Source: SourceId } when planned is not null => planned,
+                PlanResumeRestoreCommand => new ServiceError(ServiceErrorReason.Refused, "a plan needs an unlocked source"),
                 _ => new AcknowledgedResult(),
             });
 

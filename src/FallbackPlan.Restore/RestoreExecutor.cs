@@ -265,8 +265,11 @@ public sealed record RestoreExecutionOptions
     /// </remarks>
     public RestoreDestinationMode DestinationMode { get; init; } = RestoreDestinationMode.Quarantine;
 
+    /// <summary>The quarantine directory every run lands under unless told otherwise.</summary>
+    public const string DefaultQuarantineDirectory = ".fbp-quarantine";
+
     /// <summary>The quarantine directory, relative to the chosen output.</summary>
-    public string QuarantineDirectory { get; init; } = ".fbp-quarantine";
+    public string QuarantineDirectory { get; init; } = DefaultQuarantineDirectory;
 
     /// <summary>What to do about a file already at a destination.</summary>
     /// <remarks>
