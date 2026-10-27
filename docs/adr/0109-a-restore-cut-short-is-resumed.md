@@ -85,6 +85,8 @@ A hard-link group's first name found in place is the file its later names are ma
 ## What this does not do
 
 - **Resume within a file.** A file cut short mid-write never landed, so it is restored whole.
+
+  > **2026-10 ([ADR-0129](0129-a-restore-cut-short-resumes-within-a-file.md)).** Through the service, a run keeps the part of each file it was cut short in, and a resume takes it up as far as each segment proves against its object identifier, reading only the rest. In direct mode a file cut short is still restored whole.
 - **Resume from the console.** The wizard runs a restore whole, and resuming one from there is not built.
 
   > **2026-10 ([ADR-0110](0110-the-console-resumes-a-restore-cut-short.md)).** The wizard offers to restore what is left of a run that failed or was stopped, naming the run its result names.
@@ -127,3 +129,4 @@ A hard-link group's first name found in place is the file its later names are ma
 | 2026-10 | Accepted (amended) | [ADR-0110](0110-the-console-resumes-a-restore-cut-short.md) takes up the console resume this record left owed: a restore's result names its run (contract 1.68), the wizard offers to restore what is left of a run that failed or was stopped, and the command line says how. |
 | 2026-10 | Accepted (amended) | [ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md) takes up finding the run, which this record left to whoever read its folder: the service names each run before it writes, keeps it until a run of it finishes, says each one left unfinished, and resumes one by its name alone (contract 1.71, `restore-resume`). |
 | 2026-10 | Amended (§5) | [ADR-0120](0120-a-resume-is-planned.md): a resume is planned, by length as §4 measures it, saying how many files the run landed, so §5's refusal of a plan is superseded; a plan of a resume is still not kept. |
+| 2026-10 | Accepted (amended) | [ADR-0129](0129-a-restore-cut-short-resumes-within-a-file.md) takes up resuming within a file, which this record left undone: through the service a file cut short is resumed from the part its run had assembled, as far as the part proves. |

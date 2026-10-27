@@ -153,6 +153,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0126](adr/0126-a-restore-receipt-names-the-set-it-restored.md) | A restore receipt names the set it restored: at schema 9 the receipt names the set whose snapshot its run restored, where the run knew it, through the service and in direct mode, and names none where it knew none; `restore-receipts`, the service's listing and the console say it (contract 1.74) | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway`, `Cli/RestoreReceiptReport` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Repository.Tests/RestoreReceiptKeptTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Cli.Tests/RestoreReceiptDirectTests`, `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0126--a-restore-receipt-names-the-set-it-restored) |
 | [0127](adr/0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md) | What a restore did not restore is shown through the passphrase: at schema 10 a receipt records its set's identity, and `get_restore_receipt` answers the files its run failed, skipped or degraded, under a limit with a count of the rest, only through a source of that set unlocked by the session that asks; the console shows them behind the passphrase and closes the source after (contract 1.75) | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Repository.Tests/RestoreReceiptKeptTests`, `Hosts.Tests/RestoreReceiptFilesServiceTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleRestoreReceiptsScriptTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0127--what-a-restore-did-not-restore-is-shown-through-the-passphrase) |
 | [0128](adr/0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md) | The command line asks a paired service for its restore receipts: `restore-receipts --connect` lists the receipts the service keeps as a state directory's are listed, naming no file, and with `--run` the files that run did not restore, through a source of the set its receipt records that `--passphrase-env` unlocks, closed after; `--state` then names the console's own state | **Built** | `Cli/CliApplication` · `Cli/RestoreReceiptReport` · `Hosts.Tests/RestoreReceiptsRemoteTests`, `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0128--the-command-line-asks-a-paired-service-for-its-restore-receipts) |
+| [0129](adr/0129-a-restore-cut-short-resumes-within-a-file.md) | A restore cut short resumes within a file: a file is assembled in a part named by its whole-file hash and kept unless it lands or its assembly is refused; a resume takes the part up as far as each segment proves against its object identifier and each hole reads as zeroes, and reads only the rest; through the service each run keeps its parts under its name, carried to a resume's, and let go when the run finishes or is let go, or at start for a run no longer on record | **Built** | `Repository/RestoreEngine` · `Repository/RepositoryReader` · `Restore/RestoreExecutor` · `Agent/RestoreParts` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests` · [notes](#0129--a-restore-cut-short-resumes-within-a-file) |
 
 ---
 
@@ -3411,7 +3412,8 @@ listed once a run for this.
 
 What remains is recorded rather than done. A file cut short mid-write is
 restored whole, the console's wizard resumes nothing, and through the service
-the run is named rather than found.
+the run is named rather than found. ADR-0129 has since resumed such a file
+from the part its run had assembled, through the service.
 
 ### 0110 — a restore resumed from the console
 
@@ -3721,3 +3723,22 @@ the service is dialled. No contract change.
 What remains is recorded rather than done. Without `--connect` the verb reads
 the folder as before, so a service on this machine is read through its state
 directory, and a receipt is printed whole only from the folder.
+
+### 0129 — a restore cut short resumes within a file
+
+A file cut short mid-write was restored whole: the engine assembled each file
+in a spool of its own and deleted it however the file ended. It now
+assembles a file in a part its caller names, by the file's whole-file hash,
+and keeps the part unless the file lands or its assembly does not hash to the
+file. A resume takes the part up in the file's order, each segment as far as
+its bytes prove against its object identifier and each hole as far as it
+reads as zeroes, cuts it back at the first piece that does not, and reads
+only the rest, ahead of the loop or in it. A run that is not a resume takes
+up no part. Through the service each run keeps its parts in
+`restore-parts/{run}` under the state directory; a resume under a new name
+carries them, and they go when the run finishes or is let go, or at start
+for a run no longer on record. No contract or receipt change.
+
+What remains is recorded rather than done. Direct mode keeps no parts, a
+resume's plan counts each file it writes whole, and the receipt does not say
+a file was resumed within.
