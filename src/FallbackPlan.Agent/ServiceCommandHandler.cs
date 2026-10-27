@@ -688,6 +688,7 @@ public sealed partial class ServiceCommandHandler(
         ListDirectoryCommand list => await ListDirectoryAsync(list, cancellationToken).ConfigureAwait(false),
         CloseRestoreSourceCommand close => await CloseRestoreSourceAsync(close).ConfigureAwait(false),
         ListRestoreRunsCommand => ListRestoreRuns(),
+        ListRestoreReceiptsCommand listRestoreReceipts => ListRestoreReceipts(listRestoreReceipts),
         ForgetRestoreRunCommand forget => ForgetRestoreRun(forget),
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
@@ -1379,6 +1380,37 @@ public sealed partial class ServiceCommandHandler(
     private RestoreRunsResult ListRestoreRuns() =>
         new([.. runtime.RestoreRuns.Unfinished.Select(run => new RestoreRunDescriptor(
             run.Run, run.SnapshotId, run.SetName, run.OutputDirectory, run.BeganAt, run.Target, run.Existing, run.InPlace))]);
+
+    /// <summary>
+    /// The restore receipts this service keeps, newest first (contract 1.73,
+    /// ADR-0125): what became of each run's files and where it wrote them,
+    /// without the paths, which are the backup's file names (ADR-0089).
+    /// </summary>
+    private ServiceResult ListRestoreReceipts(ListRestoreReceiptsCommand command)
+    {
+        if (command.Limit is <= 0)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, "limit must be at least 1 when given.");
+        }
+
+        var kept = RestoreReceipt.ReadKept(runtime.ReceiptsRoot);
+        var shown = command.Limit is { } limit ? kept.Take(limit) : kept;
+        return new RestoreReceiptsResult([.. shown.Select(DescribeKept)], kept.Count);
+    }
+
+    private static RestoreReceiptDescriptor DescribeKept(KeptRestoreReceipt kept) => kept.Receipt is not { } receipt
+        ? new(kept.Run, null, null, null, null, 0, 0, 0, 0, 0, kept.Problem)
+        : new(
+            kept.Run,
+            receipt.Outcome.ToString().ToLowerInvariant(),
+            receipt.CompletedAt,
+            receipt.SnapshotId,
+            receipt.WrittenTo,
+            Restored: receipt.Items.Count(item => item.Outcome == "restored"),
+            FoundInPlace: receipt.Items.Count(item => item.FoundInPlace),
+            Skipped: receipt.Items.Count(item => item.Outcome == "skipped"),
+            Failed: receipt.Items.Count(item => item.Outcome == "failed"),
+            Degraded: receipt.Items.Count(item => item.Outcome == "degraded"));
 
     /// <summary>Lets a run left unfinished go: named no more, and its notice resolved (ADR-0115).</summary>
     private ServiceResult ForgetRestoreRun(ForgetRestoreRunCommand command)

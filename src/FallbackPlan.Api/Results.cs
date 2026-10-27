@@ -49,6 +49,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(RestorePlanResult), "restore_plan")]
 [JsonDerivedType(typeof(RestoreResult), "restore")]
 [JsonDerivedType(typeof(RestoreRunsResult), "restore_runs")]
+[JsonDerivedType(typeof(RestoreReceiptsResult), "restore_receipts")]
 [JsonDerivedType(typeof(RestoreSourceOpenedResult), "restore_source")]
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
@@ -948,6 +949,41 @@ public sealed record RestoreRunDescriptor(
 /// <summary>The restore runs left unfinished, oldest first (contract 1.71, ADR-0115).</summary>
 /// <param name="Runs">Each run, as <see cref="RestoreRunDescriptor"/> describes it.</param>
 public sealed record RestoreRunsResult(IReadOnlyList<RestoreRunDescriptor> Runs) : ServiceResult;
+
+/// <summary>
+/// One restore receipt the service keeps (contract 1.73, FR-RST-004,
+/// ADR-0125): what became of its run's files and where it wrote them, never
+/// the paths within the snapshot, which are the backup's file names
+/// (ADR-0089).
+/// </summary>
+/// <param name="Run">The run it is kept under.</param>
+/// <param name="Outcome">What the run as a whole achieved, as <see cref="RestoreResult"/> words it; null where the receipt does not read.</param>
+/// <param name="EndedAt">When the run ended, Unix milliseconds; null where the receipt does not read.</param>
+/// <param name="SnapshotId">The snapshot it restored, hex-encoded; null where the receipt does not read.</param>
+/// <param name="WrittenTo">Where it wrote, on the service's machine; null where the receipt does not read.</param>
+/// <param name="Restored">Its files restored, those found in place among them.</param>
+/// <param name="FoundInPlace">Its files a resume found already holding the snapshot's content and left as they stood.</param>
+/// <param name="Skipped">Its files skipped.</param>
+/// <param name="Failed">Its files that failed.</param>
+/// <param name="Degraded">Its files restored without everything captured with them.</param>
+/// <param name="Problem">Why the receipt does not read, or null where it does.</param>
+public sealed record RestoreReceiptDescriptor(
+    string Run,
+    string? Outcome,
+    ulong? EndedAt,
+    string? SnapshotId,
+    string? WrittenTo,
+    long Restored,
+    long FoundInPlace,
+    long Skipped,
+    long Failed,
+    long Degraded,
+    string? Problem = null);
+
+/// <summary>The restore receipts the service keeps, newest first (contract 1.73, ADR-0125).</summary>
+/// <param name="Receipts">The newest under the limit asked, each as <see cref="RestoreReceiptDescriptor"/> describes it.</param>
+/// <param name="Total">How many the service keeps, whatever the limit.</param>
+public sealed record RestoreReceiptsResult(IReadOnlyList<RestoreReceiptDescriptor> Receipts, int Total) : ServiceResult;
 
 /// <summary>
 /// An opened restore source (ADR-0041): the handle the source-aware verbs

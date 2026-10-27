@@ -44,6 +44,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(PlanRestoreCommand), "plan_restore")]
 [JsonDerivedType(typeof(RunRestoreCommand), "run_restore")]
 [JsonDerivedType(typeof(ListRestoreRunsCommand), "list_restore_runs")]
+[JsonDerivedType(typeof(ListRestoreReceiptsCommand), "list_restore_receipts")]
 [JsonDerivedType(typeof(ResumeRestoreCommand), "resume_restore")]
 [JsonDerivedType(typeof(PlanResumeRestoreCommand), "plan_resume_restore")]
 [JsonDerivedType(typeof(ForgetRestoreRunCommand), "forget_restore_run")]
@@ -634,6 +635,18 @@ public sealed record RunRestoreCommand(
 /// resume.
 /// </remarks>
 public sealed record ListRestoreRunsCommand : ServiceCommand;
+
+/// <summary>
+/// Lists the restore receipts the service keeps (contract 1.73, FR-RST-004,
+/// ADR-0125), newest first by when each run ended.
+/// </summary>
+/// <remarks>
+/// It names none of the backup's files, so it needs no restore source: each
+/// receipt is answered as what became of its run's files and where it wrote
+/// them, never the paths.
+/// </remarks>
+/// <param name="Limit">At most this many of the newest, or null for every one kept.</param>
+public sealed record ListRestoreReceiptsCommand(int? Limit = null) : ServiceCommand;
 
 /// <summary>
 /// Resumes a restore run left unfinished by its name alone (contract 1.71,
