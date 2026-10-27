@@ -131,6 +131,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0104](adr/0104-a-replicas-readers-take-an-archived-object-as-archived.md) | A replica's readers take an archived object as archived: a sync's read-back counts a sample its store holds only in an archival tier neither proven nor failed, through the comparison and the sealed proof, and the deep sweep passes over such a blob, repairs nothing and closes its circuit past it. One notice for the pair, dated from when the readers first met one (ledger schema 11), says so until a circuit meets none, and a person's full read says how many it could not read | **Built** | `Replication/ReplicaVerifier` · `Repository/RepositoryReader` · `Repository/ReplicaSweep` · `Application/DestinationSyncStore` · `Agent/ArchivedReplicaNotice` · `Agent/FanOut` · `Agent/ReplicaSweepJob` · `Agent/ServiceCommandHandler` · `Replication.Tests/ReplicaVerifierTests`, `Repository.Tests/ArchivedBlobLoadTests`, `Repository.Tests/ReplicaSweepTests`, `Application.Tests/DestinationSyncStoreTests`, `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0104--cold-is-not-broken) |
 | [0105](adr/0105-a-drill-takes-archived-content-as-a-stated-limit.md) | A drill takes archived content as a stated limit: at a store with an archival tier the drill plans each sampled file first, and one whose content the store holds only there is proved as far as that content, not read and not failed, under a limit saying how many; the drill says it in the pair's notice for archived objects, and a missing object still fails it, naming no file | **Built** | `Agent/RecoveryDrillJob` · `Agent/ArchivedReplicaNotice` · `Hosts.Tests/ObjectStoreDestinationTests`, `Hosts.Tests/RecoveryDrillTests` · [notes](#0105--a-limit-not-a-failure) |
 | [0106](adr/0106-a-closed-circuit-says-what-it-did-not-read.md) | A closed circuit says what it did not read: the ledger (schema 12) keeps how many blobs the circuit that last closed passed over held only in an archival tier, contract 1.66 carries it as `circuit_archived`, the CLI prints `sweep:partial@` for such a circuit, and the console says how many it did not read rather than every stored object | **Built** | `Application/DestinationSyncStore` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusSweepTokenTests`, `Web.Tests/ConsoleDestinationCardTests`, `Web.DomTests/ConsoleViewsDomTests`, `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0106--closed-is-not-whole) |
+| [0107](adr/0107-the-command-line-plans-a-restore-on-its-own.md) | The command line plans a restore on its own: `restore --plan` prints the plan for the run `restore` would make, through the service or in direct mode alike, restores nothing, and exits non-zero unless that run would restore every file and fit; a plan is still not exported to a file, and a restore is not resumed | **Built** | `Cli/CliApplication` · `Cli/OperationGateway` · `Cli/RestorePlanReport` · `Restore/RestorePlanFigures` · `Cli.Tests/RestorePlanCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/ClientModeTests`, `Repository.Tests/RestorePlanTests`, `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0107--a-plan-from-the-shell) |
 
 ---
 
@@ -3329,3 +3330,24 @@ object read back.
 
 What remains is recorded rather than done. A circuit that closed before
 schema 12 reads as passing over none until the next one closes.
+
+### 0107 — a plan from the shell
+
+The console's wizard showed a plan before a restore could be armed, and the
+command line had no way to ask for one. `restore` measured the room, refused
+a run that would not fit, and otherwise wrote first and reported after, so a
+missing or archived file was met in the run's failures.
+
+Now `restore --plan` prints the plan for the run `restore` would make and
+restores nothing. Through the service, `Cli/OperationGateway` asks for that
+run's own shape from a source the passphrase unlocked; in direct mode it makes
+the plan itself, as it runs the restore itself. `Restore/RestorePlanFigures`
+reckons what a plan's files write, its conflicts and what the target will not
+get back for the service's plan and this one, and `Cli/RestorePlanReport`
+renders either. The verb exits non-zero unless the run would restore every
+file and fit, so a script can plan before it restores.
+
+What remains is recorded rather than done. A plan prints but is not exported
+to a file another person or tool can run later, and a restore cut short is run
+again from the start, its existing-file policy settling what the first run
+wrote.
