@@ -906,6 +906,12 @@ public sealed record RestoreSpaceDescriptor(
 /// ADR-0110): the run's own, or, for a resumed quarantined run, the run it
 /// continued, whose folder it landed in. Null from a service before 1.68.
 /// </param>
+/// <param name="ResumedWithin">
+/// Files a resumed run wrote from the part an earlier run had assembled of
+/// each, reading again only what the part lacked (contract 1.76, ADR-0130),
+/// counted among <paramref name="Restored"/>. The receipt says where each was
+/// resumed. Zero from a service before 1.76.
+/// </param>
 public sealed record RestoreResult(
     long Restored,
     long Failed,
@@ -921,7 +927,8 @@ public sealed record RestoreResult(
     IReadOnlyList<string>? ReadAroundSample = null,
     IReadOnlyList<string>? NotApplied = null,
     long FoundInPlace = 0,
-    string? Run = null) : ServiceResult;
+    string? Run = null,
+    long ResumedWithin = 0) : ServiceResult;
 
 /// <summary>
 /// One restore run the service began and has not seen finish (contract 1.71,

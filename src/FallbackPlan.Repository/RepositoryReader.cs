@@ -35,6 +35,13 @@ public sealed record RestoreResult
 
     /// <summary>What failed, when restore refused.</summary>
     public string? FailureDetail { get; }
+
+    /// <summary>
+    /// How many of the file's bytes were taken up from the part an earlier
+    /// run had assembled, and not read again (ADR-0129, ADR-0130): where the
+    /// file was resumed. Zero for a file assembled whole.
+    /// </summary>
+    public long Resumed { get; init; }
 }
 
 /// <summary>

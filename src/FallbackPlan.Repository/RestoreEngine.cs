@@ -111,6 +111,7 @@ public sealed class RestoreEngine
             await using (spool.ConfigureAwait(false))
             {
                 var taken = takeUp ? await TakeUpAsync(spool, pieces, wholeFile, cancellationToken).ConfigureAwait(false) : 0;
+                var resumed = spool.Position;
 
                 // Every segment this file still needs, fetched in as few
                 // reads as the reader's bounds allow before the loop asks for
@@ -178,7 +179,7 @@ public sealed class RestoreEngine
                 }
 
                 keep = false;
-                return new RestoreResult(true, spool.Length, hash, null);
+                return new RestoreResult(true, spool.Length, hash, null) { Resumed = resumed };
             }
         }
         finally
