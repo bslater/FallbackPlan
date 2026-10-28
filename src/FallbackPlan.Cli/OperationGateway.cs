@@ -1644,6 +1644,18 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             lines.Add(OperationGateway.ResumedWithin(resumedWithin));
         }
 
+        // How to resume a run that did not finish, as one through the
+        // service says it (ADR-0110), and what its parts keep of the
+        // backup's plaintext and where, since nothing else here lists them
+        // (ADR-0137).
+        if (receipt.Outcome is not (RestoreOutcome.Complete or RestoreOutcome.Partial))
+        {
+            var held = DirectRestoreParts.Held(parts);
+            lines.Add(held > 0
+                ? $"to restore what is left, run it again with --resume; {RestoreSpace.Bytes((ulong)held)} of its files assembled so far are kept under '{parts}' until a run there finishes"
+                : "to restore what is left, run it again with --resume");
+        }
+
         // What the files came back without, which the receipt names file by
         // file (FR-RST-004).
         lines.AddRange(RestoreMetadata.Summarise(receipt.Items, target));
