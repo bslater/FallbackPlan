@@ -1,4 +1,6 @@
 using System.CommandLine;
+using System.Security.Cryptography;
+using System.Text;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
@@ -20,6 +22,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// anything is written. A resume is planned as well (FR-RST-003, ADR-0120),
 /// for the run it continues or by the run's name alone: measured where the
 /// run landed, saying how many files it already landed, and running nothing.
+/// A run keeps the parts of the files it was cut short in under its name
+/// (ADR-0129), and a resume takes up those that prove, reading none of them
+/// from the store again, under whatever name it runs. A run's parts go when
+/// it finishes or is let go, and those of a run no longer on record when the
+/// service starts.
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -234,6 +241,89 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AResume_TakesUpThePartsItsRunHadAssembled_ReadingNoneOfThemAgain()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler);
+        KeepPart(cut.Run!, "hello", "hello");
+        KeepPart(cut.Run!, "deeper", "deeper");
+
+        var resumed = await ResumeTamperedAsync(handler, cut.Run!);
+
+        Assert.AreEqual("complete", resumed.Outcome, string.Join("; ", resumed.FailedSample ?? []));
+        Assert.AreEqual("hello", await File.ReadAllTextAsync(Path.Combine(resumed.OutputDirectory, "notes.txt"), _timeout.Token));
+        Assert.AreEqual("deeper", await File.ReadAllTextAsync(Path.Combine(resumed.OutputDirectory, "nested", "deeper.txt"), _timeout.Token));
+        Assert.IsFalse(Directory.Exists(PartsOf(cut.Run!)), "a run that finishes keeps no parts");
+    }
+
+    [TestMethod]
+    public async Task AResume_TakesUpOnlyAPartThatProves()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler);
+        KeepPart(cut.Run!, "hello", "jello");
+        KeepPart(cut.Run!, "deeper", "deeper");
+
+        var resumed = await ResumeTamperedAsync(handler, cut.Run!);
+
+        Assert.AreEqual("failed", resumed.Outcome);
+        Assert.Contains("notes.txt", Assert.ContainsSingle(resumed.FailedSample!), StringComparison.Ordinal);
+        Assert.AreEqual("deeper", await File.ReadAllTextAsync(Path.Combine(resumed.OutputDirectory, "nested", "deeper.txt"), _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task AResumeInPlace_CarriesItsRunsPartsToTheNameItRunsUnder()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler, inPlace: true);
+        KeepPart(cut.Run!, "hello", "hello");
+        KeepPart(cut.Run!, "deeper", "deeper");
+
+        var resumed = await ResumeTamperedAsync(handler, cut.Run!);
+
+        Assert.AreEqual("complete", resumed.Outcome, string.Join("; ", resumed.FailedSample ?? []));
+        Assert.AreNotEqual(cut.Run, resumed.Run, "a run in place resumes under a name of its own");
+        Assert.AreEqual("hello", await File.ReadAllTextAsync(Path.Combine(Destination, "notes.txt"), _timeout.Token));
+        Assert.IsFalse(Directory.Exists(PartsOf(cut.Run!)));
+        Assert.IsFalse(Directory.Exists(PartsOf(resumed.Run!)));
+    }
+
+    [TestMethod]
+    public async Task ARunLetGo_TakesItsPartsWithIt()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var run = (await CutShortAsync(handler)).Run!;
+        KeepPart(run, "hello", "hello");
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new ForgetRestoreRunCommand(run), _timeout.Token));
+
+        Assert.IsFalse(Directory.Exists(PartsOf(run)));
+    }
+
+    [TestMethod]
+    public async Task ThePartsOfARunNoLongerOnRecord_GoWhenTheServiceStarts()
+    {
+        string kept;
+        await using (var runtime = await BackUpAndStartAsync())
+        {
+            kept = (await CutShortAsync(new ServiceCommandHandler(runtime, RemoteBindingState.Off))).Run!;
+        }
+
+        KeepPart(kept, "hello", "hello");
+        KeepPart(NoSuchRun, "hello", "hello");
+
+        await using var again = await StartAsync();
+
+        Assert.IsFalse(Directory.Exists(PartsOf(NoSuchRun)), "nothing names that run, so nothing would take its parts up");
+        Assert.IsTrue(Directory.Exists(PartsOf(kept)), "a run left unfinished keeps its parts for its resume");
+    }
+
+    [TestMethod]
     public async Task AResumeOfARunNotOnRecord_IsRefused_AndWritesNothing()
     {
         await using var runtime = await BackUpAndStartAsync();
@@ -400,12 +490,12 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
     private string Destination => Path.Combine(_harness.WorkPath, "restored");
 
     /// <summary>Runs a restore stopped once it is named, as a caller hanging up stops one.</summary>
-    private async Task<RestoreResult> CutShortAsync(ServiceCommandHandler handler)
+    private async Task<RestoreResult> CutShortAsync(ServiceCommandHandler handler, bool inPlace = false)
     {
         _cutShortAt = CancellationTokenSource.CreateLinkedTokenSource(_timeout.Token);
         try
         {
-            var cut = await RestoreAsync(handler, Destination, _cutShortAt.Token);
+            var cut = await RestoreAsync(handler, Destination, _cutShortAt.Token, inPlace: inPlace);
             Assert.AreEqual("cancelled", cut.Outcome);
             Assert.IsNotNull(cut.Run);
             return cut;
@@ -452,6 +542,33 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
                 "--passphrase-env", _harness.PassphraseVariable,
                 "--state", _harness.StateDirectory,
             ]);
+
+    private string PartsOf(string run) => Path.Combine(_harness.StateDirectory, "restore-parts", run);
+
+    /// <summary>Keeps a part of the snapshot's file holding <paramref name="original"/>, as a run cut short in it would.</summary>
+    private void KeepPart(string run, string original, string held)
+    {
+        Directory.CreateDirectory(PartsOf(run));
+        File.WriteAllText(
+            Path.Combine(PartsOf(run), $"{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(original)))}.part"), held);
+    }
+
+    /// <summary>Resumes a run while no content the store holds reads, so only what a part holds can land.</summary>
+    private async Task<RestoreResult> ResumeTamperedAsync(ServiceCommandHandler handler, string run)
+    {
+        var sound = Tamper(_harness.RepositoryPath);
+        try
+        {
+            return await ResumeAsync(handler, run);
+        }
+        finally
+        {
+            foreach (var (path, bytes) in sound)
+            {
+                await File.WriteAllBytesAsync(path, bytes, _timeout.Token);
+            }
+        }
+    }
 
     private async Task<RestoreResult> ResumeAsync(ServiceCommandHandler handler, string run)
     {

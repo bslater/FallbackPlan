@@ -48,16 +48,53 @@ public sealed class RestoreEngine
     /// written unless everything — every segment and the final hash —
     /// verifies (FR-RST-005).
     /// </summary>
-    public async ValueTask<RestoreResult> RestoreFileAsync(
+    public ValueTask<RestoreResult> RestoreFileAsync(
         FileVersionManifest manifest,
         Stream destination,
+        CancellationToken cancellationToken) =>
+        RestoreAsync(manifest, destination, part: null, takeUp: false, cancellationToken);
+
+    /// <summary>
+    /// Restores <paramref name="manifest"/> as the overload without a part
+    /// does, assembling it in <paramref name="part"/> (ADR-0129). The part is
+    /// kept unless the file is emitted or its assembly is refused, so a run
+    /// stopped in the file, or one a segment would not read for, leaves what
+    /// it had assembled.
+    /// </summary>
+    /// <param name="manifest">The file version.</param>
+    /// <param name="destination">Where the verified file is emitted.</param>
+    /// <param name="part">Where the file is assembled, and kept.</param>
+    /// <param name="takeUp">
+    /// Whether a part already there is this run's to take up: it is, piece by
+    /// piece, so far as each segment of it proves and each hole reads as
+    /// zeroes, and only the rest is read from the store. Otherwise a part
+    /// already there is assembled over.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the restore, leaving the part.</param>
+    public ValueTask<RestoreResult> RestoreFileAsync(
+        FileVersionManifest manifest,
+        Stream destination,
+        string part,
+        bool takeUp,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(part);
+        return RestoreAsync(manifest, destination, part, takeUp, cancellationToken);
+    }
+
+    private async ValueTask<RestoreResult> RestoreAsync(
+        FileVersionManifest manifest,
+        Stream destination,
+        string? part,
+        bool takeUp,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(manifest);
         ThrowHelper.ThrowIfNull(destination);
 
-        var spoolPath = Path.Combine(_spoolDirectory, $"fbp-restore-{Guid.NewGuid():n}.spool");
+        var spoolPath = part ?? Path.Combine(_spoolDirectory, $"fbp-restore-{Guid.NewGuid():n}.spool");
         var holes = manifest.SparseExtents.Count > 0;
+        var keep = part is not null;
 
         try
         {
@@ -69,18 +106,21 @@ public sealed class RestoreEngine
                 .OrderBy(piece => piece.Item1)
                 .ToList();
 
-            // Every segment this file needs, fetched in as few reads as the
-            // reader's bounds allow before the loop asks for the first of
-            // them (NFR-PERF-009). What the reader then holds is bounded by
-            // its own budget, not by this file.
-            _ = await _reader.PrefetchAsync(
-                [.. manifest.SegmentReferences.Select(reference => reference.ObjectId)],
-                cancellationToken).ConfigureAwait(false);
-
-            var spool = SparseFile.Create(spoolPath, FileMode.CreateNew, holes);
+            var spool = SparseFile.Create(
+                spoolPath, part is null ? FileMode.CreateNew : takeUp ? FileMode.OpenOrCreate : FileMode.Create, holes);
             await using (spool.ConfigureAwait(false))
             {
-                foreach (var (_, reference, extent) in pieces)
+                var taken = takeUp ? await TakeUpAsync(spool, pieces, wholeFile, cancellationToken).ConfigureAwait(false) : 0;
+
+                // Every segment this file still needs, fetched in as few
+                // reads as the reader's bounds allow before the loop asks for
+                // the first of them (NFR-PERF-009). What the reader then holds
+                // is bounded by its own budget, not by this file.
+                _ = await _reader.PrefetchAsync(
+                    [.. pieces.Skip(taken).Where(piece => piece.Item2 is not null).Select(piece => piece.Item2!.Value.ObjectId)],
+                    cancellationToken).ConfigureAwait(false);
+
+                foreach (var (_, reference, extent) in pieces.Skip(taken))
                 {
                     if (reference is { } segment)
                     {
@@ -122,6 +162,7 @@ public sealed class RestoreEngine
                 // the assembly check per-segment verification cannot make.
                 if (!hash.AsSpan().SequenceEqual(manifest.WholeFileHash.Span))
                 {
+                    keep = false;
                     return Refuse(
                         "Every segment verified individually, but the reassembly does not hash to whole_file_hash (specification 06 §4.2; FR-RST-002).");
                 }
@@ -136,18 +177,94 @@ public sealed class RestoreEngine
                     await spool.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
                 }
 
+                keep = false;
                 return new RestoreResult(true, spool.Length, hash, null);
             }
         }
         finally
         {
-            if (File.Exists(spoolPath))
+            if (!keep && File.Exists(spoolPath))
             {
                 File.Delete(spoolPath);
             }
         }
 
         static RestoreResult Refuse(string detail) => new(false, 0, null, detail);
+    }
+
+    /// <summary>
+    /// Takes up what a kept part already holds, in the file's order: each
+    /// segment so far as its bytes prove against its object identifier, each
+    /// hole so far as it reads as zeroes, and nothing past the first piece
+    /// that does not, or that the part holds only some of. What is taken is
+    /// hashed as the rest will be, and the part is cut back to its end.
+    /// </summary>
+    /// <returns>How many of <paramref name="pieces"/> were taken.</returns>
+    private async ValueTask<int> TakeUpAsync(
+        FileStream part,
+        List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)> pieces,
+        IncrementalHash wholeFile,
+        CancellationToken cancellationToken)
+    {
+        var held = part.Length;
+        var taken = 0;
+        var end = 0L;
+        foreach (var (offset, reference, extent) in pieces)
+        {
+            var length = reference is { } segment ? segment.LogicalLength : (long)extent!.Value.Length;
+            if ((long)offset + length > held)
+            {
+                break;
+            }
+
+            part.Position = (long)offset;
+            if (reference is { } proved)
+            {
+                var plaintext = new byte[proved.LogicalLength];
+                await part.ReadExactlyAsync(plaintext, cancellationToken).ConfigureAwait(false);
+                if (!_reader.Proves(proved, plaintext))
+                {
+                    break;
+                }
+
+                wholeFile.AppendData(plaintext);
+            }
+            else
+            {
+                if (!await ReadsAsZeroesAsync(part, length, cancellationToken).ConfigureAwait(false))
+                {
+                    break;
+                }
+
+                AppendZeroes(wholeFile, (ulong)length);
+            }
+
+            taken++;
+            end = (long)offset + length;
+        }
+
+        part.SetLength(end);
+        part.Position = end;
+        return taken;
+    }
+
+    /// <summary>Whether the next <paramref name="length"/> bytes of <paramref name="part"/> are all zero.</summary>
+    private static async ValueTask<bool> ReadsAsZeroesAsync(FileStream part, long length, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[Zeroes.Length];
+        while (length > 0)
+        {
+            var take = (int)Math.Min(length, buffer.Length);
+            await part.ReadExactlyAsync(buffer.AsMemory(0, take), cancellationToken).ConfigureAwait(false);
+            if (buffer.AsSpan(0, take).ContainsAnyExcept((byte)0))
+            {
+                return false;
+            }
+
+            length -= take;
+        }
+
+        return true;
     }
 
     /// <summary>

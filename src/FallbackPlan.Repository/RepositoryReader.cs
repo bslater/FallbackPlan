@@ -314,6 +314,16 @@ public sealed class RepositoryReader : IDisposable
     }
 
     /// <summary>
+    /// Whether <paramref name="plaintext"/> is the segment
+    /// <paramref name="reference"/> names: as long as it says, and deriving
+    /// its object identifier under this repository's content-ID key, the
+    /// proof every record read from a store is held to (04 §6 step 7).
+    /// </summary>
+    public bool Proves(SegmentReference reference, ReadOnlySpan<byte> plaintext) =>
+        plaintext.Length == reference.LogicalLength
+        && _objectIdDeriver.Derive(ObjectType.SegmentRecord, ContentHasher.Hash(plaintext)) == reference.ObjectId;
+
+    /// <summary>
     /// Reads and verifies one segment by object identifier — the full
     /// specification 04 §6 sequence including step 7. Given other copies
     /// (<see cref="UseOtherCopies"/>), a record this store will not serve is
