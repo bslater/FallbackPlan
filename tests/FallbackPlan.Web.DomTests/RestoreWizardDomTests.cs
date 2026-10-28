@@ -18,7 +18,9 @@ namespace FallbackPlan.Web.DomTests;
 /// FR-RST-003, which puts the plan before any byte is written. The plan is
 /// asked with the run's shape, so it shows the room the run needs where it
 /// will write, and a plan that will not fit arms the restore only when the
-/// person chooses to restore anyway (ADR-0083). Where the service says what
+/// person chooses to restore anyway (ADR-0083). Its working space is said as
+/// room to assemble the run's files one at a time, which a resume's parts
+/// may leave less than its largest file (ADR-0138). Where the service says what
 /// the run will read, the plan shows that too (ADR-0083 Amendment 2), and it
 /// names what every copy holds only in an archival tier (ADR-0103). The result says which
 /// captured metadata the files came back without (FR-RST-004), and a run that
@@ -271,6 +273,33 @@ public sealed class RestoreWizardDomTests
         await Expect(page.Locator(".plan-figures")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-read")).ToHaveCountAsync(0);
         await Expect(page.Locator("#rst-archived")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task Wizard_TheWorkingSpace_IsSaidAsRoomToAssembleFilesOneAtATime()
+    {
+        // A resume's working space needs the most that remains of any one
+        // file, which need not be its largest (ADR-0136, ADR-0138).
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(
+                1, 42, [], WriteBytes: 42,
+                Space:
+                [
+                    new RestoreSpaceDescriptor("/restore/out", 8_192, 5L * 1024 * 1024 * 1024),
+                    new RestoreSpaceDescriptor("/state/restore-parts", 4_096, 1024L * 1024 * 1024, Working: true),
+                ])
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        await Expect(page.Locator("#rst-space")).ToContainTextAsync(
+            "Needs 4.0 KiB of working space, to assemble files one at a time, in /state/restore-parts — 1.0 GiB free.");
+        await Expect(page.Locator("#rst-space")).Not.ToContainTextAsync("largest");
     }
 
     [TestMethod]

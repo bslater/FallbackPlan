@@ -171,7 +171,10 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
         var plan = await _cli.RunAsync("restore", snapshot, "--output", Destination, "--plan");
 
         Assert.AreNotEqual(0, plan.ExitCode, plan.All);
-        Assert.Contains(DirectRestoreParts.RootUnder(_cli.StatePath), plan.All, StringComparison.Ordinal);
+        Assert.Contains(
+            $"room: {DirectRestoreParts.RootUnder(_cli.StatePath)} needs 4096 byte(s) to assemble its files one at a time, 1000 free",
+            plan.All,
+            StringComparison.Ordinal);
     }
 
     [TestMethod]
