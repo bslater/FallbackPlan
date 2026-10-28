@@ -33,6 +33,8 @@ Each record left the same thing undone: every receipt kept stays until a person 
 - **`--forget` without `--run`** is refused: a receipt is let go one run at a time.
 - **`--forget` with `--connect`** is refused before the service is dialled. A paired service's receipts are let go on its machine, by naming its state directory.
 
+  > **2026-10 ([ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md)).** It asks the paired service now, at contract 1.79, and what is not a run's name is still refused before the service is dialled.
+
 ## Consequences
 
 - A person removes a receipt they no longer want by its run's name, as they read it.
@@ -41,6 +43,8 @@ Each record left the same thing undone: every receipt kept stays until a person 
 ## What this does not do
 
 - **Let receipts go through the service.** A paired service's receipts are let go on its machine, from its state directory. Neither the contract nor the console lets one go.
+
+  > **2026-10 ([ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md)).** Both do now: `forget_restore_receipt` at contract 1.79, asked by the command line and offered by the console's Maintenance view.
 - **Let receipts go by age, or all at once.** One run at a time, by its name.
 
 ## Alternatives considered
@@ -53,3 +57,4 @@ Each record left the same thing undone: every receipt kept stays until a person 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. restore-receipts with --run and --forget lets one run's kept receipt go from the state directory, and says so; every other receipt stays. A run that kept none, a name that is not a run's, --forget without a run, and --forget through a paired service are refused, and nothing is removed. No contract change. |
+| 2026-10 | Accepted | [ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md): a receipt the service keeps is let go through the service, at contract 1.79, from the command line and the console; --forget with --connect asks it. |
