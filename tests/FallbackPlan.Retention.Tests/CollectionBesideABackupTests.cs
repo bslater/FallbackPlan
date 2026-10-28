@@ -100,7 +100,11 @@ public sealed class CollectionBesideABackupTests : IDisposable
         }.Save(Path.Combine(StateDirectory, "config.json"));
     }
 
-    private static RetentionConfiguration Policy => new() { KeepDaily = 1, MinGenerations = 1 };
+    // The newest kept, and nothing by its date: a capture through the agent
+    // is stamped live as it completes, so a daily rule here would read the
+    // hour the suite runs at, and a run across midnight keeps the snapshot
+    // every case needs expired.
+    private static RetentionConfiguration Policy => new() { MinGenerations = 1 };
 
     [TestMethod]
     public async Task Backup_OfBytesOnlyATombstonedBlobHolds_StoresThemAgainRatherThanBuildingOnIt()
