@@ -881,7 +881,29 @@ public sealed partial class ServiceCommandHandler(
                 slices = resolved;
             }
 
-            var probed = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
+            // A plan of a resume is measured where the run it continues
+            // landed, as the resume will meet it (ADR-0120), and counts
+            // nothing among what it reads that the run already holds: a file
+            // it landed, or what a part it kept proves (ADR-0132). Its parts
+            // are under its own name until the resume carries them.
+            IReadOnlyList<RestoreSlice>? measured = slices is null
+                ? null
+                :
+                [
+                    .. slices.Select(slice => new RestoreSlice(
+                        slice.Plan,
+                        slice.OutputDirectory,
+                        ResumedIn(slice.OutputDirectory, command.Resume, mode, RestoreExecutionOptions.DefaultQuarantineDirectory),
+                        slice.LabelPrefix)),
+                ];
+            var held = command.Resume is { } resumed && measured is not null
+                ? new Restore.RestoreHeld
+                {
+                    Landed = RestoreSpace.LandedPaths(measured, mode),
+                    PartsDirectory = RestoreParts.Of(runtime, resumed),
+                }
+                : null;
+            var probed = await ProbePlanAsync(context, catalogue, plan, held, cancellationToken).ConfigureAwait(false);
 
             // What the files write and what they carry, from the manifests
             // the probe has already read.
@@ -891,18 +913,10 @@ public sealed partial class ServiceCommandHandler(
 
             IReadOnlyList<RestoreSpaceDescriptor>? space = null;
             long? landed = null;
-            if (slices is not null)
+            if (measured is not null)
             {
-                // A plan of a resume is measured where the run it continues
-                // landed, as the resume will meet it (ADR-0120).
                 var report = await RestoreSpace.MeasureAsync(
-                    [
-                        .. slices.Select(slice => new RestoreSlice(
-                            slice.Plan,
-                            slice.OutputDirectory,
-                            ResumedIn(slice.OutputDirectory, command.Resume, mode, RestoreExecutionOptions.DefaultQuarantineDirectory))),
-                    ],
-                    mode, policy, runtime.RestoreSpaceProbe, RestoreSpace.WrittenBytesFrom(probed.Facts),
+                    measured, mode, policy, runtime.RestoreSpaceProbe, RestoreSpace.WrittenBytesFrom(probed.Facts),
                     cancellationToken).ConfigureAwait(false);
                 landed = command.Resume is null ? null : report.Landed;
                 space =
@@ -1043,6 +1057,7 @@ public sealed partial class ServiceCommandHandler(
         RestoreContext context,
         Repository.Catalogue.Catalogue catalogue,
         RestorePlan plan,
+        Restore.RestoreHeld? held,
         CancellationToken cancellationToken)
     {
         // A plan answers for the run it plans: one that will read around what
@@ -1051,10 +1066,10 @@ public sealed partial class ServiceCommandHandler(
         await using var copies = context.OtherCopies(runtime);
         return copies is null
             ? await Restore.RestoreBlobSet.ResolveAsync(
-                catalogue, plan, context.Store, context.RepositoryId, context.Keys, cancellationToken)
+                catalogue, plan, context.Store, context.RepositoryId, context.Keys, held, cancellationToken)
                 .ConfigureAwait(false)
             : await Restore.RestoreBlobSet.ResolveAsync(
-                catalogue, plan, context.Store, copies.Sources, context.RepositoryId, context.Keys, cancellationToken)
+                catalogue, plan, context.Store, copies.Sources, context.RepositoryId, context.Keys, held, cancellationToken)
                 .ConfigureAwait(false);
     }
 

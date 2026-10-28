@@ -13,7 +13,9 @@ namespace FallbackPlan.Cli.Tests;
 /// the set no longer carries, is refused before anything is written. The
 /// plan and the run measure the room at every root together, and a plan kept
 /// for the original location runs as kept. A run of a set's snapshot names
-/// the set in its receipt, wherever it lands (FR-RST-004, ADR-0126).
+/// the set in its receipt, wherever it lands (FR-RST-004, ADR-0126). A plan
+/// of a resume there counts nothing of a file landed at its root among what
+/// it reads but the manifest (FR-RST-003, ADR-0132).
 /// </summary>
 [TestClass]
 public sealed class RestoreOriginalDirectTests : IDisposable
@@ -161,6 +163,27 @@ public sealed class RestoreOriginalDirectTests : IDisposable
     }
 
     [TestMethod]
+    public async Task APlanOfAResume_AtSeveralRoots_ReadsNothingOfWhatLandedAtEach()
+    {
+        // Both files are where they were captured, as a run cut short after
+        // landing them would leave them, until the clip is changed.
+        var docs = Path.Combine(_cli.WorkPath, "docs");
+        var media = Path.Combine(_cli.WorkPath, "media");
+        _cli.WriteFile("docs/one.txt", "first");
+        var clip = _cli.WriteFile("media/clip.txt", "clip");
+        var snapshot = await BackUpAsync((docs, "docs"), (media, "media"));
+        string[] asked = ["restore", snapshot, "docs/one.txt", "media/clip.txt", "--target", "original"];
+
+        var bothLanded = await _cli.RunAsync([.. asked, "--resume", "--plan"]);
+        await File.WriteAllTextAsync(clip, "a clip at another length");
+        var oneLanded = await _cli.RunAsync([.. asked, "--resume", "--plan"]);
+        var afresh = await _cli.RunAsync([.. asked, "--plan"]);
+
+        Assert.IsLessThan(Read(oneLanded), Read(bothLanded), "each root's file is found under its own label");
+        Assert.IsLessThan(Read(afresh), Read(oneLanded));
+    }
+
+    [TestMethod]
     public async Task TheRoomTheRunNeeds_IsMeasuredAtEveryRoot()
     {
         // The second root's file alone outgrows the room this flow's disk
@@ -242,6 +265,15 @@ public sealed class RestoreOriginalDirectTests : IDisposable
         var backup = await _cli.RunAsync("backup", "--set", "docs");
         Assert.AreEqual(0, backup.ExitCode, backup.All);
         return await LatestSnapshotAsync();
+    }
+
+    /// <summary>What a printed plan says its run will read.</summary>
+    private static long Read(CliHarness.Invocation plan)
+    {
+        Assert.AreEqual(0, plan.ExitCode, plan.All);
+        var read = System.Text.RegularExpressions.Regex.Match(plan.All, @", (\d+) byte\(s\) read");
+        Assert.IsTrue(read.Success, plan.All);
+        return long.Parse(read.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private async Task<string> LatestSnapshotAsync()

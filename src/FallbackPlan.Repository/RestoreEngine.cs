@@ -100,11 +100,7 @@ public sealed class RestoreEngine
         {
             using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-            var pieces = manifest.SegmentReferences
-                .Select(reference => (Offset: (ulong)reference.LogicalOffset, Reference: (SegmentReference?)reference, Extent: default(SparseExtent?)))
-                .Concat(manifest.SparseExtents.Select(extent => (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
-                .OrderBy(piece => piece.Item1)
-                .ToList();
+            var pieces = RestorePart.PiecesOf(manifest);
 
             var spool = SparseFile.Create(
                 spoolPath, part is null ? FileMode.CreateNew : takeUp ? FileMode.OpenOrCreate : FileMode.Create, holes);
@@ -194,11 +190,9 @@ public sealed class RestoreEngine
     }
 
     /// <summary>
-    /// Takes up what a kept part already holds, in the file's order: each
-    /// segment so far as its bytes prove against its object identifier, each
-    /// hole so far as it reads as zeroes, and nothing past the first piece
-    /// that does not, or that the part holds only some of. What is taken is
-    /// hashed as the rest will be, and the part is cut back to its end.
+    /// Takes up what a kept part already holds, in the file's order and by
+    /// <see cref="RestorePart"/>'s rule, hashing what is taken as the rest
+    /// will be, and cuts the part back to the end of it.
     /// </summary>
     /// <returns>How many of <paramref name="pieces"/> were taken.</returns>
     private async ValueTask<int> TakeUpAsync(
@@ -207,65 +201,26 @@ public sealed class RestoreEngine
         IncrementalHash wholeFile,
         CancellationToken cancellationToken)
     {
-        var held = part.Length;
-        var taken = 0;
-        var end = 0L;
-        foreach (var (offset, reference, extent) in pieces)
-        {
-            var length = reference is { } segment ? segment.LogicalLength : (long)extent!.Value.Length;
-            if ((long)offset + length > held)
+        var (taken, end) = await RestorePart.WalkAsync(
+            part,
+            pieces,
+            (reference, plaintext) => _reader.Proves(reference, plaintext),
+            (plaintext, length) =>
             {
-                break;
-            }
-
-            part.Position = (long)offset;
-            if (reference is { } proved)
-            {
-                var plaintext = new byte[proved.LogicalLength];
-                await part.ReadExactlyAsync(plaintext, cancellationToken).ConfigureAwait(false);
-                if (!_reader.Proves(proved, plaintext))
+                if (plaintext is null)
                 {
-                    break;
+                    AppendZeroes(wholeFile, (ulong)length);
                 }
-
-                wholeFile.AppendData(plaintext);
-            }
-            else
-            {
-                if (!await ReadsAsZeroesAsync(part, length, cancellationToken).ConfigureAwait(false))
+                else
                 {
-                    break;
+                    wholeFile.AppendData(plaintext);
                 }
-
-                AppendZeroes(wholeFile, (ulong)length);
-            }
-
-            taken++;
-            end = (long)offset + length;
-        }
+            },
+            cancellationToken).ConfigureAwait(false);
 
         part.SetLength(end);
         part.Position = end;
         return taken;
-    }
-
-    /// <summary>Whether the next <paramref name="length"/> bytes of <paramref name="part"/> are all zero.</summary>
-    private static async ValueTask<bool> ReadsAsZeroesAsync(FileStream part, long length, CancellationToken cancellationToken)
-    {
-        var buffer = new byte[Zeroes.Length];
-        while (length > 0)
-        {
-            var take = (int)Math.Min(length, buffer.Length);
-            await part.ReadExactlyAsync(buffer.AsMemory(0, take), cancellationToken).ConfigureAwait(false);
-            if (buffer.AsSpan(0, take).ContainsAnyExcept((byte)0))
-            {
-                return false;
-            }
-
-            length -= take;
-        }
-
-        return true;
     }
 
     /// <summary>

@@ -23,7 +23,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// as zeroes, and reads from the store only what the part lacks. A run that
 /// is not a resume takes up no part. The receipt, at schema 11, says where
 /// each file was resumed: how much of it was taken up and not read again
-/// (FR-RST-004, ADR-0130).
+/// (FR-RST-004, ADR-0130). A plan of a resume proves a part as the resume
+/// would, writing nothing, and counts nothing it proves among what the run
+/// reads, nor anything of a file the run landed but its manifest (FR-RST-003,
+/// ADR-0132).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileTests : ArchiveTestHarness
@@ -84,6 +87,95 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
 
         Assert.AreEqual("degraded", Item(resumed.Receipt).Outcome);
         Assert.AreEqual((ulong)(2 * Segment), Item(resumed.Receipt).ResumedAt);
+    }
+
+    [TestMethod]
+    public async Task APlanOfAResume_ReadsNothingOfWhatAPartProves_NorOfAFileItsRunLanded()
+    {
+        using var published = await PublishAsync("plans", 0xEA);
+        var parts = Path.Combine(SpoolDirectory, "plans-parts");
+        Task<RestoreBlobSetResult> ProbeAsync(RestoreHeld? held) =>
+            RestoreBlobSet.ResolveAsync(
+                published.Catalogue, published.Plan, published.Store, Repo, published.Keys, held, CancellationToken.None)
+            .AsTask();
+        async Task<ulong> ReadsAsync(RestoreHeld? held) => (await ProbeAsync(held)).ReadBytes;
+
+        var afresh = await ReadsAsync(null);
+        Assert.AreEqual(afresh, await ReadsAsync(new RestoreHeld { PartsDirectory = parts }), "no part holds anything");
+
+        WritePart(parts, Big.AsSpan(0, (24 * Segment) + 1_000));
+        var half = await ReadsAsync(new RestoreHeld { PartsDirectory = parts });
+        var differs = Big.ToArray();
+        differs[(10 * Segment) + 5] ^= 0xFF;
+        WritePart(parts, differs);
+        var ten = await ReadsAsync(new RestoreHeld { PartsDirectory = parts });
+        WritePart(parts, Big);
+        var whole = await ReadsAsync(new RestoreHeld { PartsDirectory = parts });
+        var landed = await ReadsAsync(new RestoreHeld { Landed = new HashSet<string>(StringComparer.Ordinal) { BigPath } });
+
+        Assert.IsLessThan(afresh, ten, "what the part proves is not read again");
+        Assert.IsLessThan(ten, half, "and only as far as it proves");
+        Assert.IsLessThan(half, whole);
+
+        // Each segment is a record of at least its own length, the content
+        // being random, so what is not read is at least that many bytes.
+        Assert.IsGreaterThanOrEqualTo(10UL * Segment, afresh - ten);
+        Assert.IsGreaterThanOrEqualTo(14UL * Segment, ten - half);
+        Assert.IsGreaterThanOrEqualTo(24UL * Segment, half - whole);
+        Assert.AreEqual(landed, whole, "a part that proves all of a file leaves only its manifest to read, as a file landed does");
+        Assert.DoesNotContain(
+            key => key.Value.StartsWith("blobs/data/", StringComparison.Ordinal),
+            (await ProbeAsync(new RestoreHeld { PartsDirectory = parts })).Blobs,
+            "nor is a blob opened only for what is held");
+
+        // A plan leaves a part as it found it.
+        SequenceAssert.AreEqual(Big, File.ReadAllBytes(PartOf(parts)));
+    }
+
+    [TestMethod]
+    public async Task APlanOfAResume_ReadsNothingOfTheStreamsOfAFileItsRunLanded()
+    {
+        // A file the run writes is counted with the streams it carries, as
+        // the plan counts any file it writes; a file landed reads only its
+        // manifest.
+        using var published = await PublishAsync("plan-streams", 0xEB, withStream: true);
+        var parts = Path.Combine(SpoolDirectory, "plan-streams-parts");
+        WritePart(parts, Big);
+        async Task<ulong> ReadsAsync(RestoreHeld held) =>
+            (await RestoreBlobSet.ResolveAsync(
+                published.Catalogue, published.Plan, published.Store, Repo, published.Keys, held, CancellationToken.None))
+            .ReadBytes;
+
+        var whole = await ReadsAsync(new RestoreHeld { PartsDirectory = parts });
+        var landed = await ReadsAsync(new RestoreHeld { Landed = new HashSet<string>(StringComparer.Ordinal) { BigPath } });
+
+        Assert.IsLessThan(whole, landed);
+    }
+
+    [TestMethod]
+    public async Task APlanOfAResume_CountsAHoleItsPartHolds_AsNoSegment()
+    {
+        var holed = Big.ToArray();
+        Array.Clear(holed, Segment, Segment);
+        using var published = await PublishAsync("plan-holes", 0xEC, content: holed, hole: new SparseExtent(Segment, Segment));
+        var parts = Path.Combine(SpoolDirectory, "plan-holes-parts");
+        var part = Path.Combine(parts, $"{Convert.ToHexStringLower(SHA256.HashData(holed))}.part");
+        Directory.CreateDirectory(parts);
+        async Task<ulong> ReadsAsync(int held)
+        {
+            File.WriteAllBytes(part, holed.AsSpan(0, held).ToArray());
+            return (await RestoreBlobSet.ResolveAsync(
+                    published.Catalogue, published.Plan, published.Store, Repo, published.Keys,
+                    new RestoreHeld { PartsDirectory = parts }, CancellationToken.None))
+                .ReadBytes;
+        }
+
+        var first = await ReadsAsync(Segment);
+        var andTheHole = await ReadsAsync(2 * Segment);
+        var andTheNext = await ReadsAsync(3 * Segment);
+
+        Assert.AreEqual(first, andTheHole, "a hole the part holds leaves no segment unread");
+        Assert.IsLessThan(andTheHole, andTheNext, "the segment after it does");
     }
 
     [TestMethod]
@@ -293,14 +385,20 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
         return (receipt, Path.Combine(root, "data", "big.bin"), reader.RecordsRead, counting.ReadKeys.Count(IsContent));
     }
 
-    private async Task<Published> PublishAsync(string name, byte seed, bool withStream = false)
+    private async Task<Published> PublishAsync(
+        string name, byte seed, bool withStream = false, byte[]? content = null, SparseExtent? hole = null)
     {
         var source = new FakeFileSystemSource();
-        var big = source.AddFile(BigPath, Big, fileId: 9_101);
+        var big = source.AddFile(BigPath, content ?? Big, fileId: 9_101);
         big.Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000 };
         if (withStream)
         {
             big.AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]\nZoneId=3"u8.ToArray();
+        }
+
+        if (hole is { } extent)
+        {
+            source.AddNode(big with { SparseExtents = [extent] });
         }
 
         var store = CreateStore();
