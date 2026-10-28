@@ -160,6 +160,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0133](adr/0133-a-run-left-unfinished-says-what-its-parts-hold.md) | A run left unfinished says what its parts hold: each run the service lists gains `held`, the bytes the parts it kept hold under the state directory, summed from its folder as the list is asked for (contract 1.77); `restore-resume` and the console's list say it | **Built** | `Agent/RestoreParts` · `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/OperationGateway` · `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreResumeVerbTests`, `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0133--a-run-left-unfinished-says-what-its-parts-hold) |
 | [0134](adr/0134-the-kept-receipts-say-which-files-were-resumed-within.md) | The kept receipts say which files were resumed within: each receipt the listing names counts its run's files resumed within among those restored, beside those found in place, from a state directory, through the service as `resumed_within` (contract 1.78), and in the console | **Built** | `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/RestoreReceiptReport` · `Cli.Tests/RestoreReceiptsVerbTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0134--the-kept-receipts-say-which-files-were-resumed-within) |
 | [0135](adr/0135-direct-mode-resumes-within-a-file.md) | Direct mode resumes within a file: a run keeps its parts under the state directory by where it lands, apart from the service's, a resume there takes them up and says how many files it resumed within, and a run there that finishes lets them go; its plan of a resume reads nothing they prove, and its working space is measured where they are kept | **Built** | `Cli/DirectRestoreParts` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0135--direct-mode-resumes-within-a-file) |
+| [0136](adr/0136-a-resumes-working-space-credits-what-its-parts-hold.md) | A resume's working space credits what its parts hold: it needs only what they do not yet hold of each file, proved as the resume takes them up, through the service and in direct mode, for a plan and a run; the folder a file lands in still needs all of it | **Built** | `Restore/RestoreSpace` · `Restore/RestoreBlobSet` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0136--a-resumes-working-space-credits-what-its-parts-hold) |
 
 ---
 
@@ -3783,6 +3784,7 @@ temporary folder, as before. No contract change.
 What remains is recorded rather than done. A resume's working space counts
 its largest file whole, though its part may hold some of it already, and the
 parts of runs left unfinished are counted only as room no longer free.
+ADR-0136 credits what a part proves.
 
 ### 0132 — a resume's plan counts only what it still reads
 
@@ -3798,7 +3800,8 @@ names, as before. No contract change.
 
 What remains is recorded rather than done. The plan reads nothing of the
 destination but each landed file's length, and the room a resume needs
-still counts its largest file whole.
+still counts its largest file whole. ADR-0136 credits what a part proves
+there too.
 
 ### 0133 — a run left unfinished says what its parts hold
 
@@ -3842,3 +3845,20 @@ tests beside the free-space one. No contract change.
 What remains is recorded rather than done. Nothing sweeps the parts of a
 destination no run there finishes, two runs at once to one destination
 share its parts, and direct mode lists nothing to say what one holds.
+
+### 0136 — a resume's working space credits what its parts hold
+
+The measure of room gave the working space room for the largest file
+whole, though a resume's part may already hold most of it there. Each file
+is now measured by what it writes and what its run holds of that, and the
+working space needs the most that remains of any one file. A plan of a
+resume takes what is held from the proof its probe already makes; a run,
+once a measure by logical length finds it short, reads its manifests and
+proves each part as the resume would, writing nothing. The service
+measures with the parts of the run a resume continues, and direct mode
+with those its destination keeps. The folder a file lands in still needs
+all of it. No contract change.
+
+What remains is recorded rather than done. A measure by logical length
+credits nothing, the parts of runs left unfinished are still counted only
+as room no longer free, and the need still says it is for the largest file.
