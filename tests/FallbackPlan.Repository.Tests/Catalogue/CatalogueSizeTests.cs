@@ -49,22 +49,22 @@ public sealed class CatalogueSizeTests
     {
         var perVersion = CatalogueSeeding.MeasureBytes(Versions) / (double)Versions;
 
-        // Measured 2 036 B/version here, and 2 001 at 20 000 versions,
-        // since a location names its blob and writer by number (ADR-0144);
-        // 2 520 and 2 477 before. This is the headline figure rather than the
+        // Measured 1 640 B/version here, and 1 607 at 20 000 versions,
+        // since the catalogue keeps no map from content to object
+        // (ADR-0145); 2 036 and 2 001 before it, and 2 520 and 2 477 before
+        // a location named its blob and writer by number (ADR-0144). This is the headline figure rather than the
         // regression guard: a whole added column moves it by only about 4%,
         // which is inside any band a different page size or fill factor
         // could also move it by. What guards the schema is the per-plane
         // case below, where the same change shows up five times as large.
-        Assert.IsGreaterThan(1_790, perVersion, $"{perVersion:F0} B/version");
-        Assert.IsLessThan(2_300, perVersion, $"{perVersion:F0} B/version");
+        Assert.IsGreaterThan(1_440, perVersion, $"{perVersion:F0} B/version");
+        Assert.IsLessThan(1_840, perVersion, $"{perVersion:F0} B/version");
     }
 
     [TestMethod]
     [DataRow(CataloguePlanes.FileVersions, 330, 420, DisplayName = "file_versions and its two indexes")]
     [DataRow(CataloguePlanes.TreeEntries, 565, 720, DisplayName = "tree_entries and its two indexes")]
     [DataRow(CataloguePlanes.Locations, 605, 775, DisplayName = "object_locations and ix_locations_blob")]
-    [DataRow(CataloguePlanes.Dedup, 376, 478, DisplayName = "segment_dedup")]
     public void EachPlaneCostsWhatItsRowsAndIndexesCost(CataloguePlanes plane, int floor, int ceiling)
     {
         // Where the bytes are, which is what makes the headline actionable

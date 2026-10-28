@@ -548,18 +548,6 @@ public sealed class CatalogueTests : IDisposable
         Assert.AreEqual(1L, synchronous);
     }
 
-    [TestMethod]
-    public void LookupByContent_ARecordedSegment_RoundTripsByContentIdentifier()
-    {
-        using var catalogue = Open();
-
-        var contentId = ContentId.FromBytes(System.Security.Cryptography.SHA256.HashData("segment"u8));
-        catalogue.RecordSegmentDedup(contentId, Object(7));
-
-        Assert.AreEqual(Object(7), catalogue.LookupByContent(contentId));
-        Assert.IsNull(catalogue.LookupByContent(ContentId.FromBytes(System.Security.Cryptography.SHA256.HashData("other"u8))));
-    }
-
     /// <inheritdoc />
     public void Dispose()
     {

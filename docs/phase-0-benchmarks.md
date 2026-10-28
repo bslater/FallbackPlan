@@ -132,6 +132,13 @@ lookup).
 | `ResolveLocation` | 100 000 | 62.2 µs | 3.6 µs | 4.36 KB |
 | `DedupLookup` | 100 000 | 13.9 µs | 1.0 µs | 1.10 KB |
 
+> **2026-10 ([ADR-0145](adr/0145-the-catalogue-keeps-no-map-from-content-to-object.md)).** `DedupLookup` measured `LookupByContent`,
+> a lookup of a map nothing in the product read. It now measures the reuse
+> candidate's lookup by object identifier, the one a backup makes for each
+> segment: 37.7 µs on the same seeding, default job. `ResolveLocation`, which
+> this change does not touch, measured 85.5 µs in the same run against 61.4
+> in ADR-0144's, which is how far one machine varies between runs.
+
 Both sit two orders of magnitude under the scale-M p99 targets — but these
 are *means at 1/500 scale*, not p99s at scale M. SQLite B-tree depth grows
 logarithmically, so the margin is encouraging rather than conclusive: a
@@ -206,6 +213,12 @@ it turns out to be the main term.
 > `ResolveLocation` measured 61 µs against 65 before on the same machine,
 > since such a lookup ranks the object's locations itself rather than
 > sorting by the writer's id in the query.
+
+> **Re-measured 2026-10 ([ADR-0145](adr/0145-the-catalogue-keeps-no-map-from-content-to-object.md)).** The catalogue keeps no
+> `segment_dedup`, which publication wrote and nothing read. At 20 000
+> versions the three planes left cost 345, 613 and 661 B/version, **1 607
+> in all**, against 2 001 with it; the floor is unchanged at 1 052. The
+> budget is missed by 4.0×.
 
 Every segment reference here is a **distinct** object, which is the no-dedup
 upper bound on `object_locations`; a corpus with cross-version dedup holds

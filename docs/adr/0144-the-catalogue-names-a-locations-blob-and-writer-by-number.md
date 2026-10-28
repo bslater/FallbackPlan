@@ -59,3 +59,4 @@ The schema version moves to 12. A catalogue of an older schema is replaced and r
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Catalogue schema 12 names a location's blob and writer by number through location_blobs and location_writers, and reads them back through the located view. At scale M's shape the locations plane falls from 1 137 B/version to 662 and the catalogue from 2 477 to 2 001. NFR-PERF-011 is still not met. |
+| 2026-10 | Accepted | [ADR-0145](0145-the-catalogue-keeps-no-map-from-content-to-object.md): the catalogue keeps no map from content to object, which nothing read, and at scale M's shape costs 1 607 B/version, not 2 001. |

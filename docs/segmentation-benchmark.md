@@ -21,7 +21,8 @@ series — eleven versions each, fixed seeds, numbers reproduce exactly — and
 segments every version under three profiles, counting a byte as *stored*
 only if no prior segment of the series already carries its content id
 (SHA-256 of plaintext — the same identity the engine's `segment_dedup`
-table uses). Compression and encryption sit downstream of that identity and
+table used, until [ADR-0145](adr/0145-the-catalogue-keeps-no-map-from-content-to-object.md) let that table go; reuse keys a
+segment's object identifier from it). Compression and encryption sit downstream of that identity and
 are excluded; the run isolates segmentation.
 
 | Scenario | Models | Shape |
