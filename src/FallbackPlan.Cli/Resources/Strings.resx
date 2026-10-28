@@ -220,6 +220,15 @@
   <data name="CliApplication_OriginalTakesNoOutput" xml:space="preserve">
     <value>--target original lands each file where it was captured, so it takes no --output: use one or the other.</value>
   </data>
+  <data name="DirectRestorePartsReport_NotAPartsName" xml:space="preserve">
+    <value>'{0}' is not the name of a destination's parts: restore-parts names each by the thirty-two lowercase hex digits of its folder.</value>
+  </data>
+  <data name="DirectRestorePartsReport_NoPartsKept" xml:space="preserve">
+    <value>No restore in direct mode keeps parts named '{0}' under '{1}'. restore-parts with no --forget lists those kept.</value>
+  </data>
+  <data name="DirectRestorePartsReport_PartsNotLetGo" xml:space="preserve">
+    <value>The parts named '{0}' were not all let go: {1}</value>
+  </data>
   <data name="RestoreReceiptReport_NotARunsName" xml:space="preserve">
     <value>--run takes a run's name: the sixteen lowercase hex digits its receipt is kept under. restore-receipts with no run lists those kept.</value>
   </data>

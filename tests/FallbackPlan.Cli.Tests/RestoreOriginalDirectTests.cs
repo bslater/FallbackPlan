@@ -15,7 +15,9 @@ namespace FallbackPlan.Cli.Tests;
 /// for the original location runs as kept. A run of a set's snapshot names
 /// the set in its receipt, wherever it lands (FR-RST-004, ADR-0126). A plan
 /// of a resume there counts nothing of a file landed at its root among what
-/// it reads but the manifest (FR-RST-003, ADR-0132).
+/// it reads but the manifest (FR-RST-003, ADR-0132). A run there that does
+/// not finish is listed by <c>restore-parts</c> as the set's, landing where
+/// its files came from (FR-RST-008, ADR-0142).
 /// </summary>
 [TestClass]
 public sealed class RestoreOriginalDirectTests : IDisposable
@@ -256,6 +258,35 @@ public sealed class RestoreOriginalDirectTests : IDisposable
                 },
             ],
         }.Save(Path.Combine(_cli.StatePath, "config.json"));
+    }
+
+    [TestMethod]
+    public async Task ARunThereThatDoesNotFinish_IsListedAsTheSets_LandingWhereItsFilesCameFrom()
+    {
+        var root = Path.Combine(_cli.WorkPath, "docs");
+        var one = _cli.WriteFile("docs/one.txt", "first");
+        var snapshot = await BackUpAsync((root, "docs"));
+        File.Delete(one);
+        foreach (var blob in Directory.GetFiles(Path.Combine(_cli.RepositoryPath, "blobs", "data"), "*", SearchOption.AllDirectories))
+        {
+            // Nothing past the envelope reads, so the run cannot finish.
+            var bytes = await File.ReadAllBytesAsync(blob);
+            for (var i = 200; i < bytes.Length; i++)
+            {
+                bytes[i] ^= 0xFF;
+            }
+
+            await File.WriteAllBytesAsync(blob, bytes);
+        }
+
+        var failed = await _cli.RunAsync("restore", snapshot, "--target", "original");
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        Assert.AreNotEqual(0, failed.ExitCode, failed.All);
+        Assert.Contains(
+            $"{Path.GetFileName(DirectRestoreParts.Of(_cli.StatePath, root))}  snapshot {snapshot} of set 'docs' to where its files came from, begun ",
+            listed.Output,
+            StringComparison.Ordinal);
     }
 
     private async Task<string> BackUpAsync(params (string Path, string Label)[] roots)

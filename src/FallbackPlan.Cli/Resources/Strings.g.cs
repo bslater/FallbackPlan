@@ -484,6 +484,39 @@ internal static class Strings
     internal static string CliApplication_OriginalTakesNoOutput => Get(nameof(CliApplication_OriginalTakesNoOutput));
 
     /// <summary>
+    /// '{0}' is not the name of a destination's parts: restore-parts names each by the thirty-two lowercase hex digits of its folder.
+    /// </summary>
+    private static string DirectRestorePartsReport_NotAPartsName => Get(nameof(DirectRestorePartsReport_NotAPartsName));
+
+    /// <summary>
+    /// '{0}' is not the name of a destination's parts: restore-parts names each by the thirty-two lowercase hex digits of its folder.
+    /// </summary>
+    internal static string FormatDirectRestorePartsReport_NotAPartsName(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, DirectRestorePartsReport_NotAPartsName, arg0);
+
+    /// <summary>
+    /// No restore in direct mode keeps parts named '{0}' under '{1}'. restore-parts with no --forget lists those kept.
+    /// </summary>
+    private static string DirectRestorePartsReport_NoPartsKept => Get(nameof(DirectRestorePartsReport_NoPartsKept));
+
+    /// <summary>
+    /// No restore in direct mode keeps parts named '{0}' under '{1}'. restore-parts with no --forget lists those kept.
+    /// </summary>
+    internal static string FormatDirectRestorePartsReport_NoPartsKept(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, DirectRestorePartsReport_NoPartsKept, arg0, arg1);
+
+    /// <summary>
+    /// The parts named '{0}' were not all let go: {1}
+    /// </summary>
+    private static string DirectRestorePartsReport_PartsNotLetGo => Get(nameof(DirectRestorePartsReport_PartsNotLetGo));
+
+    /// <summary>
+    /// The parts named '{0}' were not all let go: {1}
+    /// </summary>
+    internal static string FormatDirectRestorePartsReport_PartsNotLetGo(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, DirectRestorePartsReport_PartsNotLetGo, arg0, arg1);
+
+    /// <summary>
     /// --run takes a run's name: the sixteen lowercase hex digits its receipt is kept under. restore-receipts with no run lists those kept.
     /// </summary>
     internal static string RestoreReceiptReport_NotARunsName => Get(nameof(RestoreReceiptReport_NotARunsName));

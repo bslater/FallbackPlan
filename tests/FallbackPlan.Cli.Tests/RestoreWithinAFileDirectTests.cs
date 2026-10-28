@@ -17,7 +17,9 @@ namespace FallbackPlan.Cli.Tests;
 /// kept (ADR-0131), less what they prove, for a resume's plan and run alike
 /// (ADR-0136). A run that does not finish says how to resume it, as one
 /// through the service does, and how much of the backup its parts keep under
-/// the state directory and where (ADR-0137).
+/// the state directory and where (ADR-0137). <c>restore-parts</c> lists each
+/// destination a run left unfinished, by the name of its folder, with what it
+/// restores and where, and lets one go by that name alone (ADR-0142).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileDirectTests : IDisposable
@@ -29,6 +31,8 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
     private string Destination => Path.Combine(_cli.WorkPath, "restored");
 
     private string Parts => DirectRestoreParts.Of(_cli.StatePath, Destination);
+
+    private string Name => Path.GetFileName(Parts);
 
     [TestMethod]
     public async Task AResume_TakesUpThePartsItsDestinationKeeps_ReadingNoneOfThemAgain()
@@ -198,6 +202,164 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
         Assert.Contains("would not fit", refused.All, StringComparison.Ordinal);
         Assert.AreEqual(0, resumed.ExitCode, resumed.All);
         Assert.Contains("2 file(s) were resumed from what the run had assembled of them", resumed.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARunThatDoesNotFinish_IsListed_WithWhatItRestoresAndWhereItsPartsHold()
+    {
+        var snapshot = await BackUpAsync();
+        KeepPart("assembled before");
+        var failed = await WithContentUnreadableAsync(
+            () => _cli.RunAsync("restore", snapshot, "--output", Destination, "--existing", "rename"));
+        Assert.AreNotEqual(0, failed.ExitCode, failed.All);
+
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        Assert.AreEqual(0, listed.ExitCode, listed.All);
+        Assert.Contains(
+            $"{Name}  snapshot {snapshot} to {Destination}, rename where a file is in the way, begun ",
+            listed.Output,
+            StringComparison.Ordinal);
+        Assert.Contains(" UTC, holding 16 bytes it had assembled", listed.Output, StringComparison.Ordinal);
+        Assert.Contains(
+            $"1 destination a restore in direct mode left unfinished keeps parts under '{DirectRestoreParts.RootUnder(_cli.StatePath)}'.",
+            listed.Output,
+            StringComparison.Ordinal);
+        Assert.Contains("restore-parts --state", listed.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("one.txt", listed.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("two.txt", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARunThatFinishes_IsListedNoMore()
+    {
+        var snapshot = await BackUpAsync();
+        var failed = await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination));
+        Assert.AreNotEqual(0, failed.ExitCode, failed.All);
+        Assert.Contains(Name, (await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath)).Output, StringComparison.Ordinal);
+
+        var resumed = await _cli.RunAsync("restore", snapshot, "--output", Destination, "--resume");
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        Assert.AreEqual(0, resumed.ExitCode, resumed.All);
+        Assert.AreEqual(0, listed.ExitCode, listed.All);
+        Assert.DoesNotContain(Name, listed.Output, StringComparison.Ordinal);
+        Assert.Contains(
+            $"No restore in direct mode left parts under '{DirectRestoreParts.RootUnder(_cli.StatePath)}'.",
+            listed.Output,
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task EachDestinationLeftUnfinished_IsListed_NewestFirst()
+    {
+        var snapshot = await BackUpAsync();
+        var elsewhere = Path.Combine(_cli.WorkPath, "elsewhere");
+        var first = await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination));
+        await Task.Delay(TimeSpan.FromMilliseconds(5));
+        var second = await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", elsewhere));
+        Assert.AreNotEqual(0, first.ExitCode, first.All);
+        Assert.AreNotEqual(0, second.ExitCode, second.All);
+
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        var newer = listed.Output.IndexOf($"to {elsewhere},", StringComparison.Ordinal);
+        var older = listed.Output.IndexOf($"to {Destination},", StringComparison.Ordinal);
+        Assert.IsGreaterThanOrEqualTo(0, newer, listed.All);
+        Assert.IsGreaterThan(newer, older, "the newest is listed first");
+        Assert.Contains("2 destinations a restore in direct mode left unfinished keep parts under", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task PartsKeptWithNoAccountOfTheirRun_AreListedAsSuch()
+    {
+        KeepPart("assembled before");
+
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        Assert.AreEqual(0, listed.ExitCode, listed.All);
+        Assert.Contains($"{Name}  holding 16 bytes it had assembled; what its run restored was not kept", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ADestinationsParts_AreLetGoByItsNameAlone_AndEveryOthersStay()
+    {
+        var snapshot = await BackUpAsync();
+        var elsewhere = Path.Combine(_cli.WorkPath, "elsewhere");
+        KeepPart("assembled before");
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination))).ExitCode);
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", elsewhere))).ExitCode);
+
+        var letGo = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget", Name);
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.All);
+        Assert.Contains(
+            $"let go the parts kept under '{Parts}', 16 bytes of the files a restore in direct mode had assembled",
+            letGo.Output,
+            StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(Parts), "its folder is gone");
+        Assert.IsTrue(Directory.Exists(DirectRestoreParts.Of(_cli.StatePath, elsewhere)), "every other destination's stays");
+        Assert.DoesNotContain(Name, listed.Output, StringComparison.Ordinal);
+        Assert.Contains($"to {elsewhere},", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ANameNoDestinationKeeps_IsRefused_NamingIt()
+    {
+        Directory.CreateDirectory(_cli.StatePath);
+        var absent = new string('a', 32);
+
+        var refused = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget", absent);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains(
+            $"No restore in direct mode keeps parts named '{absent}' under '{DirectRestoreParts.RootUnder(_cli.StatePath)}'.",
+            refused.Error,
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow("../receipts")]
+    [DataRow("..")]
+    [DataRow("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    public async Task WhatIsNotAPartsFoldersName_IsRefused_AndLetsNothingGo(string name)
+    {
+        var receipts = Directory.CreateDirectory(Path.Combine(_cli.StatePath, "receipts")).FullName;
+        KeepPart("assembled before");
+
+        var refused = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget", name);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"'{name}' is not the name of a destination's parts", refused.Error, StringComparison.Ordinal);
+        Assert.IsTrue(Directory.Exists(receipts), "nothing beside the parts is let go");
+        Assert.IsTrue(Directory.Exists(Parts), "nor any destination's parts");
+    }
+
+    [TestMethod]
+    public async Task ARunThatDoesNotFinish_SaysHowToLetItsPartsGo()
+    {
+        var snapshot = await BackUpAsync();
+        KeepPart("assembled before");
+
+        var failed = await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination));
+
+        Assert.AreNotEqual(0, failed.ExitCode, failed.All);
+        Assert.Contains(
+            $"kept under '{Parts}' until a run there finishes, or restore-parts --state '{_cli.StatePath}' --forget {Name} lets them go",
+            failed.All,
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AStateDirectoryThatIsNotThere_IsRefused()
+    {
+        var absent = Path.Combine(_cli.WorkPath, "no-such-state");
+
+        var refused = await CliHarness.RunRawAsync("restore-parts", "--state", absent);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"no state directory at '{absent}'", refused.Error, StringComparison.Ordinal);
     }
 
     /// <summary>Makes a FIFO at <paramref name="path"/>, answering whether the platform would.</summary>
