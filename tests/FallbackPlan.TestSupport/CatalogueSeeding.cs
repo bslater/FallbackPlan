@@ -55,6 +55,12 @@ public enum CataloguePlanes
 /// corpus can get under — a version, the path that reaches it, and its own
 /// manifest's location.
 /// </para>
+/// <para>
+/// One path in one snapshot per version is the set whose every file
+/// changes in every snapshot. <see cref="FillSnapshots"/> seeds the shape a
+/// set has when fewer change: every snapshot lists every file, so a file a
+/// snapshot left alone still costs it a tree entry.
+/// </para>
 /// </remarks>
 public static class CatalogueSeeding
 {
@@ -85,82 +91,74 @@ public static class CatalogueSeeding
 
         var entries = new List<IndexEntry>();
         var sequence = 0UL;
-
-        void Flush()
-        {
-            if (entries.Count == 0)
-            {
-                return;
-            }
-
-            sequence++;
-            catalogue.ApplyDelta(
-                DeltaId.FromBytes(SHA256.HashData(BitConverter.GetBytes(sequence)).AsSpan(0, 16).ToArray()),
-                new IndexDelta { WriterId = Writer, Sequence = sequence, Generation = 0, Entries = entries });
-            entries = [];
-        }
-
         for (var version = 0; version < versions; version++)
         {
-            var versionObject = ObjectFrom(version);
-
-            if (planes.HasFlag(CataloguePlanes.FileVersions))
-            {
-                catalogue.RecordFileVersion(
-                    versionObject,
-                    logicalLength: 5_000_000,
-                    modifiedAt: 1_700_000_000_000UL + (ulong)version,
-                    identityDevice: 2049,
-                    identityFileId: (ulong)version + 10_000,
-                    metadataDigest: SHA256.HashData(BitConverter.GetBytes((long)version + 2_000_000)));
-            }
+            RecordVersion(catalogue, version, identityFileId: (ulong)version + 10_000, segmentsPerVersion, planes, entries);
 
             if (planes.HasFlag(CataloguePlanes.TreeEntries))
             {
-                catalogue.RecordTreeEntry(
-                    snapshotId,
-                    $"home/user/Documents/Projects/folder-{version / 100:D4}/report-{version:D7}.docx",
-                    EntryKind.File,
-                    versionObject);
-            }
-
-            if (planes.HasFlag(CataloguePlanes.Locations))
-            {
-                entries.Add(new IndexEntry(
-                    versionObject,
-                    BlobId.FromBytes(SHA256.HashData(BitConverter.GetBytes(version / 64)).AsSpan(0, 16)),
-                    PhysicalOffset: 88,
-                    StoredLength: 4096,
-                    CompressionProfileValue: 0x0001,
-                    EncryptionProfileValue: 0x0001,
-                    IndexEntryType.Insertion));
-            }
-
-            for (var segment = 0; segment < segmentsPerVersion; segment++)
-            {
-                var seed = 1_000_000_000L + ((long)version * segmentsPerVersion) + segment;
-                var segmentObject = ObjectFrom(seed);
-
-                if (planes.HasFlag(CataloguePlanes.Locations))
-                {
-                    entries.Add(new IndexEntry(
-                        segmentObject,
-                        BlobId.FromBytes(SHA256.HashData(BitConverter.GetBytes(seed / 64)).AsSpan(0, 16)),
-                        PhysicalOffset: 88 + ((ulong)segment * 1_048_576),
-                        StoredLength: 1_048_576,
-                        CompressionProfileValue: 0x0001,
-                        EncryptionProfileValue: 0x0001,
-                        IndexEntryType.Insertion));
-                }
+                catalogue.RecordTreeEntry(snapshotId, PathOf(version), EntryKind.File, ObjectFrom(version));
             }
 
             if (entries.Count >= 1000)
             {
-                Flush();
+                Flush(catalogue, entries, ref sequence);
             }
         }
 
-        Flush();
+        Flush(catalogue, entries, ref sequence);
+    }
+
+    /// <summary>
+    /// Fills <paramref name="catalogue"/> with <paramref name="files"/> files
+    /// over <paramref name="snapshots"/> snapshots, each of which lists every
+    /// file, as a set's snapshots do. The first gives each file a version.
+    /// Each after it gives <paramref name="changedPerSnapshot"/> files a new
+    /// one, the files taken in turn, and names the rest by the version they
+    /// had.
+    /// </summary>
+    /// <returns>How many file versions the snapshots hold between them.</returns>
+    public static int FillSnapshots(
+        Catalogue catalogue,
+        int files,
+        int snapshots,
+        int changedPerSnapshot,
+        int segmentsPerVersion = SegmentsPerVersionAtScaleM)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(files);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(snapshots);
+        ArgumentOutOfRangeException.ThrowIfNegative(changedPerSnapshot);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(changedPerSnapshot, files);
+        ArgumentOutOfRangeException.ThrowIfNegative(segmentsPerVersion);
+
+        var current = new int[files];
+        var entries = new List<IndexEntry>();
+        var sequence = 0UL;
+        var versions = 0;
+        var turn = 0;
+        for (var snapshot = 0; snapshot < snapshots; snapshot++)
+        {
+            for (var renewed = 0; renewed < (snapshot == 0 ? files : changedPerSnapshot); renewed++)
+            {
+                var file = snapshot == 0 ? renewed : turn++ % files;
+                current[file] = versions;
+                RecordVersion(catalogue, versions++, identityFileId: (ulong)file + 10_000, segmentsPerVersion, CataloguePlanes.All, entries);
+                if (entries.Count >= 1000)
+                {
+                    Flush(catalogue, entries, ref sequence);
+                }
+            }
+
+            var snapshotId = SHA256.HashData(BitConverter.GetBytes(snapshot + 3_000_000)).AsSpan(0, 16).ToArray();
+            for (var file = 0; file < files; file++)
+            {
+                catalogue.RecordTreeEntry(snapshotId, PathOf(file), EntryKind.File, ObjectFrom(current[file]));
+            }
+        }
+
+        Flush(catalogue, entries, ref sequence);
+        return versions;
     }
 
     /// <summary>
@@ -171,7 +169,21 @@ public static class CatalogueSeeding
     public static long MeasureBytes(
         int versions,
         int segmentsPerVersion = SegmentsPerVersionAtScaleM,
-        CataloguePlanes planes = CataloguePlanes.All)
+        CataloguePlanes planes = CataloguePlanes.All) =>
+        Measure(catalogue => Fill(catalogue, versions, segmentsPerVersion, planes));
+
+    /// <summary>
+    /// Seeds a throwaway catalogue as <see cref="FillSnapshots"/> does, and
+    /// answers what it occupies on disk and how many versions it holds.
+    /// </summary>
+    public static (long Bytes, int Versions) MeasureSnapshotBytes(int files, int snapshots, int changedPerSnapshot)
+    {
+        var versions = 0;
+        var bytes = Measure(catalogue => versions = FillSnapshots(catalogue, files, snapshots, changedPerSnapshot));
+        return (bytes, versions);
+    }
+
+    private static long Measure(Action<Catalogue> fill)
     {
         var root = Path.Combine(Path.GetTempPath(), "fbp-catalogue-size", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(root);
@@ -179,7 +191,7 @@ public static class CatalogueSeeding
         {
             using (var catalogue = Catalogue.Open(Path.Combine(root, "catalogue.db"), Repository))
             {
-                Fill(catalogue, versions, segmentsPerVersion, planes);
+                fill(catalogue);
             }
 
             // The connection pool keeps the file handle, and on Windows an
@@ -193,6 +205,75 @@ public static class CatalogueSeeding
             Directory.Delete(root, recursive: true);
         }
     }
+
+    /// <summary>
+    /// Records version <paramref name="version"/>'s row and queues the
+    /// locations of its manifest and its segments, each a distinct object.
+    /// </summary>
+    private static void RecordVersion(
+        Catalogue catalogue,
+        int version,
+        ulong identityFileId,
+        int segmentsPerVersion,
+        CataloguePlanes planes,
+        List<IndexEntry> entries)
+    {
+        if (planes.HasFlag(CataloguePlanes.FileVersions))
+        {
+            catalogue.RecordFileVersion(
+                ObjectFrom(version),
+                logicalLength: 5_000_000,
+                modifiedAt: 1_700_000_000_000UL + (ulong)version,
+                identityDevice: 2049,
+                identityFileId: identityFileId,
+                metadataDigest: SHA256.HashData(BitConverter.GetBytes((long)version + 2_000_000)));
+        }
+
+        if (!planes.HasFlag(CataloguePlanes.Locations))
+        {
+            return;
+        }
+
+        entries.Add(new IndexEntry(
+            ObjectFrom(version),
+            BlobId.FromBytes(SHA256.HashData(BitConverter.GetBytes(version / 64)).AsSpan(0, 16)),
+            PhysicalOffset: 88,
+            StoredLength: 4096,
+            CompressionProfileValue: 0x0001,
+            EncryptionProfileValue: 0x0001,
+            IndexEntryType.Insertion));
+
+        for (var segment = 0; segment < segmentsPerVersion; segment++)
+        {
+            var seed = 1_000_000_000L + ((long)version * segmentsPerVersion) + segment;
+            entries.Add(new IndexEntry(
+                ObjectFrom(seed),
+                BlobId.FromBytes(SHA256.HashData(BitConverter.GetBytes(seed / 64)).AsSpan(0, 16)),
+                PhysicalOffset: 88 + ((ulong)segment * 1_048_576),
+                StoredLength: 1_048_576,
+                CompressionProfileValue: 0x0001,
+                EncryptionProfileValue: 0x0001,
+                IndexEntryType.Insertion));
+        }
+    }
+
+    /// <summary>Publishes the queued locations as one delta of <see cref="Writer"/>'s.</summary>
+    private static void Flush(Catalogue catalogue, List<IndexEntry> entries, ref ulong sequence)
+    {
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        sequence++;
+        catalogue.ApplyDelta(
+            DeltaId.FromBytes(SHA256.HashData(BitConverter.GetBytes(sequence)).AsSpan(0, 16).ToArray()),
+            new IndexDelta { WriterId = Writer, Sequence = sequence, Generation = 0, Entries = [.. entries] });
+        entries.Clear();
+    }
+
+    private static string PathOf(int file) =>
+        $"home/user/Documents/Projects/folder-{file / 100:D4}/report-{file:D7}.docx";
 
     private static ObjectId ObjectFrom(long seed) =>
         ObjectId.FromBytes(SHA256.HashData(BitConverter.GetBytes(seed)));

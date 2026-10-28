@@ -31,6 +31,13 @@ namespace FallbackPlan.Repository.Tests.Catalogue;
 /// <c>AFileVersionWithNoSegmentsAtAll_CostsAboutTheWholeBudget</c> pins that;
 /// the requirement row carries the figures.
 /// </para>
+/// <para>
+/// The headline's shape names each version by one path in one snapshot,
+/// which is the set whose every file changes in every snapshot. A set where
+/// fewer change names each version in more snapshots, and
+/// <c>ASnapshotListsEveryFile_SoAFileItLeftUnchangedCostsItATreeEntry</c>
+/// pins what each of those costs.
+/// </para>
 /// </remarks>
 [TestClass]
 public sealed class CatalogueSizeTests
@@ -103,6 +110,25 @@ public sealed class CatalogueSizeTests
             BudgetBytesPerVersion * 1.1,
             floor,
             $"the floor is {floor:F0} B/version against a {BudgetBytesPerVersion} B budget");
+    }
+
+    [TestMethod]
+    public void ASnapshotListsEveryFile_SoAFileItLeftUnchangedCostsItATreeEntry()
+    {
+        // Each snapshot lists every file of its set, changed or not, so a
+        // catalogue grows with the snapshots it keeps as well as with its
+        // versions. The headline's shape names each version by one path in
+        // one snapshot, which is a set whose every file changes in every
+        // snapshot. A set where fewer change pays this once per snapshot for
+        // each file it left alone: 132 B measured here, which at a tenth of
+        // the files changing per snapshot is about 2 000 B/version in all.
+        var (one, _) = CatalogueSeeding.MeasureSnapshotBytes(Versions, snapshots: 1, changedPerSnapshot: 0);
+        var (two, versions) = CatalogueSeeding.MeasureSnapshotBytes(Versions, snapshots: 2, changedPerSnapshot: 0);
+        Assert.AreEqual(Versions, versions, "a snapshot that changes nothing adds no version");
+
+        var perFile = (two - one) / (double)Versions;
+        Assert.IsGreaterThan(115, perFile, $"{perFile:F0} B per unchanged file per snapshot");
+        Assert.IsLessThan(150, perFile, $"{perFile:F0} B per unchanged file per snapshot");
     }
 
     [TestMethod]
