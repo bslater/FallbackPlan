@@ -484,6 +484,28 @@ internal static class Strings
     internal static string CliApplication_OriginalTakesNoOutput => Get(nameof(CliApplication_OriginalTakesNoOutput));
 
     /// <summary>
+    /// Another restore in direct mode holds this destination's folder '{0}' ({1}). Run this again once that one ends.
+    /// </summary>
+    private static string DirectGateway_DestinationHeld => Get(nameof(DirectGateway_DestinationHeld));
+
+    /// <summary>
+    /// Another restore in direct mode holds this destination's folder '{0}' ({1}). Run this again once that one ends.
+    /// </summary>
+    internal static string FormatDirectGateway_DestinationHeld(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, DirectGateway_DestinationHeld, arg0, arg1);
+
+    /// <summary>
+    /// A restore in direct mode is under way to the destination whose parts are named '{0}', so they are not let go. Let them go once it ends, if it does not finish.
+    /// </summary>
+    private static string DirectRestorePartsReport_RunUnderWay => Get(nameof(DirectRestorePartsReport_RunUnderWay));
+
+    /// <summary>
+    /// A restore in direct mode is under way to the destination whose parts are named '{0}', so they are not let go. Let them go once it ends, if it does not finish.
+    /// </summary>
+    internal static string FormatDirectRestorePartsReport_RunUnderWay(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, DirectRestorePartsReport_RunUnderWay, arg0);
+
+    /// <summary>
     /// '{0}' is not the name of a destination's parts: restore-parts names each by the thirty-two lowercase hex digits of its folder.
     /// </summary>
     private static string DirectRestorePartsReport_NotAPartsName => Get(nameof(DirectRestorePartsReport_NotAPartsName));

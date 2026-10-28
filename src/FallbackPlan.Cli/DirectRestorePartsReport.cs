@@ -51,6 +51,12 @@ internal static class DirectRestorePartsReport
             throw new CliFailureException(Strings.FormatDirectRestorePartsReport_NotAPartsName(name));
         }
 
+        // A run there would lose what it is assembling (ADR-0143).
+        if (DirectRestoreParts.IsUnderWay(Path.Combine(DirectRestoreParts.RootUnder(stateDirectory), name)))
+        {
+            throw new CliFailureException(Strings.FormatDirectRestorePartsReport_RunUnderWay(name));
+        }
+
         long? held;
         try
         {
@@ -75,9 +81,10 @@ internal static class DirectRestorePartsReport
     private static string Describe(KeptDirectRestoreParts kept)
     {
         var holding = kept.Held > 0 ? $"holding {RestoreSpace.Bytes((ulong)kept.Held)} it had assembled" : null;
+        var underWay = kept.UnderWay ? "; a run there is under way" : string.Empty;
         if (kept.Run is not { } run)
         {
-            return $"{kept.Name}  {holding ?? "holding nothing"}; what its run restored was not kept";
+            return $"{kept.Name}  {holding ?? "holding nothing"}; what its run restored was not kept{underWay}";
         }
 
         var began = DateTimeOffset.FromUnixTimeMilliseconds((long)run.BeganAt).UtcDateTime;
@@ -86,6 +93,6 @@ internal static class DirectRestorePartsReport
         var how = run.Existing is { } existing ? $", {existing} where a file is in the way" : string.Empty;
         var held = holding is null ? string.Empty : $", {holding}";
         return string.Create(
-            CultureInfo.InvariantCulture, $"{kept.Name}  snapshot {run.SnapshotId}{of} to {to}{how}, begun {began:yyyy-MM-dd HH:mm} UTC{held}");
+            CultureInfo.InvariantCulture, $"{kept.Name}  snapshot {run.SnapshotId}{of} to {to}{how}, begun {began:yyyy-MM-dd HH:mm} UTC{held}{underWay}");
     }
 }
