@@ -19,7 +19,9 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// until a rebuild says otherwise (FR-MAN-002): a cache discarded is safe
 /// only while something fills it again. A location names its blob and its
 /// writer by numbers of the catalogue's own, and still ranks by the writer's
-/// id (NFR-PERF-011, ADR-0144).
+/// id (NFR-PERF-011, ADR-0144). A tree entry is keyed by its folder and its
+/// name, and its path, a folder's listing and a snapshot's path order are as
+/// they were (NFR-PERF-011, ADR-0148).
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -251,6 +253,124 @@ public sealed class CatalogueTests : IDisposable
         catalogue.RecordTreeEntry(snapshot, "Cafe\u0301/menu.txt", EntryKind.File, Object(2));
 
         Assert.AreEqual(Object(2), catalogue.LookupPath(snapshot, "CAF\u00c9/MENU.TXT", caseInsensitive: true)?.ObjectId);
+    }
+
+    [TestMethod]
+    public void RecordTreeEntry_APathWhoseOnlySeparatorLeadsIt_StaysApartFromTheSameNameWithoutOne()
+    {
+        // A tree entry is keyed by its folder and its name (ADR-0148). A
+        // folder's name may hold a separator, which no codec refuses, and a
+        // path that only begins with one names no folder: it is a name at
+        // the root, and not the same one as the name without it.
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x45);
+        catalogue.RecordTreeEntry(snapshot, "x", EntryKind.File, Object(1));
+        catalogue.RecordTreeEntry(snapshot, "/x", EntryKind.File, Object(2));
+
+        Assert.AreEqual(Object(1), catalogue.LookupPath(snapshot, "x")?.ObjectId);
+        Assert.AreEqual(Object(2), catalogue.LookupPath(snapshot, "/x")?.ObjectId);
+        CollectionAssert.AreEqual(
+            new[] { "/x", "x" }, catalogue.ListDirectory(snapshot, string.Empty).Select(entry => entry.Path).ToArray());
+    }
+
+    [TestMethod]
+    public void EnumerateLeaves_IsInPathOrder_AcrossFolders()
+    {
+        // A folder's files sort after a sibling whose name has a lower byte
+        // than the separator, and before one whose name has a higher: path
+        // order is not the order of folders and then names.
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x46);
+        catalogue.RecordTreeEntry(snapshot, "a0", EntryKind.File, Object(1));
+        catalogue.RecordTreeEntry(snapshot, "a", EntryKind.DirectoryPlaceholder, Object(2));
+        catalogue.RecordTreeEntry(snapshot, "a/z", EntryKind.File, Object(3));
+        catalogue.RecordTreeEntry(snapshot, "a-b", EntryKind.File, Object(4));
+
+        CollectionAssert.AreEqual(
+            new[] { "a-b", "a/z", "a0" }, catalogue.EnumerateLeaves(snapshot).Select(entry => entry.Path).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "a", "a-b", "a0" }, catalogue.ListDirectory(snapshot, string.Empty).Select(entry => entry.Path).ToArray());
+        Assert.AreEqual(Object(2), catalogue.LookupDirectory(snapshot, "a")?.TreeId);
+        Assert.AreEqual("a/z", Assert.ContainsSingle(catalogue.ListDirectory(snapshot, "a")).Path);
+    }
+
+    [TestMethod]
+    public void LookupDirectory_TwoFoldersOfOneName_AreEachFoundByTheirOwnPath()
+    {
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x47);
+        catalogue.RecordTreeEntry(snapshot, "a", EntryKind.DirectoryPlaceholder, Object(1));
+        catalogue.RecordTreeEntry(snapshot, "a/x", EntryKind.DirectoryPlaceholder, Object(2));
+        catalogue.RecordTreeEntry(snapshot, "b", EntryKind.DirectoryPlaceholder, Object(3));
+        catalogue.RecordTreeEntry(snapshot, "b/x", EntryKind.DirectoryPlaceholder, Object(4));
+
+        Assert.AreEqual(Object(2), catalogue.LookupDirectory(snapshot, "a/x")?.TreeId);
+        Assert.AreEqual(Object(4), catalogue.LookupDirectory(snapshot, "b/x")?.TreeId);
+    }
+
+    [TestMethod]
+    public void ContentOf_TwoFilesOfOneName_InTwoFolders_AreTwoFiles()
+    {
+        using var catalogue = Open();
+        var snapshot = TwoFilesOfOneName(catalogue);
+
+        var content = catalogue.ContentOf(snapshot);
+
+        Assert.AreEqual(2L, content.Files);
+        Assert.HasCount(2, content.FileBlobs);
+        Assert.HasCount(2, content.Blobs);
+    }
+
+    [TestMethod]
+    public void FilesDeliveredThrough_TwoFilesOfOneName_InTwoFolders_AreCountedApart()
+    {
+        // The snapshot's record is published at sequence 2 and both files'
+        // content later, at 3, so a destination synced through 1 holds the
+        // record's run and neither file.
+        using var catalogue = Open();
+        var snapshot = TwoFilesOfOneName(catalogue);
+
+        var delivered = catalogue.FilesDeliveredThrough(snapshot, Writer(0x77), syncedSequence: 1);
+
+        Assert.AreEqual(2L, delivered.Total);
+        Assert.AreEqual(0L, delivered.Held);
+    }
+
+    /// <summary>
+    /// A snapshot whose record one writer publishes at sequence 2, holding
+    /// <c>a/report.txt</c> and <c>b/report.txt</c>, each needing content of
+    /// its own in a blob of its own, which the writer publishes at 3.
+    /// </summary>
+    private static byte[] TwoFilesOfOneName(Catalogue catalogue)
+    {
+        var snapshot = Snapshot(0x48);
+        var (manifest, root) = (Object(0x40), Object(0x41));
+        catalogue.RecordSnapshot(
+            snapshot, new byte[16], new byte[16], manifest, root, publicationGeneration: 0,
+            captureStatus: 1, signatureState: 1);
+
+        foreach (var (folder, version, content) in (ReadOnlySpan<(string, byte, byte)>)[("a", 0x51, 0x61), ("b", 0x52, 0x62)])
+        {
+            catalogue.RecordTreeEntry(snapshot, folder, EntryKind.DirectoryPlaceholder, Object((byte)(version + 0x10)));
+            catalogue.RecordTreeEntry(snapshot, folder + "/report.txt", EntryKind.File, Object(version));
+            catalogue.RecordVersionContents(Object(version), [Object(content)]);
+        }
+
+        void Publish(ulong sequence, params (ObjectId Object, BlobId Blob)[] placed) =>
+            catalogue.ApplyDelta(
+                Delta((byte)sequence),
+                new IndexDelta
+                {
+                    WriterId = Writer(0x77),
+                    Sequence = sequence,
+                    Generation = 0,
+                    Entries = [.. placed.Select(item => new IndexEntry(item.Object, item.Blob, 88, 100, 1, 1, IndexEntryType.Insertion))],
+                });
+
+        Publish(2, (manifest, Blob(0xA0)));
+        Publish(3, (Object(0x61), Blob(0xA1)), (Object(0x62), Blob(0xA2)));
+
+        return snapshot;
     }
 
     [TestMethod]
