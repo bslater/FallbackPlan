@@ -44,6 +44,24 @@ internal static class DirectRestoreParts
     }
 
     /// <summary>
+    /// The bytes a folder's parts hold of the backup's files (ADR-0137), or
+    /// none where it keeps none or they will not be read.
+    /// </summary>
+    /// <param name="parts">The folder.</param>
+    public static long Held(string parts)
+    {
+        try
+        {
+            var folder = new DirectoryInfo(parts);
+            return folder.Exists ? folder.EnumerateFiles().Sum(part => part.Length) : 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// Removes a folder's parts: a run there finished, and nothing will take
     /// them up. Best effort: a part not removed is taken up or written again
     /// by the next run there, and let go when one finishes.

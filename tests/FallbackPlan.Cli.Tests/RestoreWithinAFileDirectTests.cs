@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Cli;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
 
@@ -14,7 +15,9 @@ namespace FallbackPlan.Cli.Tests;
 /// plan reads nothing its parts prove (FR-RST-003, ADR-0132), and the room a
 /// run needs to assemble its largest file is measured where the parts are
 /// kept (ADR-0131), less what they prove, for a resume's plan and run alike
-/// (ADR-0136).
+/// (ADR-0136). A run that does not finish says how to resume it, as one
+/// through the service does, and how much of the backup its parts keep under
+/// the state directory and where (ADR-0137).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileDirectTests : IDisposable
@@ -70,6 +73,67 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
 
         Assert.AreEqual(0, resumed.ExitCode, resumed.All);
         Assert.IsFalse(Directory.Exists(Parts), "and a run there that finishes lets it go");
+    }
+
+    [TestMethod]
+    public async Task ARunThatDoesNotFinish_SaysHowToResumeIt_AndWhatItsPartsKeep()
+    {
+        var snapshot = await BackUpAsync();
+        KeepPart("assembled before");
+
+        var failed = await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination));
+
+        Assert.AreNotEqual(0, failed.ExitCode, failed.All);
+        Assert.Contains("to restore what is left, run it again with --resume", failed.All, StringComparison.Ordinal);
+        Assert.Contains($"16 bytes of its files assembled so far are kept under '{Parts}'", failed.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARunThatDoesNotFinish_HavingAssembledNothing_SaysOnlyHowToResumeIt()
+    {
+        var snapshot = await BackUpAsync();
+
+        var failed = await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination));
+
+        Assert.AreNotEqual(0, failed.ExitCode, failed.All);
+        Assert.Contains("to restore what is left, run it again with --resume", failed.All, StringComparison.Ordinal);
+        Assert.DoesNotContain(Parts, failed.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a FIFO is a POSIX entry kind, captured and never materialised")]
+    public async Task ARunThatSkipsOnlyWhatTheTargetCannotHold_IsFinished_AndSaysNothingOfAResume()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/one.txt", "first");
+        if (!MakeFifo(Path.Combine(_cli.WorkPath, "tree", "pipe")))
+        {
+            return; // the filesystem refuses FIFOs (some CI mounts): nothing to assert
+        }
+
+        var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+        Assert.AreEqual(0, backup.ExitCode, backup.All);
+        var snapshots = await _cli.RunAsync("snapshots");
+        var snapshot = snapshots.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0].Split(' ')[0];
+        KeepPart("assembled before");
+
+        var restored = await _cli.RunAsync("restore", snapshot, "--output", Destination);
+
+        Assert.Contains("restore Partial", restored.All, StringComparison.Ordinal);
+        Assert.DoesNotContain("--resume", restored.All, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(Parts), "a run that skipped only what the target cannot hold is finished");
+    }
+
+    [TestMethod]
+    public async Task ARunThatFinishes_SaysNothingOfAResume()
+    {
+        var snapshot = await BackUpAsync();
+
+        var restored = await _cli.RunAsync("restore", snapshot, "--output", Destination);
+
+        Assert.AreEqual(0, restored.ExitCode, restored.All);
+        Assert.DoesNotContain("--resume", restored.All, StringComparison.Ordinal);
+        Assert.DoesNotContain(Parts, restored.All, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -131,6 +195,21 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
         Assert.Contains("would not fit", refused.All, StringComparison.Ordinal);
         Assert.AreEqual(0, resumed.ExitCode, resumed.All);
         Assert.Contains("2 file(s) were resumed from what the run had assembled of them", resumed.All, StringComparison.Ordinal);
+    }
+
+    /// <summary>Makes a FIFO at <paramref name="path"/>, answering whether the platform would.</summary>
+    private static bool MakeFifo(string path)
+    {
+        try
+        {
+            using var mkfifo = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("mkfifo", [path]));
+            mkfifo!.WaitForExit();
+            return mkfifo.ExitCode == 0;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>What a printed plan says its run will read.</summary>
