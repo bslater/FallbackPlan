@@ -32,7 +32,7 @@ public static class CatalogueSizeBenchmark
         Console.WriteLine("| Planes held | Bytes | B/version |");
         Console.WriteLine("|---|---:|---:|");
 
-        Report("`file_versions` and its two indexes", versions, CataloguePlanes.FileVersions);
+        Report("`file_versions` and its identity index", versions, CataloguePlanes.FileVersions);
         Report("`tree_entries` and its parent index", versions, CataloguePlanes.TreeEntries);
         Report("`object_locations` and `ix_locations_blob`", versions, CataloguePlanes.Locations);
         Report("**all three, scale M's shape**", versions, CataloguePlanes.All);

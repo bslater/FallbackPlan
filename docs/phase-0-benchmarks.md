@@ -226,6 +226,12 @@ it turns out to be the main term.
 > with the floor at 818. The budget is missed by 3.4×. `object_locations`,
 > at 661, is the largest plane again.
 
+> **Re-measured 2026-10 ([ADR-0147](adr/0147-a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it.md)).** A file version's row
+> keeps no name, kind, whole-file hash, parent version or segment count,
+> and no index on the hash. At 20 000 versions `file_versions` and its
+> identity index cost 155 B/version, against 345, and the catalogue
+> **1 183 in all**, with the floor at 636. The budget is missed by 3.0×.
+
 Every segment reference here is a **distinct** object, which is the no-dedup
 upper bound on `object_locations`; a corpus with cross-version dedup holds
 fewer rows there for the same reference count. The floor is unaffected by

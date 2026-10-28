@@ -479,19 +479,15 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>
-    /// Records a file-version manifest's projection. The optional
-    /// modification time and identity are the NFR-PERF-003 short-circuit's
-    /// comparison key; identity is catalogue-domain only (02 §2) and absent
-    /// after any rebuild.
+    /// Records what the catalogue is asked of a file version. The length,
+    /// the optional modification time and identity are the NFR-PERF-003
+    /// short-circuit's comparison key; identity is catalogue-domain only
+    /// (02 §2) and absent after any rebuild. Nothing else a manifest states
+    /// is kept, since nothing asks it of the catalogue (ADR-0147).
     /// </summary>
     public void RecordFileVersion(
         ObjectId objectId,
-        ReadOnlySpan<byte> name,
-        EntryKind entryKind,
         ulong logicalLength,
-        ReadOnlySpan<byte> wholeFileHash,
-        ObjectId? parentVersion,
-        int segmentCount,
         ulong? modifiedAt = null,
         ulong? identityDevice = null,
         ulong? identityFileId = null,
@@ -501,18 +497,12 @@ public sealed class Catalogue : IDisposable
         using var command = _connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO file_versions
-                (object_id, name, entry_kind, logical_length, whole_file_hash, parent_version, segment_count,
-                 modified_at, identity_device, identity_file_id, has_alternate_streams, metadata_digest)
-            VALUES ($id, $name, $kind, $length, $hash, $parent, $segments, $modified, $device, $fileid, $streams,
-                    $metadata);
+                (object_id, logical_length, modified_at, identity_device, identity_file_id, has_alternate_streams,
+                 metadata_digest)
+            VALUES ($id, $length, $modified, $device, $fileid, $streams, $metadata);
             """;
         command.Parameters.AddWithValue("$id", objectId.ToArray());
-        command.Parameters.AddWithValue("$name", name.ToArray());
-        command.Parameters.AddWithValue("$kind", (int)entryKind);
         command.Parameters.AddWithValue("$length", (long)logicalLength);
-        command.Parameters.AddWithValue("$hash", wholeFileHash.ToArray());
-        command.Parameters.AddWithValue("$parent", parentVersion is { } p ? p.ToArray() : DBNull.Value);
-        command.Parameters.AddWithValue("$segments", segmentCount);
         command.Parameters.AddWithValue("$modified", modifiedAt is { } m ? (long)m : DBNull.Value);
         command.Parameters.AddWithValue("$device", identityDevice is { } d ? unchecked((long)d) : DBNull.Value);
         command.Parameters.AddWithValue("$fileid", identityFileId is { } f ? unchecked((long)f) : DBNull.Value);

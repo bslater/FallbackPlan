@@ -56,11 +56,9 @@ public sealed class CatalogueReachTests : IDisposable
                 Entries = [.. placed.Select(item => new IndexEntry(item.Object, item.Blob, 88, 100, 1, 1, IndexEntryType.Insertion))],
             });
 
-    private static void Version(Catalogue catalogue, ObjectId version, string name, params ObjectId[] contents)
+    private static void Version(Catalogue catalogue, ObjectId version, params ObjectId[] contents)
     {
-        catalogue.RecordFileVersion(
-            version, System.Text.Encoding.UTF8.GetBytes(name), EntryKind.File, 10, new byte[32], parentVersion: null,
-            contents.Length);
+        catalogue.RecordFileVersion(version, 10);
         catalogue.RecordVersionContents(version, contents);
     }
 
@@ -96,8 +94,8 @@ public sealed class CatalogueReachTests : IDisposable
         var (s1, s2, s3) = (Object(0x01), Object(0x02), Object(0x03));
         var (v1, v2) = (Object(0x11), Object(0x12));
         Locate(catalogue, 1, 0, (s1, Blob(0xD1)), (s2, Blob(0xD2)), (s3, Blob(0xD1)));
-        Version(catalogue, v1, "report.txt", s1, s2);
-        Version(catalogue, v2, "notes.txt", s2, s3);
+        Version(catalogue, v1, s1, s2);
+        Version(catalogue, v2, s2, s3);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
         Snapshot(catalogue, SnapshotB, Object(0x22), Object(0x32));
         catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
@@ -122,8 +120,8 @@ public sealed class CatalogueReachTests : IDisposable
         var (s1, s3) = (Object(0x01), Object(0x03));
         var (v1, v2) = (Object(0x11), Object(0x12));
         Locate(catalogue, 1, 0, (s1, Blob(0xD1)), (s3, Blob(0xD3)));
-        Version(catalogue, v1, "report.txt", s1);
-        Version(catalogue, v2, "report.txt", s3);
+        Version(catalogue, v1, s1);
+        Version(catalogue, v2, s3);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
         Snapshot(catalogue, SnapshotB, Object(0x22), Object(0x32));
         catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
@@ -141,7 +139,7 @@ public sealed class CatalogueReachTests : IDisposable
         using var catalogue = Open();
         var v1 = Object(0x11);
         Locate(catalogue, 1, 0, (v1, Blob(0xE1)));
-        Version(catalogue, v1, "report.txt");
+        Version(catalogue, v1);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
         catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
 
@@ -181,7 +179,7 @@ public sealed class CatalogueReachTests : IDisposable
         var v1 = Object(0x11);
         Locate(catalogue, 1, 0, (s1, Blob(0xD1)));
         Locate(catalogue, 2, 1, (s1, Blob(0xD9)));
-        Version(catalogue, v1, "report.txt", s1);
+        Version(catalogue, v1, s1);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
         catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
 
@@ -200,7 +198,7 @@ public sealed class CatalogueReachTests : IDisposable
         var (traced, stray) = (Object(0x01), Object(0x0F));
         var v1 = Object(0x11);
         Locate(catalogue, 1, 0, (traced, Blob(0xD1)), (stray, Blob(0xD1)));
-        Version(catalogue, v1, "report.txt", traced);
+        Version(catalogue, v1, traced);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
         catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
 
@@ -221,7 +219,7 @@ public sealed class CatalogueReachTests : IDisposable
         for (byte i = 0; i < 8; i++)
         {
             var version = Object((byte)(0x50 + i));
-            Version(catalogue, version, $"file-{i}.txt", segment);
+            Version(catalogue, version, segment);
             catalogue.RecordTreeEntry(SnapshotA, $"docs/file-{7 - i}.txt", EntryKind.File, version);
         }
 
@@ -241,7 +239,7 @@ public sealed class CatalogueReachTests : IDisposable
         var segment = Object(0x01);
         var v1 = Object(0x11);
         Locate(catalogue, 1, 0, (segment, Blob(0xD1)));
-        Version(catalogue, v1, "report.txt", segment);
+        Version(catalogue, v1, segment);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
         catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
 

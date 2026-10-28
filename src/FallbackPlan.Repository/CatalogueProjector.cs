@@ -199,12 +199,7 @@ public sealed class CatalogueProjector
                 var version = FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
                 target.RecordFileVersion(
                     child.ObjectId,
-                    version.Name.Span,
-                    version.EntryKind,
                     version.LogicalLength,
-                    version.WholeFileHash.Span,
-                    version.ParentVersion,
-                    version.SegmentReferences.Count,
                     version.Metadata.ModifiedAt,
                     hasAlternateStreams: version.Metadata.AlternateStreams.Count > 0,
                     metadataDigest: FileVersionManifestCodec.MetadataDigest(version.Metadata));

@@ -54,3 +54,4 @@ The fold is ADR-0026 §8's, applied to a component rather than a path. A separat
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Catalogue schema 14 keeps no fold of a tree entry's path, and a lookup that folds case walks the path a folder at a time through the parent index. At scale M's shape tree_entries falls from 613 B/version to 379 and the catalogue from 1 607 to 1 373. NFR-PERF-011 is still not met. |
+| 2026-10 | Accepted | [ADR-0147](0147-a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it.md): a file version's row keeps only what is asked of it, and at scale M's shape the catalogue costs 1 183 B/version, not 1 373. |

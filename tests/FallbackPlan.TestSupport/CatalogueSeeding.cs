@@ -13,7 +13,7 @@ public enum CataloguePlanes
     /// <summary>Nothing.</summary>
     None = 0,
 
-    /// <summary><c>file_versions</c> and its two indexes.</summary>
+    /// <summary><c>file_versions</c> and its identity index.</summary>
     FileVersions = 1,
 
     /// <summary><c>tree_entries</c> and its parent index.</summary>
@@ -108,14 +108,7 @@ public static class CatalogueSeeding
             {
                 catalogue.RecordFileVersion(
                     versionObject,
-                    System.Text.Encoding.UTF8.GetBytes($"report-{version:D7}.docx"),
-                    EntryKind.File,
                     logicalLength: 5_000_000,
-                    wholeFileHash: SHA256.HashData(BitConverter.GetBytes((long)version + 1_000_000)),
-                    // Scale M's ten versions per file: one capture in ten is a
-                    // first, and the rest supersede the version before them.
-                    parentVersion: version >= 10 ? ObjectFrom(version - 10) : null,
-                    segmentCount: segmentsPerVersion,
                     modifiedAt: 1_700_000_000_000UL + (ulong)version,
                     identityDevice: 2049,
                     identityFileId: (ulong)version + 10_000,

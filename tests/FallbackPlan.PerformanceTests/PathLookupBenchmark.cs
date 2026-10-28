@@ -46,8 +46,7 @@ public static class PathLookupBenchmark
 
             catalogue.RecordTreeEntry(snapshotId, filePath, EntryKind.File, ObjectFrom(index));
             catalogue.RecordFileVersion(
-                ObjectFrom(index), "f"u8, EntryKind.File, 4096, SHA256.HashData([]),
-                parentVersion: null, segmentCount: 1,
+                ObjectFrom(index), 4096,
                 modifiedAt: 1_722_600_000_000, identityDevice: 7, identityFileId: (ulong)index);
         }
 
