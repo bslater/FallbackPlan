@@ -115,6 +115,12 @@ The compactor still asks whether a relocation would stand, and now asks it at th
 ## What this record does not do
 
 - **Rank a checkpoint's entries.** Its entries still rank at the checkpoint's generation. Nothing publishes a checkpoint, and the checkpoint work owes the rank ([ADR-0008 Amendment 1](0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first), constraint 1).
+
+  > **Amended 2026-10 ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)).** Met another way. A format-5
+  > checkpoint carries deltas rather than entries, and each carried entry
+  > ranks at its own delta's index generation, writer and sequence. A
+  > checkpoint's own entries, the earlier form, are ranked nowhere.
+
 - **Refuse to write above the newest format this build knows.** An upgrade record naming a version above 4 sets the effective version above it, and this build would still write format 4's objects. A build should refuse to write a repository whose effective version it does not know. That is owed.
 - **Reach older builds.** What an older build does with an upgraded repository is decided by that build.
 
@@ -127,5 +133,6 @@ The compactor still asks whether a relocation would stand, and now asks it at th
 
 | Date | Status | Note |
 |---|---|---|
+| 2026-10 | Accepted; built (amended) | The rank owed to a checkpoint's entries is met by [ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md): a format-5 checkpoint carries deltas, each entry ranked as its own delta's, and a checkpoint's own entries are ranked nowhere. |
 | 2026-10 | Accepted; built (amended) | The refusal to write above the newest format this build knows, owed here, is built by [ADR-0066 Amendment 1](0066-the-format-upgrade-record.md#amendment-1-2026-10--a-build-writes-only-a-format-it-implements): at a newer effective version a publication, compaction, retention apply, deletion request and upgrade record are refused naming both versions, and a destination is given a whole copy (`Repository/NewerFormatException`, `Hosts.Tests/NewerFormatServiceTests`) |
 | 2026-10 | Accepted; built | Key 12 is written by every format-4 writer and read by every reader; entries rank by it; a gap ages per gap in index generations with a production patience of 8; the catalogue is schema 10; a repository is born at 4 and lists `0x0004`; the compactor's stopgap declines nothing at 4. Recorded in [ADR-0017 Amendment 3](0017-index-entry-supersession.md#amendment-3-2026-10--format-4-ranks-an-entry-by-its-index-generation) |

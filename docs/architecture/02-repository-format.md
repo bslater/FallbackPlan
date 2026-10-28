@@ -309,6 +309,14 @@ Checkpoint compaction is bounded, resumable, and cancellable. Prior checkpoints 
 > window is configured, because nothing publishes a checkpoint
 > ([ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
 
+> **Amended 2026-10 ([ADR-0097](../adr/0097-format-5-a-checkpoint-carries-its-deltas.md), [ADR-0098](../adr/0098-a-store-retires-what-its-own-checkpoints-carry.md)).**
+> A format-5 set publishes checkpoints, and checkpoint compaction is still
+> not built, because nothing needs it. A checkpoint carries its deltas
+> whole, so two that carry one delta are both kept and both applied, the
+> delta once ([ADR-0008 Amendment 2](../adr/0008-index-generations-and-checkpoints.md#amendment-2-2026-10--format-5-meets-five-of-the-six)). No checkpoint is ever
+> deleted, so every prior generation is kept and there is no window to
+> configure.
+
 **Blob compaction is a different mechanism from the checkpoint compaction above**, and exists in one format only. In format 2 a record's key is its blob's and its nonce is its position, so moving one means opening and re-sealing it ([ADR-0025](../adr/0025-compaction-reseals-records.md)) — which a service cannot do at all, holding the structure key and not the content key, so a format-2 set is refused by name and pointed at the upgrade. In format 3 no key is needed: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` copies a sealed record into another blob verbatim, re-framing only its header, and the record opens there. `Repository/BlobCompactor` is written over that primitive and runs where the structure key and a writer identity are, which is the source service, and never at a destination ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 
 ## 8. Catalogue rebuild

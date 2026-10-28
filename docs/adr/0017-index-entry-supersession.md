@@ -127,6 +127,12 @@ with two writers.
    it, and precedence picks the winner every time an index is read. Retiring
    entries is a checkpoint's work, and nothing publishes a checkpoint yet.
 
+   > **Amended 2026-10 ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md), [ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)).** A format-5
+   > set publishes checkpoints, and a store retires the deltas its settled
+   > checkpoints carry. A checkpoint carries each delta whole, so a
+   > superseded entry stays in the copy, and precedence still picks the
+   > winner each time an index is read. Retiring an entry is still not built.
+
 What that means:
 
 - **With one writer, a compaction stands.** A compaction's delta comes after
@@ -323,6 +329,7 @@ own last delta. An entry ranks by its delta's index generation first.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended); partly built | Amendment 1's fourth point said nothing publishes a checkpoint; a format-5 set does, and a store retires the deltas its settled checkpoints carry ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md), [ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)). A superseded entry still is not retired, since a checkpoint carries each delta whole. |
 | 2026-10 | Accepted (amended); partly built | A checkpoint's own entries are ranked nowhere, by the loader or the catalogue, and from format 5 a checkpoint carries deltas, each entry ranked as its delta's ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md); `Repository.Tests/Index/CheckpointBundleTests`). Partly built still: superseded entries are never retired |
 | 2026-10 | Accepted (amended); partly built | [Amendment 3](#amendment-3-2026-10--format-4-ranks-an-entry-by-its-index-generation): the fix, as format 4. An entry ranks by its delta's index generation (`Repository.Index/IndexLoader`, `Repository.Catalogue/Catalogue`), so a compaction under the lower of two writer ids stands and is not declined (`Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`, [ADR-0096](0096-format-4-an-index-generation-per-delta.md)). Partly built still: a checkpoint's entries are not ranked this way, and superseded entries are never retired |
 | 2026-10 | Accepted (amended); partly built | Of the three conditions Amendment 1 sets for the fix, the third is met ahead of it: the product's index loads pass sequence accounting ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended), so moving generations will not read a stopped writer's journal records and blobs as missing deltas (`ArchitectureTests/IndexLoadAccountingTests`) |
