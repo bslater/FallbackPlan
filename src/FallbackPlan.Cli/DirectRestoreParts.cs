@@ -1,5 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using FallbackPlan.Domain;
 
 namespace FallbackPlan.Cli;
 
@@ -17,6 +20,11 @@ namespace FallbackPlan.Cli;
 /// </remarks>
 internal static class DirectRestoreParts
 {
+    /// <summary>The file in a folder that says what its run restores and where (ADR-0142).</summary>
+    private const string RecordName = "run.json";
+
+    private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
+
     /// <summary>The folder every destination's parts are kept under, in a state directory.</summary>
     /// <param name="stateDirectory">The command line's state directory.</param>
     public static string RootUnder(string stateDirectory) => Path.Combine(stateDirectory, "direct-restore-parts");
@@ -53,7 +61,7 @@ internal static class DirectRestoreParts
         try
         {
             var folder = new DirectoryInfo(parts);
-            return folder.Exists ? folder.EnumerateFiles().Sum(part => part.Length) : 0;
+            return folder.Exists ? folder.EnumerateFiles("*.part").Sum(part => part.Length) : 0;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -80,4 +88,125 @@ internal static class DirectRestoreParts
         {
         }
     }
+
+    /// <summary>
+    /// Says, beside a folder's parts, what the run assembling them restores
+    /// and where it lands (ADR-0142), so a listing of what direct mode keeps
+    /// can say whose they are. Each run there says it again. Best effort: a
+    /// folder whose record is not kept is listed without it.
+    /// </summary>
+    /// <param name="parts">The folder.</param>
+    /// <param name="run">What the run restores and where.</param>
+    public static void Record(string parts, DirectRestoreRun run)
+    {
+        try
+        {
+            AtomicFile.WriteAllText(Path.Combine(parts, RecordName), JsonSerializer.Serialize(run, SerializerOptions));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is a folder's: thirty-two lowercase
+    /// hex digits, as every destination's folder is named.
+    /// </summary>
+    /// <param name="name">What names the folder.</param>
+    /// <returns>Whether it does.</returns>
+    public static bool IsName(string name) =>
+        name.Length == 32 && name.All(character => char.IsAsciiDigit(character) || character is >= 'a' and <= 'f');
+
+    /// <summary>
+    /// Each destination a run in direct mode left unfinished under
+    /// <paramref name="stateDirectory"/> (ADR-0142): every folder that keeps
+    /// parts, newest first by when its run began, with what its run said of
+    /// itself and what its parts hold.
+    /// </summary>
+    /// <param name="stateDirectory">The command line's state directory.</param>
+    /// <returns>Each folder kept.</returns>
+    public static IReadOnlyList<KeptDirectRestoreParts> ReadKept(string stateDirectory)
+    {
+        var root = new DirectoryInfo(RootUnder(stateDirectory));
+        if (!root.Exists)
+        {
+            return [];
+        }
+
+        return
+        [
+            .. root.EnumerateDirectories()
+                .Where(folder => IsName(folder.Name))
+                .Select(folder => new KeptDirectRestoreParts(folder.Name, ReadRecord(folder.FullName), Held(folder.FullName), folder.LastWriteTimeUtc))
+                .OrderByDescending(kept => kept.Run?.BeganAt is { } began
+                    ? DateTimeOffset.FromUnixTimeMilliseconds((long)began).UtcDateTime
+                    : kept.LastWritten),
+        ];
+    }
+
+    /// <summary>
+    /// Lets the parts the folder <paramref name="name"/> keeps go (ADR-0142),
+    /// and every other destination's stay.
+    /// </summary>
+    /// <param name="stateDirectory">The command line's state directory.</param>
+    /// <param name="name">The folder's name, as the listing gives it.</param>
+    /// <returns>What its parts held, or null where no folder of that name is kept.</returns>
+    /// <exception cref="ArgumentException">When the name is not a folder's.</exception>
+    public static long? Forget(string stateDirectory, string name)
+    {
+        // Checked before it is joined to a path: what is not a folder's name
+        // could name anything the state directory holds, or outside it.
+        if (!IsName(name))
+        {
+            throw new ArgumentException(null, nameof(name));
+        }
+
+        var parts = Path.Combine(RootUnder(stateDirectory), name);
+        if (!Directory.Exists(parts))
+        {
+            return null;
+        }
+
+        var held = Held(parts);
+        Directory.Delete(parts, recursive: true);
+        return held;
+    }
+
+    /// <summary>What a folder's run said of itself, or null where it said nothing that reads.</summary>
+    private static DirectRestoreRun? ReadRecord(string parts)
+    {
+        try
+        {
+            var path = Path.Combine(parts, RecordName);
+            return File.Exists(path) ? JsonSerializer.Deserialize<DirectRestoreRun>(File.ReadAllText(path), SerializerOptions) : null;
+        }
+        catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }
+
+/// <summary>
+/// What a run in direct mode restores and where (ADR-0142): kept beside its
+/// parts, as the service keeps a run's record, but naming none of the
+/// backup's files.
+/// </summary>
+/// <param name="SnapshotId">The snapshot it restores, in hex.</param>
+/// <param name="Set">The set the snapshot is of, where one is configured here.</param>
+/// <param name="OutputDirectory">Where it lands, or null where it lands each file where it was captured.</param>
+/// <param name="Existing">The policy asked for a file in the way, or null for the default.</param>
+/// <param name="BeganAt">When it began, in Unix milliseconds.</param>
+internal sealed record DirectRestoreRun(
+    [property: JsonPropertyName("snapshot_id")] string SnapshotId,
+    [property: JsonPropertyName("set")] string? Set,
+    [property: JsonPropertyName("output_directory")] string? OutputDirectory,
+    [property: JsonPropertyName("existing")] string? Existing,
+    [property: JsonPropertyName("began_at")] ulong BeganAt);
+
+/// <summary>A destination's folder of parts, as <c>restore-parts</c> lists it (ADR-0142).</summary>
+/// <param name="Name">The folder's name.</param>
+/// <param name="Run">What its run said of itself, or null where that was not kept.</param>
+/// <param name="Held">The bytes its parts hold.</param>
+/// <param name="LastWritten">When the folder was last written, for ordering one whose run said nothing.</param>
+internal sealed record KeptDirectRestoreParts(string Name, DirectRestoreRun? Run, long Held, DateTime LastWritten);

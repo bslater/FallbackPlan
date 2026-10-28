@@ -2914,6 +2914,47 @@ public static class CliApplication
         }
 
         {
+            var partsStateOption = new Option<string>("--state")
+            {
+                Description = "The state directory a restore in direct mode used.",
+                Required = true,
+            };
+            var partsForgetOption = new Option<string?>("--forget")
+            {
+                Description = "Let the parts of the destination this names go, by the name the listing gives it: its folder "
+                    + "is removed from the state directory, and every other destination's stays.",
+            };
+            var command = new Command(
+                "restore-parts",
+                "List each destination a restore in direct mode left unfinished under a state directory (ADR-0142): what "
+                + "its run restores and where, when it began, and what its parts keep of the backup's files. With --forget, "
+                + "let one destination's parts go. The service lists its own runs with restore-resume.");
+            command.Options.Add(partsStateOption);
+            command.Options.Add(partsForgetOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() =>
+            {
+                var state = parse.GetValue(partsStateOption)!;
+                if (!Directory.Exists(state))
+                {
+                    throw new CliFailureException(Strings.FormatCliApplication_NoStateDirectoryKeepsReceipts(state));
+                }
+
+                if (parse.GetValue(partsForgetOption) is { } name)
+                {
+                    DirectRestorePartsReport.LetGo(output, state, name);
+                }
+                else
+                {
+                    DirectRestorePartsReport.WriteKept(output, state);
+                }
+
+                return Task.FromResult(0);
+            }));
+        }
+
+        {
             var destinationOption = new Option<string>("--destination")
             {
                 Description = "The declared destination to look in, by name.",

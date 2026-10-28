@@ -28,6 +28,8 @@ A run in direct mode that does not finish says to run it again with `--resume`. 
 
 Where the folder of its destination holds any parts, the same line says how many bytes of the backup's files they keep, the folder, and that they stay until a run there finishes. The figure is what lies in the folder as the run ends, as the service's list counts a run's parts as it is asked.
 
+> **2026-10 ([ADR-0142](0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md)).** After "until a run there finishes", the line names the command that lets them go: `restore-parts --state` with the state directory, and `--forget` with the folder's name. The figure counts the folder's parts alone, not the record each run now keeps beside them.
+
 ## Consequences
 
 - A person whose restore in direct mode did not finish learns how to resume it, and that some of their backup's plaintext stays under the state directory.
@@ -36,15 +38,22 @@ Where the folder of its destination holds any parts, the same line says how many
 ## What this does not do
 
 - **List what each destination keeps.** Direct mode keeps no record of its runs. A run says what its destination keeps only as it ends.
+
+  > **2026-10 ([ADR-0142](0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md)).** `restore-parts` lists them now, from a record each run keeps beside its parts.
 - **Say it of a run stopped before it answers.** A run the process does not see end, or one cancelled before its receipt is made, prints nothing. Its parts stay, as ADR-0135 has it.
+
+  > **2026-10 ([ADR-0142](0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md)).** It still prints nothing, but `restore-parts` lists its destination, from the record the run wrote before it assembled anything.
 
 ## Alternatives considered
 
 - **Delete the parts of a run that does not finish.** Rejected. A resume takes them up, which is what ADR-0135 keeps them for.
 - **Keep a record of each direct run, as the service does.** Rejected for now. Saying what is kept as the run ends needs none. A listing would need one, and a way to let a destination's parts go.
 
+  > **2026-10 ([ADR-0142](0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md)).** Taken up with the listing: each run keeps one beside its parts, naming none of the backup's files, and the line a run that does not finish prints ends with the command that lets them go.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A run in direct mode that does not finish says to run it again with `--resume`, and, where its destination's parts keep any of the backup's files, how many bytes they keep and where, until a run there finishes. No contract change. |
+| 2026-10 | Accepted | [ADR-0142](0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md): each run keeps the record this one turned down for now, restore-parts lists and lets go what each destination keeps, and the line names restore-parts --forget. |

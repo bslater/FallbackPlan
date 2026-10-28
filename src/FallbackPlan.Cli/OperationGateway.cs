@@ -1569,6 +1569,16 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             throw new CliFailureException(Strings.FormatDirectGateway_RestoreWouldNotFit(space.Refusal()));
         }
 
+        // Beside its parts, what the run restores and where, so restore-parts
+        // can say whose they are while it is left unfinished (ADR-0142).
+        var began = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        DirectRestoreParts.Record(parts, new DirectRestoreRun(
+            Convert.ToHexStringLower(snapshotId),
+            set?.Name,
+            request.ToOriginal ? null : Path.GetFullPath(request.OutputDirectory),
+            request.Existing,
+            began));
+
         var executor = new RestoreExecutor(reader, target);
         var options = new RestoreExecutionOptions
         {
@@ -1584,7 +1594,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             // A fresh run identifier per invocation, so two restores of one
             // snapshot displace into distinct stores (architecture 08 §3.1).
             RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
-            NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            NowUnixMilliseconds = began,
             Resume = request.Resume,
             PartsDirectory = parts,
         };
@@ -1645,14 +1655,13 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
 
         // How to resume a run that did not finish, as one through the
-        // service says it (ADR-0110), and what its parts keep of the
-        // backup's plaintext and where, since nothing else here lists them
-        // (ADR-0137).
+        // service says it (ADR-0110), what its parts keep of the backup's
+        // plaintext and where (ADR-0137), and how to let them go (ADR-0142).
         if (receipt.Outcome is not (RestoreOutcome.Complete or RestoreOutcome.Partial))
         {
             var held = DirectRestoreParts.Held(parts);
             lines.Add(held > 0
-                ? $"to restore what is left, run it again with --resume; {RestoreSpace.Bytes((ulong)held)} of its files assembled so far are kept under '{parts}' until a run there finishes"
+                ? $"to restore what is left, run it again with --resume; {RestoreSpace.Bytes((ulong)held)} of its files assembled so far are kept under '{parts}' until a run there finishes, or restore-parts --state '{session.StateDirectory}' --forget {Path.GetFileName(parts)} lets them go"
                 : "to restore what is left, run it again with --resume");
         }
 
