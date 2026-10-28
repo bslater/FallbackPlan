@@ -24,7 +24,7 @@ namespace FallbackPlan.Repository.Tests.Catalogue;
 /// The ceilings are measured figures, not the requirement's target. As of
 /// this suite the target is <b>missed by the schema itself</b>: the floor
 /// — a version, the one path that reaches it and its own manifest's
-/// location, with no segment anywhere — is already more than twice 400 B,
+/// location, with no segment anywhere — is already half as much again as 400 B,
 /// so no corpus and no dedup ratio can bring a real catalogue inside the
 /// budget. <c>AFileVersionWithNoSegmentsAtAll_AlreadyCostsMoreThanTheWholeBudget</c>
 /// pins that as the fact it is; the requirement row carries the corrected
@@ -49,29 +49,30 @@ public sealed class CatalogueSizeTests
     {
         var perVersion = CatalogueSeeding.MeasureBytes(Versions) / (double)Versions;
 
-        // Measured 1 404 B/version here, and 1 373 at 20 000 versions, since
-        // a path's case is folded when a lookup asks and not stored
-        // (ADR-0146); 2 520 and 2 477 before the catalogue's schema was
-        // first measured against its budget (ADR-0144, ADR-0145). This is the headline figure rather than the
-        // regression guard: a whole added column moves it by only about 4%,
-        // which is inside any band a different page size or fill factor
-        // could also move it by. What guards the schema is the per-plane
-        // case below, where the same change shows up five times as large.
-        Assert.IsGreaterThan(1_235, perVersion, $"{perVersion:F0} B/version");
-        Assert.IsLessThan(1_575, perVersion, $"{perVersion:F0} B/version");
+        // Measured 1 208 B/version here, and 1 183 at 20 000 versions, since
+        // a file version's row keeps only what is asked of it (ADR-0147);
+        // 2 520 and 2 477 before the catalogue's schema was first measured
+        // against its budget (ADR-0144 to ADR-0146). This is the headline
+        // figure rather than the regression guard: a whole added column
+        // moves it by only about 4%, which is inside any band a different
+        // page size or fill factor could also move it by. What guards the
+        // schema is the per-plane case below, where the same change shows up
+        // six times as large.
+        Assert.IsGreaterThan(1_065, perVersion, $"{perVersion:F0} B/version");
+        Assert.IsLessThan(1_355, perVersion, $"{perVersion:F0} B/version");
     }
 
     [TestMethod]
-    [DataRow(CataloguePlanes.FileVersions, 330, 420, DisplayName = "file_versions and its two indexes")]
+    [DataRow(CataloguePlanes.FileVersions, 165, 210, DisplayName = "file_versions and its identity index")]
     [DataRow(CataloguePlanes.TreeEntries, 365, 465, DisplayName = "tree_entries and its parent index")]
     [DataRow(CataloguePlanes.Locations, 605, 775, DisplayName = "object_locations and ix_locations_blob")]
     public void EachPlaneCostsWhatItsRowsAndIndexesCost(CataloguePlanes plane, int floor, int ceiling)
     {
         // Where the bytes are, which is what makes the headline actionable
-        // and what a schema change has to get past. A column added to
-        // file_versions with an index on it moves that plane by about a
-        // third while moving the total by a twentieth, so this is the case
-        // that notices.
+        // and what a schema change has to get past. A hash's column added to
+        // file_versions with an index on it moves that plane by more than
+        // half while moving the total by a tenth, so this is the case that
+        // notices.
         var perVersion = CatalogueSeeding.MeasureBytes(Versions, planes: plane) / (double)Versions;
 
         Assert.IsGreaterThan(floor, perVersion, $"{plane}: {perVersion:F0} B/version");
@@ -88,8 +89,8 @@ public sealed class CatalogueSizeTests
         // a catalogue anybody could restore from.
         var floor = CatalogueSeeding.MeasureBytes(Versions, segmentsPerVersion: 0) / (double)Versions;
 
-        Assert.IsGreaterThan(755, floor, $"{floor:F0} B/version");
-        Assert.IsLessThan(965, floor, $"{floor:F0} B/version");
+        Assert.IsGreaterThan(585, floor, $"{floor:F0} B/version");
+        Assert.IsLessThan(750, floor, $"{floor:F0} B/version");
 
         // Stated as an assertion rather than left in prose: the budget is
         // unreachable before a single segment exists, so it is the target

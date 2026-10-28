@@ -103,8 +103,15 @@ public static class CatalogueSchema
     /// at a time through <c>ix_tree_entries_parent</c> when it is asked
     /// (NFR-PERF-011, ADR-0146).
     /// </para>
+    /// <para>
+    /// v15 over v14: <c>file_versions</c> keeps only what a reader of the
+    /// catalogue asks of a version, and no <c>ix_file_versions_hash</c>. Its
+    /// name, kind, whole-file hash, parent and segment count were written
+    /// from the manifest and read by nothing, and the hash was indexed for a
+    /// lookup nothing made (NFR-PERF-011, ADR-0147).
+    /// </para>
     /// </remarks>
-    public const int Version = 14;
+    public const int Version = 15;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -200,22 +207,19 @@ public static class CatalogueSchema
             observed_clock_skew_ms INTEGER
         ) WITHOUT ROWID;
 
+        -- What a reader of the catalogue asks of a file version: the
+        -- incremental short-circuit's comparison key, its identity, and
+        -- whether it carries alternate streams. Everything else a version
+        -- states is in its manifest.
         CREATE TABLE file_versions (
             object_id             BLOB PRIMARY KEY,
-            name                  BLOB NOT NULL,
-            entry_kind            INTEGER NOT NULL,
             logical_length        INTEGER NOT NULL,
-            whole_file_hash       BLOB NOT NULL,
-            parent_version        BLOB,
-            segment_count         INTEGER NOT NULL,
             modified_at           INTEGER,
             identity_device       INTEGER,
             identity_file_id      INTEGER,
             has_alternate_streams INTEGER NOT NULL DEFAULT 0,
             metadata_digest       BLOB
         ) WITHOUT ROWID;
-
-        CREATE INDEX ix_file_versions_hash ON file_versions (whole_file_hash);
 
         -- Finds a prior version by the file's stable identity rather than by
         -- its path, which is what makes a rename or a move recognisable as

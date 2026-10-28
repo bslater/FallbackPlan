@@ -401,12 +401,7 @@ public sealed class ForensicRebuilder : IDisposable
             var manifest = FileVersionManifestCodec.Decode(manifestBytes);
             catalogue.RecordFileVersion(
                 entry.ObjectId,
-                manifest.Name.Span,
-                manifest.EntryKind,
                 manifest.LogicalLength,
-                manifest.WholeFileHash.Span,
-                manifest.ParentVersion,
-                manifest.SegmentReferences.Count,
                 manifest.Metadata.ModifiedAt,
                 hasAlternateStreams: manifest.Metadata.AlternateStreams.Count > 0,
                 metadataDigest: FileVersionManifestCodec.MetadataDigest(manifest.Metadata));

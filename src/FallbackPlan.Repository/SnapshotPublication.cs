@@ -137,8 +137,8 @@ public sealed record SnapshotJob
 /// <c>Inherited</c> carries the manifest a renamed file's version was
 /// rewritten from, when its content was inherited rather than captured.
 /// <c>Archive</c> is null in that case — nothing was archived — so the
-/// inherited manifest is what states the version's real length and hash to
-/// the catalogue. <c>Streams</c> is the content of a captured version's
+/// inherited manifest is what states the version's real length to the
+/// catalogue. <c>Streams</c> is the content of a captured version's
 /// alternate streams; with the segments <c>Archive</c> or <c>Inherited</c>
 /// already carries, it is what the catalogue traces damage back to the version
 /// through.
@@ -678,14 +678,7 @@ public sealed partial class PublicationOrchestrator
             var inherited = file.Inherited;
             _catalogue.RecordFileVersion(
                 file.ObjectId,
-                file.NameBytes.Span,
-                file.EntryKind,
                 (ulong)(archive?.LogicalLength ?? (long?)inherited?.LogicalLength ?? 0),
-                archive is not null ? [.. archive.WholeFileHash]
-                    : inherited is not null ? inherited.WholeFileHash.ToArray()
-                    : TreeWalkPublisher.EmptyHash,
-                parentVersion: null,
-                archive?.SegmentReferences.Count ?? inherited?.SegmentReferences.Count ?? 0,
                 file.ModifiedAt,
                 file.IdentityDevice,
                 file.IdentityFileId,
