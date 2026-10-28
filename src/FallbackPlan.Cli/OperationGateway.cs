@@ -538,6 +538,11 @@ public static class OperationGateway
     internal static string FoundInPlace(long count) => string.Create(
         CultureInfo.InvariantCulture,
         $"{count} file(s) already in place, holding the snapshot's content, were left as they stood");
+
+    /// <summary>The line saying how many files a resume took up from the parts its run had assembled (ADR-0130).</summary>
+    internal static string ResumedWithin(long count) => string.Create(
+        CultureInfo.InvariantCulture,
+        $"{count} file(s) were resumed from what the run had assembled of them");
 }
 
 /// <summary>The gateway that sends work to a running service.</summary>
@@ -797,9 +802,7 @@ internal sealed class ServiceGateway(
 
         if (result.ResumedWithin > 0)
         {
-            lines.Add(string.Create(
-                CultureInfo.InvariantCulture,
-                $"{result.ResumedWithin} file(s) were resumed from what the run had assembled of them"));
+            lines.Add(OperationGateway.ResumedWithin(result.ResumedWithin));
         }
 
         // How to resume a run that did not finish (ADR-0110). A partial
@@ -1246,6 +1249,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 {
     private static readonly AsyncLocal<Func<string, long?>?> AvailableBytesFlow = new();
 
+    private static readonly AsyncLocal<Func<string, ulong?>?> VolumeFlow = new();
+
     /// <summary>
     /// A test harness's view of the disk for this flow's restores
     /// (FR-RST-003): directory → available bytes, null meaning the platform
@@ -1257,6 +1262,17 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     {
         get => AvailableBytesFlow.Value;
         set => AvailableBytesFlow.Value = value;
+    }
+
+    /// <summary>
+    /// A test harness's view of which volume holds each directory, for this
+    /// flow's restores (FR-RST-003), as <see cref="AvailableBytesInFlow"/> is
+    /// of what is free there: null, the production value, asks the platform.
+    /// </summary>
+    internal static Func<string, ulong?>? VolumeOfInFlow
+    {
+        get => VolumeFlow.Value;
+        set => VolumeFlow.Value = value;
     }
 
     /// <summary>The session this gateway works through — the verbs a service cannot serve still need it.</summary>
@@ -1565,6 +1581,10 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
             NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Resume = request.Resume,
+
+            // Kept where a resume to the same place finds them (ADR-0135):
+            // direct mode names no run a resume could ask by.
+            PartsDirectory = DirectRestoreParts.Of(session.StateDirectory, slices.Select(slice => slice.OutputDirectory)),
         };
         var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
         foreach (var slice in slices)
@@ -1575,6 +1595,14 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
 
         var receipt = RestoreOriginalLocation.Merge(receipts) with { Set = set?.Name, SetId = set?.Id };
+
+        // A run that completed, or skipped only what the target cannot hold,
+        // is finished, as the service has it (ADR-0115): a resume would add
+        // nothing, so its parts go.
+        if (receipt.Outcome is RestoreOutcome.Complete or RestoreOutcome.Partial)
+        {
+            DirectRestoreParts.LetGo(options.PartsDirectory);
+        }
 
         var directories = plan.Items
             .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
@@ -1606,6 +1634,12 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         if (foundInPlace > 0)
         {
             lines.Add(OperationGateway.FoundInPlace(foundInPlace));
+        }
+
+        var resumedWithin = receipt.Items.Count(item => item.ResumedAt > 0);
+        if (resumedWithin > 0)
+        {
+            lines.Add(OperationGateway.ResumedWithin(resumedWithin));
         }
 
         // What the files came back without, which the receipt names file by
@@ -1640,14 +1674,18 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
 
         // A resume reads nothing of a file its run landed but the manifest
-        // (ADR-0132). Direct mode keeps no parts, so that is all it holds.
+        // (ADR-0132), nor what the parts it kept prove (ADR-0135).
         IReadOnlyList<RestoreSlice> slices =
         [
             .. SlicesOf(catalogue, snapshotId, plan, request).Select(slice => new RestoreSlice(
                 slice.Plan, slice.OutputDirectory, request.Resume ? slice.OutputDirectory : null, slice.LabelPrefix)),
         ];
         var held = request.Resume
-            ? new RestoreHeld { Landed = RestoreSpace.LandedPaths(slices, RestoreDestinationMode.InPlace) }
+            ? new RestoreHeld
+            {
+                Landed = RestoreSpace.LandedPaths(slices, RestoreDestinationMode.InPlace),
+                PartsDirectory = DirectRestoreParts.Of(session.StateDirectory, slices.Select(slice => slice.OutputDirectory)),
+            }
             : null;
         var probed = await RestoreBlobSet.ResolveAsync(
             catalogue, plan, session.Store, session.Repository.RepositoryId, session.Repository.Keys, held, cancellationToken)
@@ -1746,12 +1784,16 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     };
 
     /// <summary>How this machine says how much room a directory's volume has.</summary>
-    private static RestoreSpaceProbe SpaceProbe() => new()
+    private RestoreSpaceProbe SpaceProbe() => new()
     {
         AvailableBytes = AvailableBytesInFlow ?? RestoreSpaceProbe.PlatformAvailableBytes,
-        VolumeOf = path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
+        VolumeOf = VolumeOfInFlow ?? (path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
             ? stat.Device
-            : null,
+            : null),
+
+        // Every file a run here restores is assembled in a part (ADR-0135),
+        // so that is where the room for the largest one is needed (ADR-0131).
+        WorkingDirectory = DirectRestoreParts.RootUnder(session.StateDirectory),
     };
 
     /// <inheritdoc/>
