@@ -19,7 +19,10 @@ namespace FallbackPlan.Cli.Tests;
 /// through the service does, and how much of the backup its parts keep under
 /// the state directory and where (ADR-0137). <c>restore-parts</c> lists each
 /// destination a run left unfinished, by the name of its folder, with what it
-/// restores and where, and lets one go by that name alone (ADR-0142).
+/// restores and where, and lets one go by that name alone (ADR-0142). A run
+/// holds its destination's folder while it runs, so a second run there is
+/// refused before it writes anything, and the listing says a run is under
+/// way there and lets none of its parts go (ADR-0143).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileDirectTests : IDisposable
@@ -360,6 +363,84 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
 
         Assert.AreEqual(1, refused.ExitCode, refused.All);
         Assert.Contains($"no state directory at '{absent}'", refused.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ASecondRunToADestinationUnderWay_IsRefused_BeforeAnythingIsWritten()
+    {
+        var snapshot = await BackUpAsync();
+        using var underWay = HoldTheDestination();
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", Destination);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"Another restore in direct mode holds this destination's folder '{Parts}'", refused.Error, StringComparison.Ordinal);
+        Assert.IsFalse(File.Exists(Path.Combine(Destination, "one.txt")), "nothing is written");
+        Assert.IsFalse(File.Exists(Path.Combine(Parts, "run.json")), "nor what the run would restore");
+    }
+
+    [TestMethod]
+    public async Task ARunThatEnds_LetsTheDestinationGo_ForTheNextRunThere()
+    {
+        var snapshot = await BackUpAsync();
+        var failed = await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination));
+        Assert.AreNotEqual(0, failed.ExitCode, failed.All);
+
+        using (HoldTheDestination())
+        {
+            // Taken here, it was let go by the run that ended.
+        }
+
+        var resumed = await _cli.RunAsync("restore", snapshot, "--output", Destination, "--resume");
+
+        Assert.AreEqual(0, resumed.ExitCode, resumed.All);
+    }
+
+    [TestMethod]
+    public async Task ADestinationWithARunUnderWay_IsListedAsSuch()
+    {
+        var snapshot = await BackUpAsync();
+        KeepPart("assembled before");
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination))).ExitCode);
+        using var underWay = HoldTheDestination();
+
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        Assert.AreEqual(0, listed.ExitCode, listed.All);
+        Assert.Contains("holding 16 bytes it had assembled; a run there is under way", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ADestinationLeftUnfinished_IsNotListedAsUnderWay()
+    {
+        var snapshot = await BackUpAsync();
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination))).ExitCode);
+
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        Assert.Contains(Name, listed.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("under way", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ThePartsOfADestinationWithARunUnderWay_AreNotLetGo()
+    {
+        var snapshot = await BackUpAsync();
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination))).ExitCode);
+        using var underWay = HoldTheDestination();
+
+        var refused = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget", Name);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"A restore in direct mode is under way to the destination whose parts are named '{Name}'", refused.Error, StringComparison.Ordinal);
+        Assert.IsTrue(File.Exists(Path.Combine(Parts, "run.json")), "nothing of it is let go");
+    }
+
+    /// <summary>Holds the destination's folder as a run there does while it runs.</summary>
+    private FileStream HoldTheDestination()
+    {
+        Directory.CreateDirectory(Parts);
+        return new FileStream(Path.Combine(Parts, "run.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
 
     /// <summary>Makes a FIFO at <paramref name="path"/>, answering whether the platform would.</summary>

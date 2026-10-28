@@ -220,6 +220,12 @@
   <data name="CliApplication_OriginalTakesNoOutput" xml:space="preserve">
     <value>--target original lands each file where it was captured, so it takes no --output: use one or the other.</value>
   </data>
+  <data name="DirectGateway_DestinationHeld" xml:space="preserve">
+    <value>Another restore in direct mode holds this destination's folder '{0}' ({1}). Run this again once that one ends.</value>
+  </data>
+  <data name="DirectRestorePartsReport_RunUnderWay" xml:space="preserve">
+    <value>A restore in direct mode is under way to the destination whose parts are named '{0}', so they are not let go. Let them go once it ends, if it does not finish.</value>
+  </data>
   <data name="DirectRestorePartsReport_NotAPartsName" xml:space="preserve">
     <value>'{0}' is not the name of a destination's parts: restore-parts names each by the thirty-two lowercase hex digits of its folder.</value>
   </data>

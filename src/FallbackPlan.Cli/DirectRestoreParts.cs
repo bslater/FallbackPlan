@@ -23,6 +23,9 @@ internal static class DirectRestoreParts
     /// <summary>The file in a folder that says what its run restores and where (ADR-0142).</summary>
     private const string RecordName = "run.json";
 
+    /// <summary>The file a run holds while it runs, so no second run there starts (ADR-0143).</summary>
+    private const string HoldName = "run.lock";
+
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
     /// <summary>The folder every destination's parts are kept under, in a state directory.</summary>
@@ -109,6 +112,56 @@ internal static class DirectRestoreParts
     }
 
     /// <summary>
+    /// Takes a destination's folder for one run (ADR-0143). While the run
+    /// holds what this answers, a second run there is refused, and the
+    /// folder is listed as under way and let go by nothing. The hold is the
+    /// operating system's, so it goes with the process however that ends.
+    /// </summary>
+    /// <param name="parts">The folder.</param>
+    /// <param name="problem">Why the folder could not be taken, where it could not.</param>
+    /// <returns>The hold, or null where another run holds the folder.</returns>
+    public static FileStream? Take(string parts, out string? problem)
+    {
+        Directory.CreateDirectory(parts);
+        try
+        {
+            problem = null;
+            return new FileStream(Path.Combine(parts, HoldName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException exception)
+        {
+            problem = exception.Message;
+            return null;
+        }
+    }
+
+    /// <summary>Whether a run holds the folder <paramref name="parts"/> (ADR-0143).</summary>
+    /// <param name="parts">The folder.</param>
+    /// <returns>Whether one does.</returns>
+    public static bool IsUnderWay(string parts)
+    {
+        var hold = Path.Combine(parts, HoldName);
+        if (!File.Exists(hold))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var probe = new FileStream(hold, FileMode.Open, FileAccess.Read, FileShare.None);
+            return false;
+        }
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Whether <paramref name="name"/> is a folder's: thirty-two lowercase
     /// hex digits, as every destination's folder is named.
     /// </summary>
@@ -137,7 +190,8 @@ internal static class DirectRestoreParts
         [
             .. root.EnumerateDirectories()
                 .Where(folder => IsName(folder.Name))
-                .Select(folder => new KeptDirectRestoreParts(folder.Name, ReadRecord(folder.FullName), Held(folder.FullName), folder.LastWriteTimeUtc))
+                .Select(folder => new KeptDirectRestoreParts(
+                    folder.Name, ReadRecord(folder.FullName), Held(folder.FullName), folder.LastWriteTimeUtc, IsUnderWay(folder.FullName)))
                 .OrderByDescending(kept => kept.Run?.BeganAt is { } began
                     ? DateTimeOffset.FromUnixTimeMilliseconds((long)began).UtcDateTime
                     : kept.LastWritten),
@@ -209,4 +263,5 @@ internal sealed record DirectRestoreRun(
 /// <param name="Run">What its run said of itself, or null where that was not kept.</param>
 /// <param name="Held">The bytes its parts hold.</param>
 /// <param name="LastWritten">When the folder was last written, for ordering one whose run said nothing.</param>
-internal sealed record KeptDirectRestoreParts(string Name, DirectRestoreRun? Run, long Held, DateTime LastWritten);
+/// <param name="UnderWay">Whether a run holds the folder now (ADR-0143).</param>
+internal sealed record KeptDirectRestoreParts(string Name, DirectRestoreRun? Run, long Held, DateTime LastWritten, bool UnderWay);

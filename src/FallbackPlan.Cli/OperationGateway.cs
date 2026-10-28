@@ -1569,16 +1569,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             throw new CliFailureException(Strings.FormatDirectGateway_RestoreWouldNotFit(space.Refusal()));
         }
 
-        // Beside its parts, what the run restores and where, so restore-parts
-        // can say whose they are while it is left unfinished (ADR-0142).
         var began = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        DirectRestoreParts.Record(parts, new DirectRestoreRun(
-            Convert.ToHexStringLower(snapshotId),
-            set?.Name,
-            request.ToOriginal ? null : Path.GetFullPath(request.OutputDirectory),
-            request.Existing,
-            began));
-
         var executor = new RestoreExecutor(reader, target);
         var options = new RestoreExecutionOptions
         {
@@ -1598,12 +1589,36 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             Resume = request.Resume,
             PartsDirectory = parts,
         };
+
+        // One run at a time to a destination (ADR-0143): a second would
+        // assemble into the same parts, and let them go under this one.
+        var hold = DirectRestoreParts.Take(parts, out var problem)
+            ?? throw new CliFailureException(Strings.FormatDirectGateway_DestinationHeld(parts, problem));
         var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
-        foreach (var slice in slices)
+        try
         {
-            receipts.Add((
-                await executor.ExecuteAsync(slice.Plan, slice.OutputDirectory, options, cancellationToken).ConfigureAwait(false),
-                slice.LabelPrefix));
+            // Beside its parts, what the run restores and where, so
+            // restore-parts can say whose they are while it is left
+            // unfinished (ADR-0142).
+            DirectRestoreParts.Record(parts, new DirectRestoreRun(
+                Convert.ToHexStringLower(snapshotId),
+                set?.Name,
+                request.ToOriginal ? null : Path.GetFullPath(request.OutputDirectory),
+                request.Existing,
+                began));
+
+            foreach (var slice in slices)
+            {
+                receipts.Add((
+                    await executor.ExecuteAsync(slice.Plan, slice.OutputDirectory, options, cancellationToken).ConfigureAwait(false),
+                    slice.LabelPrefix));
+            }
+        }
+        finally
+        {
+            // Let go however the run ends, and before its folder is, which a
+            // platform that deletes no file held open needs.
+            hold.Dispose();
         }
 
         var receipt = RestoreOriginalLocation.Merge(receipts) with { Set = set?.Name, SetId = set?.Id };
