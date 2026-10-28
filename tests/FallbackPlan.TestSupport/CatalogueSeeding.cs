@@ -16,7 +16,7 @@ public enum CataloguePlanes
     /// <summary><c>file_versions</c> and its identity index.</summary>
     FileVersions = 1,
 
-    /// <summary><c>tree_entries</c> and its parent index.</summary>
+    /// <summary><c>tree_entries</c>, keyed by snapshot, folder and name.</summary>
     TreeEntries = 2,
 
     /// <summary><c>object_locations</c>, <c>ix_locations_blob</c> and the applied-delta ledger.</summary>

@@ -69,3 +69,4 @@ The manifest states all of it, unchanged. Anything that comes to need a column t
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Catalogue schema 15 keeps no name, kind, whole-file hash, parent version or segment count for a file version, and no index on its hash. At scale M's shape file_versions falls from 345 B/version to 155 and the catalogue from 1 373 to 1 183. NFR-PERF-011 is still not met. |
+| 2026-10 | Accepted | [ADR-0148](0148-a-tree-entry-is-keyed-by-its-folder-and-name.md): a tree entry is keyed by its folder and name, and at scale M's shape the catalogue costs 942 B/version, not 1 183. |

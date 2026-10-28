@@ -110,8 +110,15 @@ public static class CatalogueSchema
     /// from the manifest and read by nothing, and the hash was indexed for a
     /// lookup nothing made (NFR-PERF-011, ADR-0147).
     /// </para>
+    /// <para>
+    /// v16 over v15: <c>tree_entries</c> is keyed by snapshot, folder and
+    /// name, and keeps no path and no <c>ix_tree_entries_parent</c>. The
+    /// index restated every row to keep a folder's listing off the table,
+    /// and the path restated the folder; a listing now reads the key itself
+    /// (NFR-PERF-011, ADR-0148).
+    /// </para>
     /// </remarks>
-    public const int Version = 15;
+    public const int Version = 16;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -227,16 +234,18 @@ public static class CatalogueSchema
         CREATE INDEX ix_file_versions_identity
             ON file_versions (identity_device, identity_file_id);
 
+        -- One entry of a snapshot's tree, keyed by the folder it is in and its
+        -- name there, so a folder's listing reads the key in name order. Its
+        -- path is the folder and the name joined by a separator, and a root
+        -- entry's name is its path.
         CREATE TABLE tree_entries (
             snapshot_id   BLOB NOT NULL,
-            path          TEXT NOT NULL,
             parent        TEXT NOT NULL,
+            name          TEXT NOT NULL,
             entry_kind    INTEGER NOT NULL,
             object_id     BLOB NOT NULL,
-            PRIMARY KEY (snapshot_id, path)
+            PRIMARY KEY (snapshot_id, parent, name)
         ) WITHOUT ROWID;
-
-        CREATE INDEX ix_tree_entries_parent ON tree_entries (snapshot_id, parent, path, entry_kind, object_id);
 
         -- The access time a folder's head tree states, keyed by the tree: the
         -- identity derives from the bytes, so one tree states one access time

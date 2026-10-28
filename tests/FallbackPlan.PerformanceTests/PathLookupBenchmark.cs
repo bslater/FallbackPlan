@@ -11,15 +11,17 @@ namespace FallbackPlan.PerformanceTests;
 /// NFR-PERF-004 path-and-version lookup at reduced scale (wave V2): a
 /// catalogue v2 seeded with 100 000 tree entries across a realistic
 /// directory shape — 1/10 of the requirement's 1M-file scale, honestly
-/// labelled — measuring the exact SQL <c>ls</c> and the incremental
-/// short-circuit run. Numbers land in docs/phase-1-benchmarks.md with
-/// the scale caveat spelled out.
+/// labelled — measuring the exact SQL <c>ls</c>, the incremental
+/// short-circuit run, and the walk of a snapshot's leaves in path order a
+/// source comparison and a snapshot diff make. Numbers land in
+/// docs/phase-1-benchmarks.md with the scale caveat spelled out.
 /// </summary>
 public static class PathLookupBenchmark
 {
     private const int Files = 100_000;
     private const int FilesPerDirectory = 50;
     private const int Probes = 20_000;
+    private const int Passes = 10;
 
     public static int Run()
     {
@@ -82,15 +84,29 @@ public static class PathLookupBenchmark
         stopwatch.Stop();
         var listMicros = stopwatch.Elapsed.TotalMicroseconds / (Probes / 10);
 
+        // The baseline a source comparison and a snapshot diff walk: every
+        // file of the snapshot, in path order.
+        stopwatch.Restart();
+        var enumerated = 0;
+        for (var pass = 0; pass < Passes; pass++)
+        {
+            enumerated += catalogue.EnumerateLeaves(snapshotId).Count;
+        }
+
+        stopwatch.Stop();
+        var leavesMillis = stopwatch.Elapsed.TotalMilliseconds / Passes;
+
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"seeded {Files} tree entries + file versions in {seed.Elapsed.TotalSeconds:f1} s"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"LookupPath   {lookupMicros,8:f1} us/op over {Probes} probes ({found} found)"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"ListDirectory{listMicros,8:f1} us/op over {Probes / 10} probes ({listed} entries listed)"));
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"EnumerateLeaves{leavesMillis,6:f1} ms/op over {Passes} passes ({enumerated / Passes} files each)"));
         Console.WriteLine("scale caveat: 100k files is 1/10 of NFR-PERF-004's stated scale; single-machine, tmpfs-adjacent.");
 
         File.Delete(path);
-        return found == Probes ? 0 : 1;
+        return found == Probes && enumerated == Files * Passes ? 0 : 1;
     }
 }

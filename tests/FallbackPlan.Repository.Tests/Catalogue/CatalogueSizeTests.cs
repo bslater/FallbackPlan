@@ -21,14 +21,15 @@ namespace FallbackPlan.Repository.Tests.Catalogue;
 /// fill, so the small measurement is the conservative one.
 /// </para>
 /// <para>
-/// The ceilings are measured figures, not the requirement's target. As of
-/// this suite the target is <b>missed by the schema itself</b>: the floor
-/// — a version, the one path that reaches it and its own manifest's
-/// location, with no segment anywhere — is already half as much again as 400 B,
-/// so no corpus and no dedup ratio can bring a real catalogue inside the
-/// budget. <c>AFileVersionWithNoSegmentsAtAll_AlreadyCostsMoreThanTheWholeBudget</c>
-/// pins that as the fact it is; the requirement row carries the corrected
-/// target and what it would take to reach the old one.
+/// The ceilings are measured figures, not the requirement's target, which
+/// the catalogue still misses. Until ADR-0148 it was <b>missed by the schema
+/// itself</b>: the floor — a version, the one path that reaches it and its
+/// own manifest's location, with no segment anywhere — cost more than 400 B,
+/// so no corpus and no dedup ratio could bring a real catalogue inside the
+/// budget. The floor now costs about the budget, so what a catalogue is over
+/// it by is what its segment references cost.
+/// <c>AFileVersionWithNoSegmentsAtAll_CostsAboutTheWholeBudget</c> pins that;
+/// the requirement row carries the figures.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -49,30 +50,30 @@ public sealed class CatalogueSizeTests
     {
         var perVersion = CatalogueSeeding.MeasureBytes(Versions) / (double)Versions;
 
-        // Measured 1 208 B/version here, and 1 183 at 20 000 versions, since
-        // a file version's row keeps only what is asked of it (ADR-0147);
-        // 2 520 and 2 477 before the catalogue's schema was first measured
-        // against its budget (ADR-0144 to ADR-0146). This is the headline
-        // figure rather than the regression guard: a whole added column
-        // moves it by only about 4%, which is inside any band a different
-        // page size or fill factor could also move it by. What guards the
-        // schema is the per-plane case below, where the same change shows up
-        // six times as large.
-        Assert.IsGreaterThan(1_065, perVersion, $"{perVersion:F0} B/version");
-        Assert.IsLessThan(1_355, perVersion, $"{perVersion:F0} B/version");
+        // Measured 965 B/version here, and 942 at 20 000 versions, since a
+        // tree entry is keyed by its folder and name (ADR-0148); 2 520 and
+        // 2 477 before the catalogue's schema was first measured against its
+        // budget (ADR-0144 to ADR-0147). This is the headline figure rather
+        // than the regression guard: a whole added column moves it by only
+        // about 5%, which is inside any band a different page size or fill
+        // factor could also move it by. What guards the schema is the
+        // per-plane case below, where the same change shows up five times as
+        // large.
+        Assert.IsGreaterThan(850, perVersion, $"{perVersion:F0} B/version");
+        Assert.IsLessThan(1_080, perVersion, $"{perVersion:F0} B/version");
     }
 
     [TestMethod]
     [DataRow(CataloguePlanes.FileVersions, 165, 210, DisplayName = "file_versions and its identity index")]
-    [DataRow(CataloguePlanes.TreeEntries, 365, 465, DisplayName = "tree_entries and its parent index")]
+    [DataRow(CataloguePlanes.TreeEntries, 150, 190, DisplayName = "tree_entries")]
     [DataRow(CataloguePlanes.Locations, 605, 775, DisplayName = "object_locations and ix_locations_blob")]
     public void EachPlaneCostsWhatItsRowsAndIndexesCost(CataloguePlanes plane, int floor, int ceiling)
     {
         // Where the bytes are, which is what makes the headline actionable
         // and what a schema change has to get past. A hash's column added to
         // file_versions with an index on it moves that plane by more than
-        // half while moving the total by a tenth, so this is the case that
-        // notices.
+        // half while moving the total by a little over a tenth, so this is
+        // the case that notices.
         var perVersion = CatalogueSeeding.MeasureBytes(Versions, planes: plane) / (double)Versions;
 
         Assert.IsGreaterThan(floor, perVersion, $"{plane}: {perVersion:F0} B/version");
@@ -80,7 +81,7 @@ public sealed class CatalogueSizeTests
     }
 
     [TestMethod]
-    public void AFileVersionWithNoSegmentsAtAll_AlreadyCostsMoreThanTheWholeBudget()
+    public void AFileVersionWithNoSegmentsAtAll_CostsAboutTheWholeBudget()
     {
         // The floor: one file_versions row, the one tree_entries row that
         // makes the version reachable, and the one object_locations row for
@@ -89,16 +90,17 @@ public sealed class CatalogueSizeTests
         // a catalogue anybody could restore from.
         var floor = CatalogueSeeding.MeasureBytes(Versions, segmentsPerVersion: 0) / (double)Versions;
 
-        Assert.IsGreaterThan(585, floor, $"{floor:F0} B/version");
-        Assert.IsLessThan(750, floor, $"{floor:F0} B/version");
+        Assert.IsGreaterThan(370, floor, $"{floor:F0} B/version");
+        Assert.IsLessThan(475, floor, $"{floor:F0} B/version");
 
-        // Stated as an assertion rather than left in prose: the budget is
-        // unreachable before a single segment exists, so it is the target
-        // that is wrong and not the corpus that is unlucky. This goes red
-        // the day the schema genuinely gets there, which is when the
-        // requirement row wants revisiting.
-        Assert.IsGreaterThan(
-            BudgetBytesPerVersion,
+        // Stated as an assertion rather than left in prose. Until ADR-0148
+        // the floor alone was more than the budget, so it was the schema that
+        // missed it before any segment existed. It measured 395 B/version at
+        // 20 000 versions, inside the budget, and here, where the trees are
+        // less full, within a tenth of it. What a catalogue is over the
+        // budget by is its segment references.
+        Assert.IsLessThan(
+            BudgetBytesPerVersion * 1.1,
             floor,
             $"the floor is {floor:F0} B/version against a {BudgetBytesPerVersion} B budget");
     }

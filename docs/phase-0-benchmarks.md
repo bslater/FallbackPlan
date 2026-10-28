@@ -232,6 +232,14 @@ it turns out to be the main term.
 > identity index cost 155 B/version, against 345, and the catalogue
 > **1 183 in all**, with the floor at 636. The budget is missed by 3.0×.
 
+> **Re-measured 2026-10 ([ADR-0148](adr/0148-a-tree-entry-is-keyed-by-its-folder-and-name.md)).** A tree entry is keyed by
+> its folder and name, and keeps no path and no covering index. At
+> 20 000 versions `tree_entries` costs 138 B/version, against 378, and
+> the catalogue **942 in all**. The floor is **395**, inside the budget
+> for the first time, so what is over it is the segment references:
+> `object_locations`, at 661, is about 110 B for each of a version's six
+> locations. The budget is missed by 2.4×.
+
 Every segment reference here is a **distinct** object, which is the no-dedup
 upper bound on `object_locations`; a corpus with cross-version dedup holds
 fewer rows there for the same reference count. The floor is unaffected by
@@ -284,3 +292,4 @@ forced the question.
 |------|--------|-----|-----|----------|
 | 2026-09 | NFR-PERF-011 | ≤ 400 B/file version at scale M | **contradicted, not yet replaced** — measured 2 520 B, with a structural floor of ~1 175 B | §5. The floor is reached with no segment at all, so no corpus brings the schema inside 400 B. A replacement number is a schema or segmentation-target decision, not a measurement. |
 | 2026-09 | NFR-PERF-012 | ≥ 500 blobs/s **and** scale M in ≤ 2 hours | **internally inconsistent, and in the wrong unit** — the two clauses differ by ~100×, and a rebuild's work is per record | §6. Scale M is ~24 000 blobs at the default blob size, so ≥ 500 blobs/s is under a minute. Settling the unit is what the row needs before a number can be set. |
+| 2026-10 | NFR-PERF-011 | contradicted, with a structural floor of ~1 175 B | **still missed, by 2.4×, and no longer structural.** It measured 942 B, with the floor at 395 B, inside the budget ([ADR-0148](adr/0148-a-tree-entry-is-keyed-by-its-folder-and-name.md)) | §5. A version with no segments now fits, so what is over the budget is the ~110 B each segment reference costs in `object_locations`, five of them at scale M's shape. A replacement number is still a location-schema or segmentation-target decision. |
