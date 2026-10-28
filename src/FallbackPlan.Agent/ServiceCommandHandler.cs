@@ -691,6 +691,7 @@ public sealed partial class ServiceCommandHandler(
         ListRestoreReceiptsCommand listRestoreReceipts => ListRestoreReceipts(listRestoreReceipts),
         GetRestoreReceiptCommand getRestoreReceipt => GetRestoreReceipt(getRestoreReceipt),
         ForgetRestoreRunCommand forget => ForgetRestoreRun(forget),
+        ForgetRestoreReceiptCommand forgetReceipt => ForgetRestoreReceipt(forgetReceipt),
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
         ProvisionInstallationCommand setup => ProvisionInstallation(setup),
@@ -1523,6 +1524,23 @@ public sealed partial class ServiceCommandHandler(
         UnfinishedRestoreNotice.Resolve(runtime, command.Run, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         RestoreParts.LetGo(runtime, command.Run);
         return new AcknowledgedResult();
+    }
+
+    /// <summary>
+    /// Lets one run's kept receipt go (contract 1.79, ADR-0140): that run's
+    /// alone, by its name, which is never joined to a path unless it is a
+    /// run's.
+    /// </summary>
+    private ServiceResult ForgetRestoreReceipt(ForgetRestoreReceiptCommand command)
+    {
+        if (!IsRunId(command.Run))
+        {
+            return NamesNoRun(command.Run);
+        }
+
+        return RestoreReceipt.LetGo(runtime.ReceiptsRoot, command.Run)
+            ? new AcknowledgedResult()
+            : new ServiceError(ServiceErrorReason.NotFound, $"No restore receipt of run {command.Run} is kept by the service.");
     }
 
     private static ServiceError NamesNoRun(string named) =>

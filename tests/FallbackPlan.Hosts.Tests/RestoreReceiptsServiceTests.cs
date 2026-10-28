@@ -14,6 +14,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// keeps: what became of each run's files and where it wrote them, never the
 /// paths, which are the backup's file names, and a receipt that does not read
 /// said not to. Each names the set it restored (contract 1.74, ADR-0126).
+/// One run's receipt is let go by the run's name alone (contract 1.79,
+/// ADR-0140), and only that one; a run it keeps none of, and what is not a
+/// run's name, are refused.
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsServiceTests : IDisposable
@@ -106,6 +109,43 @@ public sealed class RestoreReceiptsServiceTests : IDisposable
             System.Text.Json.JsonSerializer.Serialize<ServiceResult>(listed, Api.Transport.FrameCodec.SerializerOptions),
             StringComparison.Ordinal,
             "the listing names none of the backup's files");
+    }
+
+    [TestMethod]
+    public async Task AReceiptTheServiceKeeps_IsLetGoByItsRunsNameAlone_AndOnlyItsRunsIs()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "the notes to come back");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await RunBackupAndWaitAsync(runtime, handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
+        var first = await RestoreAsync(handler, snapshotId, source.SourceId, "first");
+        var second = await RestoreAsync(handler, snapshotId, source.SourceId, "second");
+
+        var forgot = await handler.ExecuteAsync(new ForgetRestoreReceiptCommand(first.Run!), _timeout.Token);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(forgot, (forgot as ServiceError)?.Message);
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            await handler.ExecuteAsync(new ListRestoreReceiptsCommand(), _timeout.Token), out var listed);
+        Assert.AreEqual(second.Run, Assert.ContainsSingle(listed.Receipts).Run, "only the run named is let go");
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ForgetRestoreReceiptCommand(first.Run!), _timeout.Token), out var gone);
+        Assert.AreEqual(ServiceErrorReason.NotFound, gone.Reason);
+        Assert.Contains(first.Run!, gone.Message, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ForgetRestoreReceiptCommand(Path.Combine("..", "config")), _timeout.Token),
+            out var notARun);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, notARun.Reason);
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            await handler.ExecuteAsync(new ListRestoreReceiptsCommand(), _timeout.Token), out var still);
+        Assert.AreEqual(1, still.Total, "what is refused lets nothing go");
     }
 
     [TestMethod]

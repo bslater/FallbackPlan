@@ -784,8 +784,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// receipt's items as found in place is. Additive: a pre-1.78 client
     /// ignores the field, and a pre-1.78 service's receipts say none.
     /// </para>
+    /// <para>
+    /// 1.79 lets a receipt the service keeps go (FR-RST-004, ADR-0140).
+    /// `forget_restore_receipt` names the run alone, and the service removes
+    /// that run's receipt and no other, answering `acknowledged`; a run it
+    /// keeps no receipt of is not found, and what is not a run's name is
+    /// refused. Additive: a pre-1.79 service refuses the command as unknown.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 78);
+    public static ContractVersion Current { get; } = new(1, 79);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

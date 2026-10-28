@@ -2813,7 +2813,7 @@ public static class CliApplication
             var receiptsForgetOption = new Option<bool>("--forget")
             {
                 Description = "Let the receipt of the run --run names go: its file is removed from the state directory, "
-                    + "and every other run's stays (ADR-0139). Not through a paired service.",
+                    + "and every other run's stays (ADR-0139). With --connect, the paired service lets its own go (ADR-0140).",
             };
             var command = new Command(
                 "restore-receipts",
@@ -2821,7 +2821,7 @@ public static class CliApplication
                 + "(ADR-0124): each run, newest first, with when it ended, what became of its files and where it "
                 + "wrote them, or one run's receipt whole. With --connect, those a paired service keeps (ADR-0128), "
                 + "and one run's files it did not restore, through the passphrase. With --run and --forget, let that "
-                + "run's receipt go (ADR-0139).");
+                + "run's receipt go, from the state directory or the paired service (ADR-0139, ADR-0140).");
             command.Options.Add(receiptsStateOption);
             command.Options.Add(receiptsRunOption);
             command.Options.Add(receiptsLimitOption);
@@ -2843,11 +2843,6 @@ public static class CliApplication
 
                 if (parse.GetValue(connectOption) is not null)
                 {
-                    if (forget)
-                    {
-                        throw new CliFailureException(Strings.CliApplication_ForgetReadsTheStateDirectory);
-                    }
-
                     // Refused before the service is dialled, as a state
                     // directory's reading refuses them before it is read.
                     if (run is not null)
@@ -2864,8 +2859,10 @@ public static class CliApplication
                         parse,
                         client => run is null
                             ? RestoreReceiptReport.WriteServiceKeptAsync(output, client, limit, cancellationToken)
-                            : RestoreReceiptReport.WriteServiceRunAsync(
-                                output, client, parse.GetValue(passphraseEnvOption), run, limit, cancellationToken),
+                            : forget
+                                ? RestoreReceiptReport.LetGoThroughServiceAsync(output, client, run, cancellationToken)
+                                : RestoreReceiptReport.WriteServiceRunAsync(
+                                    output, client, parse.GetValue(passphraseEnvOption), run, limit, cancellationToken),
                         cancellationToken,
                         receiptsStateOption);
                 }

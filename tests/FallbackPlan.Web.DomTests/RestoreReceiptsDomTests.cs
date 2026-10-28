@@ -15,7 +15,9 @@ namespace FallbackPlan.Web.DomTests;
 /// shown only once the passphrase of the set its receipt records has
 /// unlocked a source, which is closed after (ADR-0127), and a run that
 /// restored everything offers nothing to show. A run says how many of its
-/// files were resumed within (ADR-0134).
+/// files were resumed within (ADR-0134). A receipt is let go by its run once
+/// a person confirms, asking no passphrase, and the list is asked again
+/// (ADR-0140).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -140,6 +142,48 @@ public sealed class RestoreReceiptsDomTests
         await Expect(card).Not.ToContainTextAsync("found in place");
         await Expect(card).Not.ToContainTextAsync("degraded");
         await Expect(card).Not.ToContainTextAsync("Showing the newest");
+    }
+
+    [TestMethod]
+    public async Task AReceipt_IsLetGoByItsRun_AfterAPersonConfirms_AndTheListIsAskedAgain()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var forgot = false;
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListDestinationsCommand => new DestinationsResult([]),
+            ListRestoreReceiptsCommand => new RestoreReceiptsResult(
+                forgot
+                    ? []
+                    : [
+                        new RestoreReceiptDescriptor(
+                            "0123456789abcdef", "complete", 1_700_000_000_000, new string('e', 32), "/srv/restored",
+                            Restored: 3, FoundInPlace: 0, Skipped: 0, Failed: 0, Degraded: 0),
+                    ],
+                Total: forgot ? 0 : 1),
+            ForgetRestoreReceiptCommand => Forgot(),
+            _ => new AcknowledgedResult(),
+        };
+        ServiceResult Forgot()
+        {
+            forgot = true;
+            return new AcknowledgedResult();
+        }
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#maintenance");
+
+        await page.ClickAsync("[data-action=\"forget-receipt\"][data-run=\"0123456789abcdef\"]");
+        await Expect(page.Locator("#dialog")).ToContainTextAsync("0123456789abcdef");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ForgetRestoreReceiptCommand>(), "nothing is let go before the person confirms");
+        await page.ClickAsync("#forget-receipt-go");
+
+        Assert.AreEqual("0123456789abcdef", (await harness.ReceivedAsync<ForgetRestoreReceiptCommand>()).Run);
+        await Expect(page.Locator("#restore-receipts-card")).ToContainTextAsync("No restore has kept a receipt here yet.");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<OpenRestoreSourceCommand>(), "letting a receipt go asks no passphrase");
     }
 
     [TestMethod]

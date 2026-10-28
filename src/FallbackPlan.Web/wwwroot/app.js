@@ -1697,6 +1697,10 @@ function renderRestoreReceiptsCard() {
     ? ` <button type="button" class="btn small" data-action="restore-receipt-files"
           data-run="${esc(row.run)}" data-set-id="${esc(row.setId)}">Not restored…</button>`
     : "";
+  // Any receipt, one that will not read too, is the person's to let go
+  // (ADR-0140), once they confirm which run's it is.
+  const letGo = row => `<button type="button" class="btn small" data-action="forget-receipt"
+      data-run="${esc(row.run)}">Let go…</button>`;
 
   let body;
   if (S.restoreReceipts === null) {
@@ -1707,7 +1711,7 @@ function renderRestoreReceiptsCard() {
   } else {
     body = `
       <div class="table-wrap"><table class="data">
-        <thead><tr><th>Ended</th><th>Run</th><th>Set</th><th>Outcome</th><th>Files</th><th>Written to</th></tr></thead>
+        <thead><tr><th>Ended</th><th>Run</th><th>Set</th><th>Outcome</th><th>Files</th><th>Written to</th><th></th></tr></thead>
         <tbody>${S.restoreReceipts.map(row => row.problem ? `
           <tr>
             <td>—</td>
@@ -1715,6 +1719,7 @@ function renderRestoreReceiptsCard() {
             <td>—</td>
             <td>${badge({ cls: "warn", icon: "?" }, "unreadable")}</td>
             <td colspan="2">${esc(row.problem)}</td>
+            <td>${letGo(row)}</td>
           </tr>` : `
           <tr>
             <td>${esc(fmtWhen(row.endedAt))}</td>
@@ -1723,6 +1728,7 @@ function renderRestoreReceiptsCard() {
             <td>${esc(row.outcome)}</td>
             <td>${esc(files(row))}${notRestored(row)}</td>
             <td class="mono detail">${esc(row.writtenTo)}</td>
+            <td>${letGo(row)}</td>
           </tr>`).join("")}
         </tbody>
       </table></div>`;
@@ -3034,6 +3040,29 @@ const actions = {
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
         <button type="button" class="btn primary" id="forget-run-go" data-action="forget-run-go" data-run="${esc(el.dataset.run)}">Let it go</button>
       </div>`);
+  },
+
+  "forget-receipt"(el) {
+    openDialog(`
+      <h3>Let the receipt go</h3>
+      <p class="dlg-sub">The receipt of run <span class="mono">${esc(el.dataset.run)}</span>.</p>
+      <p class="dlg-sub">The service will keep it no more, and nothing brings it back. What its run restored stays
+      where it landed.</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" id="forget-receipt-go" data-action="forget-receipt-go" data-run="${esc(el.dataset.run)}">Let it go</button>
+      </div>`);
+  },
+
+  async "forget-receipt-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "forget_restore_receipt", run: el.dataset.run }, { okToast: "Let go.", errToast: "Not let go" });
+      if (result) {
+        closeDialog();
+        refreshRestoreReceipts();
+      }
+    });
   },
 
   async "forget-run-go"(el) {

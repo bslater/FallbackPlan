@@ -58,6 +58,8 @@ They sit beside the peers' receipts, read on entering the view and never by the 
 
   > **2026-10 ([ADR-0139](0139-a-kept-restore-receipt-is-let-go.md)).** From the service's state directory, on its machine, `restore-receipts --run <run> --forget` lets one go. Neither the contract nor the console lets one go.
 
+  > **2026-10 ([ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md)).** The service lets one go through the contract now, `forget_restore_receipt` at 1.79, and the console offers it beside each receipt.
+
 ## Alternatives considered
 
 - **Answer the whole receipt through a restore source.** Rejected for now. A run's files are behind the passphrase, but the question a person asks first is what each restore did and where it wrote, which needs none of them.
@@ -73,3 +75,4 @@ They sit beside the peers' receipts, read on entering the view and never by the 
 | 2026-10 | Accepted | [ADR-0128](0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md): the command line asks a paired service for the receipts it keeps, which this record left undone. |
 | 2026-10 | Accepted | [ADR-0134](0134-the-kept-receipts-say-which-files-were-resumed-within.md): each receipt listed carries its run's files resumed within (contract 1.78), and the console says them. |
 | 2026-10 | Accepted | [ADR-0139](0139-a-kept-restore-receipt-is-let-go.md): a receipt the service keeps is let go from its state directory, on its machine; the contract and the console let none go. |
+| 2026-10 | Accepted | [ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md): the service lets a receipt it keeps go by the run's name, at contract 1.79, and the console's Maintenance view offers it. |

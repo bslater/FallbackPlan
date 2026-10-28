@@ -20,6 +20,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// unlocks, and the source is closed after (FR-WOR-007). A receipt that records
 /// no set, one that does not read, a run the service keeps no receipt of, and
 /// the files asked without the passphrase are each refused, naming no file.
+/// The console lets a receipt the service keeps go by its run alone, and the
+/// service keeps every other run's (contract 1.79, ADR-0140).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsRemoteTests : IDisposable
@@ -63,6 +65,25 @@ public sealed class RestoreReceiptsRemoteTests : IDisposable
         Assert.AreEqual(0, limited.ExitCode, limited.Error);
         Assert.DoesNotContain(NoSetRun, limited.Output, StringComparison.Ordinal);
         Assert.Contains("The newest 1 of 2 restore receipts kept by the service.", limited.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task APairedConsole_LetsAReceiptTheServiceKeepsGo_ByItsRunAlone()
+    {
+        await using var service = await StartServiceAsync();
+        var receipts = Path.Combine(_harness.StateDirectory, "receipts");
+        Keep(receipts, Run, _harness.DocsSetId);
+        Keep(receipts, NoSetRun, setId: null, completedAt: 1_699_000_000_000);
+
+        var forgot = await service.CliAsync("restore-receipts", "--run", Run, "--forget");
+        var again = await service.CliAsync("restore-receipts", "--run", Run, "--forget");
+
+        Assert.AreEqual(0, forgot.ExitCode, forgot.Error);
+        Assert.Contains($"let go the receipt of run {Run} the service kept", forgot.Output, StringComparison.Ordinal);
+        Assert.IsFalse(File.Exists(Path.Combine(receipts, $"{Run}.json")), "the service's receipt of the run is gone");
+        Assert.IsTrue(File.Exists(Path.Combine(receipts, $"{NoSetRun}.json")), "and every other run's stays");
+        Assert.AreEqual(1, again.ExitCode, again.Output);
+        Assert.Contains(Run, again.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]

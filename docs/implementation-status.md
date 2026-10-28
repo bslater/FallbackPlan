@@ -164,6 +164,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0137](adr/0137-a-run-in-direct-mode-left-unfinished-says-how-to-resume-it.md) | A run in direct mode left unfinished says how to resume it: to run it again with --resume, and how many bytes of the backup its destination's parts keep under the state directory, and where | **Built** | `Cli/DirectRestoreParts` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0137--a-run-in-direct-mode-left-unfinished-says-how-to-resume-it) |
 | [0138](adr/0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md) | The working space is said as room to assemble files one at a time: the refusal, the command line's plan and the console say so, since a resume's need is the most that remains of any one file | **Built** | `Restore/RestoreSpace` · `Cli/RestorePlanReport` · `Repository.Tests/RestoreSpaceTests` · `Cli.Tests/RestoreWithinAFileDirectTests` · `Web.DomTests/RestoreWizardDomTests` · [notes](#0138--the-working-space-is-said-as-room-to-assemble-files-one-at-a-time) |
 | [0139](adr/0139-a-kept-restore-receipt-is-let-go.md) | A kept restore receipt is let go: restore-receipts with --run and --forget removes that run's receipt from the state directory and every other run's stays; what is refused removes nothing | **Built** | `Restore/RestoreExecutor` · `Cli/RestoreReceiptReport` · `Repository.Tests/RestoreReceiptReadBackTests` · `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0139--a-kept-restore-receipt-is-let-go) |
+| [0140](adr/0140-the-service-lets-a-kept-restore-receipt-go.md) | The service lets a kept restore receipt go: forget_restore_receipt at contract 1.79 lets one run's receipt go by its name, asked by restore-receipts with --connect and offered by the console once a person confirms | **Built** | `Agent/ServiceCommandHandler` · `Cli/RestoreReceiptReport` · `Api.Tests/ConfigurationContractTests` · `Hosts.Tests/RestoreReceiptsServiceTests` · `Cli.Tests/RestoreReceiptsVerbTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0140--the-service-lets-a-kept-restore-receipt-go) |
 
 ---
 
@@ -3904,4 +3905,18 @@ and `--forget` with `--connect` are refused, and nothing is removed. No
 contract change.
 
 What remains is recorded rather than done. Neither the contract nor the
-console lets a receipt go, and none goes by age or all at once.
+console lets a receipt go, and none goes by age or all at once. ADR-0140
+lets the service and the console.
+
+### 0140 — the service lets a kept restore receipt go
+
+ADR-0139 let a receipt go from its state directory and refused it through a
+paired service. `forget_restore_receipt`, at contract 1.79, now has the
+service let one run's receipt go by its name, by the same rule, and answer
+`acknowledged`; a run it keeps none of is not found, and what is not a run's
+name is refused. `restore-receipts --connect --run <run> --forget` asks it,
+and the console's Maintenance view offers each receipt it lists, letting
+it go once a person confirms and asking the list again.
+
+What remains is recorded rather than done. Receipts still go one run at a
+time, never by age.

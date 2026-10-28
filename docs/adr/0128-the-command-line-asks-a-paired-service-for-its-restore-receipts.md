@@ -52,6 +52,8 @@ A name that is not a run's, and a limit below one, are refused before the servic
 
   > **2026-10 ([ADR-0139](0139-a-kept-restore-receipt-is-let-go.md)).** From a state directory, one run's receipt is let go with `--run <run> --forget`. With `--connect`, `--forget` is refused before the service is dialled.
 
+  > **2026-10 ([ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md)).** With `--connect`, `--forget` asks the paired service to let the run's receipt go, at contract 1.79.
+
 ## Alternatives considered
 
 - **Ask a service on this machine when `--state` names its state directory.** Rejected. The verb would read the same folder or ask the service depending on whether one was listening, and a person could not tell which answer they had.
@@ -63,3 +65,4 @@ A name that is not a run's, and a limit below one, are refused before the servic
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. `restore-receipts --connect` lists the receipts a paired service keeps, as a state directory's are listed, and with `--run` the files that run did not restore, through a source of the set its receipt records that the passphrase unlocks, closed after. No contract change. |
 | 2026-10 | Accepted | [ADR-0139](0139-a-kept-restore-receipt-is-let-go.md): --forget lets a receipt go from a state directory only, and is refused with --connect before the service is dialled. |
+| 2026-10 | Accepted | [ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md): with --connect, --run and --forget ask the paired service to let that run's receipt go. |

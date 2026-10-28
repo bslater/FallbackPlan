@@ -17,8 +17,9 @@ namespace FallbackPlan.Cli.Tests;
 /// Through a paired service (ADR-0128), a name that is not a run's and a
 /// limit below one are refused before the service is dialled. One run's
 /// receipt is let go by its name, and only that one (ADR-0139): a name that
-/// is not a run's, a run that kept none, no run at all, and a paired service
-/// are refused, and nothing is removed.
+/// is not a run's, a run that kept none, and no run at all are refused, and
+/// nothing is removed. A paired service is asked to let its receipt go by the
+/// run's name alone, and what it refuses is refused as it says (ADR-0140).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsVerbTests : IDisposable
@@ -50,6 +51,30 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
             ValueTask.FromResult<FallbackPlan.Api.ServiceResult>(command is FallbackPlan.Api.ListRestoreReceiptsCommand
                 ? new FallbackPlan.Api.RestoreReceiptsResult(receipts, receipts.Length)
                 : new FallbackPlan.Api.ServiceError(FallbackPlan.Api.ServiceErrorReason.InvalidArgument, "not scripted"));
+
+        public IAsyncEnumerable<FallbackPlan.Api.JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
+            AsyncEnumerable.Empty<FallbackPlan.Api.JobProgressEvent>();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>A service that keeps the receipts of the runs it was given, and lets each go once.</summary>
+    private sealed class ForgettingClient(params string[] kept) : FallbackPlan.Api.IFallbackPlanClient
+    {
+        private readonly HashSet<string> _kept = new(kept, StringComparer.Ordinal);
+
+        public List<FallbackPlan.Api.ServiceCommand> Asked { get; } = [];
+
+        public FallbackPlan.Api.ContractVersion ServiceContractVersion => FallbackPlan.Api.ContractVersion.Current;
+
+        public ValueTask<FallbackPlan.Api.ServiceResult> ExecuteAsync(FallbackPlan.Api.ServiceCommand command, CancellationToken cancellationToken)
+        {
+            Asked.Add(command);
+            return ValueTask.FromResult<FallbackPlan.Api.ServiceResult>(
+                command is FallbackPlan.Api.ForgetRestoreReceiptCommand forget && _kept.Remove(forget.Run)
+                    ? new FallbackPlan.Api.AcknowledgedResult()
+                    : new FallbackPlan.Api.ServiceError(FallbackPlan.Api.ServiceErrorReason.NotFound, "the service keeps no such receipt"));
+        }
 
         public IAsyncEnumerable<FallbackPlan.Api.JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
             AsyncEnumerable.Empty<FallbackPlan.Api.JobProgressEvent>();
@@ -330,15 +355,41 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Forget_ThroughAPairedService_IsRefusedBeforeItIsDialled()
+    public async Task Forget_ThroughAPairedService_AsksItToLetTheRunsReceiptGo_ByItsNameAlone()
+    {
+        await using var client = new ForgettingClient("0123456789abcdef", "fedcba9876543210");
+        using var output = new StringWriter();
+
+        Assert.AreEqual(0, await RestoreReceiptReport.LetGoThroughServiceAsync(output, client, "0123456789abcdef", CancellationToken.None));
+
+        Assert.IsInstanceOfType<FallbackPlan.Api.ForgetRestoreReceiptCommand>(Assert.ContainsSingle(client.Asked), out var asked);
+        Assert.AreEqual("0123456789abcdef", asked.Run);
+        Assert.Contains("let go the receipt of run 0123456789abcdef the service kept", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Forget_ThroughAPairedService_ARunItKeepsNoReceiptOf_IsRefusedAsTheServiceSays()
+    {
+        await using var client = new ForgettingClient();
+        using var output = new StringWriter();
+
+        var refused = await Assert.ThrowsExactlyAsync<CliFailureException>(
+            () => RestoreReceiptReport.LetGoThroughServiceAsync(output, client, "0123456789abcdef", CancellationToken.None));
+
+        Assert.Contains("the service keeps no such receipt", refused.Message, StringComparison.Ordinal);
+        Assert.AreEqual(string.Empty, output.ToString());
+    }
+
+    [TestMethod]
+    public async Task Forget_ThroughAPairedService_WhatIsNotARunsName_IsRefusedBeforeItIsDialled()
     {
         // Nothing listens on the port: a refusal that dialled first would say that instead.
         var forgot = await CliHarness.RunRawAsync(
-            "restore-receipts", "--run", "0123456789abcdef", "--forget",
+            "restore-receipts", "--run", Path.Combine("..", "config"), "--forget",
             "--connect", "127.0.0.1:1", "--state", _cli.StatePath, "--fingerprint", new string('f', 64));
 
         Assert.AreEqual(1, forgot.ExitCode, forgot.All);
-        Assert.Contains("--forget lets go a receipt kept under --state", forgot.Error, StringComparison.Ordinal);
+        Assert.Contains("sixteen", forgot.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]

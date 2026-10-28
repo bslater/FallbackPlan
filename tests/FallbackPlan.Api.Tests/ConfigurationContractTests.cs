@@ -34,11 +34,21 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_WhatAKeptReceiptResumedWithin_IsRecordedAtOneSeventyEight()
+    public void ContractVersion_LettingAKeptReceiptGo_IsRecordedAtOneSeventyNine()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.78", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.79", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void LettingAKeptReceiptGo_CrossesUnderItsWireName()
+    {
+        // Contract 1.79 (FR-RST-004, ADR-0140): the service lets one run's
+        // kept receipt go, by the run's name alone.
+        Assert.AreEqual(
+            """{"command":"forget_restore_receipt","run":"0123456789abcdef"}""",
+            JsonSerializer.Serialize<ServiceCommand>(new ForgetRestoreReceiptCommand("0123456789abcdef"), FrameCodec.SerializerOptions));
     }
 
     [TestMethod]
