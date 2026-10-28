@@ -52,6 +52,8 @@ When a run failed or was stopped and its result names a run, the wizard's result
 
 Through the service, a run that failed or was stopped says to run it again with `--resume` and its name. A run that completed, or failed nothing, says nothing of it.
 
+> **2026-10 ([ADR-0137](0137-a-run-in-direct-mode-left-unfinished-says-how-to-resume-it.md)).** In direct mode too, a run that does not finish says to run it again with `--resume`, and what its parts keep of the backup and where.
+
 ## Consequences
 
 - A person restoring from the console resumes a run cut short without leaving the wizard, and without reading a run's name out of a path.
@@ -80,3 +82,4 @@ Through the service, a run that failed or was stopped says to run it again with 
 | 2026-10 | Accepted | [ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md): a run the console did not see end is named by the service and noticed, and the command line resumes it by its name alone (contract 1.71). The wizard's offer is unchanged. |
 | 2026-10 | Accepted | [ADR-0116](0116-the-console-resumes-a-restore-it-did-not-see-end.md): a run the console did not see end is resumed from the console, from the snapshots page's list of runs left unfinished or from the run's notice, by its name alone. |
 | 2026-10 | Accepted | [ADR-0123](0123-the-console-plans-the-resume-a-result-offers.md): restoring what is left of a result is planned first, by the run's name, and asked only from beneath its plan. |
+| 2026-10 | Accepted | [ADR-0137](0137-a-run-in-direct-mode-left-unfinished-says-how-to-resume-it.md): Decision 3 holds in direct mode too. A run there that does not finish says to run it again with `--resume`, and what its parts keep and where. |
