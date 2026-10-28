@@ -461,12 +461,15 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// How a restore asks this machine about room (FR-RST-003, ADR-0083): the
     /// free-space probe the destination floor asks, and the volume identity
     /// placement asks, so a restore and placement agree on what shares a
-    /// drive.
+    /// drive. The working space is where the service's runs keep their
+    /// parts, since every file a run here restores is assembled in one
+    /// (ADR-0129, ADR-0131).
     /// </summary>
     internal Restore.RestoreSpaceProbe RestoreSpaceProbe => new()
     {
         AvailableBytes = Options.AvailableBytesProbe ?? Restore.RestoreSpaceProbe.PlatformAvailableBytes,
         VolumeOf = VolumeIdOf,
+        WorkingDirectory = RestorePartsRoot,
     };
 
     private static ulong? DefaultVolumeIdOf(string path)
