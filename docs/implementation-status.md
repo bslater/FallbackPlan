@@ -154,6 +154,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0127](adr/0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md) | What a restore did not restore is shown through the passphrase: at schema 10 a receipt records its set's identity, and `get_restore_receipt` answers the files its run failed, skipped or degraded, under a limit with a count of the rest, only through a source of that set unlocked by the session that asks; the console shows them behind the passphrase and closes the source after (contract 1.75) | **Built** | `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `FallbackPlan.Api` · the console script of `FallbackPlan.Web` · `Repository.Tests/RestoreReceiptKeptTests`, `Hosts.Tests/RestoreReceiptFilesServiceTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleRestoreReceiptsScriptTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0127--what-a-restore-did-not-restore-is-shown-through-the-passphrase) |
 | [0128](adr/0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md) | The command line asks a paired service for its restore receipts: `restore-receipts --connect` lists the receipts the service keeps as a state directory's are listed, naming no file, and with `--run` the files that run did not restore, through a source of the set its receipt records that `--passphrase-env` unlocks, closed after; `--state` then names the console's own state | **Built** | `Cli/CliApplication` · `Cli/RestoreReceiptReport` · `Hosts.Tests/RestoreReceiptsRemoteTests`, `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0128--the-command-line-asks-a-paired-service-for-its-restore-receipts) |
 | [0129](adr/0129-a-restore-cut-short-resumes-within-a-file.md) | A restore cut short resumes within a file: a file is assembled in a part named by its whole-file hash and kept unless it lands or its assembly is refused; a resume takes the part up as far as each segment proves against its object identifier and each hole reads as zeroes, and reads only the rest; through the service each run keeps its parts under its name, carried to a resume's, and let go when the run finishes or is let go, or at start for a run no longer on record | **Built** | `Repository/RestoreEngine` · `Repository/RepositoryReader` · `Restore/RestoreExecutor` · `Agent/RestoreParts` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests` · [notes](#0129--a-restore-cut-short-resumes-within-a-file) |
+| [0130](adr/0130-a-restore-says-which-files-it-resumed-within.md) | A restore says which files it resumed within: the receipt, at schema 11, gives each file a resume wrote from its part `resumed_at`, how many of its bytes were taken up, and the result counts those files as `resumed_within` (contract 1.76), which `restore`, `restore-resume` and the console's result say | **Built** | `Repository/RestoreEngine` · `Restore/RestoreExecutor` · `Api/Results` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleRestoreResultScriptTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0130--a-restore-says-which-files-it-resumed-within) |
 
 ---
 
@@ -3741,4 +3742,20 @@ for a run no longer on record. No contract or receipt change.
 
 What remains is recorded rather than done. Direct mode keeps no parts, a
 resume's plan counts each file it writes whole, and the receipt does not say
-a file was resumed within.
+a file was resumed within. ADR-0130 has since had the receipt say where each
+such file was resumed, and the result count them.
+
+### 0130 — a restore says which files it resumed within
+
+A resume took up the part of each file its run was cut short in, and the
+receipt counted the file restored, as it counts any file the run wrote. The
+engine now says how many of a file's bytes it took up from its part, and the
+receipt, at schema 11, gives each such file `resumed_at`, written only where
+some were. A restore's result through the service counts those files as
+`resumed_within` (contract 1.76), among the files restored, as the files
+found in place are, and `restore`, `restore-resume` and the console's result
+say how many.
+
+What remains is recorded rather than done. Direct mode resumes no file
+within, and the listing of kept receipts counts a file resumed within as a
+file restored.
