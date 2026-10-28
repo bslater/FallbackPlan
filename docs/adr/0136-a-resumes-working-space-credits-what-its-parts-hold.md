@@ -49,6 +49,8 @@ The part is copied to where the file lands once its hash verifies, so that folde
 - **Count the parts of runs left unfinished.** As ADR-0131 has it, they take room until each run is resumed or let go, and the free space measured is what is left beside them.
 - **Say what remains.** The need still says it is working space for the run's largest file. With a part held, it is the most that remains of any one file.
 
+  > **2026-10 ([ADR-0138](0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md)).** It says it now: the need is said as room to assemble the run's files one at a time, by the refusal, the command line's plan and the console.
+
 ## Alternatives considered
 
 - **Credit a part by its length.** Rejected. A part is taken up only as far as it proves. A part of the right length holding something else would be credited room the run then needs.
@@ -59,3 +61,4 @@ The part is copied to where the file lands once its hash verifies, so that folde
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A resume's working space needs only what its parts do not yet hold of each file, proved as the resume takes them up, through the service and in direct mode, for its plan and its run. The folder a file lands in still needs all of it. No contract change. |
+| 2026-10 | Accepted | [ADR-0138](0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md): the working-space need is said as room to assemble the run's files one at a time, which a credited part leaves true. |
