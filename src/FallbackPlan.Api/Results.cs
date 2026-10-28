@@ -850,11 +850,16 @@ public sealed record RestorePlanResult(
 /// </param>
 /// <param name="NeededBytes">
 /// The bytes the run needs there: each file's written bytes in whole 4 KiB
-/// clusters, a cluster for each directory it creates, and room for the
-/// largest file where the engine holds it while its hash verifies.
+/// clusters, a cluster for each directory it creates, and room where the
+/// engine holds each file while its hash verifies, to assemble the files one
+/// at a time.
 /// </param>
 /// <param name="AvailableBytes">What the platform says is free there; null when it will not say, which never counts as short.</param>
-/// <param name="Working">Whether this is the engine's working directory alone, needing room for the largest file only.</param>
+/// <param name="Working">
+/// Whether this is the engine's working directory alone, needing room only to
+/// assemble the files one at a time: the most that remains of any one, which
+/// is the largest unless a resume's part holds some of it.
+/// </param>
 public sealed record RestoreSpaceDescriptor(
     string Directory,
     long NeededBytes,

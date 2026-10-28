@@ -103,7 +103,12 @@ public sealed record RestoreSpaceProbe
 /// </param>
 /// <param name="NeededBytes">The bytes the run needs there (<see cref="RestoreSpace"/> says how they are counted).</param>
 /// <param name="AvailableBytes">What the platform says is free there, or null when it will not say.</param>
-/// <param name="Working">Whether this is the engine's working directory alone, which needs room for the largest file less what a part holds of it.</param>
+/// <param name="Working">
+/// Whether this is the engine's working directory alone, which needs room to
+/// assemble the run's files one at a time: the most that remains of any one,
+/// which is its largest file unless a resume's part holds some of it
+/// (ADR-0136, ADR-0138).
+/// </param>
 public sealed record RestoreSpaceNeed(string Directory, ulong NeededBytes, long? AvailableBytes, bool Working = false)
 {
     /// <summary>Whether the platform says less is free than the run needs. Never, when it will not say.</summary>
@@ -117,7 +122,7 @@ public sealed record RestoreSpaceNeed(string Directory, ulong NeededBytes, long?
             : "where the free space is unknown";
 
         return Working
-            ? $"needs {RestoreSpace.Bytes(NeededBytes)} of working space in '{Directory}' for its largest file, {free}"
+            ? $"needs {RestoreSpace.Bytes(NeededBytes)} of working space in '{Directory}' to assemble its files one at a time, {free}"
             : $"needs {RestoreSpace.Bytes(NeededBytes)} on the volume holding '{Directory}', {free}";
     }
 }

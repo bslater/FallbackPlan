@@ -6340,7 +6340,7 @@ function rstPlanDetails(plan, arming) {
       <div class="fig"><b>${fmtCount(plan.conflicts ?? 0)}</b><span>conflicts</span></div>
     </div>
     ${space.length ? `<p class="subtle" id="rst-space">${space.map(need => `Needs <b>${fmtBytes(need.neededBytes)}</b>
-      ${need.working ? "of working space for the largest file in" : "on the disk holding"}
+      ${need.working ? "of working space, to assemble files one at a time, in" : "on the disk holding"}
       <span class="mono">${esc(need.directory)}</span> —
       ${need.availableBytes == null ? "free space unknown" : `${fmtBytes(need.availableBytes)} free`}.`).join("<br>")}</p>` : ""}
     ${rstShort(plan) ? `<div id="rst-space-short">

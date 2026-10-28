@@ -13,7 +13,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// What a run needs on each volume it writes to: every file's written bytes in
 /// whole clusters, a cluster for each directory it creates, and room for the
 /// largest file where the engine holds it while its hash verifies. That is
-/// measured against what the platform says is free there.
+/// measured against what the platform says is free there, and the working
+/// space is said as room to assemble the run's files one at a time
+/// (ADR-0138).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -100,6 +102,18 @@ public sealed class RestoreSpaceTests : ArchiveTestHarness
         var spool = report.Needs.Single(need => need.Working);
         Assert.AreEqual(working, spool.Directory);
         Assert.AreEqual(2 * Cluster, spool.NeededBytes, "the engine holds one file at a time: the largest");
+    }
+
+    [TestMethod]
+    public void AWorkingNeed_IsSaidAsRoomToAssembleItsFilesOneAtATime()
+    {
+        // With a resume's part credited, the need is the most that remains of
+        // any one file, which need not be its largest (ADR-0136, ADR-0138).
+        var need = new RestoreSpaceNeed("/state/restore-parts", 2 * Cluster, 1_000, Working: true);
+
+        Assert.AreEqual(
+            "needs 8192 bytes (8.0 KiB) of working space in '/state/restore-parts' to assemble its files one at a time, which has 1000 bytes free",
+            need.Describe());
     }
 
     [TestMethod]

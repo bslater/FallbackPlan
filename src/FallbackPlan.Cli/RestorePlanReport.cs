@@ -59,7 +59,7 @@ internal static class RestorePlanReport
         {
             var room = need.AvailableBytes is not { } free || free >= need.NeededBytes;
             fits &= room;
-            var working = need.Working ? " while files verify" : string.Empty;
+            var working = need.Working ? " to assemble its files one at a time" : string.Empty;
             var available = need.AvailableBytes is { } known
                 ? string.Create(CultureInfo.InvariantCulture, $", {known} free")
                 : ", free space unknown";
