@@ -21,7 +21,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// leaves what was assembled. A resume takes the part up only so far as each
 /// of its segments proves against its object identifier, and each hole reads
 /// as zeroes, and reads from the store only what the part lacks. A run that
-/// is not a resume takes up no part.
+/// is not a resume takes up no part. The receipt, at schema 11, says where
+/// each file was resumed: how much of it was taken up and not read again
+/// (FR-RST-004, ADR-0130).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileTests : ArchiveTestHarness
@@ -49,6 +51,39 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
             "the whole segments the part held are not read again, and the piece of the next one is not taken");
         Assert.IsLessThan(fresh.ContentReads, resumed.ContentReads, "nor are the blobs only they were in");
         Assert.IsFalse(File.Exists(PartOf(parts)), "a part goes once its file lands");
+        Assert.AreEqual((ulong)(24 * Segment), Item(resumed.Receipt).ResumedAt, "the receipt says where the file was resumed");
+        Assert.AreEqual(0UL, Item(fresh.Receipt).ResumedAt);
+    }
+
+    [TestMethod]
+    public async Task TheReceipt_SaysWhereAFileWasResumed_AtSchemaEleven_AndNothingOfOneWrittenWhole()
+    {
+        using var published = await PublishAsync("receipt", 0xE8);
+        var parts = Path.Combine(SpoolDirectory, "receipt-parts");
+        WritePart(parts, Big.AsSpan(0, 3 * Segment));
+
+        var resumed = await RestoreAsync(published, "receipt-resumed", Resumed("receipt-resumed", parts));
+        var fresh = await RestoreAsync(published, "receipt-fresh", Fresh("receipt-fresh"));
+
+        Assert.AreEqual(11, RestoreReceipt.CurrentSchemaVersion);
+        Assert.AreEqual(11, resumed.Receipt.SchemaVersion);
+        Assert.Contains($"\"resumed_at\": {3 * Segment}", resumed.Receipt.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain("\"resumed_at\"", fresh.Receipt.ToJson(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AFileResumedWithin_ThatLandsDegraded_StillSaysWhereItWasResumed()
+    {
+        // No target writes an alternate stream back, so the file lands
+        // degraded; it was still written from its part.
+        using var published = await PublishAsync("degraded", 0xE9, withStream: true);
+        var parts = Path.Combine(SpoolDirectory, "degraded-parts");
+        WritePart(parts, Big.AsSpan(0, 2 * Segment));
+
+        var resumed = await RestoreAsync(published, "degraded-resumed", Resumed("degraded-resumed", parts));
+
+        Assert.AreEqual("degraded", Item(resumed.Receipt).Outcome);
+        Assert.AreEqual((ulong)(2 * Segment), Item(resumed.Receipt).ResumedAt);
     }
 
     [TestMethod]
@@ -66,6 +101,7 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
         Assert.AreEqual(RestoreOutcome.Complete, resumed.Receipt.Outcome);
         SequenceAssert.AreEqual(Big, File.ReadAllBytes(resumed.Landed));
         Assert.AreEqual(10L, fresh.SegmentsRead - resumed.SegmentsRead, "the ten before the one that differs");
+        Assert.AreEqual((ulong)(10 * Segment), Item(resumed.Receipt).ResumedAt);
     }
 
     [TestMethod]
@@ -82,6 +118,7 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
         SequenceAssert.AreEqual(Big, File.ReadAllBytes(again.Landed));
         Assert.AreEqual(fresh.SegmentsRead, again.SegmentsRead, "a run not told it resumes cannot know the part is its own");
         Assert.IsFalse(File.Exists(PartOf(parts)));
+        Assert.AreEqual(0UL, Item(again.Receipt).ResumedAt);
     }
 
     [TestMethod]
@@ -110,6 +147,7 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
         SequenceAssert.AreEqual(Big, File.ReadAllBytes(resumed.Landed));
         Assert.AreEqual((long)(held.Length / Segment), fresh.SegmentsRead - resumed.SegmentsRead);
         Assert.IsFalse(File.Exists(PartOf(parts)));
+        Assert.AreEqual((ulong)(held.Length / Segment * Segment), Item(resumed.Receipt).ResumedAt);
     }
 
     [TestMethod]
@@ -178,6 +216,7 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
         Assert.IsTrue(written.Success, written.FailureDetail);
         SequenceAssert.AreEqual(file, overHole.ToArray());
         Assert.AreEqual(1L, reader.RecordsRead - before, "what lay where the hole is was not taken, nor anything after it");
+        Assert.AreEqual((long)Segment, written.Resumed, "the file was resumed where the hole begins");
 
         await File.WriteAllBytesAsync(part, notZero);
         var afresh = new Unseekable();
@@ -185,6 +224,7 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
 
         Assert.IsTrue(written.Success, written.FailureDetail);
         SequenceAssert.AreEqual(file, afresh.ToArray());
+        Assert.AreEqual(0L, written.Resumed);
 
         await File.WriteAllBytesAsync(part, file);
         before = reader.RecordsRead;
@@ -194,7 +234,10 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
         Assert.IsTrue(written.Success, written.FailureDetail);
         SequenceAssert.AreEqual(file, whole.ToArray());
         Assert.AreEqual(0L, reader.RecordsRead - before, "a hole that reads as zeroes is taken with the rest");
+        Assert.AreEqual((long)file.Length, written.Resumed, "all of it, the hole included");
     }
+
+    private static ReceiptItem Item(RestoreReceipt receipt) => receipt.Items.Single(item => item.Path == BigPath);
 
     private static string PartOf(string parts) =>
         Path.Combine(parts, $"{Convert.ToHexStringLower(SHA256.HashData(Big))}.part");
@@ -250,10 +293,16 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
         return (receipt, Path.Combine(root, "data", "big.bin"), reader.RecordsRead, counting.ReadKeys.Count(IsContent));
     }
 
-    private async Task<Published> PublishAsync(string name, byte seed)
+    private async Task<Published> PublishAsync(string name, byte seed, bool withStream = false)
     {
         var source = new FakeFileSystemSource();
-        source.AddFile(BigPath, Big, fileId: 9_101).Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000 };
+        var big = source.AddFile(BigPath, Big, fileId: 9_101);
+        big.Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000 };
+        if (withStream)
+        {
+            big.AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]\nZoneId=3"u8.ToArray();
+        }
+
         var store = CreateStore();
         var keys = CreateKeys();
         using var credential = CreateCredential();

@@ -26,7 +26,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// (ADR-0129), and a resume takes up those that prove, reading none of them
 /// from the store again, under whatever name it runs. A run's parts go when
 /// it finishes or is let go, and those of a run no longer on record when the
-/// service starts.
+/// service starts. The result counts the files a resume took up from its
+/// parts, the receipt says where each was resumed (FR-RST-004), and the
+/// command line says so (ADR-0130).
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -54,6 +56,7 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         Assert.AreEqual("complete", restored.Outcome);
         Assert.IsEmpty(await RunsAsync(handler));
         Assert.IsFalse(runtime.Notices.Notices.Any(notice => notice.Key.StartsWith(NoticeKind, StringComparison.Ordinal)));
+        Assert.AreEqual(0L, restored.ResumedWithin, "a run that resumes nothing says it resumed nothing within");
     }
 
     [TestMethod]
@@ -255,6 +258,39 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         Assert.AreEqual("hello", await File.ReadAllTextAsync(Path.Combine(resumed.OutputDirectory, "notes.txt"), _timeout.Token));
         Assert.AreEqual("deeper", await File.ReadAllTextAsync(Path.Combine(resumed.OutputDirectory, "nested", "deeper.txt"), _timeout.Token));
         Assert.IsFalse(Directory.Exists(PartsOf(cut.Run!)), "a run that finishes keeps no parts");
+        Assert.AreEqual(2L, resumed.ResumedWithin, "the result counts the files it took up from parts");
+        var receipt = FallbackPlan.Restore.RestoreReceipt.ReadKept(
+            Path.GetDirectoryName(resumed.ReceiptPath!)!, Path.GetFileNameWithoutExtension(resumed.ReceiptPath!))!.Receipt!;
+        Assert.AreEqual(5UL, receipt.Items.Single(item => item.Path == "notes.txt").ResumedAt, "and the receipt where each was resumed");
+        Assert.AreEqual(6UL, receipt.Items.Single(item => item.Path == "nested/deeper.txt").ResumedAt);
+    }
+
+    [TestMethod]
+    public async Task RestoreResume_SaysHowManyFilesItTookUpFromTheirParts()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var cut = await CutShortAsync(handler);
+        KeepPart(cut.Run!, "hello", "hello");
+        KeepPart(cut.Run!, "deeper", "deeper");
+
+        var sound = Tamper(_harness.RepositoryPath);
+        HostHarness.Invocation resumed;
+        try
+        {
+            resumed = await CliAsync("restore-resume", cut.Run!);
+        }
+        finally
+        {
+            foreach (var (path, bytes) in sound)
+            {
+                await File.WriteAllBytesAsync(path, bytes, _timeout.Token);
+            }
+        }
+
+        Assert.AreEqual(0, resumed.ExitCode, resumed.Output + resumed.Error);
+        Assert.Contains("2 file(s) were resumed from what the run had assembled of them", resumed.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]

@@ -61,6 +61,7 @@ public sealed class ConsoleRestoreResultScriptTests
         Assert.Contains("W.result.run", step, StringComparison.Ordinal, "a resume is not offered for the run the service named");
         Assert.Contains("id=\"rst-resume\"", step, StringComparison.Ordinal);
         Assert.Contains("W.result.foundInPlace", step, StringComparison.Ordinal, "what a resume found in place is not shown");
+        Assert.Contains("W.result.resumedWithin", step, StringComparison.Ordinal, "what a resume took up from its parts is not shown");
         Assert.Contains("const name = W.result.run;", script, StringComparison.Ordinal, "the resume offered is not of the run the service named");
         Assert.Contains("resume: name, ignoreFreeSpace", script, StringComparison.Ordinal, "the resume does not name the run");
     }

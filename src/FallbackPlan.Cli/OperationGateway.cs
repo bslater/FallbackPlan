@@ -794,6 +794,13 @@ internal sealed class ServiceGateway(
             lines.Add(OperationGateway.FoundInPlace(result.FoundInPlace));
         }
 
+        if (result.ResumedWithin > 0)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{result.ResumedWithin} file(s) were resumed from what the run had assembled of them"));
+        }
+
         // How to resume a run that did not finish (ADR-0110). A partial
         // run skipped what this target cannot hold, which a resume would
         // skip again.

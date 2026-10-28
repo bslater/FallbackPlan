@@ -762,8 +762,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// receipt that records no set. Additive: a pre-1.75 client never asks,
     /// and a pre-1.75 service refuses the verb.
     /// </para>
+    /// <para>
+    /// 1.76 says which files a resume took up from the parts its run had
+    /// assembled (FR-RST-008, ADR-0130). `RestoreResult` gains
+    /// `resumed_within`, how many of the files it restored it wrote from a
+    /// part, reading again only what the part lacked. Additive: a pre-1.76
+    /// client ignores the field, and a pre-1.76 service's result says none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 75);
+    public static ContractVersion Current { get; } = new(1, 76);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -1288,7 +1288,8 @@ public sealed partial class ServiceCommandHandler(
                             + $"around {string.Join("; ", item.ReadAround!)}")],
                     NotApplied: notApplied.Count == 0 ? null : notApplied,
                     FoundInPlace: receipt.Items.Count(item => item.FoundInPlace),
-                    Run: record.Run);
+                    Run: record.Run,
+                    ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0));
                 return answered;
             }
             finally

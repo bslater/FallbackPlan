@@ -34,11 +34,28 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_WhatARestoreDidNotRestore_IsRecordedAtOneSeventyFive()
+    public void ContractVersion_WhatARestoreResumedWithin_IsRecordedAtOneSeventySix()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.75", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.76", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void WhatARestoreResumedWithin_CrossesUnderItsWireName_AndAPre176ServiceSaysNone()
+    {
+        // Contract 1.76 (FR-RST-008, ADR-0130): the files a resume took up
+        // from the parts its run had assembled.
+        var answered = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreResult(3, 0, "/srv/restored", "complete", ResumedWithin: 2), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"resumed_within\":2", answered, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestoreResult>(
+            JsonSerializer.Deserialize<ServiceResult>(
+                """{"result":"restore","restored":3,"failed":0,"output_directory":"/srv/restored","outcome":"complete"}""",
+                FrameCodec.SerializerOptions),
+            out var older);
+        Assert.AreEqual(0L, older.ResumedWithin);
     }
 
     [TestMethod]

@@ -170,6 +170,16 @@ public sealed record ReceiptItem
     [JsonPropertyName("found_in_place")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool FoundInPlace { get; init; }
+
+    /// <summary>
+    /// Where a resumed run resumed the file: how many of its bytes it took up
+    /// from the part an earlier run had assembled, each segment proved, and
+    /// did not read again (FR-RST-008; ADR-0129, ADR-0130). Written only when
+    /// some were.
+    /// </summary>
+    [JsonPropertyName("resumed_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public ulong ResumedAt { get; init; }
 }
 
 /// <summary>
@@ -212,8 +222,12 @@ public sealed record RestoreReceipt
     /// hex identifier said whose. Version 10 added the optional
     /// <c>set_id</c> (ADR-0127): a set's name can pass to another set, and
     /// its files are shown only to the passphrase of the set they are.
+    /// Version 11 added the optional per-item <c>resumed_at</c> (ADR-0130):
+    /// a file a resume took up from its part was written by this run, but not
+    /// all of it was read again, and a receipt that said nothing of it would
+    /// not say where the run picked it up.
     /// </remarks>
-    public const int CurrentSchemaVersion = 10;
+    public const int CurrentSchemaVersion = 11;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -1100,7 +1114,8 @@ public sealed class RestoreExecutor(
                     }
 
                     var (settled, notApplied, degraded) = Settle(
-                        item, manifest, landing, (ulong)result.Length, writtenAs, notLinked, foundInPlace: false);
+                        item, manifest, landing, (ulong)result.Length, writtenAs, notLinked, foundInPlace: false,
+                        resumedAt: (ulong)result.Resumed);
                     if (!degraded && group is not null && notLinked is null)
                     {
                         groups.TryAdd(group, new LandedName(RestoreHardLinks.KeyOf(manifest)!, item.Path, landing, notApplied));
@@ -1283,7 +1298,8 @@ public sealed class RestoreExecutor(
         ulong length,
         string? writtenAs,
         string? notLinked,
-        bool foundInPlace)
+        bool foundInPlace,
+        ulong resumedAt = 0)
     {
         // Metadata strictly AFTER content (architecture 08 §3): a crash
         // between the two leaves verified content with default metadata,
@@ -1311,6 +1327,7 @@ public sealed class RestoreExecutor(
                         + (written.Detail is { } left ? $"; {left}" : string.Empty)),
                 NotApplied = notApplied,
                 FoundInPlace = foundInPlace,
+                ResumedAt = resumedAt,
             }), notApplied, true);
         }
 
@@ -1318,7 +1335,7 @@ public sealed class RestoreExecutor(
         {
             Path = item.Path, Outcome = "restored", Bytes = length, WrittenAs = writtenAs,
             Detail = Joined(notLinked, written.Detail), NotApplied = notApplied,
-            FoundInPlace = foundInPlace,
+            FoundInPlace = foundInPlace, ResumedAt = resumedAt,
         }), notApplied, false);
     }
 

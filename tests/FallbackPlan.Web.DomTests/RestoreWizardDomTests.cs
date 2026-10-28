@@ -390,7 +390,7 @@ public sealed class RestoreWizardDomTests
                 FailedSample: outcome == "failed" ? ["notes.txt — the copy it was read from went away"] : null, Run: "0123456789abcdef"),
             RunRestoreCommand { Resume: "0123456789abcdef" } => new ApiRestoreResult(
                 1, 0, "/restore/out", "complete", ReceiptPath: "/state/receipts/fedcba9876543210.json",
-                FoundInPlace: 1, Run: "fedcba9876543210"),
+                FoundInPlace: 1, Run: "fedcba9876543210", ResumedWithin: 1),
             PlanResumeRestoreCommand => new RestorePlanResult(1, 5, [], WriteBytes: 5, Landed: 1),
             _ => fakes(command),
         };
@@ -426,6 +426,7 @@ public sealed class RestoreWizardDomTests
 
         await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-found-in-place")).ToContainTextAsync("1 file(s)");
+        await Expect(page.Locator("#rst-resumed-within")).ToContainTextAsync("1 file(s)");
         await Expect(page.Locator("#rst-resume")).ToHaveCountAsync(0);
     }
 

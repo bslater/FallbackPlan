@@ -54,14 +54,14 @@ public sealed class RestoreReceiptKeptTests : IDisposable
     }
 
     [TestMethod]
-    public void AReceiptNamesAndRecordsTheSetItsRunRestored_AtSchemaTen_AndOneThatKnewNoneSaysNothingOfOne()
+    public void AReceiptNamesAndRecordsTheSetItsRunRestored_SinceSchemaTen_AndOneThatKnewNoneSaysNothingOfOne()
     {
         var receipts = Path.Combine(_root, "receipts");
 
         var named = (ReceiptOf("notes.txt") with { Set = "docs", SetId = new string('a', 32) }).Keep(receipts, "0123456789abcdef");
         var unnamed = ReceiptOf("notes.txt").Keep(receipts, "fedcba9876543210");
 
-        Assert.AreEqual(10, RestoreReceipt.CurrentSchemaVersion);
+        Assert.IsGreaterThanOrEqualTo(10, RestoreReceipt.CurrentSchemaVersion);
         using (var document = JsonDocument.Parse(File.ReadAllText(named)))
         {
             Assert.AreEqual("docs", document.RootElement.GetProperty("set").GetString());
