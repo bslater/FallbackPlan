@@ -15,7 +15,10 @@ namespace FallbackPlan.Cli.Tests;
 /// and says how many of its files were resumed within, from the folder and
 /// through a paired service alike (ADR-0134).
 /// Through a paired service (ADR-0128), a name that is not a run's and a
-/// limit below one are refused before the service is dialled.
+/// limit below one are refused before the service is dialled. One run's
+/// receipt is let go by its name, and only that one (ADR-0139): a name that
+/// is not a run's, a run that kept none, no run at all, and a paired service
+/// are refused, and nothing is removed.
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsVerbTests : IDisposable
@@ -266,6 +269,76 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
         Assert.Contains("sixteen", notARun.Error, StringComparison.Ordinal);
         Assert.AreEqual(1, belowOne.ExitCode, belowOne.All);
         Assert.Contains("--limit takes at least 1", belowOne.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Forget_LetsOneRunsReceiptGo_AndLeavesTheRest()
+    {
+        Kept("0123456789abcdef", new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1 });
+        Kept("fedcba9876543210", new ReceiptItem { Path = "b.txt", Outcome = "restored", Bytes = 1 });
+
+        var forgot = await CliHarness.RunRawAsync(
+            "restore-receipts", "--state", _cli.StatePath, "--run", "0123456789abcdef", "--forget");
+
+        Assert.AreEqual(0, forgot.ExitCode, forgot.All);
+        Assert.Contains($"let go the receipt of run 0123456789abcdef kept under '{Receipts}'", forgot.Output, StringComparison.Ordinal);
+        Assert.IsFalse(File.Exists(Path.Combine(Receipts, "0123456789abcdef.json")));
+        Assert.IsTrue(File.Exists(Path.Combine(Receipts, "fedcba9876543210.json")), "the other run's receipt is kept");
+
+        var listed = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath);
+        Assert.Contains("1 restore receipt kept under", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Forget_ARunThatKeptNoReceipt_IsRefusedNamingIt()
+    {
+        Directory.CreateDirectory(Receipts);
+
+        var forgot = await CliHarness.RunRawAsync(
+            "restore-receipts", "--state", _cli.StatePath, "--run", "0123456789abcdef", "--forget");
+
+        Assert.AreEqual(1, forgot.ExitCode, forgot.All);
+        Assert.Contains("0123456789abcdef", forgot.Error, StringComparison.Ordinal);
+        Assert.Contains("no receipt", forgot.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Forget_WhatIsNotARunsName_IsRefused_AndRemovesNothing()
+    {
+        Directory.CreateDirectory(Receipts);
+        var config = Path.Combine(_cli.StatePath, "config.json");
+        await File.WriteAllTextAsync(config, "{}");
+
+        var forgot = await CliHarness.RunRawAsync(
+            "restore-receipts", "--state", _cli.StatePath, "--run", Path.Combine("..", "config"), "--forget");
+
+        Assert.AreEqual(1, forgot.ExitCode, forgot.All);
+        Assert.Contains("sixteen", forgot.Error, StringComparison.Ordinal);
+        Assert.IsTrue(File.Exists(config));
+    }
+
+    [TestMethod]
+    public async Task Forget_WithoutARun_IsRefused_AndRemovesNothing()
+    {
+        Kept("0123456789abcdef", new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1 });
+
+        var forgot = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--forget");
+
+        Assert.AreEqual(1, forgot.ExitCode, forgot.All);
+        Assert.Contains("--forget lets one run's receipt go: name it with --run", forgot.Error, StringComparison.Ordinal);
+        Assert.IsTrue(File.Exists(Path.Combine(Receipts, "0123456789abcdef.json")));
+    }
+
+    [TestMethod]
+    public async Task Forget_ThroughAPairedService_IsRefusedBeforeItIsDialled()
+    {
+        // Nothing listens on the port: a refusal that dialled first would say that instead.
+        var forgot = await CliHarness.RunRawAsync(
+            "restore-receipts", "--run", "0123456789abcdef", "--forget",
+            "--connect", "127.0.0.1:1", "--state", _cli.StatePath, "--fingerprint", new string('f', 64));
+
+        Assert.AreEqual(1, forgot.ExitCode, forgot.All);
+        Assert.Contains("--forget lets go a receipt kept under --state", forgot.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]

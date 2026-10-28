@@ -2810,15 +2810,22 @@ public static class CliApplication
             {
                 Description = "At most this many of the newest; with --connect and --run, of the files it did not restore.",
             };
+            var receiptsForgetOption = new Option<bool>("--forget")
+            {
+                Description = "Let the receipt of the run --run names go: its file is removed from the state directory, "
+                    + "and every other run's stays (ADR-0139). Not through a paired service.",
+            };
             var command = new Command(
                 "restore-receipts",
                 "Read back the restore receipts kept under a state directory, by the service or in direct mode "
                 + "(ADR-0124): each run, newest first, with when it ended, what became of its files and where it "
                 + "wrote them, or one run's receipt whole. With --connect, those a paired service keeps (ADR-0128), "
-                + "and one run's files it did not restore, through the passphrase.");
+                + "and one run's files it did not restore, through the passphrase. With --run and --forget, let that "
+                + "run's receipt go (ADR-0139).");
             command.Options.Add(receiptsStateOption);
             command.Options.Add(receiptsRunOption);
             command.Options.Add(receiptsLimitOption);
+            command.Options.Add(receiptsForgetOption);
             command.Options.Add(connectOption);
             command.Options.Add(fingerprintOption);
             command.Options.Add(passphraseEnvOption);
@@ -2828,8 +2835,19 @@ public static class CliApplication
             {
                 var run = parse.GetValue(receiptsRunOption);
                 var limit = parse.GetValue(receiptsLimitOption);
+                var forget = parse.GetValue(receiptsForgetOption);
+                if (forget && run is null)
+                {
+                    throw new CliFailureException(Strings.CliApplication_ForgetNamesTheReceipt);
+                }
+
                 if (parse.GetValue(connectOption) is not null)
                 {
+                    if (forget)
+                    {
+                        throw new CliFailureException(Strings.CliApplication_ForgetReadsTheStateDirectory);
+                    }
+
                     // Refused before the service is dialled, as a state
                     // directory's reading refuses them before it is read.
                     if (run is not null)
@@ -2860,7 +2878,15 @@ public static class CliApplication
 
                 if (run is not null)
                 {
-                    RestoreReceiptReport.WriteRun(output, state, run);
+                    if (forget)
+                    {
+                        RestoreReceiptReport.LetGo(output, state, run);
+                    }
+                    else
+                    {
+                        RestoreReceiptReport.WriteRun(output, state, run);
+                    }
+
                     return Task.FromResult(0);
                 }
 

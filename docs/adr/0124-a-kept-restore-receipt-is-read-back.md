@@ -54,6 +54,8 @@ A name that is not a run's is refused before it is joined to a path, as the serv
 - **List them as JSON.** `--run` prints one receipt as JSON, as it was kept, and a script that wants them all reads the folder.
 - **Let receipts go.** Every receipt kept stays until a person removes it.
 
+  > **2026-10 ([ADR-0139](0139-a-kept-restore-receipt-is-let-go.md)).** `restore-receipts --run <run> --forget` lets one run's receipt go from the state directory, and every other run's stays.
+
 ## Alternatives considered
 
 - **Add a restore kind to `receipts`.** Rejected. That verb vouches for every fact it prints from signed bytes checked again as it reads, and a restore receipt is signed by no one. Putting the two under one name would lend the restore receipt a check it never had.
@@ -67,3 +69,4 @@ A name that is not a run's is refused before it is joined to a path, as the serv
 | 2026-10 | Accepted | [ADR-0125](0125-the-service-lists-the-restore-receipts-it-keeps.md): the service answers the receipts it keeps, and the console shows them, which this record left undone. |
 | 2026-10 | Accepted | [ADR-0128](0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md): with `--connect`, `restore-receipts` asks a paired service for the receipts it keeps, and `--state` names the console's own state; without it, the verb reads the folder as this record decided. |
 | 2026-10 | Accepted | [ADR-0134](0134-the-kept-receipts-say-which-files-were-resumed-within.md): each run listed counts its files resumed within beside those found in place. |
+| 2026-10 | Accepted | [ADR-0139](0139-a-kept-restore-receipt-is-let-go.md): the verb lets one run's kept receipt go by the run's name, from the state directory it reads. |

@@ -7,7 +7,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// each run's own file, newest first, as it was kept. A file under a run's
 /// name that does not read as a receipt is listed as unreadable rather than
 /// hiding the rest, and what is not a run's receipt, the peers' receipts in
-/// the folders beside included, is passed over.
+/// the folders beside included, is passed over. A run's receipt is let go by
+/// the run's name alone, and nothing that is not a run's name reaches a path
+/// (ADR-0139).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptReadBackTests : IDisposable
@@ -72,6 +74,29 @@ public sealed class RestoreReceiptReadBackTests : IDisposable
         var kept = RestoreReceipt.ReadKept(_receipts);
 
         Assert.AreEqual("0123456789abcdef", Assert.ContainsSingle(kept).Run);
+    }
+
+    [TestMethod]
+    public void AReceiptLetGo_IsGone_AndOnlyItsRunsIs()
+    {
+        ReceiptOf("gone.txt", completedAt: 20).Keep(_receipts, "0123456789abcdef");
+        ReceiptOf("kept.txt", completedAt: 40).Keep(_receipts, "fedcba9876543210");
+
+        Assert.IsTrue(RestoreReceipt.LetGo(_receipts, "0123456789abcdef"));
+
+        Assert.AreEqual("fedcba9876543210", Assert.ContainsSingle(RestoreReceipt.ReadKept(_receipts)).Run);
+        Assert.IsFalse(RestoreReceipt.LetGo(_receipts, "0123456789abcdef"), "a run whose receipt is gone keeps none to let go");
+    }
+
+    [TestMethod]
+    public void WhatIsNotARunsName_LetsNothingGo()
+    {
+        Directory.CreateDirectory(_receipts);
+        var beside = Path.Combine(Path.GetDirectoryName(_receipts)!, "config.json");
+        File.WriteAllText(beside, "{}");
+
+        Assert.IsFalse(RestoreReceipt.LetGo(_receipts, Path.Combine("..", "config")));
+        Assert.IsTrue(File.Exists(beside), "what is not a run's name is never joined to a path");
     }
 
     [TestMethod]

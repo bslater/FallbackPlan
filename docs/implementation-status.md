@@ -163,6 +163,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0136](adr/0136-a-resumes-working-space-credits-what-its-parts-hold.md) | A resume's working space credits what its parts hold: it needs only what they do not yet hold of each file, proved as the resume takes them up, through the service and in direct mode, for a plan and a run; the folder a file lands in still needs all of it | **Built** | `Restore/RestoreSpace` · `Restore/RestoreBlobSet` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0136--a-resumes-working-space-credits-what-its-parts-hold) |
 | [0137](adr/0137-a-run-in-direct-mode-left-unfinished-says-how-to-resume-it.md) | A run in direct mode left unfinished says how to resume it: to run it again with --resume, and how many bytes of the backup its destination's parts keep under the state directory, and where | **Built** | `Cli/DirectRestoreParts` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0137--a-run-in-direct-mode-left-unfinished-says-how-to-resume-it) |
 | [0138](adr/0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md) | The working space is said as room to assemble files one at a time: the refusal, the command line's plan and the console say so, since a resume's need is the most that remains of any one file | **Built** | `Restore/RestoreSpace` · `Cli/RestorePlanReport` · `Repository.Tests/RestoreSpaceTests` · `Cli.Tests/RestoreWithinAFileDirectTests` · `Web.DomTests/RestoreWizardDomTests` · [notes](#0138--the-working-space-is-said-as-room-to-assemble-files-one-at-a-time) |
+| [0139](adr/0139-a-kept-restore-receipt-is-let-go.md) | A kept restore receipt is let go: restore-receipts with --run and --forget removes that run's receipt from the state directory and every other run's stays; what is refused removes nothing | **Built** | `Restore/RestoreExecutor` · `Cli/RestoreReceiptReport` · `Repository.Tests/RestoreReceiptReadBackTests` · `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0139--a-kept-restore-receipt-is-let-go) |
 
 ---
 
@@ -3891,3 +3892,16 @@ and the contract are as they were.
 
 What remains is recorded rather than done. The need names no file, and
 says nothing of how much a resume's parts saved.
+
+### 0139 — a kept restore receipt is let go
+
+Every receipt a restore kept stayed until a person found its file under the
+state directory and removed it, which three records left undone.
+`restore-receipts --run <run> --forget` now lets that run's receipt go and
+says so, and every other run's stays. The name is checked to be a run's
+before it reaches a path. A run that kept none, `--forget` without a run,
+and `--forget` with `--connect` are refused, and nothing is removed. No
+contract change.
+
+What remains is recorded rather than done. Neither the contract nor the
+console lets a receipt go, and none goes by age or all at once.
