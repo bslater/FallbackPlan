@@ -82,6 +82,24 @@ internal static class RestoreReceiptReport
         output.WriteLine(File.ReadAllText(path).TrimEnd());
     }
 
+    /// <summary>
+    /// Lets the receipt <paramref name="run"/> kept under
+    /// <paramref name="stateDirectory"/> go, and says so (ADR-0139).
+    /// </summary>
+    /// <exception cref="CliFailureException">When the name is not a run's, or the run kept no receipt there.</exception>
+    public static void LetGo(TextWriter output, string stateDirectory, string run)
+    {
+        RefuseUnlessARun(run);
+
+        var directory = Path.Combine(stateDirectory, "receipts");
+        if (!RestoreReceipt.LetGo(directory, run))
+        {
+            throw new CliFailureException(Strings.FormatRestoreReceiptReport_NoReceiptKept(run, directory));
+        }
+
+        output.WriteLine($"let go the receipt of run {run} kept under '{directory}'");
+    }
+
     /// <summary>Refuses what is not a run's name.</summary>
     /// <exception cref="CliFailureException">When it is not.</exception>
     public static void RefuseUnlessARun(string run)

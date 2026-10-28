@@ -392,6 +392,35 @@ public sealed record RestoreReceipt
         return File.Exists(path) ? Read(path, run) : null;
     }
 
+    /// <summary>
+    /// Lets the receipt <paramref name="run"/> kept under
+    /// <paramref name="receiptsDirectory"/> go (ADR-0139): its file is
+    /// removed, and every other run's stays.
+    /// </summary>
+    /// <param name="receiptsDirectory">Where a state directory keeps restore receipts.</param>
+    /// <param name="run">The run.</param>
+    /// <returns>
+    /// Whether it kept one there to let go; never where <paramref name="run"/>
+    /// is not a run's name, which is never joined to a path.
+    /// </returns>
+    public static bool LetGo(string receiptsDirectory, string run)
+    {
+        ThrowHelper.ThrowIfNull(receiptsDirectory);
+        if (!IsRunName(run))
+        {
+            return false;
+        }
+
+        var path = Path.Combine(receiptsDirectory, $"{run}.json");
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        File.Delete(path);
+        return true;
+    }
+
     private static KeptRestoreReceipt Read(string path, string run)
     {
         RestoreReceipt? receipt = null;

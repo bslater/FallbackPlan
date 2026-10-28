@@ -235,6 +235,12 @@
   <data name="RestoreReceiptReport_ReceiptRecordsNoSet" xml:space="preserve">
     <value>Run {0}'s receipt records no set, so no passphrase here is known to be its own. It is read on the service's machine: restore-receipts --state &lt;the service's state directory&gt; --run {0}.</value>
   </data>
+  <data name="CliApplication_ForgetNamesTheReceipt" xml:space="preserve">
+    <value>--forget lets one run's receipt go: name it with --run.</value>
+  </data>
+  <data name="CliApplication_ForgetReadsTheStateDirectory" xml:space="preserve">
+    <value>--forget lets go a receipt kept under --state, not one a paired service keeps; on the service's machine, name its state directory with --state.</value>
+  </data>
   <data name="CliApplication_NoStateDirectoryKeepsReceipts" xml:space="preserve">
     <value>no state directory at '{0}' — nothing has been kept there.</value>
   </data>

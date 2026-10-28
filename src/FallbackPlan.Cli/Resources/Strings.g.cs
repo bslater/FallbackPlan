@@ -533,6 +533,16 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, RestoreReceiptReport_ReceiptRecordsNoSet, arg0);
 
     /// <summary>
+    /// --forget lets one run's receipt go: name it with --run.
+    /// </summary>
+    internal static string CliApplication_ForgetNamesTheReceipt => Get(nameof(CliApplication_ForgetNamesTheReceipt));
+
+    /// <summary>
+    /// --forget lets go a receipt kept under --state, not one a paired service keeps; on the service's machine, name its state directory with --state.
+    /// </summary>
+    internal static string CliApplication_ForgetReadsTheStateDirectory => Get(nameof(CliApplication_ForgetReadsTheStateDirectory));
+
+    /// <summary>
     /// no state directory at '{0}' — nothing has been kept there.
     /// </summary>
     private static string CliApplication_NoStateDirectoryKeepsReceipts => Get(nameof(CliApplication_NoStateDirectoryKeepsReceipts));
