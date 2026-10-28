@@ -55,6 +55,13 @@ public sealed class CatalogueTests : IDisposable
         return WriterId.FromBytes(bytes);
     }
 
+    private static byte[] Snapshot(byte seed)
+    {
+        var bytes = new byte[16];
+        Array.Fill(bytes, seed);
+        return bytes;
+    }
+
     private static DeltaId Delta(byte seed)
     {
         var bytes = new byte[16];
@@ -198,6 +205,52 @@ public sealed class CatalogueTests : IDisposable
         Assert.IsFalse(catalogue.HasLocation(Object(1)));
         Assert.IsFalse(catalogue.HasLocationBy(Object(1), Writer(1)));
         Assert.IsNull(catalogue.FindReuseCandidate(Object(1)));
+    }
+
+    [TestMethod]
+    public void LookupPath_CaseInsensitive_FollowsEveryFolderWhoseNameFoldsAlike()
+    {
+        // The fold is taken as the path is asked for, a folder at a time
+        // (ADR-0146): two folders may fold alike, and only one of them holds
+        // what is asked.
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x42);
+        catalogue.RecordTreeEntry(snapshot, "Docs", EntryKind.DirectoryPlaceholder, Object(1));
+        catalogue.RecordTreeEntry(snapshot, "Docs/x.txt", EntryKind.File, Object(2));
+        catalogue.RecordTreeEntry(snapshot, "DOCS", EntryKind.DirectoryPlaceholder, Object(3));
+        catalogue.RecordTreeEntry(snapshot, "DOCS/y.txt", EntryKind.File, Object(4));
+
+        Assert.AreEqual("Docs/x.txt", catalogue.LookupPath(snapshot, "docs/X.TXT", caseInsensitive: true)?.Path);
+        Assert.AreEqual("DOCS/y.txt", catalogue.LookupPath(snapshot, "docs/Y.txt", caseInsensitive: true)?.Path);
+        Assert.AreEqual(Object(4), catalogue.LookupPath(snapshot, "docs/Y.txt", caseInsensitive: true)?.ObjectId);
+        Assert.IsNull(catalogue.LookupPath(snapshot, "docs/z.txt", caseInsensitive: true));
+        Assert.IsNull(catalogue.LookupPath(snapshot, "docs/X.TXT"), "a lookup that is not asked to fold does not");
+    }
+
+    [TestMethod]
+    public void LookupPath_CaseInsensitive_PrefersTheExactPath_ThenTheFirstInOrdinalOrder()
+    {
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x43);
+        catalogue.RecordTreeEntry(snapshot, "Docs", EntryKind.DirectoryPlaceholder, Object(1));
+        catalogue.RecordTreeEntry(snapshot, "Docs/x.txt", EntryKind.File, Object(2));
+        catalogue.RecordTreeEntry(snapshot, "docs", EntryKind.DirectoryPlaceholder, Object(3));
+        catalogue.RecordTreeEntry(snapshot, "docs/x.txt", EntryKind.File, Object(4));
+
+        Assert.AreEqual("docs/x.txt", catalogue.LookupPath(snapshot, "docs/x.txt", caseInsensitive: true)?.Path);
+        Assert.AreEqual("Docs/x.txt", catalogue.LookupPath(snapshot, "Docs/x.txt", caseInsensitive: true)?.Path);
+        Assert.AreEqual("Docs/x.txt", catalogue.LookupPath(snapshot, "DOCS/X.TXT", caseInsensitive: true)?.Path);
+    }
+
+    [TestMethod]
+    public void LookupPath_CaseInsensitive_FoldsTheComposedAndDecomposedFormsAlike()
+    {
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x44);
+        catalogue.RecordTreeEntry(snapshot, "Cafe\u0301", EntryKind.DirectoryPlaceholder, Object(1));
+        catalogue.RecordTreeEntry(snapshot, "Cafe\u0301/menu.txt", EntryKind.File, Object(2));
+
+        Assert.AreEqual(Object(2), catalogue.LookupPath(snapshot, "CAF\u00c9/MENU.TXT", caseInsensitive: true)?.ObjectId);
     }
 
     [TestMethod]

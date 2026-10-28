@@ -523,10 +523,10 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>
-    /// The catalogue's path index key: the invariant lowercase form of the
-    /// NFC-normalised path — the same case regime rules-v1 matching uses
-    /// (ADR-0026 §Decision 8). Applied for indexing only; stored paths keep
-    /// their original form.
+    /// A path's fold: the invariant lowercase form of the NFC-normalised
+    /// path — the same case regime rules-v1 matching uses (ADR-0026
+    /// §Decision 8). Taken when a lookup or a plan asks for it, never stored
+    /// (ADR-0146); stored paths keep their original form.
     /// </summary>
     public static string Casefold(string path)
     {
@@ -548,13 +548,12 @@ public sealed class Catalogue : IDisposable
 
         using var command = _connection.CreateCommand();
         command.CommandText = """
-            INSERT OR REPLACE INTO tree_entries (snapshot_id, path, parent, path_casefold, entry_kind, object_id)
-            VALUES ($snapshot, $path, $parent, $casefold, $kind, $object);
+            INSERT OR REPLACE INTO tree_entries (snapshot_id, path, parent, entry_kind, object_id)
+            VALUES ($snapshot, $path, $parent, $kind, $object);
             """;
         command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
         command.Parameters.AddWithValue("$path", path);
         command.Parameters.AddWithValue("$parent", parent);
-        command.Parameters.AddWithValue("$casefold", Casefold(path));
         command.Parameters.AddWithValue("$kind", (int)entryKind);
         command.Parameters.AddWithValue("$object", objectId.ToArray());
         command.ExecuteNonQuery();
@@ -999,33 +998,70 @@ public sealed class Catalogue : IDisposable
         ThrowHelper.ThrowIfNullOrEmpty(path);
         var started = Stopwatch.GetTimestamp();
 
-        using var command = _connection.CreateCommand();
-        command.CommandText = caseInsensitive
-            ? """
-              SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
-              FROM tree_entries t
-              LEFT JOIN file_versions f ON f.object_id = t.object_id
-              WHERE t.snapshot_id = $snapshot AND t.path_casefold = $casefold
-              ORDER BY (t.path = $path) DESC, t.path
-              LIMIT 1;
-              """
-            : """
-              SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
-              FROM tree_entries t
-              LEFT JOIN file_versions f ON f.object_id = t.object_id
-              WHERE t.snapshot_id = $snapshot AND t.path = $path;
-              """;
-        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
-        command.Parameters.AddWithValue("$path", path);
-        if (caseInsensitive)
+        CatalogueTreeEntry? entry = null;
+        if ((caseInsensitive ? FoldedPath(snapshotId, path) : path) is { } found)
         {
-            command.Parameters.AddWithValue("$casefold", Casefold(path));
+            using var command = _connection.CreateCommand();
+            command.CommandText = """
+                SELECT t.path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
+                FROM tree_entries t
+                LEFT JOIN file_versions f ON f.object_id = t.object_id
+                WHERE t.snapshot_id = $snapshot AND t.path = $path;
+                """;
+            command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+            command.Parameters.AddWithValue("$path", found);
+
+            using var reader = command.ExecuteReader();
+            entry = reader.Read() ? ReadTreeEntry(reader) : null;
         }
 
-        using var reader = command.ExecuteReader();
-        var entry = reader.Read() ? ReadTreeEntry(reader) : null;
         EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
         return entry;
+    }
+
+    /// <summary>
+    /// The path in a snapshot whose every component folds as
+    /// <paramref name="path"/>'s does, found a folder at a time through the
+    /// parent index, since no fold is stored (ADR-0146): the path itself
+    /// where the snapshot holds it, and otherwise the first such path in
+    /// ordinal order. Every folder whose name folds alike is followed, since
+    /// only one of them may hold the rest.
+    /// </summary>
+    private string? FoldedPath(ReadOnlySpan<byte> snapshotId, string path)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT path FROM tree_entries WHERE snapshot_id = $snapshot AND parent = $parent;";
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        var parent = command.Parameters.Add("$parent", SqliteType.Text);
+
+        List<string> candidates = [string.Empty];
+        foreach (var component in path.Split('/'))
+        {
+            var folded = Casefold(component);
+            List<string> matching = [];
+            foreach (var candidate in candidates)
+            {
+                parent.Value = candidate;
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    var child = reader.GetString(0);
+                    if (string.Equals(Casefold(child[(child.LastIndexOf('/') + 1)..]), folded, StringComparison.Ordinal))
+                    {
+                        matching.Add(child);
+                    }
+                }
+            }
+
+            if (matching.Count == 0)
+            {
+                return null;
+            }
+
+            candidates = matching;
+        }
+
+        return candidates.Contains(path, StringComparer.Ordinal) ? path : candidates.Min(StringComparer.Ordinal);
     }
 
     /// <summary>
