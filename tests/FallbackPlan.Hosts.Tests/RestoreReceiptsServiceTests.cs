@@ -16,7 +16,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// said not to. Each names the set it restored (contract 1.74, ADR-0126).
 /// One run's receipt is let go by the run's name alone (contract 1.79,
 /// ADR-0140), and only that one; a run it keeps none of, and what is not a
-/// run's name, are refused.
+/// run's name, are refused. Listed as JSON from the service's state
+/// directory, the receipts read as the service answers them (ADR-0141).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsServiceTests : IDisposable
@@ -146,6 +147,37 @@ public sealed class RestoreReceiptsServiceTests : IDisposable
         Assert.IsInstanceOfType<RestoreReceiptsResult>(
             await handler.ExecuteAsync(new ListRestoreReceiptsCommand(), _timeout.Token), out var still);
         Assert.AreEqual(1, still.Total, "what is refused lets nothing go");
+    }
+
+    [TestMethod]
+    public async Task AsJson_TheServicesStateDirectory_IsListedAsTheServiceAnswersIt()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "the notes to come back");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await RunBackupAndWaitAsync(runtime, handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
+        await RestoreAsync(handler, snapshotId, source.SourceId, "first");
+        await RestoreAsync(handler, snapshotId, source.SourceId, "second");
+        await File.WriteAllTextAsync(
+            Path.Combine(_harness.StateDirectory, "receipts", "0000000000000000.json"), "{ not a receipt");
+        File.SetLastWriteTimeUtc(
+            Path.Combine(_harness.StateDirectory, "receipts", "0000000000000000.json"), DateTime.UnixEpoch.AddDays(1));
+
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            await handler.ExecuteAsync(new ListRestoreReceiptsCommand(), _timeout.Token), out var listed);
+        var read = await CliAsync("restore-receipts", "--state", _harness.StateDirectory, "--json");
+
+        Assert.AreEqual(0, read.ExitCode, read.Error);
+        Assert.AreEqual(
+            System.Text.Json.JsonSerializer.Serialize(listed, Api.Transport.FrameCodec.SerializerOptions),
+            read.Output.Trim(),
+            "the folder's listing is the service's answer, field for field");
     }
 
     [TestMethod]

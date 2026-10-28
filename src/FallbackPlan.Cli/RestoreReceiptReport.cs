@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Cli.Resources;
@@ -59,6 +60,34 @@ internal static class RestoreReceiptReport
         output.WriteLine(shown.Count == kept.Count
             ? $"{kept.Count} restore {(kept.Count == 1 ? "receipt" : "receipts")} kept under '{directory}'."
             : $"The newest {shown.Count} of {kept.Count} restore receipts kept under '{directory}'.");
+    }
+
+    /// <summary>
+    /// Writes the receipts kept under <paramref name="stateDirectory"/> as
+    /// JSON (ADR-0141), the newest <paramref name="limit"/> where one is
+    /// given, each as the service answers it (contract 1.73, ADR-0125), so a
+    /// script reads a state directory's listing and a paired service's alike.
+    /// </summary>
+    public static void WriteKeptJson(TextWriter output, string stateDirectory, int? limit)
+    {
+        var kept = RestoreReceipt.ReadKept(Path.Combine(stateDirectory, "receipts"));
+        var shown = limit is { } most ? kept.Take(most) : kept;
+        output.WriteLine(JsonSerializer.Serialize(
+            new RestoreReceiptsResult([.. shown.Select(Describe)], kept.Count), FrameCodec.SerializerOptions));
+    }
+
+    /// <summary>
+    /// Writes the receipts a paired service keeps as JSON, as it answers them
+    /// (ADR-0141), the newest <paramref name="limit"/> where one is given.
+    /// </summary>
+    /// <returns>The exit code.</returns>
+    public static async Task<int> WriteServiceKeptJsonAsync(
+        TextWriter output, IFallbackPlanClient client, int? limit, CancellationToken cancellationToken)
+    {
+        var listed = await AskAsync<RestoreReceiptsResult>(client, new ListRestoreReceiptsCommand(limit), cancellationToken)
+            .ConfigureAwait(false);
+        output.WriteLine(JsonSerializer.Serialize(listed, FrameCodec.SerializerOptions));
+        return 0;
     }
 
     /// <summary>
@@ -274,6 +303,28 @@ internal static class RestoreReceiptReport
             _ => throw new CliFailureException($"the service answered with {result.GetType().Name}."),
         };
     }
+
+    /// <summary>
+    /// A kept receipt as the service describes it (ADR-0125): what became of
+    /// its run's files and where it wrote them, never the paths, which are the
+    /// backup's file names. A receipt that does not read says why.
+    /// </summary>
+    private static RestoreReceiptDescriptor Describe(KeptRestoreReceipt kept) => kept.Receipt is not { } receipt
+        ? new(kept.Run, null, null, null, null, 0, 0, 0, 0, 0, kept.Problem)
+        : new(
+            kept.Run,
+            receipt.Outcome.ToString().ToLowerInvariant(),
+            receipt.CompletedAt,
+            receipt.SnapshotId,
+            receipt.WrittenTo,
+            Restored: receipt.Items.Count(item => item.Outcome == "restored"),
+            FoundInPlace: receipt.Items.Count(item => item.FoundInPlace),
+            Skipped: receipt.Items.Count(item => item.Outcome == "skipped"),
+            Failed: receipt.Items.Count(item => item.Outcome == "failed"),
+            Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
+            Set: receipt.Set,
+            SetId: receipt.SetId,
+            ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0));
 
     /// <summary>
     /// The items' outcomes, counted. A file a resume found in place is counted
