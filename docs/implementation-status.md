@@ -171,6 +171,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0144](adr/0144-the-catalogue-names-a-locations-blob-and-writer-by-number.md) | The catalogue names a location's blob and writer by number: schema 12 states each sixteen-byte id once, in a table of its own, and reads it back through a view, so the locations plane falls from 1 137 B/version to 662 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueSizeTests` · `Repository.Tests/Catalogue/CatalogueTests` · [notes](#0144--the-catalogue-names-a-locations-blob-and-writer-by-number) |
 | [0145](adr/0145-the-catalogue-keeps-no-map-from-content-to-object.md) | The catalogue keeps no map from content to object: schema 13 drops segment_dedup, which publication wrote and nothing read, so the catalogue falls from 2 001 B/version to 1 607 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository/SnapshotPublication` · `Repository.Tests/EndToEnd/StaleCatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0145--the-catalogue-keeps-no-map-from-content-to-object) |
 | [0146](adr/0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md) | The catalogue folds a path's case when asked, not when stored: schema 14 keeps no fold of a tree entry's path and no index on one, and a lookup that folds walks the path through the parent index, so tree_entries falls from 613 B/version to 379 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0146--the-catalogue-folds-a-paths-case-when-asked-not-when-stored) |
+| [0147](adr/0147-a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it.md) | A file version's catalogue row keeps only what is asked of it: schema 15 keeps no name, kind, whole-file hash, parent version or segment count, and no index on the hash, so file_versions falls from 345 B/version to 155 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0147--a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it) |
 
 ---
 
@@ -4014,3 +4015,18 @@ from 1 607 to 1 373.
 
 What remains is recorded rather than done. The catalogue is still more
 than three times its budget.
+
+### 0147 — a file version's catalogue row keeps only what is asked of it
+
+Each route that fills a catalogue wrote twelve of a file version's
+manifest fields into its row, and indexed its whole-file hash. Five
+were read by nothing: the name, the kind, the hash, the parent version
+and the segment count, and no lookup used the hash's index. Publication
+even wrote the parent as absent while the rebuilds wrote the manifest's.
+At schema 15 the row keeps the length, modification time, identity,
+alternate-streams flag and metadata digest, and the identity index.
+`file_versions` falls from 345 B/version to 155, and the catalogue from
+1 373 to 1 183.
+
+What remains is recorded rather than done. The catalogue is still nearly
+three times its budget.
