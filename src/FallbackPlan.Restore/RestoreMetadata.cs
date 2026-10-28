@@ -73,7 +73,8 @@ public enum ExtendedAttributeKinds
 
 /// <summary>
 /// What a restore knows of one item from its manifest: the bytes restoring
-/// it writes, and what was captured with it.
+/// it writes, what was captured with it, and how much of it a resume
+/// already holds.
 /// </summary>
 /// <param name="Kind">The entry's kind.</param>
 /// <param name="WrittenBytes">Its segments' bytes, its holes skipped (<see cref="RestoreSpace.WrittenBytes"/>); none for a folder.</param>
@@ -83,6 +84,12 @@ public enum ExtendedAttributeKinds
 /// <param name="Mode">Its captured POSIX mode, whose set-id bits depend on the ownership given back.</param>
 /// <param name="Attributes">The kinds of extended attribute it carries that are not written back everywhere.</param>
 /// <param name="HardLink">What it must agree on with its hard-link group's first name to share that name's file, or null for a file of no group (ADR-0102).</param>
+/// <param name="HeldBytes">
+/// What the run a plan resumes already holds of its written bytes: all of
+/// them for a file it landed, and for one it was cut short in what the part
+/// it kept proves (<see cref="RestoreSpace.HeldBytes"/>; ADR-0132,
+/// ADR-0136). None for a plan of a run afresh.
+/// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -91,7 +98,8 @@ public sealed record RestoreItemFacts(
     string? Group = null,
     uint? Mode = null,
     ExtendedAttributeKinds Attributes = ExtendedAttributeKinds.None,
-    string? HardLink = null);
+    string? HardLink = null,
+    ulong HeldBytes = 0);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it

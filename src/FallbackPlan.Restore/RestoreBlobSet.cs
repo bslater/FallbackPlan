@@ -284,15 +284,11 @@ public static class RestoreBlobSet
                 continue;
             }
 
-            facts[item.ObjectId] = new RestoreItemFacts(
-                manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), RestoreMetadata.Captured(manifest.Metadata),
-                manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode,
-                RestoreMetadata.KindsOf(manifest.Metadata), RestoreHardLinks.KeyOf(manifest));
-
             // What the run already holds of the file is not read again: a
             // file it landed at its length but for its manifest, and a file
             // it was cut short in as far as its part proves, in the file's
-            // order (ADR-0132).
+            // order (ADR-0132). Nor does what a part holds need room in the
+            // working space again (ADR-0136).
             var landed = held is not null && held.Landed.Contains(item.Path);
             var heldSegments = landed
                 ? manifest.SegmentReferences.Count
@@ -303,6 +299,12 @@ public static class RestoreBlobSet
                         (reference, plaintext) => RestorePart.Proves(objectIdDeriver, reference, plaintext),
                         cancellationToken).ConfigureAwait(false)
                     : 0;
+
+            facts[item.ObjectId] = new RestoreItemFacts(
+                manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), RestoreMetadata.Captured(manifest.Metadata),
+                manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode,
+                RestoreMetadata.KindsOf(manifest.Metadata), RestoreHardLinks.KeyOf(manifest),
+                RestoreSpace.HeldBytes(manifest, heldSegments));
 
             // A lost segment makes the path missing whatever else of it is
             // archived, because no rehydration brings that segment back. The
