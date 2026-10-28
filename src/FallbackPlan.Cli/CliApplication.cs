@@ -2810,6 +2810,11 @@ public static class CliApplication
             {
                 Description = "At most this many of the newest; with --connect and --run, of the files it did not restore.",
             };
+            var receiptsListJsonOption = new Option<bool>("--json")
+            {
+                Description = "List the receipts as JSON, each as the service answers it, from the state directory or a "
+                    + "paired service alike (ADR-0141). --run prints one receipt as JSON already, as it was kept.",
+            };
             var receiptsForgetOption = new Option<bool>("--forget")
             {
                 Description = "Let the receipt of the run --run names go: its file is removed from the state directory, "
@@ -2826,6 +2831,7 @@ public static class CliApplication
             command.Options.Add(receiptsRunOption);
             command.Options.Add(receiptsLimitOption);
             command.Options.Add(receiptsForgetOption);
+            command.Options.Add(receiptsListJsonOption);
             command.Options.Add(connectOption);
             command.Options.Add(fingerprintOption);
             command.Options.Add(passphraseEnvOption);
@@ -2858,7 +2864,9 @@ public static class CliApplication
                     return WithServiceAsync(
                         parse,
                         client => run is null
-                            ? RestoreReceiptReport.WriteServiceKeptAsync(output, client, limit, cancellationToken)
+                            ? parse.GetValue(receiptsListJsonOption)
+                                ? RestoreReceiptReport.WriteServiceKeptJsonAsync(output, client, limit, cancellationToken)
+                                : RestoreReceiptReport.WriteServiceKeptAsync(output, client, limit, cancellationToken)
                             : forget
                                 ? RestoreReceiptReport.LetGoThroughServiceAsync(output, client, run, cancellationToken)
                                 : RestoreReceiptReport.WriteServiceRunAsync(
@@ -2892,7 +2900,15 @@ public static class CliApplication
                     throw new CliFailureException(Strings.CliApplication_LimitTakesAtLeastOne);
                 }
 
-                RestoreReceiptReport.WriteKept(output, state, limit);
+                if (parse.GetValue(receiptsListJsonOption))
+                {
+                    RestoreReceiptReport.WriteKeptJson(output, state, limit);
+                }
+                else
+                {
+                    RestoreReceiptReport.WriteKept(output, state, limit);
+                }
+
                 return Task.FromResult(0);
             }));
         }

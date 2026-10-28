@@ -21,7 +21,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// no set, one that does not read, a run the service keeps no receipt of, and
 /// the files asked without the passphrase are each refused, naming no file.
 /// The console lets a receipt the service keeps go by its run alone, and the
-/// service keeps every other run's (contract 1.79, ADR-0140).
+/// service keeps every other run's (contract 1.79, ADR-0140). Listed as JSON,
+/// they read as the service answers them (ADR-0141).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsRemoteTests : IDisposable
@@ -84,6 +85,25 @@ public sealed class RestoreReceiptsRemoteTests : IDisposable
         Assert.IsTrue(File.Exists(Path.Combine(receipts, $"{NoSetRun}.json")), "and every other run's stays");
         Assert.AreEqual(1, again.ExitCode, again.Output);
         Assert.Contains(Run, again.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task APairedConsole_ListsTheReceiptsTheServiceKeeps_AsJson()
+    {
+        await using var service = await StartServiceAsync();
+        Keep(Path.Combine(_harness.StateDirectory, "receipts"), Run, _harness.DocsSetId);
+        Keep(Path.Combine(_harness.StateDirectory, "receipts"), NoSetRun, setId: null, completedAt: 1_699_000_000_000);
+
+        var listed = await service.CliAsync("restore-receipts", "--json");
+
+        Assert.AreEqual(0, listed.ExitCode, listed.Error);
+        using var json = System.Text.Json.JsonDocument.Parse(listed.Output);
+        Assert.AreEqual(2, json.RootElement.GetProperty("total").GetInt32());
+        CollectionAssert.AreEqual(
+            new[] { Run, NoSetRun },
+            json.RootElement.GetProperty("receipts").EnumerateArray().Select(receipt => receipt.GetProperty("run").GetString()).ToArray(),
+            "the service's receipts, newest first");
+        AssertNamesNoFile(listed.Output);
     }
 
     [TestMethod]

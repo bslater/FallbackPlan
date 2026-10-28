@@ -20,6 +20,9 @@ namespace FallbackPlan.Cli.Tests;
 /// is not a run's, a run that kept none, and no run at all are refused, and
 /// nothing is removed. A paired service is asked to let its receipt go by the
 /// run's name alone, and what it refuses is refused as it says (ADR-0140).
+/// With --json the receipts are listed as the service answers them, from the
+/// folder and through a paired service alike, under a limit and with how many
+/// are kept (ADR-0141).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsVerbTests : IDisposable
@@ -390,6 +393,75 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
 
         Assert.AreEqual(1, forgot.ExitCode, forgot.All);
         Assert.Contains("sixteen", forgot.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AsJson_EachReceiptKept_IsListedAsTheServiceAnswersIt_NewestFirst()
+    {
+        Kept("0123456789abcdef", new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1, FoundInPlace = true },
+            new ReceiptItem { Path = "b.txt", Outcome = "failed", Bytes = 0 });
+        Directory.CreateDirectory(Receipts);
+        await File.WriteAllTextAsync(Path.Combine(Receipts, "fedcba9876543210.json"), "{ not a receipt");
+        File.SetLastWriteTimeUtc(Path.Combine(Receipts, "fedcba9876543210.json"), DateTime.UnixEpoch.AddDays(1));
+
+        var listed = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--json");
+
+        Assert.AreEqual(0, listed.ExitCode, listed.All);
+        using var json = JsonDocument.Parse(listed.Output);
+        Assert.AreEqual(2, json.RootElement.GetProperty("total").GetInt32());
+        var receipts = json.RootElement.GetProperty("receipts");
+        Assert.AreEqual(2, receipts.GetArrayLength());
+        var newest = receipts[0];
+        Assert.AreEqual("0123456789abcdef", newest.GetProperty("run").GetString());
+        Assert.AreEqual("complete", newest.GetProperty("outcome").GetString());
+        Assert.AreEqual(1_700_000_000_000L, newest.GetProperty("ended_at").GetInt64());
+        Assert.AreEqual("/srv/restored", newest.GetProperty("written_to").GetString());
+        Assert.AreEqual(1, newest.GetProperty("restored").GetInt32());
+        Assert.AreEqual(1, newest.GetProperty("found_in_place").GetInt32());
+        Assert.AreEqual(1, newest.GetProperty("failed").GetInt32());
+        var unreadable = receipts[1];
+        Assert.AreEqual("fedcba9876543210", unreadable.GetProperty("run").GetString());
+        Assert.IsFalse(string.IsNullOrWhiteSpace(unreadable.GetProperty("problem").GetString()));
+        Assert.DoesNotContain("a.txt", listed.Output, StringComparison.Ordinal, "the listing names none of the backup's files");
+    }
+
+    [TestMethod]
+    public async Task AsJson_ALimit_ListsTheNewest_AndTheTotalCountsTheRest_AndNoneKeptIsAnEmptyList()
+    {
+        Directory.CreateDirectory(_cli.StatePath);
+        var none = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--json");
+        Kept("0123456789abcdef", new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1 });
+        Kept("fedcba9876543210", new ReceiptItem { Path = "b.txt", Outcome = "restored", Bytes = 1 });
+
+        var limited = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--json", "--limit", "1");
+
+        Assert.AreEqual(0, none.ExitCode, none.All);
+        using (var empty = JsonDocument.Parse(none.Output))
+        {
+            Assert.AreEqual(0, empty.RootElement.GetProperty("total").GetInt32());
+            Assert.AreEqual(0, empty.RootElement.GetProperty("receipts").GetArrayLength());
+        }
+
+        Assert.AreEqual(0, limited.ExitCode, limited.All);
+        using var json = JsonDocument.Parse(limited.Output);
+        Assert.AreEqual(2, json.RootElement.GetProperty("total").GetInt32());
+        Assert.AreEqual(1, json.RootElement.GetProperty("receipts").GetArrayLength());
+    }
+
+    [TestMethod]
+    public async Task AsJson_ThroughAPairedService_IsListedAsItAnswers()
+    {
+        await using var client = new ListingClient(
+            new FallbackPlan.Api.RestoreReceiptDescriptor("0123456789abcdef", "complete", 1_700_000_000_000, new string('e', 32), "/srv/restored", 3, 0, 0, 0, 0, ResumedWithin: 2));
+        using var output = new StringWriter();
+
+        Assert.AreEqual(0, await RestoreReceiptReport.WriteServiceKeptJsonAsync(output, client, null, CancellationToken.None));
+
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.AreEqual(1, json.RootElement.GetProperty("total").GetInt32());
+        var receipt = Assert.ContainsSingle(json.RootElement.GetProperty("receipts").EnumerateArray().ToList());
+        Assert.AreEqual("0123456789abcdef", receipt.GetProperty("run").GetString());
+        Assert.AreEqual(2, receipt.GetProperty("resumed_within").GetInt32());
     }
 
     [TestMethod]
