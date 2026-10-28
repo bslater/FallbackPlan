@@ -56,6 +56,8 @@ A run's parts go when it finishes or is let go. When the service starts, the par
 ## What this does not do
 
 - **Resume within a file in direct mode.** A run in direct mode keeps no parts, and a file it was cut short in is restored whole, as before.
+
+  > **2026-10 ([ADR-0135](0135-direct-mode-resumes-within-a-file.md)).** It does now. A run in direct mode keeps its parts under the state directory by where it lands, a resume there takes them up, and a run there that finishes lets them go.
 - **Measure what a part saves.** A resume's plan still counts each file it writes whole, so what it says the run will read errs high.
 
   > **2026-10 ([ADR-0132](0132-a-resumes-plan-counts-only-what-it-still-reads.md)).** It measures it now. A plan of a resume through the service proves each part its run kept as the resume would take it up, writing nothing, and counts nothing the part proves among what the run reads.
@@ -78,3 +80,4 @@ A run's parts go when it finishes or is let go. When the service starts, the par
 | 2026-10 | Accepted | The working space is measured where the parts are kept, by [ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md): a run through the service is measured for the room its parts need on the state directory, not in the system's temporary folder. |
 | 2026-10 | Accepted | What a part saves is measured, by [ADR-0132](0132-a-resumes-plan-counts-only-what-it-still-reads.md): a plan of a resume proves each part by the rule the engine takes one up by, now shared, and counts nothing it proves among what the run reads. |
 | 2026-10 | Accepted | What a run left unfinished holds is said, by [ADR-0133](0133-a-run-left-unfinished-says-what-its-parts-hold.md): each run listed says what its parts hold under the state directory, at contract 1.77, and `restore-resume` and the console say it. |
+| 2026-10 | Accepted | Direct mode resumes within a file, by [ADR-0135](0135-direct-mode-resumes-within-a-file.md): its runs keep their parts under the state directory by where they land, apart from the service's, and a run there that finishes lets them go. |

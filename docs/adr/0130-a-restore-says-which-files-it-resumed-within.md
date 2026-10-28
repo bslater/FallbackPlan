@@ -45,6 +45,8 @@ The service's result of a restore gains `resumed_within`: how many of the files 
 ## What this does not do
 
 - **Say it in direct mode.** Direct mode keeps no parts (ADR-0129), so it resumes no file within.
+
+  > **2026-10 ([ADR-0135](0135-direct-mode-resumes-within-a-file.md)).** It does now, and a resume there says how many files it resumed within, as one through the service does.
 - **Say it in the listing of kept receipts.** The listing counts what became of each run's files, and a file resumed within is a file restored.
 
   > **2026-10 ([ADR-0134](0134-the-kept-receipts-say-which-files-were-resumed-within.md)).** It says it now, among the files restored as the files found in place are, at contract 1.78.
@@ -61,3 +63,4 @@ The service's result of a restore gains `resumed_within`: how many of the files 
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The receipt at schema 11 says where each file a resume wrote from its part was resumed; contract 1.76's `resumed_within` counts those files on a restore's result; `restore`, `restore-resume` and the console's result say how many. |
 | 2026-10 | Accepted | The listing of kept receipts counts each run's files resumed within, by [ADR-0134](0134-the-kept-receipts-say-which-files-were-resumed-within.md): among the files restored, from the folder, through the service at contract 1.78, and in the console. |
+| 2026-10 | Accepted | [ADR-0135](0135-direct-mode-resumes-within-a-file.md): a resume in direct mode resumes within a file too, and says how many files it did. |

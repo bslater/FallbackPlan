@@ -42,6 +42,8 @@ The service's list of the runs left unfinished gains, for each, `held`: the byte
 - **Say which files the parts are of.** Their names are the files' whole-file hashes, and which files those are is the backup's to say, through the passphrase.
 - **Say it in direct mode.** Direct mode keeps no parts.
 
+  > **2026-10 ([ADR-0135](0135-direct-mode-resumes-within-a-file.md)).** It keeps them now, by where a run lands, and still lists no runs to say it beside.
+
 ## Alternatives considered
 
 - **Keep the total in the run's record.** Rejected. The record is written as a run begins and ends, and a part grows while it runs. A total read from the folder is what lies there.
@@ -52,3 +54,4 @@ The service's list of the runs left unfinished gains, for each, `held`: the byte
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Each run left unfinished says what the parts it kept hold (contract 1.77's `held`), summed from its own folder as the list is asked for; `restore-resume` and the console's list say it, and a run holding nothing says nothing of it. |
+| 2026-10 | Accepted | [ADR-0135](0135-direct-mode-resumes-within-a-file.md): direct mode keeps parts by where a run lands, and lists no runs, so nothing says what a destination holds. |
