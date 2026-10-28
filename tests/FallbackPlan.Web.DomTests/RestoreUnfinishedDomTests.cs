@@ -20,6 +20,7 @@ namespace FallbackPlan.Web.DomTests;
 /// planned (ADR-0121): what the run already landed, what is left to write,
 /// and whether it fits, and one that will not fit is armed only when the
 /// person says to go on; a service that cannot plan it still resumes it.
+/// Each run says what the parts it kept hold (ADR-0133).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -30,7 +31,7 @@ public sealed class RestoreUnfinishedDomTests
     private static readonly ulong Now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     private static readonly RestoreRunDescriptor Unfinished =
-        new(Run, "snap-1", "docs", "/restore/out", Now - 3_600_000, Existing: "rename", InPlace: true);
+        new(Run, "snap-1", "docs", "/restore/out", Now - 3_600_000, Existing: "rename", InPlace: true, Held: 3_145_728);
 
     /// <summary>A resume's plan that fits, one file already landed.</summary>
     private static readonly RestorePlanResult Fits = new(
@@ -70,6 +71,7 @@ public sealed class RestoreUnfinishedDomTests
         await Expect(card).ToContainTextAsync("docs");
         await Expect(card).ToContainTextAsync("/restore/out");
         await Expect(card).ToContainTextAsync("in place");
+        await Expect(card).ToContainTextAsync("holds 3.0 MiB it had assembled");
         await Expect(card.Locator($"[data-action=\"resume-run\"][data-run=\"{Run}\"]")).ToBeVisibleAsync();
         await Expect(card.Locator($"[data-action=\"forget-run\"][data-run=\"{Run}\"]")).ToBeVisibleAsync();
     }

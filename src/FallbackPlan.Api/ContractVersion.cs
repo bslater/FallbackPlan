@@ -769,8 +769,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// part, reading again only what the part lacked. Additive: a pre-1.76
     /// client ignores the field, and a pre-1.76 service's result says none.
     /// </para>
+    /// <para>
+    /// 1.77 says what each run left unfinished holds of the files it was cut
+    /// short in (FR-RST-008, ADR-0133). `RestoreRunDescriptor` gains `held`,
+    /// the bytes the parts it kept hold under the service's state directory,
+    /// which a resume takes up and letting the run go removes. Additive: a
+    /// pre-1.77 client ignores the field, and a pre-1.77 service's runs say
+    /// none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 76);
+    public static ContractVersion Current { get; } = new(1, 77);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

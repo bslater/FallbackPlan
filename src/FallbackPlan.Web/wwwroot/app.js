@@ -1199,7 +1199,8 @@ function renderUnfinishedRuns() {
       ${S.restoreRuns.map(runDescriptor => `
         <div class="notice">
           <span class="text">${describeRun(runDescriptor)}
-            <span class="subtle" title="${esc(fmtWhen(runDescriptor.beganAt))}">· begun ${esc(rel(runDescriptor.beganAt))}</span></span>
+            <span class="subtle" title="${esc(fmtWhen(runDescriptor.beganAt))}">· begun ${esc(rel(runDescriptor.beganAt))}</span>${runDescriptor.held
+              ? ` <span class="subtle">· holds ${esc(fmtBytes(runDescriptor.held))} it had assembled</span>` : ""}</span>
           <button type="button" class="btn small" data-action="resume-run" data-run="${esc(runDescriptor.run)}">Restore what is left…</button>
           <button type="button" class="btn small" data-action="forget-run" data-run="${esc(runDescriptor.run)}">Let it go…</button>
         </div>`).join("")}

@@ -45,6 +45,24 @@ internal static class RestoreParts
         });
     }
 
+    /// <summary>
+    /// The bytes a run's parts hold (ADR-0133), or none where it kept none
+    /// or they will not be read.
+    /// </summary>
+    public static long Held(ServiceRuntime runtime, string run)
+    {
+        var held = 0L;
+        Attempt(() =>
+        {
+            var parts = new DirectoryInfo(Of(runtime, run));
+            if (parts.Exists)
+            {
+                held = parts.EnumerateFiles().Sum(part => part.Length);
+            }
+        });
+        return held;
+    }
+
     /// <summary>Removes a run's parts: it finished, or was let go, and nothing will take them up.</summary>
     public static void LetGo(ServiceRuntime runtime, string run) => Attempt(() =>
     {
