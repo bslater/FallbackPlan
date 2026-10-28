@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.77
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.78
 
 ---
 
@@ -262,3 +262,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.75 | What a restore did not restore, through the passphrase ([ADR-0127](../../docs/adr/0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md), FR-RST-004, FR-WOR-007). Each of `restore_receipts`' rows gains `set_id`, the identity of the set the receipt records. `get_restore_receipt` takes `run`, `source` and `limit`, and answers `restore_receipt`: the `receipt`, the `items` its run failed, skipped or degraded, each with `path`, `outcome` and `detail`, and `unlisted`, how many more there are. It is answered only through a source of the receipt's set, unlocked by the session that asks, and refused for a receipt that records no set. Additive: a pre-1.75 client never asks, and a pre-1.75 service refuses the verb. |
 | 1.76 | Which files a resume took up from its parts ([ADR-0130](../../docs/adr/0130-a-restore-says-which-files-it-resumed-within.md), FR-RST-008). `restore`'s result gains `resumed_within`, how many of the files it restored it wrote from the part its run had assembled of each, reading again only what the part lacked. Additive: a pre-1.76 client ignores the field, and a pre-1.76 service's result says none. |
 | 1.77 | What a run left unfinished holds ([ADR-0133](../../docs/adr/0133-a-run-left-unfinished-says-what-its-parts-hold.md), FR-RST-008). `restore_runs`' each run gains `held`, the bytes the parts it kept hold under the service's state directory, which a resume takes up and letting the run go removes. Additive: a pre-1.77 client ignores the field, and a pre-1.77 service's runs say none. |
+| 1.78 | Which kept runs resumed within a file ([ADR-0134](../../docs/adr/0134-the-kept-receipts-say-which-files-were-resumed-within.md), FR-RST-004). `restore_receipts`' each receipt gains `resumed_within`, how many of its run's files a resume wrote from the part an earlier run had assembled of each, counted among those restored as `found_in_place` is. Additive: a pre-1.78 client ignores the field, and a pre-1.78 service's receipts say none. |

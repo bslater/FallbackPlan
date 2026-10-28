@@ -69,3 +69,4 @@ They sit beside the peers' receipts, read on entering the view and never by the 
 | 2026-10 | Accepted | [ADR-0126](0126-a-restore-receipt-names-the-set-it-restored.md): each receipt listed names the set its run restored (contract 1.74). |
 | 2026-10 | Accepted | [ADR-0127](0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md): the files a run did not restore are shown through the passphrase, which this record left undone. |
 | 2026-10 | Accepted | [ADR-0128](0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md): the command line asks a paired service for the receipts it keeps, which this record left undone. |
+| 2026-10 | Accepted | [ADR-0134](0134-the-kept-receipts-say-which-files-were-resumed-within.md): each receipt listed carries its run's files resumed within (contract 1.78), and the console says them. |
