@@ -156,6 +156,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0129](adr/0129-a-restore-cut-short-resumes-within-a-file.md) | A restore cut short resumes within a file: a file is assembled in a part named by its whole-file hash and kept unless it lands or its assembly is refused; a resume takes the part up as far as each segment proves against its object identifier and each hole reads as zeroes, and reads only the rest; through the service each run keeps its parts under its name, carried to a resume's, and let go when the run finishes or is let go, or at start for a run no longer on record | **Built** | `Repository/RestoreEngine` · `Repository/RepositoryReader` · `Restore/RestoreExecutor` · `Agent/RestoreParts` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests` · [notes](#0129--a-restore-cut-short-resumes-within-a-file) |
 | [0130](adr/0130-a-restore-says-which-files-it-resumed-within.md) | A restore says which files it resumed within: the receipt, at schema 11, gives each file a resume wrote from its part `resumed_at`, how many of its bytes were taken up, and the result counts those files as `resumed_within` (contract 1.76), which `restore`, `restore-resume` and the console's result say | **Built** | `Repository/RestoreEngine` · `Restore/RestoreExecutor` · `Api/Results` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleRestoreResultScriptTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0130--a-restore-says-which-files-it-resumed-within) |
 | [0131](adr/0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md) | The service measures a restore's working space where its parts are kept: its probe of room names the folder its runs keep their parts in as the working directory, so a plan and a run measure the room for the largest file on the state directory's volume; direct mode measures the temporary folder its engine spools in | **Built** | `Agent/ServiceRuntime` · `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0131--the-service-measures-a-restores-working-space-where-its-parts-are-kept) |
+| [0132](adr/0132-a-resumes-plan-counts-only-what-it-still-reads.md) | A resume's plan counts only what it still reads: nothing of a file its run landed at its length but the manifest, and through the service nothing a part its run kept proves, proved by the rule a resume takes a part up by, now shared by the engine and the plan; what is held is still probed for what is missing or archived | **Built** | `Restore/RestoreBlobSet` · `Repository/RestorePart` · `Repository/RestoreEngine` · `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0132--a-resumes-plan-counts-only-what-it-still-reads) |
 
 ---
 
@@ -3597,7 +3598,8 @@ resume restores nothing and is not kept. Contract 1.72 carries it: `resume` on
 `plan_restore`, `plan_resume_restore`, and `landed` on `restore_plan`.
 
 What remains is recorded rather than done. The console plans no resume.
-ADR-0121 has since taken it up.
+ADR-0121 has since taken it up, and ADR-0132 has a plan of a resume count
+nothing of what its run landed but each file's manifest.
 
 ### 0121 — the console plans a resume
 
@@ -3744,8 +3746,9 @@ for a run no longer on record. No contract or receipt change.
 What remains is recorded rather than done. Direct mode keeps no parts, a
 resume's plan counts each file it writes whole, and the receipt does not say
 a file was resumed within. ADR-0130 has since had the receipt say where each
-such file was resumed, and the result count them, and ADR-0131 measures the
-working space where the parts are kept.
+such file was resumed, and the result count them, ADR-0131 measures the
+working space where the parts are kept, and ADR-0132 has a resume's plan
+count nothing its parts prove.
 
 ### 0130 — a restore says which files it resumed within
 
@@ -3776,3 +3779,19 @@ temporary folder, as before. No contract change.
 What remains is recorded rather than done. A resume's working space counts
 its largest file whole, though its part may hold some of it already, and the
 parts of runs left unfinished are counted only as room no longer free.
+
+### 0132 — a resume's plan counts only what it still reads
+
+A plan says what its run reads, and a plan of a resume was measured where
+its run landed for room but counted what it read as for a run afresh. The
+plan's probe is now told what a resume holds: the files its run landed at
+their length, by the rule the measure counts them by, of which it counts
+only the manifest; and, through the service, where the run kept its parts.
+Each part is proved as the resume would take it up, by a walk the engine
+now shares, writing nothing, and what it proves is not counted. What is
+held is still probed, so a path is missing or archived by everything it
+names, as before. No contract change.
+
+What remains is recorded rather than done. The plan reads nothing of the
+destination but each landed file's length, and the room a resume needs
+still counts its largest file whole.

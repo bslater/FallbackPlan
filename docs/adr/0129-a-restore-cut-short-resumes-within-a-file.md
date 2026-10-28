@@ -55,6 +55,8 @@ A run's parts go when it finishes or is let go. When the service starts, the par
 
 - **Resume within a file in direct mode.** A run in direct mode keeps no parts, and a file it was cut short in is restored whole, as before.
 - **Measure what a part saves.** A resume's plan still counts each file it writes whole, so what it says the run will read errs high.
+
+  > **2026-10 ([ADR-0132](0132-a-resumes-plan-counts-only-what-it-still-reads.md)).** It measures it now. A plan of a resume through the service proves each part its run kept as the resume would take it up, writing nothing, and counts nothing the part proves among what the run reads.
 - **Say in the receipt that a file was resumed within.** The receipt counts the file restored, as it counts any file the run wrote.
 
   > **2026-10 ([ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md)).** It says so now. The receipt, at schema 11, says where each file a resume wrote from its part was resumed, and a restore's result counts those files (contract 1.76).
@@ -75,3 +77,4 @@ A run's parts go when it finishes or is let go. When the service starts, the par
 | 2026-10 | Accepted | The receipt says where a file was resumed within, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): at schema 11, with a restore's result counting those files at contract 1.76. What this does not do no longer leaves the receipt silent on it. |
 | 2026-10 | Accepted | The receipt says where a file was resumed within, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): at schema 11, with a restore's result counting those files at contract 1.76. What this does not do no longer leaves the receipt silent on it. |
 | 2026-10 | Accepted | The working space is measured where the parts are kept, by [ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md): a run through the service is measured for the room its parts need on the state directory, not in the system's temporary folder. |
+| 2026-10 | Accepted | What a part saves is measured, by [ADR-0132](0132-a-resumes-plan-counts-only-what-it-still-reads.md): a plan of a resume proves each part by the rule the engine takes one up by, now shared, and counts nothing it proves among what the run reads. |
