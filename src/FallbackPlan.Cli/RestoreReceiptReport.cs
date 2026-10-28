@@ -100,6 +100,21 @@ internal static class RestoreReceiptReport
         output.WriteLine($"let go the receipt of run {run} kept under '{directory}'");
     }
 
+    /// <summary>
+    /// Asks a paired service to let the receipt it keeps of
+    /// <paramref name="run"/> go (contract 1.79, ADR-0140), and says so.
+    /// </summary>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="CliFailureException">When the service keeps no receipt of the run, or refuses it.</exception>
+    public static async Task<int> LetGoThroughServiceAsync(
+        TextWriter output, IFallbackPlanClient client, string run, CancellationToken cancellationToken)
+    {
+        RefuseUnlessARun(run);
+        _ = await AskAsync<AcknowledgedResult>(client, new ForgetRestoreReceiptCommand(run), cancellationToken).ConfigureAwait(false);
+        output.WriteLine($"let go the receipt of run {run} the service kept");
+        return 0;
+    }
+
     /// <summary>Refuses what is not a run's name.</summary>
     /// <exception cref="CliFailureException">When it is not.</exception>
     public static void RefuseUnlessARun(string run)

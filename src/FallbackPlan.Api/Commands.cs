@@ -49,6 +49,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ResumeRestoreCommand), "resume_restore")]
 [JsonDerivedType(typeof(PlanResumeRestoreCommand), "plan_resume_restore")]
 [JsonDerivedType(typeof(ForgetRestoreRunCommand), "forget_restore_run")]
+[JsonDerivedType(typeof(ForgetRestoreReceiptCommand), "forget_restore_receipt")]
 [JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
 [JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
 [JsonDerivedType(typeof(ProvisionInstallationCommand), "provision_installation")]
@@ -692,6 +693,14 @@ public sealed record PlanResumeRestoreCommand(string Run, string? Source = null)
 /// </summary>
 /// <param name="Run">The run, as <see cref="ListRestoreRunsCommand"/> names it.</param>
 public sealed record ForgetRestoreRunCommand(string Run) : ServiceCommand;
+
+/// <summary>
+/// Lets a restore receipt the service keeps go (contract 1.79, FR-RST-004,
+/// ADR-0140): the service removes that run's receipt, and every other run's
+/// stays.
+/// </summary>
+/// <param name="Run">The run whose receipt to let go, as <see cref="ListRestoreReceiptsCommand"/> names it.</param>
+public sealed record ForgetRestoreReceiptCommand(string Run) : ServiceCommand;
 
 /// <summary>
 /// Opens a restore source (ADR-0041): the place a guided restore reads from —
