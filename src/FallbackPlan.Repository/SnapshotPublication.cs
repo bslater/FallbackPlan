@@ -700,14 +700,6 @@ public sealed partial class PublicationOrchestrator
                     ? inherited.ContentObjects()
                     : (archive?.SegmentReferences.Select(reference => reference.ObjectId) ?? [])
                         .Concat(file.Streams ?? []));
-
-            if (archive is not null)
-            {
-                for (var i = 0; i < archive.SegmentReferences.Count; i++)
-                {
-                    _catalogue.RecordSegmentDedup(archive.SegmentContentIds[i], archive.SegmentReferences[i].ObjectId);
-                }
-            }
         }
 
         _catalogue.SetSource("live");

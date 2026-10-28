@@ -16,8 +16,8 @@ namespace FallbackPlan.PerformanceTests;
 /// <c>dotnet run -c Release -- dedup</c>.
 /// </summary>
 /// <remarks>
-/// Dedup identity is the segment content id (SHA-256 of plaintext), the same
-/// identity the engine's <c>segment_dedup</c> catalogue table uses — so a
+/// Dedup identity is the segment content id (SHA-256 of plaintext), the
+/// identity the engine's reuse keys a segment's object identifier from — so a
 /// "stored byte" here is a byte no prior segment of the series already
 /// covers. Encryption and compression sit downstream of that identity and do
 /// not change the ratio; they are excluded so the run isolates segmentation.

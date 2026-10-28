@@ -174,46 +174,40 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Publication_APoisonedSegmentDedupTable_InfluencesNothing()
+    public async Task Publication_KeepsNoMapFromContentToObject()
     {
-        // segment_dedup is written by the projection and read by nothing on
-        // the publication path — cross-run reuse rides object_locations, and
-        // in-session reuse rides the session's own memory. This pins that
-        // fact: if the table ever silently became load-bearing, poisoned
-        // rows would surface here as reused-but-wrong references.
+        // Reuse rides object_locations, by the object identifier a segment's
+        // content identifier is keyed into, and in-session reuse rides the
+        // session's own memory. A map from content identifier to object was
+        // written once and read by nothing, so it is kept nowhere (ADR-0145),
+        // and none can come back as a second answer to the same question.
         var store = CreateStore();
         using var keys = CreateKeys();
         using var credential = CreateCredential();
-        var cataloguePath = Path.Combine(SpoolDirectory, "catalogue-poison.db");
+        var cataloguePath = Path.Combine(SpoolDirectory, "catalogue-columns.db");
 
-        var content = Deterministic(120_000, 41);
         using (var catalogue = CatalogueDb.Open(cataloguePath, Repo))
         {
-            await Publish(store, keys, credential, catalogue, "poison")
-                .PublishAsync(Job(SourceWith(content), 0xD1), CancellationToken.None);
+            await Publish(store, keys, credential, catalogue, "columns")
+                .PublishAsync(Job(SourceWith(Deterministic(120_000, 41)), 0xD1), CancellationToken.None);
         }
 
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        using (var raw = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={cataloguePath}"))
+        using var raw = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={cataloguePath}");
+        raw.Open();
+        using var columns = raw.CreateCommand();
+        columns.CommandText = """
+            SELECT m.name || '.' || c.name FROM sqlite_master m, pragma_table_info(m.name) c
+            WHERE m.type = 'table' AND c.name = 'content_id';
+            """;
+        using var reader = columns.ExecuteReader();
+        var keeping = new List<string>();
+        while (reader.Read())
         {
-            raw.Open();
-            using var poison = raw.CreateCommand();
-            poison.CommandText = "UPDATE segment_dedup SET object_id = randomblob(32);";
-            Assert.IsTrue(poison.ExecuteNonQuery() > 0, "the projection stopped writing segment_dedup rows");
+            keeping.Add(reader.GetString(0));
         }
 
-        using (var catalogue = CatalogueDb.Open(cataloguePath, Repo))
-        {
-            var republished = await Publish(store, keys, credential, catalogue, "poison")
-                .PublishAsync(
-                    Job(SourceWith(content, modifiedAt: 1_722_000_000_777), 0xD2, now: 1_722_600_000_002),
-                    CancellationToken.None);
-
-            var file = Assert.ContainsSingle(republished.Files);
-            var (success, restored, detail) = await TryRestoreFileAsync(store, keys, file.ObjectId);
-            Assert.IsTrue(success, detail);
-            SequenceAssert.AreEqual(content, restored);
-        }
+        Assert.IsEmpty(keeping, string.Join(", ", keeping));
     }
 
     private void DeleteEveryDataBlob()

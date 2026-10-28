@@ -1325,18 +1325,6 @@ public sealed class Catalogue : IDisposable
         !reader.IsDBNull(7) && reader.GetInt64(7) > 0,
         reader.IsDBNull(8) ? null : (byte[])reader.GetValue(8));
 
-    /// <summary>Records a content-to-object dedup mapping — catalogue-domain only, never durable in the repository (02 §2).</summary>
-    public void RecordSegmentDedup(ContentId contentId, ObjectId objectId)
-    {
-        using var command = _connection.CreateCommand();
-        command.CommandText = """
-            INSERT OR IGNORE INTO segment_dedup (content_id, object_id) VALUES ($content, $object);
-            """;
-        command.Parameters.AddWithValue("$content", contentId.ToArray());
-        command.Parameters.AddWithValue("$object", objectId.ToArray());
-        command.ExecuteNonQuery();
-    }
-
     /// <summary>Records a snapshot's projection with its signature verdict (1 verified, 2 failed, 3 unverified).</summary>
     public void RecordSnapshot(
         ReadOnlySpan<byte> snapshotId,
@@ -1564,19 +1552,6 @@ public sealed class Catalogue : IDisposable
         command.CommandText = "INSERT OR IGNORE INTO verified_objects (object_id) VALUES ($object);";
         command.Parameters.AddWithValue("$object", objectId.ToArray());
         command.ExecuteNonQuery();
-    }
-
-    /// <summary>Looks up a prior segment by content identifier — the dedup path (NFR-PERF-010).</summary>
-    public ObjectId? LookupByContent(ContentId contentId)
-    {
-        var started = Stopwatch.GetTimestamp();
-        using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT object_id FROM segment_dedup WHERE content_id = $content;";
-        command.Parameters.AddWithValue("$content", contentId.ToArray());
-
-        var result = command.ExecuteScalar() is byte[] bytes ? ObjectId.FromBytes(bytes) : (ObjectId?)null;
-        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
-        return result;
     }
 
     /// <summary>The number of applied deltas — the idempotence ledger's size.</summary>

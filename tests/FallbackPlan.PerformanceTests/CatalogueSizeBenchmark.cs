@@ -35,8 +35,7 @@ public static class CatalogueSizeBenchmark
         Report("`file_versions` and its two indexes", versions, CataloguePlanes.FileVersions);
         Report("`tree_entries` and its two indexes", versions, CataloguePlanes.TreeEntries);
         Report("`object_locations` and `ix_locations_blob`", versions, CataloguePlanes.Locations);
-        Report("`segment_dedup`", versions, CataloguePlanes.Dedup);
-        Report("**all four, scale M's shape**", versions, CataloguePlanes.All);
+        Report("**all three, scale M's shape**", versions, CataloguePlanes.All);
         Report("**the floor — no segments at all**", versions, CataloguePlanes.All, segmentsPerVersion: 0);
 
         Console.WriteLine();

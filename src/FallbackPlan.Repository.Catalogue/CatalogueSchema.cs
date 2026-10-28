@@ -89,8 +89,15 @@ public static class CatalogueSchema
     /// location stated both twice, once in the row and once in the blob
     /// index, which holds the row's key.
     /// </para>
+    /// <para>
+    /// v13 over v12: no <c>segment_dedup</c>. Publication wrote each
+    /// segment's content identifier beside its object there, and nothing
+    /// read it: reuse looks a segment up by the object identifier its content
+    /// identifier is keyed into, through <c>object_locations</c>
+    /// (NFR-PERF-011, ADR-0145).
+    /// </para>
     /// </remarks>
-    public const int Version = 12;
+    public const int Version = 13;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -249,11 +256,6 @@ public static class CatalogueSchema
             object_id   BLOB NOT NULL,
             snapshot_id BLOB NOT NULL,
             PRIMARY KEY (object_id, snapshot_id)
-        ) WITHOUT ROWID;
-
-        CREATE TABLE segment_dedup (
-            content_id BLOB PRIMARY KEY,
-            object_id  BLOB NOT NULL
         ) WITHOUT ROWID;
 
         -- Objects another writer stored that this device has fetched,

@@ -22,11 +22,8 @@ public enum CataloguePlanes
     /// <summary><c>object_locations</c>, <c>ix_locations_blob</c> and the applied-delta ledger.</summary>
     Locations = 4,
 
-    /// <summary><c>segment_dedup</c>.</summary>
-    Dedup = 8,
-
     /// <summary>Every plane a captured file version puts rows into.</summary>
-    All = FileVersions | TreeEntries | Locations | Dedup,
+    All = FileVersions | TreeEntries | Locations,
 }
 
 /// <summary>
@@ -46,8 +43,8 @@ public enum CataloguePlanes
 /// </para>
 /// <para>
 /// It writes through the same <see cref="Catalogue.RecordFileVersion"/>,
-/// <see cref="Catalogue.RecordTreeEntry"/>, <see cref="Catalogue.ApplyDelta"/>
-/// and <see cref="Catalogue.RecordSegmentDedup"/> calls publication uses, so
+/// <see cref="Catalogue.RecordTreeEntry"/> and <see cref="Catalogue.ApplyDelta"/>
+/// calls publication uses, so
 /// what is measured is the schema's cost and not a model's guess at it.
 /// </para>
 /// <para>
@@ -162,11 +159,6 @@ public static class CatalogueSeeding
                         EncryptionProfileValue: 0x0001,
                         IndexEntryType.Insertion));
                 }
-
-                if (planes.HasFlag(CataloguePlanes.Dedup))
-                {
-                    catalogue.RecordSegmentDedup(ContentFrom(seed), segmentObject);
-                }
             }
 
             if (entries.Count >= 1000)
@@ -211,7 +203,4 @@ public static class CatalogueSeeding
 
     private static ObjectId ObjectFrom(long seed) =>
         ObjectId.FromBytes(SHA256.HashData(BitConverter.GetBytes(seed)));
-
-    private static ContentId ContentFrom(long seed) =>
-        ContentId.FromBytes(SHA256.HashData(BitConverter.GetBytes(~seed)));
 }

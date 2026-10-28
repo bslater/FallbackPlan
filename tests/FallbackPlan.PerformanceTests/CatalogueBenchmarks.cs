@@ -10,14 +10,15 @@ namespace FallbackPlan.PerformanceTests;
 /// <summary>
 /// Catalogue lookup latency at reduced scale (NFR-PERF-004 path resolution,
 /// NFR-PERF-010 dedup lookup): a catalogue seeded with 100 000 object
-/// locations and 100 000 dedup rows — 1/500 of scale M — measured on the
-/// exact SQL the engine runs. The per-operation numbers land in
+/// locations — 1/500 of scale M — measured on the exact SQL the engine runs.
+/// The dedup lookup is the reuse candidate's, by the object identifier a
+/// segment's content identifier is keyed into (ADR-0145). The per-operation numbers land in
 /// docs/phase-0-benchmarks.md with the scale caveat spelled out.
 /// </summary>
 [MemoryDiagnoser]
 public class CatalogueBenchmarks
 {
-    /// <summary>Rows seeded into object_locations and segment_dedup.</summary>
+    /// <summary>Rows seeded into object_locations.</summary>
     [Params(100_000)]
     public int Rows { get; set; }
 
@@ -30,14 +31,10 @@ public class CatalogueBenchmarks
     private Catalogue _catalogue = null!;
     private string _path = string.Empty;
     private ObjectId[] _probeObjects = [];
-    private ContentId[] _probeContents = [];
     private int _next;
 
     private static ObjectId ObjectFrom(int seed) =>
         ObjectId.FromBytes(SHA256.HashData(BitConverter.GetBytes(seed)));
-
-    private static ContentId ContentFrom(int seed) =>
-        ContentId.FromBytes(SHA256.HashData(BitConverter.GetBytes(~seed)));
 
     [GlobalSetup]
     public void Setup()
@@ -73,13 +70,7 @@ public class CatalogueBenchmarks
                 });
         }
 
-        for (var index = 0; index < Rows; index++)
-        {
-            _catalogue.RecordSegmentDedup(ContentFrom(index), ObjectFrom(index));
-        }
-
         _probeObjects = [.. Enumerable.Range(0, 4096).Select(index => ObjectFrom(index * (Rows / 4096)))];
-        _probeContents = [.. Enumerable.Range(0, 4096).Select(index => ContentFrom(index * (Rows / 4096)))];
     }
 
     [GlobalCleanup]
@@ -101,9 +92,9 @@ public class CatalogueBenchmarks
     }
 
     [Benchmark]
-    public ObjectId? DedupLookup()
+    public ReuseCandidate? DedupLookup()
     {
-        var probe = _probeContents[_next++ & 4095];
-        return _catalogue.LookupByContent(probe);
+        var probe = _probeObjects[_next++ & 4095];
+        return _catalogue.FindReuseCandidate(probe);
     }
 }
