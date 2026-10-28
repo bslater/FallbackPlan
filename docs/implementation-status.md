@@ -158,6 +158,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0131](adr/0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md) | The service measures a restore's working space where its parts are kept: its probe of room names the folder its runs keep their parts in as the working directory, so a plan and a run measure the room for the largest file on the state directory's volume; direct mode measures the temporary folder its engine spools in | **Built** | `Agent/ServiceRuntime` · `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0131--the-service-measures-a-restores-working-space-where-its-parts-are-kept) |
 | [0132](adr/0132-a-resumes-plan-counts-only-what-it-still-reads.md) | A resume's plan counts only what it still reads: nothing of a file its run landed at its length but the manifest, and through the service nothing a part its run kept proves, proved by the rule a resume takes a part up by, now shared by the engine and the plan; what is held is still probed for what is missing or archived | **Built** | `Restore/RestoreBlobSet` · `Repository/RestorePart` · `Repository/RestoreEngine` · `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0132--a-resumes-plan-counts-only-what-it-still-reads) |
 | [0133](adr/0133-a-run-left-unfinished-says-what-its-parts-hold.md) | A run left unfinished says what its parts hold: each run the service lists gains `held`, the bytes the parts it kept hold under the state directory, summed from its folder as the list is asked for (contract 1.77); `restore-resume` and the console's list say it | **Built** | `Agent/RestoreParts` · `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/OperationGateway` · `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreResumeVerbTests`, `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0133--a-run-left-unfinished-says-what-its-parts-hold) |
+| [0134](adr/0134-the-kept-receipts-say-which-files-were-resumed-within.md) | The kept receipts say which files were resumed within: each receipt the listing names counts its run's files resumed within among those restored, beside those found in place, from a state directory, through the service as `resumed_within` (contract 1.78), and in the console | **Built** | `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/RestoreReceiptReport` · `Cli.Tests/RestoreReceiptsVerbTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0134--the-kept-receipts-say-which-files-were-resumed-within) |
 
 ---
 
@@ -3765,7 +3766,7 @@ say how many.
 
 What remains is recorded rather than done. Direct mode resumes no file
 within, and the listing of kept receipts counts a file resumed within as a
-file restored.
+file restored. ADR-0134 has since had the listing count those files apart.
 
 ### 0131 — the service measures a restore's working space where its parts are kept
 
@@ -3810,3 +3811,15 @@ a run holding nothing says nothing of it.
 
 What remains is recorded rather than done. A run's notice does not say
 it, and which files the parts are of is not said.
+
+### 0134 — the kept receipts say which files were resumed within
+
+The listing of kept receipts counted each run's files restored, with those
+found in place among them, and said nothing of files resumed within. Each
+receipt listed now counts them too, from its items as found in place is,
+whether read from a state directory, through the service as
+`resumed_within` (contract 1.78), or in the console, and says them among
+the files restored: "3 restored (1 found in place, 1 resumed within)".
+
+What remains is recorded rather than done. A receipt kept before schema 11
+counts none, as it says nothing of where a file was resumed.

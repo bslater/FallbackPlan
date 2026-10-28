@@ -992,6 +992,12 @@ public sealed record RestoreRunsResult(IReadOnlyList<RestoreRunDescriptor> Runs)
 /// whose passphrase shows the receipt's files. Null where the receipt records
 /// none, kept before receipt schema 10 or by a run that knew no set.
 /// </param>
+/// <param name="ResumedWithin">
+/// Its files a resume wrote from the part an earlier run had assembled of
+/// each (contract 1.78, ADR-0134), counted among <paramref name="Restored"/>.
+/// Zero from a service before 1.78, and for a receipt kept before receipt
+/// schema 11, which says nothing of it.
+/// </param>
 public sealed record RestoreReceiptDescriptor(
     string Run,
     string? Outcome,
@@ -1005,7 +1011,8 @@ public sealed record RestoreReceiptDescriptor(
     long Degraded,
     string? Problem = null,
     string? Set = null,
-    string? SetId = null);
+    string? SetId = null,
+    long ResumedWithin = 0);
 
 /// <summary>
 /// One file a restore did not restore, as its kept receipt says (contract

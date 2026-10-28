@@ -777,8 +777,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// pre-1.77 client ignores the field, and a pre-1.77 service's runs say
     /// none.
     /// </para>
+    /// <para>
+    /// 1.78 says, of each receipt the service keeps, how many of its run's
+    /// files were resumed within (FR-RST-004, ADR-0134).
+    /// `RestoreReceiptDescriptor` gains `resumed_within`, counted from the
+    /// receipt's items as found in place is. Additive: a pre-1.78 client
+    /// ignores the field, and a pre-1.78 service's receipts say none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 77);
+    public static ContractVersion Current { get; } = new(1, 78);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

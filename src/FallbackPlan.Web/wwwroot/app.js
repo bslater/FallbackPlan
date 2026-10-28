@@ -1680,8 +1680,12 @@ function renderRestoreReceiptsCard() {
   if (!el) return;
 
   const files = row => {
-    const restored = row.foundInPlace
-      ? `${fmtCount(row.restored)} restored (${fmtCount(row.foundInPlace)} found in place)`
+    const among = [
+      row.foundInPlace ? `${fmtCount(row.foundInPlace)} found in place` : "",
+      row.resumedWithin ? `${fmtCount(row.resumedWithin)} resumed within` : "",
+    ].filter(Boolean);
+    const restored = among.length
+      ? `${fmtCount(row.restored)} restored (${among.join(", ")})`
       : `${fmtCount(row.restored)} restored`;
     const counts = `${restored}, ${fmtCount(row.skipped)} skipped, ${fmtCount(row.failed)} failed`;
     return row.degraded ? `${counts}, ${fmtCount(row.degraded)} degraded` : counts;

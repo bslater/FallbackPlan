@@ -49,6 +49,7 @@ internal static class RestoreReceiptReport
                 Counts(
                     receipt.Items.Count(item => item.Outcome == "restored"),
                     receipt.Items.Count(item => item.FoundInPlace),
+                    receipt.Items.Count(item => item.ResumedAt > 0),
                     receipt.Items.Count(item => item.Outcome == "skipped"),
                     receipt.Items.Count(item => item.Outcome == "failed"),
                     receipt.Items.Count(item => item.Outcome == "degraded")),
@@ -207,7 +208,7 @@ internal static class RestoreReceiptReport
             receipt.EndedAt ?? 0,
             receipt.SnapshotId,
             receipt.Set,
-            Counts(receipt.Restored, receipt.FoundInPlace, receipt.Skipped, receipt.Failed, receipt.Degraded),
+            Counts(receipt.Restored, receipt.FoundInPlace, receipt.ResumedWithin, receipt.Skipped, receipt.Failed, receipt.Degraded),
             receipt.WrittenTo);
     }
 
@@ -245,9 +246,16 @@ internal static class RestoreReceiptReport
     /// The items' outcomes, counted. A file a resume found in place is counted
     /// restored, as its receipt counts it, and said to be.
     /// </summary>
-    private static string Counts(long restored, long found, long skipped, long failed, long degraded)
+    private static string Counts(long restored, long found, long resumed, long skipped, long failed, long degraded)
     {
-        var counts = found > 0 ? $"{restored} restored ({found} found in place)" : $"{restored} restored";
+        // Both are among the files restored: one found in place was left as
+        // it stood, and one resumed within was written from its run's part.
+        string[] among =
+        [
+            .. found > 0 ? [$"{found} found in place"] : Array.Empty<string>(),
+            .. resumed > 0 ? [$"{resumed} resumed within"] : Array.Empty<string>(),
+        ];
+        var counts = among.Length > 0 ? $"{restored} restored ({string.Join(", ", among)})" : $"{restored} restored";
         counts += $", {skipped} skipped, {failed} failed";
         return degraded > 0 ? $"{counts}, {degraded} degraded" : counts;
     }

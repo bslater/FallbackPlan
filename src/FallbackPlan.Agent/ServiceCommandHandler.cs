@@ -1442,7 +1442,8 @@ public sealed partial class ServiceCommandHandler(
             Failed: receipt.Items.Count(item => item.Outcome == "failed"),
             Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
             Set: receipt.Set,
-            SetId: receipt.SetId);
+            SetId: receipt.SetId,
+            ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0));
 
     /// <summary>How many of a receipt's files a reading answers where the caller names no limit.</summary>
     private const int ReceiptFilesAnswered = 200;
