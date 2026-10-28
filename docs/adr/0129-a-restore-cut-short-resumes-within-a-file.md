@@ -51,6 +51,8 @@ A run's parts go when it finishes or is let go. When the service starts, the par
 - A large file cut short near its end is read again only from where its run stopped.
 - A run left unfinished holds, under the state directory, as much of the file it was cut short in as it had assembled, until it is resumed or let go. Its notice is what says the run is there.
 
+  > **2026-10 ([ADR-0133](0133-a-run-left-unfinished-says-what-its-parts-hold.md)).** The list of runs left unfinished says how much each holds too (contract 1.77), and so do the command line and the console.
+
 ## What this does not do
 
 - **Resume within a file in direct mode.** A run in direct mode keeps no parts, and a file it was cut short in is restored whole, as before.
@@ -75,3 +77,4 @@ A run's parts go when it finishes or is let go. When the service starts, the par
 | 2026-10 | Accepted | The receipt says where a file was resumed within, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): at schema 11, with a restore's result counting those files at contract 1.76. What this does not do no longer leaves the receipt silent on it. |
 | 2026-10 | Accepted | The working space is measured where the parts are kept, by [ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md): a run through the service is measured for the room its parts need on the state directory, not in the system's temporary folder. |
 | 2026-10 | Accepted | What a part saves is measured, by [ADR-0132](0132-a-resumes-plan-counts-only-what-it-still-reads.md): a plan of a resume proves each part by the rule the engine takes one up by, now shared, and counts nothing it proves among what the run reads. |
+| 2026-10 | Accepted | What a run left unfinished holds is said, by [ADR-0133](0133-a-run-left-unfinished-says-what-its-parts-hold.md): each run listed says what its parts hold under the state directory, at contract 1.77, and `restore-resume` and the console say it. |
