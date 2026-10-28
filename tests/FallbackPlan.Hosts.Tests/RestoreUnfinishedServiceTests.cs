@@ -28,7 +28,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// it finishes or is let go, and those of a run no longer on record when the
 /// service starts. The result counts the files a resume took up from its
 /// parts, the receipt says where each was resumed (FR-RST-004), and the
-/// command line says so (ADR-0130). Each run listed says what its parts
+/// command line says so (ADR-0130), as the listing of kept receipts does
+/// (ADR-0134). Each run listed says what its parts
 /// hold, and the command line says it too (ADR-0133). A plan of a resume counts nothing among
 /// what the run reads of a file its run landed but its manifest, nor what
 /// its parts prove (ADR-0132).
@@ -266,6 +267,12 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
             Path.GetDirectoryName(resumed.ReceiptPath!)!, Path.GetFileNameWithoutExtension(resumed.ReceiptPath!))!.Receipt!;
         Assert.AreEqual(5UL, receipt.Items.Single(item => item.Path == "notes.txt").ResumedAt, "and the receipt where each was resumed");
         Assert.AreEqual(6UL, receipt.Items.Single(item => item.Path == "nested/deeper.txt").ResumedAt);
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            await handler.ExecuteAsync(new ListRestoreReceiptsCommand(), _timeout.Token), out var kept);
+        Assert.AreEqual(
+            2L,
+            kept.Receipts.Single(listed => listed.Run == Path.GetFileNameWithoutExtension(resumed.ReceiptPath!)).ResumedWithin,
+            "and its kept receipt is listed with them");
     }
 
     [TestMethod]

@@ -14,7 +14,8 @@ namespace FallbackPlan.Web.DomTests;
 /// restored where its receipt does (ADR-0126). What a run did not restore is
 /// shown only once the passphrase of the set its receipt records has
 /// unlocked a source, which is closed after (ADR-0127), and a run that
-/// restored everything offers nothing to show.
+/// restored everything offers nothing to show. A run says how many of its
+/// files were resumed within (ADR-0134).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -33,7 +34,7 @@ public sealed class RestoreReceiptsDomTests
             [
                 new RestoreReceiptDescriptor(
                     "0123456789abcdef", "partial", 1_700_000_000_000, new string('e', 32), "/srv/restored",
-                    Restored: 3, FoundInPlace: 1, Skipped: 2, Failed: 1, Degraded: 1, Set: "photos"),
+                    Restored: 3, FoundInPlace: 1, Skipped: 2, Failed: 1, Degraded: 1, Set: "photos", ResumedWithin: 1),
                 new RestoreReceiptDescriptor(
                     "fedcba9876543210", null, null, null, null, 0, 0, 0, 0, 0, Problem: "not a receipt"),
             ],
@@ -49,7 +50,7 @@ public sealed class RestoreReceiptsDomTests
         await Expect(card).ToContainTextAsync("0123456789abcdef");
         await Expect(card.Locator("tr", new() { HasText = "0123456789abcdef" })).ToContainTextAsync("photos");
         await Expect(card).ToContainTextAsync("partial");
-        await Expect(card).ToContainTextAsync("3 restored (1 found in place), 2 skipped, 1 failed, 1 degraded");
+        await Expect(card).ToContainTextAsync("3 restored (1 found in place, 1 resumed within), 2 skipped, 1 failed, 1 degraded");
         await Expect(card).ToContainTextAsync("/srv/restored");
         await Expect(card).ToContainTextAsync("fedcba9876543210");
         await Expect(card).ToContainTextAsync("unreadable");

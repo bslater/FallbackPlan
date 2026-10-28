@@ -11,7 +11,9 @@ namespace FallbackPlan.Cli.Tests;
 /// as it was kept. A path that holds nothing because it was mistyped is not
 /// "nothing restored", a name that is not a run's is refused before it
 /// reaches a path, and a receipt that does not read is said to, beside the
-/// rest. A run names the set it restored where its receipt does (ADR-0126).
+/// rest. A run names the set it restored where its receipt does (ADR-0126),
+/// and says how many of its files were resumed within, from the folder and
+/// through a paired service alike (ADR-0134).
 /// Through a paired service (ADR-0128), a name that is not a run's and a
 /// limit below one are refused before the service is dialled.
 /// </summary>
@@ -21,6 +23,36 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
     private readonly CliHarness _cli = new();
 
     public void Dispose() => _cli.Dispose();
+
+    /// <summary>Keeps a receipt of one run's items under the state directory, as a run keeps its own.</summary>
+    private void Kept(string run, params ReceiptItem[] items) =>
+        new RestoreReceipt
+        {
+            SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
+            SnapshotId = new string('e', 32),
+            StartedAt = 1_699_999_990_000,
+            CompletedAt = 1_700_000_000_000,
+            Items = items,
+            Displaced = [],
+            WrittenTo = "/srv/restored",
+            Outcome = RestoreOutcome.Complete,
+        }.Keep(Receipts, run);
+
+    /// <summary>A service that lists the receipts it was given, and answers nothing else.</summary>
+    private sealed class ListingClient(params FallbackPlan.Api.RestoreReceiptDescriptor[] receipts) : FallbackPlan.Api.IFallbackPlanClient
+    {
+        public FallbackPlan.Api.ContractVersion ServiceContractVersion => FallbackPlan.Api.ContractVersion.Current;
+
+        public ValueTask<FallbackPlan.Api.ServiceResult> ExecuteAsync(FallbackPlan.Api.ServiceCommand command, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<FallbackPlan.Api.ServiceResult>(command is FallbackPlan.Api.ListRestoreReceiptsCommand
+                ? new FallbackPlan.Api.RestoreReceiptsResult(receipts, receipts.Length)
+                : new FallbackPlan.Api.ServiceError(FallbackPlan.Api.ServiceErrorReason.InvalidArgument, "not scripted"));
+
+        public IAsyncEnumerable<FallbackPlan.Api.JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
+            AsyncEnumerable.Empty<FallbackPlan.Api.JobProgressEvent>();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private string Receipts => Path.Combine(_cli.StatePath, "receipts");
 
@@ -82,6 +114,36 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
             "2 restored (1 found in place), 1 skipped, 1 failed, 1 degraded", listed.Output, StringComparison.Ordinal);
         Assert.Contains("written to /srv/restored", listed.Output, StringComparison.Ordinal);
         Assert.Contains("1 restore receipt kept under", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARunThatResumedWithinAFile_SaysHowManyOfItsFilesWere()
+    {
+        Kept("0123456789abcdef",
+            new ReceiptItem { Path = "found.txt", Outcome = "restored", Bytes = 1, FoundInPlace = true },
+            new ReceiptItem { Path = "resumed.txt", Outcome = "restored", Bytes = 8, ResumedAt = 4 },
+            new ReceiptItem { Path = "written.txt", Outcome = "restored", Bytes = 1 });
+        Kept("fedcba9876543210",
+            new ReceiptItem { Path = "resumed.txt", Outcome = "restored", Bytes = 8, ResumedAt = 4 },
+            new ReceiptItem { Path = "written.txt", Outcome = "restored", Bytes = 1 });
+
+        var listed = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath);
+
+        Assert.AreEqual(0, listed.ExitCode, listed.All);
+        Assert.Contains("3 restored (1 found in place, 1 resumed within), 0 skipped, 0 failed", listed.Output, StringComparison.Ordinal);
+        Assert.Contains("2 restored (1 resumed within), 0 skipped, 0 failed", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ThroughAPairedService_ARunThatResumedWithinAFile_SaysHowManyOfItsFilesWere()
+    {
+        await using var client = new ListingClient(
+            new FallbackPlan.Api.RestoreReceiptDescriptor("0123456789abcdef", "complete", 1_700_000_000_000, new string('e', 32), "/srv/restored", 3, 0, 0, 0, 0, ResumedWithin: 2));
+        using var output = new StringWriter();
+
+        Assert.AreEqual(0, await RestoreReceiptReport.WriteServiceKeptAsync(output, client, null, CancellationToken.None));
+
+        Assert.Contains("3 restored (2 resumed within), 0 skipped, 0 failed", output.ToString(), StringComparison.Ordinal);
     }
 
     [TestMethod]

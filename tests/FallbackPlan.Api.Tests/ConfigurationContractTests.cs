@@ -34,11 +34,31 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_WhatARunLeftUnfinishedHolds_IsRecordedAtOneSeventySeven()
+    public void ContractVersion_WhatAKeptReceiptResumedWithin_IsRecordedAtOneSeventyEight()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.77", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.78", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void WhatAKeptReceiptResumedWithin_CrossesUnderItsWireName_AndAPre178ServiceSaysNone()
+    {
+        // Contract 1.78 (FR-RST-004, ADR-0134): how many of a kept run's
+        // files were resumed from the parts its run had assembled.
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreReceiptsResult(
+                [new RestoreReceiptDescriptor("0123456789abcdef", "complete", 1_000, new string('e', 32), "/srv/restored", 3, 0, 0, 0, 0, ResumedWithin: 2)],
+                1),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"resumed_within\":2", listed, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(
+                """{"result":"restore_receipts","receipts":[{"run":"0123456789abcdef","restored":3,"found_in_place":0,"skipped":0,"failed":0,"degraded":0}],"total":1}""",
+                FrameCodec.SerializerOptions),
+            out var older);
+        Assert.AreEqual(0L, Assert.ContainsSingle(older.Receipts).ResumedWithin);
     }
 
     [TestMethod]
