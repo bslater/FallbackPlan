@@ -37,6 +37,8 @@ A run in direct mode keeps no parts. Its engine spools in the system's temporary
 ## What this does not do
 
 - **Credit what a part already holds.** A resume's working space counts its largest file whole, though the part may hold some of it already. The figure errs high, as ADR-0083's figures do.
+
+  > **2026-10 ([ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md)).** It credits it now. A resume's working space needs only what its parts do not yet hold of each file, proved as the resume would take them up.
 - **Count the parts of runs left unfinished.** They take room on the state directory until each run is resumed or let go (ADR-0129). The free space measured is what is left beside them.
 
 ## Alternatives considered
@@ -50,3 +52,4 @@ A run in direct mode keeps no parts. Its engine spools in the system's temporary
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The service's probe of room names the folder its runs keep their parts in as the working directory, so a plan and a run measure the working space there. Direct mode measures the temporary folder its engine spools in, as before. No contract change. |
 | 2026-10 | Accepted | Direct mode's working space is measured where its parts are kept, by [ADR-0135](0135-direct-mode-resumes-within-a-file.md), as Decision 1 has the service's. |
+| 2026-10 | Accepted | [ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md): a resume's working space, where Decision 1 measures it, needs only what its parts do not yet hold of each file. |

@@ -13,7 +13,8 @@ namespace FallbackPlan.Cli.Tests;
 /// lets them go, and a run that is not a resume takes up no part. A resume's
 /// plan reads nothing its parts prove (FR-RST-003, ADR-0132), and the room a
 /// run needs to assemble its largest file is measured where the parts are
-/// kept (ADR-0131).
+/// kept (ADR-0131), less what they prove, for a resume's plan and run alike
+/// (ADR-0136).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileDirectTests : IDisposable
@@ -107,6 +108,29 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
 
         Assert.AreNotEqual(0, plan.ExitCode, plan.All);
         Assert.Contains(DirectRestoreParts.RootUnder(_cli.StatePath), plan.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task TheRoomToAssembleAFile_IsCreditedWhatItsPartsHold_OnAResumeAlone()
+    {
+        var snapshot = await BackUpAsync();
+        KeepPart("first");
+        KeepPart("second");
+        DirectGateway.VolumeOfInFlow = path => path.StartsWith(_cli.StatePath, StringComparison.Ordinal) ? 2UL : 1UL;
+        DirectGateway.AvailableBytesInFlow = path => path.StartsWith(_cli.StatePath, StringComparison.Ordinal) ? 1_000 : null;
+
+        var afresh = await _cli.RunAsync("restore", snapshot, "--output", Destination, "--plan");
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", Destination, "--resume", "--plan");
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", Destination);
+        var resumed = await _cli.RunAsync("restore", snapshot, "--output", Destination, "--resume");
+
+        Assert.AreNotEqual(0, afresh.ExitCode, "a run that is not a resume takes up no part, so needs room for a whole file");
+        Assert.AreEqual(0, plan.ExitCode, plan.All);
+        Assert.DoesNotContain(DirectRestoreParts.RootUnder(_cli.StatePath), plan.All, StringComparison.Ordinal);
+        Assert.AreNotEqual(0, refused.ExitCode, "nor is a run that is not a resume");
+        Assert.Contains("would not fit", refused.All, StringComparison.Ordinal);
+        Assert.AreEqual(0, resumed.ExitCode, resumed.All);
+        Assert.Contains("2 file(s) were resumed from what the run had assembled of them", resumed.All, StringComparison.Ordinal);
     }
 
     /// <summary>What a printed plan says its run will read.</summary>

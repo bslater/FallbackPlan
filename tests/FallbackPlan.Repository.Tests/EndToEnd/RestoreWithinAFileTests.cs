@@ -26,7 +26,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// (FR-RST-004, ADR-0130). A plan of a resume proves a part as the resume
 /// would, writing nothing, and counts nothing it proves among what the run
 /// reads, nor anything of a file the run landed but its manifest (FR-RST-003,
-/// ADR-0132).
+/// ADR-0132). What a part proves is room the run's working space already
+/// holds, so a resume's plan, and a run measured from its manifests, need
+/// there only the rest of each file; the folder the file lands in still
+/// needs all of it (ADR-0136).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileTests : ArchiveTestHarness
@@ -176,6 +179,66 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
 
         Assert.AreEqual(first, andTheHole, "a hole the part holds leaves no segment unread");
         Assert.IsLessThan(andTheHole, andTheNext, "the segment after it does");
+    }
+
+    [TestMethod]
+    public async Task APlanOfAResume_CreditsItsWorkingSpaceWhatAPartProves_AndNotItsDestination()
+    {
+        using var published = await PublishAsync("room", 0xED);
+        var parts = Path.Combine(SpoolDirectory, "room-parts");
+        var output = Path.Combine(SpoolDirectory, "room-out");
+        var item = published.Plan.Items.Single(candidate => candidate.Path == BigPath);
+        async Task<(ulong Held, ulong Working, ulong Destination)> MeasureAsync(bool resume)
+        {
+            var probed = await RestoreBlobSet.ResolveAsync(
+                published.Catalogue, published.Plan, published.Store, Repo, published.Keys,
+                resume ? new RestoreHeld { PartsDirectory = parts } : null, CancellationToken.None);
+            var report = await RestoreSpace.MeasureAsync(
+                [new RestoreSlice(published.Plan, output)], RestoreDestinationMode.InPlace, ExistingDestinationPolicy.Preserve,
+                ApartProbe(parts, available: null), RestoreSpace.WrittenBytesFrom(probed.Facts), CancellationToken.None);
+            return (probed.Facts[item.ObjectId].HeldBytes, WorkingOf(report), report.Needs.Single(need => !need.Working).NeededBytes);
+        }
+
+        WritePart(parts, Big.AsSpan(0, (24 * Segment) + 1_000));
+        var afresh = await MeasureAsync(resume: false);
+        var half = await MeasureAsync(resume: true);
+        var differs = Big.ToArray();
+        differs[(10 * Segment) + 5] ^= 0xFF;
+        WritePart(parts, differs);
+        var ten = await MeasureAsync(resume: true);
+        WritePart(parts, Big);
+        var whole = await MeasureAsync(resume: true);
+
+        Assert.AreEqual((0UL, (ulong)Big.Length), (afresh.Held, afresh.Working), "a run that is not a resume takes up no part");
+        Assert.AreEqual((24UL * Segment, 24UL * Segment), (half.Held, half.Working), "what the part proves is room already taken");
+        Assert.AreEqual((10UL * Segment, 38UL * Segment), (ten.Held, ten.Working), "and only as far as it proves");
+        Assert.AreEqual(((ulong)Big.Length, 0UL), (whole.Held, whole.Working), "a part that proves all of a file leaves nothing to assemble");
+        Assert.AreEqual(afresh.Destination, half.Destination, "the file still lands whole where the run writes");
+        Assert.AreEqual(afresh.Destination, whole.Destination);
+    }
+
+    [TestMethod]
+    public async Task ARunShortOfWorkingSpaceForAWholeFile_FitsWhereItsPartHoldsTheRest()
+    {
+        using var published = await PublishAsync("room-run", 0xEE);
+        var parts = Path.Combine(SpoolDirectory, "room-run-parts");
+        var output = Path.Combine(SpoolDirectory, "room-run-out");
+        WritePart(parts, Big.AsSpan(0, 24 * Segment));
+        using var reader = Reader(published);
+        Task<RestoreSpaceReport> MeasureAsync(string? held) => RestoreSpace.MeasureRunAsync(
+            [new RestoreSlice(published.Plan, output)], RestoreDestinationMode.InPlace, ExistingDestinationPolicy.Preserve,
+            ApartProbe(parts, available: 30L * Segment), reader, held, CancellationToken.None).AsTask();
+
+        Assert.IsTrue((await MeasureAsync(null)).IsShort, "the whole file will not fit beside what is free");
+
+        var credited = await MeasureAsync(parts);
+
+        Assert.IsFalse(credited.IsShort, "the rest of it does");
+        Assert.AreEqual(24UL * Segment, WorkingOf(credited));
+        Assert.IsTrue(credited.Exact, "measured from the manifests, which name the part");
+
+        // And the part is left as it was.
+        SequenceAssert.AreEqual(Big.AsSpan(0, 24 * Segment).ToArray(), File.ReadAllBytes(PartOf(parts)));
     }
 
     [TestMethod]
@@ -330,6 +393,22 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
     }
 
     private static ReceiptItem Item(RestoreReceipt receipt) => receipt.Items.Single(item => item.Path == BigPath);
+
+    /// <summary>
+    /// A probe whose working space is <paramref name="parts"/>, a volume of
+    /// its own with <paramref name="available"/> free, beside a volume for
+    /// everything else that never says.
+    /// </summary>
+    private static RestoreSpaceProbe ApartProbe(string parts, long? available) => new()
+    {
+        AvailableBytes = path => path.StartsWith(parts, StringComparison.Ordinal) ? available : null,
+        VolumeOf = path => path.StartsWith(parts, StringComparison.Ordinal) ? 2UL : 1UL,
+        WorkingDirectory = parts,
+    };
+
+    /// <summary>What a run needs of its working space, which names no need where it needs none.</summary>
+    private static ulong WorkingOf(RestoreSpaceReport report) =>
+        report.Needs.SingleOrDefault(need => need.Working)?.NeededBytes ?? 0;
 
     private static string PartOf(string parts) =>
         Path.Combine(parts, $"{Convert.ToHexStringLower(SHA256.HashData(Big))}.part");

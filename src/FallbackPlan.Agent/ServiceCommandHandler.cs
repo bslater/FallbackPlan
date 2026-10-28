@@ -1191,10 +1191,13 @@ public sealed partial class ServiceCommandHandler(
             // (FR-RST-003): every slice is measured together, because two on
             // one volume share its room. The figure errs high, and a volume
             // that compresses what it stores holds more than it says, so a
-            // person may go on regardless.
+            // person may go on regardless. A resume's working space already
+            // holds what the parts of the run it continues prove, under that
+            // run's name until it carries them (ADR-0136).
             var space = await RestoreSpace.MeasureRunAsync(
                 [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory, ResumedInFolder(slice.OutputDirectory)))],
                 options.DestinationMode, options.ExistingDestination, runtime.RestoreSpaceProbe, reader,
+                command.Resume is null ? null : RestoreParts.Of(runtime, command.Resume),
                 cancellationToken).ConfigureAwait(false);
             if (space.IsShort && !command.IgnoreFreeSpace)
             {

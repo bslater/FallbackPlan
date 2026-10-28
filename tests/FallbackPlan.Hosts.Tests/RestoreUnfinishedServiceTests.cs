@@ -32,7 +32,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// (ADR-0134). Each run listed says what its parts
 /// hold, and the command line says it too (ADR-0133). A plan of a resume counts nothing among
 /// what the run reads of a file its run landed but its manifest, nor what
-/// its parts prove (ADR-0132).
+/// its parts prove (ADR-0132). What its parts prove is room already taken,
+/// so neither the plan of a resume nor the resume needs it again, and a
+/// resume runs where whole files would not fit (FR-RST-003, ADR-0136).
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -465,6 +467,66 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
             await File.ReadAllTextAsync(
                 Path.Combine(PartsOf(cut.Run!), $"{Convert.ToHexStringLower(SHA256.HashData("deeper"u8))}.part"), _timeout.Token),
             "and a plan leaves a part as it found it");
+    }
+
+    [TestMethod]
+    [DataRow(false, DisplayName = "quarantined")]
+    [DataRow(true, DisplayName = "in place, whose parts lie under the run it continues until it carries them")]
+    public async Task AResumesWorkingSpace_IsCreditedWhatItsPartsHold_SoItRunsWhereWholeFilesWouldNotFit(bool inPlace)
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler, inPlace);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        var snapshot = await SnapshotIdAsync(handler);
+        async Task<long> NeedsAsync()
+        {
+            var answer = await handler.ExecuteAsync(
+                new PlanRestoreCommand(snapshot, null, source.SourceId, OutputDirectory: Destination, InPlace: inPlace, Resume: cut.Run),
+                _timeout.Token);
+            Assert.IsInstanceOfType<RestorePlanResult>(answer, out var plan, (answer as ServiceError)?.Message);
+            return Assert.ContainsSingle(plan.Space!).NeededBytes;
+        }
+
+        // The parts and the folder share a volume, which needs room for
+        // both files where they land and for the larger still to assemble.
+        var whole = await NeedsAsync();
+        KeepPart(cut.Run!, "deeper", "deeper");
+        Assert.AreEqual(whole, await NeedsAsync(), "the other file is as large still to assemble");
+        KeepPart(cut.Run!, "hello", "hello");
+        var credited = await NeedsAsync();
+        Assert.AreEqual(whole - 4096, credited, "with both held, nothing is left to assemble");
+
+        _available = credited;
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(new ResumeRestoreCommand(cut.Run!, source.SourceId), _timeout.Token),
+            out var resumed);
+        Assert.AreEqual("complete", resumed.Outcome, "the run is measured as its plan was");
+        Assert.AreEqual(inPlace, resumed.Run != cut.Run);
+        Assert.AreEqual(2L, resumed.ResumedWithin);
+    }
+
+    [TestMethod]
+    public async Task AResumeWhosePartsHoldNothing_IsRefused_WhereWholeFilesWouldNotFit()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        KeepPart(cut.Run!, "hello", "jello");
+        KeepPart(cut.Run!, "deeper", "deepen");
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            await handler.ExecuteAsync(
+                new PlanRestoreCommand(await SnapshotIdAsync(handler), null, source.SourceId, OutputDirectory: Destination, Resume: cut.Run),
+                _timeout.Token),
+            out var plan);
+        _available = Assert.ContainsSingle(plan.Space!).NeededBytes - 4096;
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ResumeRestoreCommand(cut.Run!, source.SourceId), _timeout.Token),
+            out var refused);
+        Assert.Contains("would not fit", refused.Message, StringComparison.Ordinal);
+        Assert.AreEqual(cut.Run, Assert.ContainsSingle(await RunsAsync(handler)).Run, "a part that proves nothing is credited nothing");
     }
 
     [TestMethod]

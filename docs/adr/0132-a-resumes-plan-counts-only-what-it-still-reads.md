@@ -47,6 +47,8 @@ A file found landed at its length may still differ, and the resume then restores
 
 - **Hash what the run landed.** As ADR-0120 has it, the plan says what lies there at its length.
 - **Credit a part in the room the run needs.** A resume's working space still counts its largest file whole ([ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md)).
+
+  > **2026-10 ([ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md)).** It credits it now, from the proof the probe already makes, and a resume's run proves its parts the same way when it reads its manifests.
 - **Read parts in direct mode.** Direct mode keeps none (ADR-0129).
 
   > **2026-10 ([ADR-0135](0135-direct-mode-resumes-within-a-file.md)).** It keeps them now, and a resume's plan in direct mode reads nothing they prove.
@@ -62,3 +64,4 @@ A file found landed at its length may still differ, and the resume then restores
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A plan of a resume counts nothing of a file its run landed but its manifest, and, through the service, nothing a part its run kept proves, proved by the rule the engine takes a part up by, now shared. What is held is still probed for what is missing or archived. No contract change. |
 | 2026-10 | Accepted | [ADR-0135](0135-direct-mode-resumes-within-a-file.md): a resume's plan in direct mode reads nothing the parts its destination keeps prove. |
+| 2026-10 | Accepted | [ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md): what the probe proves of each part is credited to the room the run needs too, and the run itself proves its parts the same way. |

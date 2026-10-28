@@ -1547,10 +1547,14 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         // before a byte of payload.
         reader.UseLocationSource(catalogue.ResolveLocation);
 
+        // Kept where a resume to the same place finds them (ADR-0135):
+        // direct mode names no run a resume could ask by.
+        var parts = DirectRestoreParts.Of(session.StateDirectory, slices.Select(slice => slice.OutputDirectory));
+
         // Whether it fits, before anything is written (FR-RST-003). The run
         // below lands in place under the policy asked, so that is the run
         // measured, at every root it writes to together, less what a resume
-        // leaves where it stands.
+        // leaves where it stands and what its parts hold (ADR-0136).
         var space = await RestoreSpace.MeasureRunAsync(
             [.. slices.Select(slice => new RestoreSlice(
                 slice.Plan, slice.OutputDirectory, request.Resume ? slice.OutputDirectory : null))],
@@ -1558,6 +1562,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             existing,
             SpaceProbe(),
             reader,
+            request.Resume ? parts : null,
             cancellationToken).ConfigureAwait(false);
         if (space.IsShort && !request.IgnoreFreeSpace)
         {
@@ -1581,10 +1586,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
             NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Resume = request.Resume,
-
-            // Kept where a resume to the same place finds them (ADR-0135):
-            // direct mode names no run a resume could ask by.
-            PartsDirectory = DirectRestoreParts.Of(session.StateDirectory, slices.Select(slice => slice.OutputDirectory)),
+            PartsDirectory = parts,
         };
         var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
         foreach (var slice in slices)

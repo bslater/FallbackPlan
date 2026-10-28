@@ -35,6 +35,8 @@ A resume to the same place takes each part up as far as it proves, by the rule t
 - **What its plan reads.** A resume's plan reads nothing its parts prove ([ADR-0132](0132-a-resumes-plan-counts-only-what-it-still-reads.md)).
 - **Where it needs room.** The room to assemble the largest file is measured where the parts are kept ([ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md)), since every file is assembled in one.
 
+  > **2026-10 ([ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md)).** Less what the parts prove of each file, for a resume's plan and its run.
+
 ## Consequences
 
 - A large file a run in direct mode was cut short in is read again only from where the run stopped.
@@ -56,3 +58,4 @@ A resume to the same place takes each part up as far as it proves, by the rule t
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A run in direct mode keeps its parts under the state directory by where it lands, a resume there takes them up and says how many files it resumed within, and a run there that finishes lets them go. Its plan of a resume reads nothing they prove, and its working space is measured where they are kept. No contract change. |
+| 2026-10 | Accepted | [ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md): a resume in direct mode needs working space only for what its destination's parts do not yet hold of each file. |

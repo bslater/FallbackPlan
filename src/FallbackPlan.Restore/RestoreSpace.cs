@@ -25,6 +25,15 @@ namespace FallbackPlan.Restore;
 /// </param>
 public sealed record RestoreSlice(RestorePlan Plan, string OutputDirectory, string? ResumedIn = null, string LabelPrefix = "");
 
+/// <summary>What restoring one file writes, and how much of that its run already holds.</summary>
+/// <param name="Written">Its segments' bytes, its holes skipped.</param>
+/// <param name="Held">
+/// What of <paramref name="Written"/> a resume takes up from the part its run
+/// kept, which the working space already holds (ADR-0136). None for a run
+/// afresh.
+/// </param>
+public readonly record struct RestoreFileBytes(ulong Written, ulong Held = 0);
+
 /// <summary>How a restore asks the platform about room (FR-RST-003; ADR-0083).</summary>
 public sealed record RestoreSpaceProbe
 {
@@ -94,7 +103,7 @@ public sealed record RestoreSpaceProbe
 /// </param>
 /// <param name="NeededBytes">The bytes the run needs there (<see cref="RestoreSpace"/> says how they are counted).</param>
 /// <param name="AvailableBytes">What the platform says is free there, or null when it will not say.</param>
-/// <param name="Working">Whether this is the engine's working directory alone, which needs room for the largest file.</param>
+/// <param name="Working">Whether this is the engine's working directory alone, which needs room for the largest file less what a part holds of it.</param>
 public sealed record RestoreSpaceNeed(string Directory, ulong NeededBytes, long? AvailableBytes, bool Working = false)
 {
     /// <summary>Whether the platform says less is free than the run needs. Never, when it will not say.</summary>
@@ -158,6 +167,13 @@ public sealed record RestoreSpaceReport(IReadOnlyList<RestoreSpaceNeed> Needs, u
 /// of its own, so nothing there is in the way.
 /// </para>
 /// <para>
+/// A resume takes up what each part its run kept proves, which the working
+/// directory already holds, so there it needs only the rest of each file,
+/// the most of any one file. Measured from manifests alone, which name the
+/// parts: a measure by logical length credits nothing. The folder the file
+/// lands in still needs all of it (ADR-0136).
+/// </para>
+/// <para>
 /// A resumed run leaves a file an earlier one landed as it stands, so a file
 /// already where that run landed it, at its length, needs nothing. The run
 /// checks its hash when it reaches it; the measure goes by length, which
@@ -191,13 +207,39 @@ public static class RestoreSpace
     }
 
     /// <summary>
+    /// The bytes the first <paramref name="segments"/> of a file's segments
+    /// write: what a part holds of it that holds them. The codec keeps a
+    /// manifest's segments in the file's order.
+    /// </summary>
+    /// <param name="manifest">The file's manifest.</param>
+    /// <param name="segments">How many of its segments, from its start.</param>
+    public static ulong HeldBytes(FileVersionManifest manifest, int segments)
+    {
+        ThrowHelper.ThrowIfNull(manifest);
+        return manifest.SegmentReferences.Take(segments)
+            .Aggregate(0ul, (sum, reference) => sum + (ulong)reference.LogicalLength);
+    }
+
+    /// <summary>
     /// What each file writes, read from its manifest through
     /// <paramref name="reader"/>. A manifest that will not read answers null,
     /// and the measure takes that file at its logical length. A later name of
     /// a hard-link group the run makes one file again writes nothing
     /// (ADR-0102), so a tree of links is measured once, not once a name.
     /// </summary>
-    public static Func<RestorePlanItem, CancellationToken, ValueTask<ulong?>> WrittenBytesThrough(RepositoryReader reader)
+    public static Func<RestorePlanItem, CancellationToken, ValueTask<RestoreFileBytes?>> WrittenBytesThrough(RepositoryReader reader) =>
+        WrittenBytesThrough(reader, partsDirectory: null);
+
+    /// <summary>
+    /// What each file writes, as the overload without parts says, and what a
+    /// resume holds of it in the part its run kept in
+    /// <paramref name="partsDirectory"/>: as far as the part proves, read as
+    /// the resume would take it up, writing nothing (ADR-0136).
+    /// </summary>
+    /// <param name="reader">Reads each manifest, and proves each part's segments.</param>
+    /// <param name="partsDirectory">Where a resume's run kept its parts, or null for a run afresh.</param>
+    public static Func<RestorePlanItem, CancellationToken, ValueTask<RestoreFileBytes?>> WrittenBytesThrough(
+        RepositoryReader reader, string? partsDirectory)
     {
         ThrowHelper.ThrowIfNull(reader);
 
@@ -219,24 +261,39 @@ public static class RestoreSpace
                 return null;
             }
 
+            FileVersionManifest manifest;
             try
             {
-                var manifest = FileVersionManifestCodec.Decode(read.Plaintext);
-                return RestoreHardLinks.KeyOf(manifest) is { } key && !linked.Add(key) ? 0 : WrittenBytes(manifest);
+                manifest = FileVersionManifestCodec.Decode(read.Plaintext);
             }
             catch (FormatException)
             {
                 return null;
             }
+
+            if (RestoreHardLinks.KeyOf(manifest) is { } key && !linked.Add(key))
+            {
+                return new RestoreFileBytes(0);
+            }
+
+            var held = partsDirectory is null
+                ? 0
+                : await RestorePart.HeldSegmentsAsync(
+                    Path.Combine(partsDirectory, RestorePart.NameOf(manifest)),
+                    manifest,
+                    (reference, plaintext) => reader.Proves(reference, plaintext),
+                    cancellationToken).ConfigureAwait(false);
+            return new RestoreFileBytes(WrittenBytes(manifest), HeldBytes(manifest, held));
         };
     }
 
     /// <summary>
-    /// What each file writes, as the plan probe found it
-    /// (<see cref="RestoreBlobSetResult.Facts"/>), a later name of a hard-link
-    /// group nothing, as <see cref="WrittenBytesThrough"/> says.
+    /// What each file writes, and what a resume holds of it, as the plan
+    /// probe found them (<see cref="RestoreBlobSetResult.Facts"/>), a later
+    /// name of a hard-link group nothing, as
+    /// <see cref="WrittenBytesThrough(RepositoryReader)"/> says.
     /// </summary>
-    public static Func<RestorePlanItem, CancellationToken, ValueTask<ulong?>> WrittenBytesFrom(
+    public static Func<RestorePlanItem, CancellationToken, ValueTask<RestoreFileBytes?>> WrittenBytesFrom(
         IReadOnlyDictionary<ObjectId, RestoreItemFacts> facts)
     {
         ThrowHelper.ThrowIfNull(facts);
@@ -244,8 +301,10 @@ public static class RestoreSpace
         var linked = new HashSet<string>(StringComparer.Ordinal);
         return (item, _) => ValueTask.FromResult(
             !facts.TryGetValue(item.ObjectId, out var known)
-                ? (ulong?)null
-                : known.HardLink is { } key && !linked.Add(key) ? 0 : known.WrittenBytes);
+                ? (RestoreFileBytes?)null
+                : known.HardLink is { } key && !linked.Add(key)
+                    ? new RestoreFileBytes(0)
+                    : new RestoreFileBytes(known.WrittenBytes, known.HeldBytes));
     }
 
     /// <summary>
@@ -257,8 +316,9 @@ public static class RestoreSpace
     /// <param name="existing">What the run does about a file already at a destination.</param>
     /// <param name="probe">How the platform is asked.</param>
     /// <param name="writtenBytes">
-    /// What each file writes; null takes every file at its logical length,
-    /// which the catalogue knows without a read.
+    /// What each file writes, and what a resume holds of it; null takes every
+    /// file at its logical length, which the catalogue knows without a read,
+    /// and holds none of it.
     /// </param>
     /// <param name="cancellationToken">Cancels the measure.</param>
     public static async ValueTask<RestoreSpaceReport> MeasureAsync(
@@ -266,7 +326,7 @@ public static class RestoreSpace
         RestoreDestinationMode mode,
         ExistingDestinationPolicy existing,
         RestoreSpaceProbe probe,
-        Func<RestorePlanItem, CancellationToken, ValueTask<ulong?>>? writtenBytes,
+        Func<RestorePlanItem, CancellationToken, ValueTask<RestoreFileBytes?>>? writtenBytes,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(slices);
@@ -320,15 +380,14 @@ public static class RestoreSpace
                     }
                 }
 
-                var data = writtenBytes is null
-                    ? item.Length
-                    : await writtenBytes(item, cancellationToken).ConfigureAwait(false) ?? item.Length;
+                var measured = writtenBytes is null ? null : await writtenBytes(item, cancellationToken).ConfigureAwait(false);
+                var data = measured?.Written ?? item.Length;
                 var allocated = Allocated(data);
 
                 writes += data;
                 need += allocated > replaced ? allocated - replaced : 0;
                 inFlight = Math.Max(inFlight, Math.Min(allocated, replaced));
-                largest = Math.Max(largest, allocated);
+                largest = Math.Max(largest, Allocated(data - Math.Min(measured?.Held ?? 0, data)));
             }
 
             Add(volumes, Identify(slice.OutputDirectory, probe), slice.OutputDirectory, need, inFlight);
@@ -399,12 +458,34 @@ public static class RestoreSpace
     /// the check costs a restore nothing on its read budget (NFR-PERF-009)
     /// unless the disk is nearly full.
     /// </remarks>
+    public static ValueTask<RestoreSpaceReport> MeasureRunAsync(
+        IReadOnlyList<RestoreSlice> slices,
+        RestoreDestinationMode mode,
+        ExistingDestinationPolicy existing,
+        RestoreSpaceProbe probe,
+        RepositoryReader reader,
+        CancellationToken cancellationToken) =>
+        MeasureRunAsync(slices, mode, existing, probe, reader, partsDirectory: null, cancellationToken);
+
+    /// <summary>
+    /// A resume's space as the overload without parts measures it, crediting
+    /// its working space, once it reads the manifests, what each part its run
+    /// kept in <paramref name="partsDirectory"/> proves (ADR-0136).
+    /// </summary>
+    /// <param name="slices">The run's slices, in the order it writes them.</param>
+    /// <param name="mode">Where restored content lands.</param>
+    /// <param name="existing">What the run does about a file already at a destination.</param>
+    /// <param name="probe">How the platform is asked.</param>
+    /// <param name="reader">Reads each manifest, should the run be short by logical length, and proves each part.</param>
+    /// <param name="partsDirectory">Where the run it resumes kept its parts, or null for a run afresh.</param>
+    /// <param name="cancellationToken">Cancels the measure.</param>
     public static async ValueTask<RestoreSpaceReport> MeasureRunAsync(
         IReadOnlyList<RestoreSlice> slices,
         RestoreDestinationMode mode,
         ExistingDestinationPolicy existing,
         RestoreSpaceProbe probe,
         RepositoryReader reader,
+        string? partsDirectory,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(reader);
@@ -413,7 +494,7 @@ public static class RestoreSpace
             .ConfigureAwait(false);
 
         return byLength.IsShort
-            ? await MeasureAsync(slices, mode, existing, probe, WrittenBytesThrough(reader), cancellationToken)
+            ? await MeasureAsync(slices, mode, existing, probe, WrittenBytesThrough(reader, partsDirectory), cancellationToken)
                 .ConfigureAwait(false)
             : byLength;
     }
