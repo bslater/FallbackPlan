@@ -327,8 +327,7 @@ public sealed class RepositoryReader : IDisposable
     /// proof every record read from a store is held to (04 §6 step 7).
     /// </summary>
     public bool Proves(SegmentReference reference, ReadOnlySpan<byte> plaintext) =>
-        plaintext.Length == reference.LogicalLength
-        && _objectIdDeriver.Derive(ObjectType.SegmentRecord, ContentHasher.Hash(plaintext)) == reference.ObjectId;
+        RestorePart.Proves(_objectIdDeriver, reference, plaintext);
 
     /// <summary>
     /// Reads and verifies one segment by object identifier — the full

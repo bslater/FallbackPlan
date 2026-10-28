@@ -19,7 +19,11 @@ namespace FallbackPlan.Restore;
 /// Where the run this one resumes landed it (ADR-0109): the output itself in
 /// place, or that run's quarantine folder. Null for a run that resumes none.
 /// </param>
-public sealed record RestoreSlice(RestorePlan Plan, string OutputDirectory, string? ResumedIn = null);
+/// <param name="LabelPrefix">
+/// The root's label and a slash, which the slice's paths shed from the
+/// plan's (ADR-0041), or empty where there is one root.
+/// </param>
+public sealed record RestoreSlice(RestorePlan Plan, string OutputDirectory, string? ResumedIn = null, string LabelPrefix = "");
 
 /// <summary>How a restore asks the platform about room (FR-RST-003; ADR-0083).</summary>
 public sealed record RestoreSpaceProbe
@@ -283,17 +287,7 @@ public static class RestoreSpace
             foreach (var item in slice.Plan.Items)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-
-                // Only a run in place, or one landing where an earlier run
-                // landed, can find anything in its way.
-                var landsIn = mode == RestoreDestinationMode.InPlace
-                    ? root
-                    : slice.ResumedIn is { } resumed ? new DirectoryInfo(resumed).FullName : null;
-                string? destination = null;
-                if (landsIn is not null && RestoreExecutor.TryResolve(landsIn, item.Path, out var resolved, out _))
-                {
-                    destination = resolved;
-                }
+                var destination = DestinationOf(slice, mode, root, item);
 
                 if (item.Kind == EntryKind.DirectoryPlaceholder)
                 {
@@ -306,9 +300,7 @@ public static class RestoreSpace
                     continue;
                 }
 
-                if (slice.ResumedIn is not null && destination is not null
-                    && new FileInfo(destination) is { Exists: true } landed
-                    && (ulong)landed.Length == item.Length)
+                if (IsLanded(slice, destination, item))
                 {
                     landedFiles++;
                     continue;
@@ -370,6 +362,35 @@ public static class RestoreSpace
     }
 
     /// <summary>
+    /// The files a resume will find its run landed, by the rule its measure
+    /// counts them by (ADR-0120): at their length where the resume lands
+    /// them. Named as the plan names them, each behind its slice's label
+    /// prefix, so a plan's probe can leave their content unread (ADR-0132).
+    /// </summary>
+    /// <param name="slices">The run's slices, each with where the run it resumes landed it.</param>
+    /// <param name="mode">How the run lands.</param>
+    public static IReadOnlySet<string> LandedPaths(IReadOnlyList<RestoreSlice> slices, RestoreDestinationMode mode)
+    {
+        ThrowHelper.ThrowIfNull(slices);
+
+        var landed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var slice in slices)
+        {
+            ThrowHelper.ThrowIfNull(slice);
+            var root = new DirectoryInfo(slice.OutputDirectory).FullName;
+            foreach (var item in slice.Plan.Items.Where(item => item.Kind == EntryKind.File))
+            {
+                if (IsLanded(slice, DestinationOf(slice, mode, root, item), item))
+                {
+                    landed.Add(slice.LabelPrefix + item.Path);
+                }
+            }
+        }
+
+        return landed;
+    }
+
+    /// <summary>
     /// A run's space as a run measures it: from logical lengths, which cost
     /// nothing, and again from every manifest only when they say it is short.
     /// </summary>
@@ -416,6 +437,26 @@ public static class RestoreSpace
 
         return string.Create(CultureInfo.InvariantCulture, $"{bytes} bytes ({value:0.0} {units[unit]})");
     }
+
+    /// <summary>
+    /// Where <paramref name="item"/> would meet something already there: only
+    /// a run in place, or one landing where an earlier run landed, can.
+    /// </summary>
+    private static string? DestinationOf(RestoreSlice slice, RestoreDestinationMode mode, string root, RestorePlanItem item)
+    {
+        var landsIn = mode == RestoreDestinationMode.InPlace
+            ? root
+            : slice.ResumedIn is { } resumed ? new DirectoryInfo(resumed).FullName : null;
+        return landsIn is not null && RestoreExecutor.TryResolve(landsIn, item.Path, out var resolved, out _)
+            ? resolved
+            : null;
+    }
+
+    /// <summary>Whether a resume finds <paramref name="item"/> landed, at its length, at <paramref name="destination"/>.</summary>
+    private static bool IsLanded(RestoreSlice slice, string? destination, RestorePlanItem item) =>
+        slice.ResumedIn is not null && destination is not null
+        && new FileInfo(destination) is { Exists: true } landed
+        && (ulong)landed.Length == item.Length;
 
     /// <summary>The volume holding <paramref name="directory"/>, or the directory itself when the platform will not say.</summary>
     private static (ulong? Volume, string? Path) Identify(string directory, RestoreSpaceProbe probe)

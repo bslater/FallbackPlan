@@ -1638,13 +1638,21 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
         }
 
-        var slices = SlicesOf(catalogue, snapshotId, plan, request);
+        // A resume reads nothing of a file its run landed but the manifest
+        // (ADR-0132). Direct mode keeps no parts, so that is all it holds.
+        IReadOnlyList<RestoreSlice> slices =
+        [
+            .. SlicesOf(catalogue, snapshotId, plan, request).Select(slice => new RestoreSlice(
+                slice.Plan, slice.OutputDirectory, request.Resume ? slice.OutputDirectory : null, slice.LabelPrefix)),
+        ];
+        var held = request.Resume
+            ? new RestoreHeld { Landed = RestoreSpace.LandedPaths(slices, RestoreDestinationMode.InPlace) }
+            : null;
         var probed = await RestoreBlobSet.ResolveAsync(
-            catalogue, plan, session.Store, session.Repository.RepositoryId, session.Repository.Keys, cancellationToken)
+            catalogue, plan, session.Store, session.Repository.RepositoryId, session.Repository.Keys, held, cancellationToken)
             .ConfigureAwait(false);
         var space = await RestoreSpace.MeasureAsync(
-            [.. slices.Select(slice => new RestoreSlice(
-                slice.Plan, slice.OutputDirectory, request.Resume ? slice.OutputDirectory : null))],
+            slices,
             RestoreDestinationMode.InPlace,
             existing,
             SpaceProbe(),

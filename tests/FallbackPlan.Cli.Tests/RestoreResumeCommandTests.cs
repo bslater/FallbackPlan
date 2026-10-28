@@ -9,7 +9,9 @@ namespace FallbackPlan.Cli.Tests;
 /// It is measured for what it still has to write, so a disk the cut-short run
 /// filled most of does not refuse the run that finishes it. A resume is
 /// planned too (FR-RST-003, ADR-0120): measured as the resume will meet it,
-/// and saying how many files the run already landed, restoring nothing.
+/// and saying how many files the run already landed, restoring nothing. Its
+/// plan counts nothing of a file the run landed among what it reads but the
+/// file's manifest (ADR-0132).
 /// </summary>
 /// <remarks>
 /// In direct mode the run lands in place, where <c>--output</c> points, so
@@ -118,6 +120,24 @@ public sealed class RestoreResumeCommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task APlanOfAResume_ReadsNothingOfWhatTheRunLanded()
+    {
+        var snapshot = await BackUpAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+        var first = await _cli.RunAsync("restore", snapshot, "--output", destination);
+        Assert.AreEqual(0, first.ExitCode, first.All);
+        File.Delete(Path.Combine(destination, "nested", "two.txt"));
+
+        var resumed = await _cli.RunAsync("restore", snapshot, "--output", destination, "--resume", "--plan");
+        var afresh = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "elsewhere"), "--plan");
+        await File.WriteAllTextAsync(Path.Combine(destination, "one.txt"), "not the first");
+        var nothingLanded = await _cli.RunAsync("restore", snapshot, "--output", destination, "--resume", "--plan");
+
+        Assert.IsLessThan(Read(afresh), Read(resumed), "a file the run landed at its length is not read again");
+        Assert.AreEqual(Read(afresh), Read(nothingLanded), "and one at another length is, as everything is where nothing landed");
+    }
+
+    [TestMethod]
     public async Task APlanOfAResumeNamingARun_InDirectMode_IsRefusedBeforeAnythingIsAsked()
     {
         await _cli.InitAsync();
@@ -149,6 +169,15 @@ public sealed class RestoreResumeCommandTests : IDisposable
     }
 
     public void Dispose() => _cli.Dispose();
+
+    /// <summary>What a printed plan says its run will read.</summary>
+    private static long Read(CliHarness.Invocation plan)
+    {
+        Assert.AreEqual(0, plan.ExitCode, plan.All);
+        var read = System.Text.RegularExpressions.Regex.Match(plan.All, @", (\d+) byte\(s\) read");
+        Assert.IsTrue(read.Success, plan.All);
+        return long.Parse(read.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     private async Task<string> BackUpAsync()
     {

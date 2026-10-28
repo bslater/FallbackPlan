@@ -767,7 +767,7 @@ public sealed class RestoreExecutor(
             options.Resume && PartOf(manifest) is { } part && File.Exists(part);
 
         string? PartOf(FileVersionManifest manifest) => options.PartsDirectory is { } directory
-            ? Path.Combine(directory, $"{Convert.ToHexStringLower(manifest.WholeFileHash.Span)}.part")
+            ? Path.Combine(directory, RestorePart.NameOf(manifest))
             : null;
 
         // Where a resumed run finds each file already landed, decided once:

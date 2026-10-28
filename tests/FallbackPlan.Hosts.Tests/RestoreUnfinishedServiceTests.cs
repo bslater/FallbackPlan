@@ -28,7 +28,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// it finishes or is let go, and those of a run no longer on record when the
 /// service starts. The result counts the files a resume took up from its
 /// parts, the receipt says where each was resumed (FR-RST-004), and the
-/// command line says so (ADR-0130).
+/// command line says so (ADR-0130). A plan of a resume counts nothing among
+/// what the run reads of a file its run landed but its manifest, nor what
+/// its parts prove (ADR-0132).
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -417,6 +419,44 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
             _timeout.Token);
         Assert.IsInstanceOfType<RestorePlanResult>(afresh, out var unresumed, (afresh as ServiceError)?.Message);
         Assert.IsNull(unresumed.Landed, "a plan of a run that resumes nothing names nothing landed");
+    }
+
+    [TestMethod]
+    public async Task APlanOfAResume_ReadsNothingOfWhatItsRunLanded_NorOfWhatItsPartsProve()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var cut = await CutShortAsync(handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        var snapshot = await SnapshotIdAsync(handler);
+        async Task<long> ReadsAsync(string? resume)
+        {
+            var answer = await handler.ExecuteAsync(
+                new PlanRestoreCommand(snapshot, null, source.SourceId, OutputDirectory: Destination, Resume: resume),
+                _timeout.Token);
+            Assert.IsInstanceOfType<RestorePlanResult>(answer, out var plan, (answer as ServiceError)?.Message);
+            Assert.IsNotNull(plan.ReadBytes);
+            return plan.ReadBytes.Value;
+        }
+
+        var afresh = await ReadsAsync(null);
+        Assert.AreEqual(afresh, await ReadsAsync(cut.Run), "a run that landed nothing and kept no part leaves everything to read");
+
+        Directory.CreateDirectory(cut.OutputDirectory);
+        await File.WriteAllTextAsync(Path.Combine(cut.OutputDirectory, "notes.txt"), "hello", _timeout.Token);
+        var landedOne = await ReadsAsync(cut.Run);
+        Assert.IsLessThan(afresh, landedOne, "a file the run landed at its length is not read again");
+
+        KeepPart(cut.Run!, "deeper", "deeper");
+        Assert.IsLessThan(landedOne, await ReadsAsync(cut.Run), "nor is what a part proves");
+
+        KeepPart(cut.Run!, "deeper", "deepen");
+        Assert.AreEqual(landedOne, await ReadsAsync(cut.Run), "a part that does not prove saves nothing");
+        Assert.AreEqual(
+            "deepen",
+            await File.ReadAllTextAsync(
+                Path.Combine(PartsOf(cut.Run!), $"{Convert.ToHexStringLower(SHA256.HashData("deeper"u8))}.part"), _timeout.Token),
+            "and a plan leaves a part as it found it");
     }
 
     [TestMethod]

@@ -72,6 +72,23 @@ public sealed record RestoreBlobSetResult(
 }
 
 /// <summary>
+/// What a resume already holds of the files its plan names (FR-RST-003,
+/// FR-RST-008; ADR-0132), so the plan counts among what its run reads only
+/// what the run will read: the files its run landed at their length, of
+/// which it reads only the manifest, and where its run kept the parts of the
+/// files it was cut short in, of which it reads only past what each part
+/// proves.
+/// </summary>
+public sealed record RestoreHeld
+{
+    /// <summary>The files the run landed at their length, by the paths the plan names them by.</summary>
+    public IReadOnlySet<string> Landed { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>Where the run kept its parts, or null where it kept none.</summary>
+    public string? PartsDirectory { get; init; }
+}
+
+/// <summary>
 /// Resolves what a <see cref="RestorePlan"/> needs from the store
 /// (NFR-PERF-009; architecture 05 §5): the blob set the run will open, and
 /// the paths it cannot reach.
@@ -115,22 +132,57 @@ public static class RestoreBlobSet
         IReadOnlyList<CopySource> otherCopies,
         RepositoryId repositoryId,
         RepositoryKeySet keys,
+        CancellationToken cancellationToken) =>
+        ResolveAsync(catalogue, plan, store, otherCopies, repositoryId, keys, held: null, cancellationToken);
+
+    /// <summary>
+    /// Resolves the blob set and the unreachable paths for a plan of a
+    /// resume whose run reads around what <paramref name="store"/> will not
+    /// serve, counting among what it reads nothing <paramref name="held"/>
+    /// says the run already holds.
+    /// </summary>
+    public static ValueTask<RestoreBlobSetResult> ResolveAsync(
+        Catalogue catalogue,
+        RestorePlan plan,
+        IObjectStore store,
+        IReadOnlyList<CopySource> otherCopies,
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        RestoreHeld? held,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(otherCopies);
         return ResolveAsync(
             catalogue, plan, otherCopies.Count == 0 ? store : new FirstHolderStore(store, otherCopies),
-            repositoryId, keys, cancellationToken);
+            repositoryId, keys, held, cancellationToken);
     }
 
     /// <summary>Resolves the blob set and the unreachable paths for <paramref name="plan"/>.</summary>
+    public static ValueTask<RestoreBlobSetResult> ResolveAsync(
+        Catalogue catalogue,
+        RestorePlan plan,
+        IObjectStore store,
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        CancellationToken cancellationToken) =>
+        ResolveAsync(catalogue, plan, store, repositoryId, keys, held: null, cancellationToken);
+
+    /// <summary>
+    /// Resolves the blob set and the unreachable paths for a plan of a
+    /// resume, counting among what it reads nothing <paramref name="held"/>
+    /// says the run already holds (ADR-0132). What is held is still probed:
+    /// a path stays missing or archived by everything it names, because a
+    /// file found landed at its length may still differ, and is then
+    /// restored.
+    /// </summary>
     public static async ValueTask<RestoreBlobSetResult> ResolveAsync(
         Catalogue catalogue,
         RestorePlan plan,
         IObjectStore store,
         RepositoryId repositoryId,
         RepositoryKeySet keys,
+        RestoreHeld? held,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
@@ -146,10 +198,10 @@ public static class RestoreBlobSet
         var archived = new List<string>();
         var needed = new HashSet<ObjectKey>();
         var facts = new Dictionary<ObjectId, RestoreItemFacts>();
-        var read = new HashSet<ObjectId>();
+        var reads = new HashSet<ObjectId>();
         var readBytes = 0UL;
 
-        async ValueTask<Holding> HoldingAsync(ObjectId objectId, ResolvedLocation location)
+        async ValueTask<Holding> HoldingAsync(ObjectId objectId, ResolvedLocation location, bool counted = true)
         {
             if (!blobKeys.TryGetValue(location.BlobId, out var blob))
             {
@@ -164,7 +216,7 @@ public static class RestoreBlobSet
                 return Holding.Absent;
             }
 
-            if (needed.Add(found.Key) && !found.Archived)
+            if (counted && needed.Add(found.Key) && !found.Archived)
             {
                 readBytes += (ulong)BlobReader.EnvelopeReadLength(found.Length);
             }
@@ -174,7 +226,7 @@ public static class RestoreBlobSet
                 return Holding.Archived;
             }
 
-            if (read.Add(objectId))
+            if (counted && reads.Add(objectId))
             {
                 readBytes += (ulong)RecordFraming.MaxRecordLength(location.StoredLength);
             }
@@ -237,16 +289,33 @@ public static class RestoreBlobSet
                 manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode,
                 RestoreMetadata.KindsOf(manifest.Metadata), RestoreHardLinks.KeyOf(manifest));
 
+            // What the run already holds of the file is not read again: a
+            // file it landed at its length but for its manifest, and a file
+            // it was cut short in as far as its part proves, in the file's
+            // order (ADR-0132).
+            var landed = held is not null && held.Landed.Contains(item.Path);
+            var heldSegments = landed
+                ? manifest.SegmentReferences.Count
+                : held?.PartsDirectory is { } parts
+                    ? await RestorePart.HeldSegmentsAsync(
+                        Path.Combine(parts, RestorePart.NameOf(manifest)),
+                        manifest,
+                        (reference, plaintext) => RestorePart.Proves(objectIdDeriver, reference, plaintext),
+                        cancellationToken).ConfigureAwait(false)
+                    : 0;
+
             // A lost segment makes the path missing whatever else of it is
-            // archived, because no rehydration brings that segment back.
-            var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
-                .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
+            // archived, because no rehydration brings that segment back. The
+            // codec holds a manifest's segments in the file's order.
+            var references = manifest.SegmentReferences
+                .Select((reference, index) => (reference.ObjectId, Counted: index >= heldSegments))
+                .Concat(manifest.Metadata.AlternateStreams.Select(stream => (stream.ObjectId, Counted: !landed)));
             var archivedSegment = false;
             var lost = false;
-            foreach (var referenced in references)
+            foreach (var (referenced, counted) in references)
             {
                 var holding = catalogue.ResolveLocation(referenced) is { } segmentLocation
-                    ? await HoldingAsync(referenced, segmentLocation).ConfigureAwait(false)
+                    ? await HoldingAsync(referenced, segmentLocation, counted).ConfigureAwait(false)
                     : Holding.Absent;
                 if (holding == Holding.Absent)
                 {
