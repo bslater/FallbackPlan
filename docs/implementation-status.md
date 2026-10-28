@@ -159,6 +159,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0132](adr/0132-a-resumes-plan-counts-only-what-it-still-reads.md) | A resume's plan counts only what it still reads: nothing of a file its run landed at its length but the manifest, and through the service nothing a part its run kept proves, proved by the rule a resume takes a part up by, now shared by the engine and the plan; what is held is still probed for what is missing or archived | **Built** | `Restore/RestoreBlobSet` · `Repository/RestorePart` · `Repository/RestoreEngine` · `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0132--a-resumes-plan-counts-only-what-it-still-reads) |
 | [0133](adr/0133-a-run-left-unfinished-says-what-its-parts-hold.md) | A run left unfinished says what its parts hold: each run the service lists gains `held`, the bytes the parts it kept hold under the state directory, summed from its folder as the list is asked for (contract 1.77); `restore-resume` and the console's list say it | **Built** | `Agent/RestoreParts` · `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/OperationGateway` · `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreResumeVerbTests`, `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0133--a-run-left-unfinished-says-what-its-parts-hold) |
 | [0134](adr/0134-the-kept-receipts-say-which-files-were-resumed-within.md) | The kept receipts say which files were resumed within: each receipt the listing names counts its run's files resumed within among those restored, beside those found in place, from a state directory, through the service as `resumed_within` (contract 1.78), and in the console | **Built** | `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/RestoreReceiptReport` · `Cli.Tests/RestoreReceiptsVerbTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0134--the-kept-receipts-say-which-files-were-resumed-within) |
+| [0135](adr/0135-direct-mode-resumes-within-a-file.md) | Direct mode resumes within a file: a run keeps its parts under the state directory by where it lands, apart from the service's, a resume there takes them up and says how many files it resumed within, and a run there that finishes lets them go; its plan of a resume reads nothing they prove, and its working space is measured where they are kept | **Built** | `Cli/DirectRestoreParts` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0135--direct-mode-resumes-within-a-file) |
 
 ---
 
@@ -3751,7 +3752,7 @@ a file was resumed within. ADR-0130 has since had the receipt say where each
 such file was resumed, and the result count them, ADR-0131 measures the
 working space where the parts are kept, and ADR-0132 has a resume's plan
 count nothing its parts prove, and ADR-0133 has each run left unfinished say
-what its parts hold.
+what its parts hold. ADR-0135 has direct mode resume within a file too.
 
 ### 0130 — a restore says which files it resumed within
 
@@ -3823,3 +3824,21 @@ the files restored: "3 restored (1 found in place, 1 resumed within)".
 
 What remains is recorded rather than done. A receipt kept before schema 11
 counts none, as it says nothing of where a file was resumed.
+
+### 0135 — direct mode resumes within a file
+
+A run in direct mode kept no parts, so `restore --resume` read again all of
+the file its run was cut short in. Each run in direct mode now assembles
+every file in a part under `direct-restore-parts/{destination}` in the
+state directory, named by where it lands, since direct mode names no run.
+The folder is apart from the service's `restore-parts`, whose start sweeps
+every run it has no record of. A resume there takes the parts up as the
+service's does and says how many files it resumed within; a run there that
+completes, or skips only what the target cannot hold, lets them go. Its
+plan of a resume reads nothing they prove, and its probe of room measures
+the working space where they are kept, with a flow-scoped volume hook for
+tests beside the free-space one. No contract change.
+
+What remains is recorded rather than done. Nothing sweeps the parts of a
+destination no run there finishes, two runs at once to one destination
+share its parts, and direct mode lists nothing to say what one holds.

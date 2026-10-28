@@ -49,6 +49,8 @@ A file found landed at its length may still differ, and the resume then restores
 - **Credit a part in the room the run needs.** A resume's working space still counts its largest file whole ([ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md)).
 - **Read parts in direct mode.** Direct mode keeps none (ADR-0129).
 
+  > **2026-10 ([ADR-0135](0135-direct-mode-resumes-within-a-file.md)).** It keeps them now, and a resume's plan in direct mode reads nothing they prove.
+
 ## Alternatives considered
 
 - **Count a part by its length.** Rejected. A resume takes up only what a part proves, and a plan that counted more would say the run reads less than it does.
@@ -59,3 +61,4 @@ A file found landed at its length may still differ, and the resume then restores
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A plan of a resume counts nothing of a file its run landed but its manifest, and, through the service, nothing a part its run kept proves, proved by the rule the engine takes a part up by, now shared. What is held is still probed for what is missing or archived. No contract change. |
+| 2026-10 | Accepted | [ADR-0135](0135-direct-mode-resumes-within-a-file.md): a resume's plan in direct mode reads nothing the parts its destination keeps prove. |

@@ -27,6 +27,8 @@ The service's probe of room names the folder its runs keep their parts in as the
 
 A run in direct mode keeps no parts. Its engine spools in the system's temporary folder, and that is what it measures.
 
+> **2026-10 ([ADR-0135](0135-direct-mode-resumes-within-a-file.md)).** Direct mode keeps parts now, under the state directory, and its working space is measured where they are kept, as the service's is.
+
 ## Consequences
 
 - A run through the service is refused where its parts will not fit, before anything is written. It is not refused for a temporary folder it does not write to.
@@ -47,3 +49,4 @@ A run in direct mode keeps no parts. Its engine spools in the system's temporary
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The service's probe of room names the folder its runs keep their parts in as the working directory, so a plan and a run measure the working space there. Direct mode measures the temporary folder its engine spools in, as before. No contract change. |
+| 2026-10 | Accepted | Direct mode's working space is measured where its parts are kept, by [ADR-0135](0135-direct-mode-resumes-within-a-file.md), as Decision 1 has the service's. |
