@@ -16,7 +16,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// The account running these tests restores its own files, so on a POSIX
 /// host it gives them back their owner and group (ADR-0085), and a symlink
 /// its own metadata, onto the link itself (ADR-0101). What is left to say
-/// there is a creation time Linux cannot set.
+/// there is a creation time Linux cannot set. The service assembles each file
+/// in its run's parts under the state directory (ADR-0129), so the working
+/// space is measured there, and the system's temporary folder not at all
+/// (FR-RST-003, ADR-0131).
 /// </summary>
 [TestClass]
 public sealed class RestoreHonestyServiceTests : IDisposable
@@ -82,6 +85,78 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         Assert.IsFalse(
             Directory.Exists(runtime.ReceiptsRoot) && Directory.EnumerateFileSystemEntries(runtime.ReceiptsRoot).Any(),
             "a restore that never ran has no receipt");
+    }
+
+    [TestMethod]
+    public async Task Plan_MeasuresTheWorkingSpace_WhereTheServiceKeepsItsRunsParts()
+    {
+        await BackUpTwoFilesAsync();
+        await using var runtime = await StartApartAsync(partsAvailable: 1_000, temporaryAvailable: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var destination = Path.Combine(_harness.WorkPath, "restored");
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            await handler.ExecuteAsync(
+                new PlanRestoreCommand(snapshotId, null, OutputDirectory: destination, Source: source.SourceId),
+                _timeout.Token),
+            out var plan);
+
+        // The folder fits on its own volume; the parts are a need of their
+        // own, on the state directory's, and short there.
+        Assert.IsNotNull(plan.Space);
+        Assert.HasCount(2, plan.Space);
+        var working = plan.Space.Single(need => need.Working);
+        Assert.AreEqual(runtime.RestorePartsRoot, working.Directory);
+        Assert.AreEqual(1_000L, working.AvailableBytes);
+        Assert.IsGreaterThan(1_000L, working.NeededBytes);
+        Assert.IsNull(plan.Space.Single(need => !need.Working).AvailableBytes);
+        Assert.Contains(
+            line => line.Contains(runtime.RestorePartsRoot, StringComparison.Ordinal) && line.Contains("1000", StringComparison.Ordinal),
+            plan.ConflictSample!);
+    }
+
+    [TestMethod]
+    public async Task Run_WhoseStateDirectoryWillNotHoldItsParts_IsRefused_AndWritesNothing()
+    {
+        await BackUpTwoFilesAsync();
+        await using var runtime = await StartApartAsync(partsAvailable: 1_000, temporaryAvailable: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var destination = Path.Combine(_harness.WorkPath, "restored");
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, destination, Source: source.SourceId), _timeout.Token),
+            out var refused);
+
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains(runtime.RestorePartsRoot, refused.Message, StringComparison.Ordinal);
+        Assert.Contains("1000", refused.Message, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(destination), "a refused restore must not even create its folder");
+    }
+
+    [TestMethod]
+    public async Task Run_IsNotRefused_ForATemporaryFolderItDoesNotWriteTo()
+    {
+        // Through the service the engine never spools in the system's
+        // temporary folder, so that folder being short stops nothing.
+        await BackUpTwoFilesAsync();
+        await using var runtime = await StartApartAsync(partsAvailable: null, temporaryAvailable: 1_000);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var destination = Path.Combine(_harness.WorkPath, "restored");
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, destination, Source: source.SourceId), _timeout.Token),
+            out var restored);
+
+        Assert.AreEqual("complete", restored.Outcome);
+        Assert.AreEqual(2, restored.Restored);
     }
 
     [TestMethod]
@@ -352,6 +427,38 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         Assert.IsInstanceOfType<SnapshotsResult>(
             await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
         return Assert.ContainsSingle(snapshots.Snapshots).SnapshotId;
+    }
+
+    /// <summary>
+    /// A service whose state directory, system temporary folder, vaults and
+    /// everything else are each a volume of their own, with what is free on
+    /// the first two given and the rest never short.
+    /// </summary>
+    private async Task<ServiceRuntime> StartApartAsync(long? partsAvailable, long? temporaryAvailable)
+    {
+        await _harness.SetupAsync();
+        var temporary = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
+        bool IsTemporary(string path) =>
+            string.Equals(Path.TrimEndingDirectorySeparator(path), temporary, StringComparison.Ordinal);
+        bool IsState(string path) => path.StartsWith(_harness.StateDirectory, StringComparison.Ordinal);
+
+        return await ServiceRuntime.StartAsync(
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+                VolumeIdentityOverride = path =>
+                    path.Contains("vault", StringComparison.Ordinal) ? 2UL
+                    : IsTemporary(path) ? 4UL
+                    : IsState(path) ? 3UL
+                    : 1UL,
+                AvailableBytesProbe = path =>
+                    path.Contains("vault", StringComparison.Ordinal) ? null
+                    : IsTemporary(path) ? temporaryAvailable
+                    : IsState(path) ? partsAvailable
+                    : null,
+            },
+            _timeout.Token);
     }
 
     private async Task<ServiceRuntime> StartAsync(long? availableBytes)
