@@ -27,11 +27,15 @@ The only reader was a lookup asked to fold case, and no product path asks it. Pu
 
 Schema 14's `tree_entries` keeps no fold of its path and no index on one. A path is held in the row's key and in the parent index, which a folder's listing reads.
 
+> **Amended 2026-10 ([ADR-0148](0148-a-tree-entry-is-keyed-by-its-folder-and-name.md)).** Schema 16 keeps neither the path nor the parent index. An entry is keyed by its folder and its name, and a folder's listing reads that key.
+
 ### 2. A lookup that folds walks the path
 
 A lookup asked to fold case takes the asked path a folder at a time. At each level it lists the children of every folder matched so far through the parent index, and keeps each child whose name folds as the asked component does. Two folders that fold alike are both followed, since only one may hold the rest. Of the paths it ends on, it takes the asked path itself where the snapshot holds it, and otherwise the first in ordinal order, as before.
 
 The fold is ADR-0026 §8's, applied to a component rather than a path. A separator neither composes nor changes case, so the two agree.
+
+> **Amended 2026-10 ([ADR-0148](0148-a-tree-entry-is-keyed-by-its-folder-and-name.md)).** Each folder is listed through the key, and each child's name is compared as it is kept.
 
 ## Consequences
 
@@ -55,3 +59,4 @@ The fold is ADR-0026 §8's, applied to a component rather than a path. A separat
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Catalogue schema 14 keeps no fold of a tree entry's path, and a lookup that folds case walks the path a folder at a time through the parent index. At scale M's shape tree_entries falls from 613 B/version to 379 and the catalogue from 1 607 to 1 373. NFR-PERF-011 is still not met. |
 | 2026-10 | Accepted | [ADR-0147](0147-a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it.md): a file version's row keeps only what is asked of it, and at scale M's shape the catalogue costs 1 183 B/version, not 1 373. |
+| 2026-10 | Accepted (amended) | [ADR-0148](0148-a-tree-entry-is-keyed-by-its-folder-and-name.md): a tree entry is keyed by its folder and name, and the walk lists each folder through that key rather than through a parent index. |

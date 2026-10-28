@@ -38,6 +38,20 @@ searches it directly — a 54× improvement, and the reason this wave
 measures instead of assuming. The schema version bump forces existing
 caches to rebuild; a cache is never migrated.
 
+> **2026-10, schema v16 ([ADR-0148](adr/0148-a-tree-entry-is-keyed-by-its-folder-and-name.md)).** `ix_tree_entries_parent`
+> is gone. A tree entry is keyed by its snapshot, folder and name, so a
+> folder's listing reads the key itself in name order, and a path is
+> looked up by its folder and name. These are three runs each, before
+> and after, at the same 100 000 files:
+>
+> - `LookupPath`: 35–41 µs/op before, and 37–47 after.
+> - `ListDirectory`: 345–417 µs/op before, and 309–426 after.
+> - `EnumerateLeaves`, a snapshot's leaves in path order and now measured
+>   too: 683–732 ms before, and 670–773 after. It now sorts what the key
+>   no longer orders.
+>
+> None of them changes beyond what this machine varies by between runs.
+
 Segmentation-profile dedup numbers live in
 [segmentation-benchmark.md](segmentation-benchmark.md); phase-0 engine
 numbers in [phase-0-benchmarks.md](phase-0-benchmarks.md).

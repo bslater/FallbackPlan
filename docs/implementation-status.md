@@ -172,6 +172,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0145](adr/0145-the-catalogue-keeps-no-map-from-content-to-object.md) | The catalogue keeps no map from content to object: schema 13 drops segment_dedup, which publication wrote and nothing read, so the catalogue falls from 2 001 B/version to 1 607 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository/SnapshotPublication` · `Repository.Tests/EndToEnd/StaleCatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0145--the-catalogue-keeps-no-map-from-content-to-object) |
 | [0146](adr/0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md) | The catalogue folds a path's case when asked, not when stored: schema 14 keeps no fold of a tree entry's path and no index on one, and a lookup that folds walks the path through the parent index, so tree_entries falls from 613 B/version to 379 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0146--the-catalogue-folds-a-paths-case-when-asked-not-when-stored) |
 | [0147](adr/0147-a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it.md) | A file version's catalogue row keeps only what is asked of it: schema 15 keeps no name, kind, whole-file hash, parent version or segment count, and no index on the hash, so file_versions falls from 345 B/version to 155 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0147--a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it) |
+| [0148](adr/0148-a-tree-entry-is-keyed-by-its-folder-and-name.md) | A tree entry is keyed by its folder and name: schema 16 keeps no path and no covering parent index, and a snapshot's leaves are sorted into path order, so tree_entries falls from 378 B/version to 138 and the floor, at 395, is inside the budget | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0148--a-tree-entry-is-keyed-by-its-folder-and-name) |
 
 ---
 
@@ -4030,3 +4031,18 @@ alternate-streams flag and metadata digest, and the identity index.
 
 What remains is recorded rather than done. The catalogue is still nearly
 three times its budget.
+
+### 0148 — a tree entry is keyed by its folder and name
+
+`tree_entries` kept each entry by snapshot and path, and again in
+`ix_tree_entries_parent`, a covering index that restated the whole row so
+that a folder's listing need not read the table. The path restated the
+folder beside it. At schema 16 an entry is keyed by its snapshot, its
+folder and its name. A listing reads the key in name order, and a path is
+rebuilt from its folder and name wherever a query returns one. A
+snapshot's leaves are sorted into path order, which the key no longer
+gives. `tree_entries` falls from 378 B/version to 138, the catalogue
+from 1 183 to 942, and the floor from 636 to 395, inside the budget.
+
+What remains is recorded rather than done. The catalogue is still more
+than twice its budget, and what is over it is the segment references.
