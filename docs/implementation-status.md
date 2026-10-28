@@ -166,6 +166,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0139](adr/0139-a-kept-restore-receipt-is-let-go.md) | A kept restore receipt is let go: restore-receipts with --run and --forget removes that run's receipt from the state directory and every other run's stays; what is refused removes nothing | **Built** | `Restore/RestoreExecutor` · `Cli/RestoreReceiptReport` · `Repository.Tests/RestoreReceiptReadBackTests` · `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0139--a-kept-restore-receipt-is-let-go) |
 | [0140](adr/0140-the-service-lets-a-kept-restore-receipt-go.md) | The service lets a kept restore receipt go: forget_restore_receipt at contract 1.79 lets one run's receipt go by its name, asked by restore-receipts with --connect and offered by the console once a person confirms | **Built** | `Agent/ServiceCommandHandler` · `Cli/RestoreReceiptReport` · `Api.Tests/ConfigurationContractTests` · `Hosts.Tests/RestoreReceiptsServiceTests` · `Cli.Tests/RestoreReceiptsVerbTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0140--the-service-lets-a-kept-restore-receipt-go) |
 | [0141](adr/0141-the-kept-restore-receipts-are-listed-as-json.md) | The kept restore receipts are listed as JSON: restore-receipts with --json writes each receipt as the service describes it, and how many are kept, from a state directory or a paired service alike | **Built** | `Cli/RestoreReceiptReport` · `Cli.Tests/RestoreReceiptsVerbTests` · `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0141--the-kept-restore-receipts-are-listed-as-json) |
+| [0142](adr/0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md) | The parts a restore in direct mode keeps are listed and let go: each run says beside its parts what it restores and where, restore-parts lists every destination left unfinished with what its parts hold, and --forget lets one go by its folder's name | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0142--the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go) |
 
 ---
 
@@ -3883,6 +3884,7 @@ finishes says nothing of a resume. No contract change.
 
 What remains is recorded rather than done. Nothing lists what each
 destination keeps, and a run the process does not see end says nothing.
+ADR-0142 took the listing up.
 
 ### 0138 — the working space is said as room to assemble files one at a time
 
@@ -3934,3 +3936,19 @@ same answer for the service's own state directory. No contract change.
 
 What remains is recorded rather than done. The listing gives each
 receipt's account, never the receipt whole.
+
+### 0142 — the parts a restore in direct mode keeps are listed and let go
+
+A run in direct mode that did not finish said, as it ended, how many
+bytes of the backup its destination's parts keep and where, and nothing
+said it after. Each run now writes beside its parts what it restores
+and where, naming none of the backup's files. `restore-parts --state`
+lists every folder of parts, newest first, by its name, with that
+account and what the parts hold, and `--forget <name>` lets one go and
+every other stay, the name checked before it reaches a path. The line a
+run that does not finish prints ends with that command. No contract
+change.
+
+What remains is recorded rather than done. Parts go one destination at
+a time, never by age, and a run under way in another process is listed
+as one left unfinished.
