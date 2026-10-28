@@ -17,7 +17,9 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// ADR-0010 Amendment 2 gives a cache. And that a catalogue it creates —
 /// new, or in place of one another schema wrote — says it needs rebuilding
 /// until a rebuild says otherwise (FR-MAN-002): a cache discarded is safe
-/// only while something fills it again.
+/// only while something fills it again. A location names its blob and its
+/// writer by numbers of the catalogue's own, and still ranks by the writer's
+/// id (NFR-PERF-011, ADR-0144).
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -120,6 +122,82 @@ public sealed class CatalogueTests : IDisposable
         catalogue.ApplyDelta(Delta(3), new IndexDelta { WriterId = Writer(3), Sequence = 1, Generation = 0 });
 
         Assert.AreEqual(5UL, catalogue.MaxIndexGeneration());
+    }
+
+    [TestMethod]
+    public void ResolveLocation_TwoWritersAtOneGeneration_RankByTheirIds_NotByWhichTheCatalogueMetFirst()
+    {
+        // The catalogue names a writer by a number of its own (ADR-0144),
+        // given in the order it meets them; 07 §3 ranks by the writer's id.
+        using var catalogue = Open();
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(0x90),
+            Sequence = 1,
+            Generation = 0,
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+        catalogue.ApplyDelta(Delta(2), new IndexDelta
+        {
+            WriterId = Writer(0x10),
+            Sequence = 1,
+            Generation = 0,
+            Entries = [new IndexEntry(Object(1), Blob(2), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        var winner = catalogue.ResolveLocation(Object(1))!;
+
+        Assert.AreEqual(Writer(0x90), winner.WriterId, "the higher id wins a tie, though the catalogue met it first");
+        Assert.AreEqual(Blob(1), winner.BlobId);
+    }
+
+    [TestMethod]
+    public void FindReuseCandidate_OfTwoWritersCopies_NamesTheWriterAReadResolvesTo()
+    {
+        using var catalogue = Open();
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(0x90),
+            Sequence = 1,
+            Generation = 0,
+            IndexGeneration = 1,
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+        catalogue.ApplyDelta(Delta(2), new IndexDelta
+        {
+            WriterId = Writer(0x10),
+            Sequence = 1,
+            Generation = 0,
+            IndexGeneration = 2,
+            Entries = [new IndexEntry(Object(1), Blob(2), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+        catalogue.RecordVerified(Object(1));
+
+        var candidate = catalogue.FindReuseCandidate(Object(1))!;
+
+        Assert.AreEqual(Writer(0x10), candidate.WriterId, "the later generation's writer, whose id sorts lower");
+        Assert.AreEqual(catalogue.ResolveLocation(Object(1))!.WriterId, candidate.WriterId);
+        Assert.IsTrue(candidate.Verified);
+    }
+
+    [TestMethod]
+    public void HasLocation_AnObjectWhoseOnlyLocationIsInADeletedBlob_HasNone()
+    {
+        using var catalogue = Open();
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+        Assert.IsTrue(catalogue.HasLocation(Object(1)));
+
+        catalogue.SetBlobState(Blob(1), BlobState.Deleted);
+
+        Assert.IsFalse(catalogue.HasLocation(Object(1)));
+        Assert.IsFalse(catalogue.HasLocationBy(Object(1), Writer(1)));
+        Assert.IsNull(catalogue.FindReuseCandidate(Object(1)));
     }
 
     [TestMethod]
