@@ -165,6 +165,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0138](adr/0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md) | The working space is said as room to assemble files one at a time: the refusal, the command line's plan and the console say so, since a resume's need is the most that remains of any one file | **Built** | `Restore/RestoreSpace` · `Cli/RestorePlanReport` · `Repository.Tests/RestoreSpaceTests` · `Cli.Tests/RestoreWithinAFileDirectTests` · `Web.DomTests/RestoreWizardDomTests` · [notes](#0138--the-working-space-is-said-as-room-to-assemble-files-one-at-a-time) |
 | [0139](adr/0139-a-kept-restore-receipt-is-let-go.md) | A kept restore receipt is let go: restore-receipts with --run and --forget removes that run's receipt from the state directory and every other run's stays; what is refused removes nothing | **Built** | `Restore/RestoreExecutor` · `Cli/RestoreReceiptReport` · `Repository.Tests/RestoreReceiptReadBackTests` · `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0139--a-kept-restore-receipt-is-let-go) |
 | [0140](adr/0140-the-service-lets-a-kept-restore-receipt-go.md) | The service lets a kept restore receipt go: forget_restore_receipt at contract 1.79 lets one run's receipt go by its name, asked by restore-receipts with --connect and offered by the console once a person confirms | **Built** | `Agent/ServiceCommandHandler` · `Cli/RestoreReceiptReport` · `Api.Tests/ConfigurationContractTests` · `Hosts.Tests/RestoreReceiptsServiceTests` · `Cli.Tests/RestoreReceiptsVerbTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0140--the-service-lets-a-kept-restore-receipt-go) |
+| [0141](adr/0141-the-kept-restore-receipts-are-listed-as-json.md) | The kept restore receipts are listed as JSON: restore-receipts with --json writes each receipt as the service describes it, and how many are kept, from a state directory or a paired service alike | **Built** | `Cli/RestoreReceiptReport` · `Cli.Tests/RestoreReceiptsVerbTests` · `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0141--the-kept-restore-receipts-are-listed-as-json) |
 
 ---
 
@@ -3920,3 +3921,16 @@ it go once a person confirms and asking the list again.
 
 What remains is recorded rather than done. Receipts still go one run at a
 time, never by age.
+
+### 0141 — the kept restore receipts are listed as JSON
+
+`restore-receipts` listed the receipts in words and printed one whole as
+JSON, so a script that wanted them all read the folder file by file. With
+`--json` it now writes one document: each receipt as the service describes
+it (contract 1.73) and how many are kept, from the state directory or a
+paired service alike, under `--limit`. The command line describes a
+folder's receipt as the service does, and a test holds the two to the
+same answer for the service's own state directory. No contract change.
+
+What remains is recorded rather than done. The listing gives each
+receipt's account, never the receipt whole.

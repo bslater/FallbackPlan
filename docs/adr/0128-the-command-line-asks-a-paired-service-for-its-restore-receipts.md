@@ -66,3 +66,4 @@ A name that is not a run's, and a limit below one, are refused before the servic
 | 2026-10 | Accepted | Built in one slice, tests first. `restore-receipts --connect` lists the receipts a paired service keeps, as a state directory's are listed, and with `--run` the files that run did not restore, through a source of the set its receipt records that the passphrase unlocks, closed after. No contract change. |
 | 2026-10 | Accepted | [ADR-0139](0139-a-kept-restore-receipt-is-let-go.md): --forget lets a receipt go from a state directory only, and is refused with --connect before the service is dialled. |
 | 2026-10 | Accepted | [ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md): with --connect, --run and --forget ask the paired service to let that run's receipt go. |
+| 2026-10 | Accepted | [ADR-0141](0141-the-kept-restore-receipts-are-listed-as-json.md): with --connect and --json, the paired service's receipts are listed as JSON as it answers them. |

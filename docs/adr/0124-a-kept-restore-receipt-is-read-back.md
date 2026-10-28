@@ -52,6 +52,8 @@ A name that is not a run's is refused before it is joined to a path, as the serv
 - **Read the receipts through the service.** The verb reads the state directory itself, as `receipts` does. A console on another machine still sees a run's receipt only in that run's result.
   > **2026-10 ([ADR-0125](0125-the-service-lists-the-restore-receipts-it-keeps.md)).** The service answers them, as what became of each run's files and where it wrote them, and the console shows them in its Maintenance view.
 - **List them as JSON.** `--run` prints one receipt as JSON, as it was kept, and a script that wants them all reads the folder.
+
+  > **2026-10 ([ADR-0141](0141-the-kept-restore-receipts-are-listed-as-json.md)).** `--json` lists them now, each as the service answers it, from the folder and through a paired service alike.
 - **Let receipts go.** Every receipt kept stays until a person removes it.
 
   > **2026-10 ([ADR-0139](0139-a-kept-restore-receipt-is-let-go.md)).** `restore-receipts --run <run> --forget` lets one run's receipt go from the state directory, and every other run's stays.
@@ -70,3 +72,4 @@ A name that is not a run's is refused before it is joined to a path, as the serv
 | 2026-10 | Accepted | [ADR-0128](0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md): with `--connect`, `restore-receipts` asks a paired service for the receipts it keeps, and `--state` names the console's own state; without it, the verb reads the folder as this record decided. |
 | 2026-10 | Accepted | [ADR-0134](0134-the-kept-receipts-say-which-files-were-resumed-within.md): each run listed counts its files resumed within beside those found in place. |
 | 2026-10 | Accepted | [ADR-0139](0139-a-kept-restore-receipt-is-let-go.md): the verb lets one run's kept receipt go by the run's name, from the state directory it reads. |
+| 2026-10 | Accepted | [ADR-0141](0141-the-kept-restore-receipts-are-listed-as-json.md): the verb lists the receipts kept as JSON with --json, each as the service describes it. |
