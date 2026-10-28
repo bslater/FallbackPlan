@@ -633,7 +633,7 @@ public sealed class Catalogue : IDisposable
     public IReadOnlyList<BlobId> LocatedBlobs()
     {
         using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT DISTINCT blob_id FROM object_locations;";
+        command.CommandText = "SELECT n.blob_id FROM location_blobs n WHERE EXISTS (SELECT 1 FROM object_locations l WHERE l.blob_ref = n.blob_ref);";
 
         var blobs = new List<BlobId>();
         using var reader = command.ExecuteReader();
@@ -729,7 +729,7 @@ public sealed class Catalogue : IDisposable
     private List<ObjectId> ObjectsLocatedIn(BlobId blob)
     {
         using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT DISTINCT object_id FROM object_locations WHERE blob_id = $blob;";
+        command.CommandText = "SELECT DISTINCT object_id FROM located WHERE blob_id = $blob;";
         command.Parameters.AddWithValue("$blob", blob.ToArray());
 
         var objects = new List<ObjectId>();
@@ -1166,7 +1166,7 @@ public sealed class Catalogue : IDisposable
         {
             bound.CommandText = """
                 SELECT MIN(l.sequence) FROM snapshots s
-                JOIN object_locations l ON l.object_id = s.object_id
+                JOIN located l ON l.object_id = s.object_id
                 WHERE l.writer_id = $writer AND l.sequence > $synced;
                 """;
             bound.Parameters.AddWithValue("$writer", writer.ToArray());
@@ -1181,7 +1181,7 @@ public sealed class Catalogue : IDisposable
                 JOIN version_contents c ON c.version_id = t.object_id
                 WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory
                   AND NOT EXISTS (
-                      SELECT 1 FROM object_locations l
+                      SELECT 1 FROM located l
                       LEFT JOIN blobs b ON b.blob_id = l.blob_id
                       WHERE l.object_id = c.object_id
                         AND COALESCE(b.state, 1) <> 3
@@ -1197,7 +1197,7 @@ public sealed class Catalogue : IDisposable
         record.CommandText = """
             SELECT EXISTS (
                 SELECT 1 FROM snapshots s
-                JOIN object_locations l ON l.object_id = s.object_id
+                JOIN located l ON l.object_id = s.object_id
                 WHERE s.snapshot_id = $snapshot AND (l.writer_id <> $writer OR l.sequence <= $through));
             """;
         record.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
@@ -1223,7 +1223,7 @@ public sealed class Catalogue : IDisposable
                    l.generation, l.writer_id, l.sequence
             FROM tree_entries t
             JOIN version_contents c ON c.version_id = t.object_id
-            JOIN object_locations l ON l.object_id = c.object_id
+            JOIN located l ON l.object_id = c.object_id
             LEFT JOIN blobs b ON b.blob_id = l.blob_id
             WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory AND COALESCE(b.state, 1) <> 3;
             """;
@@ -1295,12 +1295,24 @@ public sealed class Catalogue : IDisposable
         static bool Outranks(
             (ContentBlob Blob, ulong Generation, byte[] Writer, ulong Sequence) candidate,
             (ContentBlob Blob, ulong Generation, byte[] Writer, ulong Sequence) standing) =>
-            candidate.Generation != standing.Generation
-                ? candidate.Generation > standing.Generation
-                : candidate.Writer.AsSpan().SequenceCompareTo(standing.Writer) is var order && order != 0
-                    ? order > 0
-                    : candidate.Sequence > standing.Sequence;
+            Catalogue.Outranks(
+                (candidate.Generation, candidate.Writer, candidate.Sequence),
+                (standing.Generation, standing.Writer, standing.Sequence));
     }
+
+    /// <summary>
+    /// Whether one location outranks another by 07 §3's order: the later
+    /// generation, then the writer whose id sorts higher, then the later
+    /// sequence.
+    /// </summary>
+    private static bool Outranks(
+        (ulong Generation, byte[] Writer, ulong Sequence) candidate,
+        (ulong Generation, byte[] Writer, ulong Sequence) standing) =>
+        candidate.Generation != standing.Generation
+            ? candidate.Generation > standing.Generation
+            : candidate.Writer.AsSpan().SequenceCompareTo(standing.Writer) is var order && order != 0
+                ? order > 0
+                : candidate.Sequence > standing.Sequence;
 
     private static CatalogueTreeEntry ReadTreeEntry(SqliteDataReader reader) => new(
         reader.GetString(0),
@@ -1450,7 +1462,8 @@ public sealed class Catalogue : IDisposable
         command.CommandText = """
             SELECT EXISTS (
                 SELECT 1 FROM object_locations l
-                LEFT JOIN blobs b ON b.blob_id = l.blob_id
+                JOIN location_blobs n ON n.blob_ref = l.blob_ref
+                LEFT JOIN blobs b ON b.blob_id = n.blob_id
                 WHERE l.object_id = $object AND COALESCE(b.state, 1) <> 3
             );
             """;
@@ -1477,8 +1490,11 @@ public sealed class Catalogue : IDisposable
         command.CommandText = """
             SELECT EXISTS (
                 SELECT 1 FROM object_locations l
-                LEFT JOIN blobs b ON b.blob_id = l.blob_id
-                WHERE l.object_id = $object AND l.writer_id = $writer AND COALESCE(b.state, 1) <> 3
+                JOIN location_blobs n ON n.blob_ref = l.blob_ref
+                LEFT JOIN blobs b ON b.blob_id = n.blob_id
+                WHERE l.object_id = $object
+                  AND l.writer_ref = (SELECT writer_ref FROM location_writers WHERE writer_id = $writer)
+                  AND COALESCE(b.state, 1) <> 3
             );
             """;
         command.Parameters.AddWithValue("$object", objectId.ToArray());
@@ -1506,20 +1522,29 @@ public sealed class Catalogue : IDisposable
         var started = Stopwatch.GetTimestamp();
         using var command = _connection.CreateCommand();
         command.CommandText = """
-            SELECT l.writer_id,
+            SELECT l.generation, (SELECT writer_id FROM location_writers WHERE writer_ref = l.writer_ref), l.sequence,
                    EXISTS (SELECT 1 FROM verified_objects v WHERE v.object_id = l.object_id)
             FROM object_locations l
-            LEFT JOIN blobs b ON b.blob_id = l.blob_id
-            WHERE l.object_id = $object AND COALESCE(b.state, 1) <> 3
-            ORDER BY l.generation DESC, l.writer_id DESC, l.sequence DESC
-            LIMIT 1;
+            JOIN location_blobs n ON n.blob_ref = l.blob_ref
+            LEFT JOIN blobs b ON b.blob_id = n.blob_id
+            WHERE l.object_id = $object AND COALESCE(b.state, 1) <> 3;
             """;
         command.Parameters.AddWithValue("$object", objectId.ToArray());
 
+        // Ranked here, by the 07 §3 order: an ORDER BY on the writer's id,
+        // which a location holds by number, sorts on every lookup.
+        ReuseCandidate? candidate = null;
+        (ulong Generation, byte[] Writer, ulong Sequence) standing = default;
         using var reader = command.ExecuteReader();
-        var candidate = reader.Read()
-            ? new ReuseCandidate(WriterId.FromBytes((byte[])reader.GetValue(0)), reader.GetInt64(1) > 0)
-            : null;
+        while (reader.Read())
+        {
+            var rank = (Generation: (ulong)reader.GetInt64(0), Writer: (byte[])reader.GetValue(1), Sequence: (ulong)reader.GetInt64(2));
+            if (candidate is null || Outranks(rank, standing))
+            {
+                standing = rank;
+                candidate = new ReuseCandidate(WriterId.FromBytes(rank.Writer), reader.GetInt64(3) > 0);
+            }
+        }
 
         EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
         return candidate;
@@ -1578,35 +1603,44 @@ public sealed class Catalogue : IDisposable
     {
         using var command = _connection.CreateCommand();
         command.CommandText = $"""
-            SELECT l.blob_id,
+            SELECT n.blob_id,
                    CASE WHEN b.store_blob_key = b.blob_id THEN NULL ELSE b.store_blob_key END,
                    l.physical_offset, l.stored_length,
-                   l.compression_profile, l.encryption_profile, l.generation, l.writer_id, l.sequence
+                   l.compression_profile, l.encryption_profile, l.generation,
+                   (SELECT writer_id FROM location_writers WHERE writer_ref = l.writer_ref), l.sequence
             FROM object_locations l
-            LEFT JOIN blobs b ON b.blob_id = l.blob_id
+            JOIN location_blobs n ON n.blob_ref = l.blob_ref
+            LEFT JOIN blobs b ON b.blob_id = n.blob_id
             WHERE l.object_id = $object
-            {(excludeDeleted ? "AND COALESCE(b.state, 1) <> 3" : string.Empty)}
-            ORDER BY l.generation DESC, l.writer_id DESC, l.sequence DESC
-            LIMIT 1;
+            {(excludeDeleted ? "AND COALESCE(b.state, 1) <> 3" : string.Empty)};
             """;
         command.Parameters.AddWithValue("$object", objectId.ToArray());
 
+        // Ranked here, by the 07 §3 order: an ORDER BY on the writer's id,
+        // which a location holds by number, sorts on every lookup.
+        ResolvedLocation? winner = null;
+        (ulong Generation, byte[] Writer, ulong Sequence) standing = default;
         using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        while (reader.Read())
         {
-            return null;
+            var rank = (Generation: (ulong)reader.GetInt64(6), Writer: (byte[])reader.GetValue(7), Sequence: (ulong)reader.GetInt64(8));
+            if (winner is null || Outranks(rank, standing))
+            {
+                standing = rank;
+                winner = new ResolvedLocation(
+                    BlobId.FromBytes((byte[])reader.GetValue(0)),
+                    reader.IsDBNull(1) ? null : StoreBlobKey.FromBytes((byte[])reader.GetValue(1)),
+                    (ulong)reader.GetInt64(2),
+                    (uint)reader.GetInt64(3),
+                    (ushort)reader.GetInt64(4),
+                    (ushort)reader.GetInt64(5),
+                    rank.Generation,
+                    WriterId.FromBytes(rank.Writer),
+                    rank.Sequence);
+            }
         }
 
-        return new ResolvedLocation(
-            BlobId.FromBytes((byte[])reader.GetValue(0)),
-            reader.IsDBNull(1) ? null : StoreBlobKey.FromBytes((byte[])reader.GetValue(1)),
-            (ulong)reader.GetInt64(2),
-            (uint)reader.GetInt64(3),
-            (ushort)reader.GetInt64(4),
-            (ushort)reader.GetInt64(5),
-            (ulong)reader.GetInt64(6),
-            WriterId.FromBytes((byte[])reader.GetValue(7)),
-            (ulong)reader.GetInt64(8));
+        return winner;
     }
 
     private void InsertLocation(
@@ -1619,10 +1653,14 @@ public sealed class Catalogue : IDisposable
         using var command = _connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
+            INSERT OR IGNORE INTO location_blobs (blob_id) VALUES ($blob);
+            INSERT OR IGNORE INTO location_writers (writer_id) VALUES ($writer);
             INSERT OR IGNORE INTO object_locations
-                (object_id, blob_id, physical_offset, stored_length, compression_profile,
-                 encryption_profile, entry_type, generation, writer_id, sequence)
-            VALUES ($object, $blob, $offset, $stored, $compression, $encryption, $type, $generation, $writer, $sequence);
+                (object_id, blob_ref, physical_offset, stored_length, compression_profile,
+                 encryption_profile, entry_type, generation, writer_ref, sequence)
+            VALUES ($object, (SELECT blob_ref FROM location_blobs WHERE blob_id = $blob), $offset, $stored,
+                    $compression, $encryption, $type, $generation,
+                    (SELECT writer_ref FROM location_writers WHERE writer_id = $writer), $sequence);
             """;
         command.Parameters.AddWithValue("$object", entry.ObjectId.ToArray());
         command.Parameters.AddWithValue("$blob", entry.BlobId.ToArray());

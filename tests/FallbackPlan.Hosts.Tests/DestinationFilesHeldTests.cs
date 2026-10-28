@@ -234,7 +234,7 @@ public sealed class DestinationFilesHeldTests : IDisposable
             using var corrupt = connection.CreateCommand();
             corrupt.CommandText = """
                 UPDATE blobs SET store_blob_key = x'01'
-                WHERE blob_id IN (SELECT l.blob_id FROM object_locations l
+                WHERE blob_id IN (SELECT l.blob_id FROM located l
                                   JOIN version_contents c ON c.object_id = l.object_id LIMIT 1);
                 """;
             Assert.AreEqual(1, corrupt.ExecuteNonQuery(), "the corruption must land, or the test proves nothing");

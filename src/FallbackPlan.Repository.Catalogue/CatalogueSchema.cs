@@ -81,8 +81,16 @@ public static class CatalogueSchema
     /// identity derives from, so without the prior value a capture cannot
     /// rebuild the prior identity, and every folder it read was written anew.
     /// </para>
+    /// <para>
+    /// v12 over v11: <c>object_locations</c> names its blob and its writer by
+    /// numbers of the catalogue's own, from <c>location_blobs</c> and
+    /// <c>location_writers</c>, and <c>located</c> reads each location by
+    /// their ids again (NFR-PERF-011, ADR-0144). Each is sixteen bytes, and a
+    /// location stated both twice, once in the row and once in the blob
+    /// index, which holds the row's key.
+    /// </para>
     /// </remarks>
-    public const int Version = 11;
+    public const int Version = 12;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -103,21 +111,41 @@ public static class CatalogueSchema
             state          INTEGER NOT NULL DEFAULT 1
         ) WITHOUT ROWID;
 
+        -- The blobs and writers a location names, each by a number given in
+        -- the order the catalogue meets it. A number ranks nothing: 07 §3
+        -- ranks by the writer's id, which `located` reads back.
+        CREATE TABLE location_blobs (
+            blob_ref INTEGER PRIMARY KEY,
+            blob_id  BLOB NOT NULL UNIQUE
+        );
+
+        CREATE TABLE location_writers (
+            writer_ref INTEGER PRIMARY KEY,
+            writer_id  BLOB NOT NULL UNIQUE
+        );
+
         CREATE TABLE object_locations (
             object_id           BLOB NOT NULL,
-            blob_id             BLOB NOT NULL,
+            blob_ref            INTEGER NOT NULL,
             physical_offset     INTEGER NOT NULL,
             stored_length       INTEGER NOT NULL,
             compression_profile INTEGER NOT NULL,
             encryption_profile  INTEGER NOT NULL,
             entry_type          INTEGER NOT NULL,
             generation          INTEGER NOT NULL,
-            writer_id           BLOB NOT NULL,
+            writer_ref          INTEGER NOT NULL,
             sequence            INTEGER NOT NULL,
-            PRIMARY KEY (object_id, generation, writer_id, sequence, blob_id)
+            PRIMARY KEY (object_id, generation, writer_ref, sequence, blob_ref)
         ) WITHOUT ROWID;
 
-        CREATE INDEX ix_locations_blob ON object_locations (blob_id);
+        CREATE INDEX ix_locations_blob ON object_locations (blob_ref);
+
+        CREATE VIEW located AS
+            SELECT l.object_id, n.blob_id, l.physical_offset, l.stored_length, l.compression_profile,
+                   l.encryption_profile, l.entry_type, l.generation, w.writer_id, l.sequence
+            FROM object_locations l
+            JOIN location_blobs n ON n.blob_ref = l.blob_ref
+            JOIN location_writers w ON w.writer_ref = l.writer_ref;
 
         CREATE TABLE index_deltas (
             delta_id             BLOB PRIMARY KEY,

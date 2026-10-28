@@ -168,6 +168,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0141](adr/0141-the-kept-restore-receipts-are-listed-as-json.md) | The kept restore receipts are listed as JSON: restore-receipts with --json writes each receipt as the service describes it, and how many are kept, from a state directory or a paired service alike | **Built** | `Cli/RestoreReceiptReport` · `Cli.Tests/RestoreReceiptsVerbTests` · `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0141--the-kept-restore-receipts-are-listed-as-json) |
 | [0142](adr/0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md) | The parts a restore in direct mode keeps are listed and let go: each run says beside its parts what it restores and where, restore-parts lists every destination left unfinished with what its parts hold, and --forget lets one go by its folder's name | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0142--the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go) |
 | [0143](adr/0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md) | A destination takes one restore in direct mode at a time: a run holds its folder of parts while it runs, a second run there is refused, and restore-parts says a run is under way there and lets none of its parts go | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0143--a-destination-takes-one-restore-in-direct-mode-at-a-time) |
+| [0144](adr/0144-the-catalogue-names-a-locations-blob-and-writer-by-number.md) | The catalogue names a location's blob and writer by number: schema 12 states each sixteen-byte id once, in a table of its own, and reads it back through a view, so the locations plane falls from 1 137 B/version to 662 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueSizeTests` · `Repository.Tests/Catalogue/CatalogueTests` · [notes](#0144--the-catalogue-names-a-locations-blob-and-writer-by-number) |
 
 ---
 
@@ -3968,3 +3969,18 @@ contract change.
 
 What remains is recorded rather than done. A run to a path inside
 another run's destination is a destination of its own, as it was.
+
+### 0144 — the catalogue names a location's blob and writer by number
+
+NFR-PERF-011 asks at most 400 B of catalogue per file version, and the
+catalogue cost 2 477 at scale M's shape. Its largest plane was the
+locations, which stated each location's sixteen-byte blob and writer ids
+twice, once in the row and once in the blob index. At schema 12 each
+blob and writer is given a number the first time a location names it,
+the location holds the numbers, and every query reads the ids back
+through the `located` view, ranking by the writer's id as before. The
+locations plane falls to 662 B/version and the catalogue to 2 001. A
+catalogue of an older schema is rebuilt on its first open.
+
+What remains is recorded rather than done. The catalogue is still five
+times its budget; `tree_entries` is now its largest plane.
