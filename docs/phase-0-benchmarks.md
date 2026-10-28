@@ -186,6 +186,27 @@ the total is broken out. The two segment planes are 62% of the cost, at
 256 KiB targets"*. That was written as a caveat on a segmentation decision;
 it turns out to be the main term.
 
+> **Re-measured 2026-10 ([ADR-0144](adr/0144-the-catalogue-names-a-locations-blob-and-writer-by-number.md)).** A location names its blob
+> and its writer by a number of the catalogue's own, so neither sixteen-byte
+> id is stated twice in each location. At 20 000 versions, the schema before
+> and after:
+>
+> | Planes held | Before | After |
+> |---|---:|---:|
+> | `file_versions` and its two indexes | 345 | 346 |
+> | `tree_entries` and its two indexes | 612 | 613 |
+> | `object_locations` and `ix_locations_blob` | 1 137 | 662 |
+> | `segment_dedup` | 399 | 400 |
+> | **all four, at scale M's shape** | **2 477** | **2 001** |
+> | **the floor — no segments at all** | **1 129** | **1 052** |
+>
+> The budget is missed by 5.0× now, not 6.3×. The other planes are as they
+> were, and `tree_entries`, which holds each path in its row and both its
+> indexes, is now the largest. A lookup of one object costs what it did:
+> `ResolveLocation` measured 61 µs against 65 before on the same machine,
+> since such a lookup ranks the object's locations itself rather than
+> sorting by the writer's id in the query.
+
 Every segment reference here is a **distinct** object, which is the no-dedup
 upper bound on `object_locations`; a corpus with cross-version dedup holds
 fewer rows there for the same reference count. The floor is unaffected by
