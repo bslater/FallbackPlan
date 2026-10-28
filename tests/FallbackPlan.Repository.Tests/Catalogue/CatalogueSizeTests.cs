@@ -49,21 +49,21 @@ public sealed class CatalogueSizeTests
     {
         var perVersion = CatalogueSeeding.MeasureBytes(Versions) / (double)Versions;
 
-        // Measured 1 640 B/version here, and 1 607 at 20 000 versions,
-        // since the catalogue keeps no map from content to object
-        // (ADR-0145); 2 036 and 2 001 before it, and 2 520 and 2 477 before
-        // a location named its blob and writer by number (ADR-0144). This is the headline figure rather than the
+        // Measured 1 404 B/version here, and 1 373 at 20 000 versions, since
+        // a path's case is folded when a lookup asks and not stored
+        // (ADR-0146); 2 520 and 2 477 before the catalogue's schema was
+        // first measured against its budget (ADR-0144, ADR-0145). This is the headline figure rather than the
         // regression guard: a whole added column moves it by only about 4%,
         // which is inside any band a different page size or fill factor
         // could also move it by. What guards the schema is the per-plane
         // case below, where the same change shows up five times as large.
-        Assert.IsGreaterThan(1_440, perVersion, $"{perVersion:F0} B/version");
-        Assert.IsLessThan(1_840, perVersion, $"{perVersion:F0} B/version");
+        Assert.IsGreaterThan(1_235, perVersion, $"{perVersion:F0} B/version");
+        Assert.IsLessThan(1_575, perVersion, $"{perVersion:F0} B/version");
     }
 
     [TestMethod]
     [DataRow(CataloguePlanes.FileVersions, 330, 420, DisplayName = "file_versions and its two indexes")]
-    [DataRow(CataloguePlanes.TreeEntries, 565, 720, DisplayName = "tree_entries and its two indexes")]
+    [DataRow(CataloguePlanes.TreeEntries, 365, 465, DisplayName = "tree_entries and its parent index")]
     [DataRow(CataloguePlanes.Locations, 605, 775, DisplayName = "object_locations and ix_locations_blob")]
     public void EachPlaneCostsWhatItsRowsAndIndexesCost(CataloguePlanes plane, int floor, int ceiling)
     {
@@ -88,8 +88,8 @@ public sealed class CatalogueSizeTests
         // a catalogue anybody could restore from.
         var floor = CatalogueSeeding.MeasureBytes(Versions, segmentsPerVersion: 0) / (double)Versions;
 
-        Assert.IsGreaterThan(965, floor, $"{floor:F0} B/version");
-        Assert.IsLessThan(1_230, floor, $"{floor:F0} B/version");
+        Assert.IsGreaterThan(755, floor, $"{floor:F0} B/version");
+        Assert.IsLessThan(965, floor, $"{floor:F0} B/version");
 
         // Stated as an assertion rather than left in prose: the budget is
         // unreachable before a single segment exists, so it is the target

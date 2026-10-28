@@ -220,6 +220,12 @@ it turns out to be the main term.
 > in all**, against 2 001 with it; the floor is unchanged at 1 052. The
 > budget is missed by 4.0×.
 
+> **Re-measured 2026-10 ([ADR-0146](adr/0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md)).** A tree entry keeps no
+> fold of its path and no index on one. At 20 000 versions `tree_entries`
+> costs 379 B/version, against 613, and the catalogue **1 373 in all**,
+> with the floor at 818. The budget is missed by 3.4×. `object_locations`,
+> at 661, is the largest plane again.
+
 Every segment reference here is a **distinct** object, which is the no-dedup
 upper bound on `object_locations`; a corpus with cross-version dedup holds
 fewer rows there for the same reference count. The floor is unaffected by

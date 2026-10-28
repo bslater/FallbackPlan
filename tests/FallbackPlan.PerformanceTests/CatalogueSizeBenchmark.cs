@@ -33,7 +33,7 @@ public static class CatalogueSizeBenchmark
         Console.WriteLine("|---|---:|---:|");
 
         Report("`file_versions` and its two indexes", versions, CataloguePlanes.FileVersions);
-        Report("`tree_entries` and its two indexes", versions, CataloguePlanes.TreeEntries);
+        Report("`tree_entries` and its parent index", versions, CataloguePlanes.TreeEntries);
         Report("`object_locations` and `ix_locations_blob`", versions, CataloguePlanes.Locations);
         Report("**all three, scale M's shape**", versions, CataloguePlanes.All);
         Report("**the floor — no segments at all**", versions, CataloguePlanes.All, segmentsPerVersion: 0);

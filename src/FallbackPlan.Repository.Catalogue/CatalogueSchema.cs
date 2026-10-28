@@ -96,8 +96,15 @@ public static class CatalogueSchema
     /// identifier is keyed into, through <c>object_locations</c>
     /// (NFR-PERF-011, ADR-0145).
     /// </para>
+    /// <para>
+    /// v14 over v13: no <c>tree_entries.path_casefold</c> or its index. Each
+    /// tree entry stated its path folded once in the row and again in the
+    /// index, for a lookup that folds case, which now takes the fold a folder
+    /// at a time through <c>ix_tree_entries_parent</c> when it is asked
+    /// (NFR-PERF-011, ADR-0146).
+    /// </para>
     /// </remarks>
-    public const int Version = 13;
+    public const int Version = 14;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -220,15 +227,12 @@ public static class CatalogueSchema
             snapshot_id   BLOB NOT NULL,
             path          TEXT NOT NULL,
             parent        TEXT NOT NULL,
-            path_casefold TEXT NOT NULL,
             entry_kind    INTEGER NOT NULL,
             object_id     BLOB NOT NULL,
             PRIMARY KEY (snapshot_id, path)
         ) WITHOUT ROWID;
 
         CREATE INDEX ix_tree_entries_parent ON tree_entries (snapshot_id, parent, path, entry_kind, object_id);
-
-        CREATE INDEX ix_tree_entries_casefold ON tree_entries (snapshot_id, path_casefold);
 
         -- The access time a folder's head tree states, keyed by the tree: the
         -- identity derives from the bytes, so one tree states one access time
