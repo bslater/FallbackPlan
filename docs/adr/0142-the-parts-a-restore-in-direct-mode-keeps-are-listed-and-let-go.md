@@ -54,6 +54,8 @@ A run there that does not finish says the command that lets its parts go, after 
 
 - **Resume by the name.** The listing says what each run restored and where. The resume is that restore again with `--resume`, naming the same paths, which the listing does not give because they are the backup's file names.
 - **Tell a run under way from one left unfinished.** Direct mode keeps no lock on a destination. A run in another process is listed too, and letting its parts go while it runs costs it what it had assembled.
+
+  > **2026-10 ([ADR-0143](0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md)).** A run holds its folder while it runs. The listing says a run is under way there, and `--forget` lets none of its parts go.
 - **Sweep folders by age.** One destination at a time, by its name.
 
 ## Alternatives considered
@@ -66,3 +68,4 @@ A run there that does not finish says the command that lets its parts go, after 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A run in direct mode says beside its parts what it restores and where; restore-parts lists each destination left unfinished, newest first, with what its parts hold, and lets one go by its folder's name; a run that does not finish says how. No contract change. |
+| 2026-10 | Accepted | [ADR-0143](0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md): a destination with a run under way is listed as such, and --forget refuses it. |

@@ -167,6 +167,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0140](adr/0140-the-service-lets-a-kept-restore-receipt-go.md) | The service lets a kept restore receipt go: forget_restore_receipt at contract 1.79 lets one run's receipt go by its name, asked by restore-receipts with --connect and offered by the console once a person confirms | **Built** | `Agent/ServiceCommandHandler` · `Cli/RestoreReceiptReport` · `Api.Tests/ConfigurationContractTests` · `Hosts.Tests/RestoreReceiptsServiceTests` · `Cli.Tests/RestoreReceiptsVerbTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0140--the-service-lets-a-kept-restore-receipt-go) |
 | [0141](adr/0141-the-kept-restore-receipts-are-listed-as-json.md) | The kept restore receipts are listed as JSON: restore-receipts with --json writes each receipt as the service describes it, and how many are kept, from a state directory or a paired service alike | **Built** | `Cli/RestoreReceiptReport` · `Cli.Tests/RestoreReceiptsVerbTests` · `Hosts.Tests/RestoreReceiptsServiceTests` · [notes](#0141--the-kept-restore-receipts-are-listed-as-json) |
 | [0142](adr/0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md) | The parts a restore in direct mode keeps are listed and let go: each run says beside its parts what it restores and where, restore-parts lists every destination left unfinished with what its parts hold, and --forget lets one go by its folder's name | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0142--the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go) |
+| [0143](adr/0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md) | A destination takes one restore in direct mode at a time: a run holds its folder of parts while it runs, a second run there is refused, and restore-parts says a run is under way there and lets none of its parts go | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0143--a-destination-takes-one-restore-in-direct-mode-at-a-time) |
 
 ---
 
@@ -3951,4 +3952,19 @@ change.
 
 What remains is recorded rather than done. Parts go one destination at
 a time, never by age, and a run under way in another process is listed
-as one left unfinished.
+as one left unfinished. ADR-0143 tells the two apart.
+
+### 0143 — a destination takes one restore in direct mode at a time
+
+Two runs in direct mode to one destination shared its folder of parts,
+and one could let go of what the other was assembling; `restore-parts`
+could not tell a run under way from one left unfinished. A run now holds
+its folder, by an operating-system lock on a file in it, from before it
+writes its record until it ends, however it ends. A second run there is
+refused before it writes anything. The listing says a run is under way
+where one holds the folder, and `--forget` refuses it. The lock goes with
+the process, so a run the machine cut short leaves its folder free. No
+contract change.
+
+What remains is recorded rather than done. A run to a path inside
+another run's destination is a destination of its own, as it was.

@@ -48,6 +48,8 @@ A resume to the same place takes each part up as far as it proves, by the rule t
 
   > **2026-10 ([ADR-0142](0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md)).** `restore-parts --forget` lets one destination's parts go by its folder's name. Nothing sweeps them by age.
 - **Keep two runs at once to one destination apart.** They share its parts, as they share the files they write.
+
+  > **2026-10 ([ADR-0143](0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md)).** A run holds its destination's folder while it runs, and a second run there is refused before it writes anything.
 - **List what a destination holds,** as a run left unfinished does through the service ([ADR-0133](0133-a-run-left-unfinished-says-what-its-parts-hold.md)). Direct mode lists no runs.
 
   > **2026-10 ([ADR-0137](0137-a-run-in-direct-mode-left-unfinished-says-how-to-resume-it.md)).** A run there that does not finish says it as it ends: how many bytes its destination's parts keep, and where. Nothing lists them after.
@@ -67,3 +69,4 @@ A resume to the same place takes each part up as far as it proves, by the rule t
 | 2026-10 | Accepted | [ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md): a resume in direct mode needs working space only for what its destination's parts do not yet hold of each file. |
 | 2026-10 | Accepted | [ADR-0137](0137-a-run-in-direct-mode-left-unfinished-says-how-to-resume-it.md): a run in direct mode that does not finish says how to resume it, and what its destination's parts keep and where. |
 | 2026-10 | Accepted | [ADR-0142](0142-the-parts-a-restore-in-direct-mode-keeps-are-listed-and-let-go.md): restore-parts lists each destination left unfinished, from a record each run keeps beside its parts, and lets one go by its folder's name. |
+| 2026-10 | Accepted | [ADR-0143](0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md): a run holds its destination's folder of parts while it runs, so a second run there is refused. |
