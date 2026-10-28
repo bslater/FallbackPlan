@@ -49,6 +49,8 @@ A quarantined run lands in a directory of its own, where nothing is in the way.
 
 The needs are summed per volume. Two folders on one volume share its free space, so the slices of an original-location restore are measured together, or each would fit and both would not. The engine's working directory joins the volume it shares, or is a need of its own when it shares none, labelled as working space. A directory not yet created is asked about at its nearest existing ancestor. The service asks volume identity through the probe placement uses ([ADR-0051](0051-local-destination-placement.md)), so the two agree on what shares a drive. It asks free space through the probe the destination floor uses, so one test seam answers for both.
 
+> **2026-10 ([ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md)).** Through the service, the engine's working directory is the folder its runs keep their parts in, under the state directory ([ADR-0129](0129-a-restore-cut-short-resumes-within-a-file.md)), and the working space is measured there. Direct mode still measures the system's temporary folder, where its engine spools.
+
 A platform that will not say what is free is never short. The check exists to stop a disk filling, not to stop a restore because a platform would not answer — the posture the destination floor took first (FR-DEST-010).
 
 ### 3. The plan measures exactly; the run measures cheaply first
@@ -190,3 +192,4 @@ A restore of part of a tree can meet the first, and a tree larger than the read 
 | 2026-10 | Accepted | [ADR-0107](0107-the-command-line-plans-a-restore-on-its-own.md): `restore --plan` prints this record's plan from the command line, made by the service or in direct mode alike, and restores nothing; export to a file and resume stay owed. |
 | 2026-10 | Accepted | [ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md): the command line keeps this record's plan in a file as JSON with `restore --export`; resume stays owed. |
 | 2026-10 | Accepted | [ADR-0109](0109-a-restore-cut-short-is-resumed.md) resumes a restore cut short, the last of what this record left owed. §2's measure needs nothing for a file a resume finds already where it lands at its length, and §5's receipt moves to schema 8 for `found_in_place`. |
+| 2026-10 | Accepted | [ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md) measures §2's working directory, through the service, where the runs keep their parts: the folder every file a run there restores is assembled in since ADR-0129. |

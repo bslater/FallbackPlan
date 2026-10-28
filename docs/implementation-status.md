@@ -155,6 +155,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0128](adr/0128-the-command-line-asks-a-paired-service-for-its-restore-receipts.md) | The command line asks a paired service for its restore receipts: `restore-receipts --connect` lists the receipts the service keeps as a state directory's are listed, naming no file, and with `--run` the files that run did not restore, through a source of the set its receipt records that `--passphrase-env` unlocks, closed after; `--state` then names the console's own state | **Built** | `Cli/CliApplication` · `Cli/RestoreReceiptReport` · `Hosts.Tests/RestoreReceiptsRemoteTests`, `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0128--the-command-line-asks-a-paired-service-for-its-restore-receipts) |
 | [0129](adr/0129-a-restore-cut-short-resumes-within-a-file.md) | A restore cut short resumes within a file: a file is assembled in a part named by its whole-file hash and kept unless it lands or its assembly is refused; a resume takes the part up as far as each segment proves against its object identifier and each hole reads as zeroes, and reads only the rest; through the service each run keeps its parts under its name, carried to a resume's, and let go when the run finishes or is let go, or at start for a run no longer on record | **Built** | `Repository/RestoreEngine` · `Repository/RepositoryReader` · `Restore/RestoreExecutor` · `Agent/RestoreParts` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests` · [notes](#0129--a-restore-cut-short-resumes-within-a-file) |
 | [0130](adr/0130-a-restore-says-which-files-it-resumed-within.md) | A restore says which files it resumed within: the receipt, at schema 11, gives each file a resume wrote from its part `resumed_at`, how many of its bytes were taken up, and the result counts those files as `resumed_within` (contract 1.76), which `restore`, `restore-resume` and the console's result say | **Built** | `Repository/RestoreEngine` · `Restore/RestoreExecutor` · `Api/Results` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleRestoreResultScriptTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0130--a-restore-says-which-files-it-resumed-within) |
+| [0131](adr/0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md) | The service measures a restore's working space where its parts are kept: its probe of room names the folder its runs keep their parts in as the working directory, so a plan and a run measure the room for the largest file on the state directory's volume; direct mode measures the temporary folder its engine spools in | **Built** | `Agent/ServiceRuntime` · `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0131--the-service-measures-a-restores-working-space-where-its-parts-are-kept) |
 
 ---
 
@@ -3743,7 +3744,8 @@ for a run no longer on record. No contract or receipt change.
 What remains is recorded rather than done. Direct mode keeps no parts, a
 resume's plan counts each file it writes whole, and the receipt does not say
 a file was resumed within. ADR-0130 has since had the receipt say where each
-such file was resumed, and the result count them.
+such file was resumed, and the result count them, and ADR-0131 measures the
+working space where the parts are kept.
 
 ### 0130 — a restore says which files it resumed within
 
@@ -3759,3 +3761,18 @@ say how many.
 What remains is recorded rather than done. Direct mode resumes no file
 within, and the listing of kept receipts counts a file resumed within as a
 file restored.
+
+### 0131 — the service measures a restore's working space where its parts are kept
+
+ADR-0129 had the service assemble every file a run restores in a part under
+`restore-parts/{run}` in the state directory, while the room a restore needs
+for its largest file was still measured in the system's temporary folder,
+where the engine had spooled. The service's probe of room now names the
+parts folder as the working directory, so a plan and a run measure the
+working space on the state directory's volume, joined to a folder the run
+writes to where they share one. Direct mode keeps no parts and measures the
+temporary folder, as before. No contract change.
+
+What remains is recorded rather than done. A resume's working space counts
+its largest file whole, though its part may hold some of it already, and the
+parts of runs left unfinished are counted only as room no longer free.

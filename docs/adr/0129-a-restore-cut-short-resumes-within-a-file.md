@@ -44,6 +44,8 @@ The service keeps each run's parts in `restore-parts/{run}` under its state dire
 
 A run's parts go when it finishes or is let go. When the service starts, the parts of any run no longer on record go too. Each step is best effort: a part not carried is assembled again, and one not removed goes at the next start.
 
+> **2026-10 ([ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md)).** The room a run needs to assemble its largest file is measured here too: the service's working space is the folder its runs keep their parts in, and no longer the system's temporary folder.
+
 ## Consequences
 
 - A large file cut short near its end is read again only from where its run stopped.
@@ -72,3 +74,4 @@ A run's parts go when it finishes or is let go. When the service starts, the par
 | 2026-10 | Accepted | Built in one slice, tests first. A file is assembled in a part named by its whole-file hash, kept unless it lands or is refused; a resume takes it up as far as each segment proves against its object identifier and each hole reads as zeroes, and reads only the rest. The service keeps each run's parts under its name, carries them to a resume's, and lets them go when the run finishes or is let go, and at start for runs no longer on record. No contract or receipt change. |
 | 2026-10 | Accepted | The receipt says where a file was resumed within, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): at schema 11, with a restore's result counting those files at contract 1.76. What this does not do no longer leaves the receipt silent on it. |
 | 2026-10 | Accepted | The receipt says where a file was resumed within, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): at schema 11, with a restore's result counting those files at contract 1.76. What this does not do no longer leaves the receipt silent on it. |
+| 2026-10 | Accepted | The working space is measured where the parts are kept, by [ADR-0131](0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md): a run through the service is measured for the room its parts need on the state directory, not in the system's temporary folder. |
