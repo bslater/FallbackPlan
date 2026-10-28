@@ -173,6 +173,11 @@ and a path the catalogue folds are never in different case regimes. The
 fold is applied for indexing only; stored names remain the original bytes
 (architecture 06 §2's never-normalise-destructively rule).
 
+> **Amended 2026-10 ([ADR-0146](0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md)).** The fold is no longer stored or
+> indexed. A lookup that folds case takes it a folder at a time, through the
+> index of each folder's children, when it is asked. What folds alike is
+> unchanged.
+
 ### 9 Verification outcomes are not durable in v1
 
 FR-DED-003 wants verification outcomes to survive a catalogue rebuild;
@@ -257,3 +262,4 @@ only cheap because the format is pre-freeze.
 | 2026-10 | Accepted | Decision 10's receipt is at schema 9, by [ADR-0126](0126-a-restore-receipt-names-the-set-it-restored.md): it names the set whose snapshot its run restored, where the run knew it. |
 | 2026-10 | Accepted | Decision 10's receipt is at schema 10, by [ADR-0127](0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md): it records the identity of the set it names. |
 | 2026-10 | Accepted | Decision 10's receipt is at schema 11, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): each file a resume wrote from the part its run had assembled says where it was resumed. |
+| 2026-10 | Accepted (amended) | [ADR-0146](0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md): Decision 8's fold is taken when a lookup asks for it, a folder at a time through the parent index, and no longer stored or indexed. |

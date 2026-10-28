@@ -55,3 +55,4 @@ NFR-PERF-010's figure is the reuse candidate's lookup by object identifier, whic
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Catalogue schema 13 has no segment_dedup, publication records no content identifier in the catalogue, and the dedup lookup benchmark measures the reuse candidate's lookup. At scale M's shape the catalogue falls from 2 001 B/version to 1 607. NFR-PERF-011 is still not met. |
+| 2026-10 | Accepted | [ADR-0146](0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md): a path's case is folded when a lookup asks and not stored, and at scale M's shape the catalogue costs 1 373 B/version, not 1 607. |

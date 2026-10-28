@@ -170,6 +170,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0143](adr/0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md) | A destination takes one restore in direct mode at a time: a run holds its folder of parts while it runs, a second run there is refused, and restore-parts says a run is under way there and lets none of its parts go | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0143--a-destination-takes-one-restore-in-direct-mode-at-a-time) |
 | [0144](adr/0144-the-catalogue-names-a-locations-blob-and-writer-by-number.md) | The catalogue names a location's blob and writer by number: schema 12 states each sixteen-byte id once, in a table of its own, and reads it back through a view, so the locations plane falls from 1 137 B/version to 662 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueSizeTests` · `Repository.Tests/Catalogue/CatalogueTests` · [notes](#0144--the-catalogue-names-a-locations-blob-and-writer-by-number) |
 | [0145](adr/0145-the-catalogue-keeps-no-map-from-content-to-object.md) | The catalogue keeps no map from content to object: schema 13 drops segment_dedup, which publication wrote and nothing read, so the catalogue falls from 2 001 B/version to 1 607 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository/SnapshotPublication` · `Repository.Tests/EndToEnd/StaleCatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0145--the-catalogue-keeps-no-map-from-content-to-object) |
+| [0146](adr/0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md) | The catalogue folds a path's case when asked, not when stored: schema 14 keeps no fold of a tree entry's path and no index on one, and a lookup that folds walks the path through the parent index, so tree_entries falls from 613 B/version to 379 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0146--the-catalogue-folds-a-paths-case-when-asked-not-when-stored) |
 
 ---
 
@@ -3999,3 +4000,17 @@ falls from 2 001 B/version to 1 607.
 
 What remains is recorded rather than done. The catalogue is still four
 times its budget.
+
+### 0146 — the catalogue folds a path's case when asked, not when stored
+
+Each tree entry stored its path's fold, ADR-0026 §8's case-insensitive
+key, in its row and in an index of its own, for a lookup no product path
+makes. At schema 14 neither is kept. A lookup asked to fold walks the
+path a folder at a time through the parent index, folding each child's
+name as it compares, following every folder that folds alike, and takes
+the exact path where the snapshot holds it, else the first in ordinal
+order. `tree_entries` falls from 613 B/version to 379, and the catalogue
+from 1 607 to 1 373.
+
+What remains is recorded rather than done. The catalogue is still more
+than three times its budget.

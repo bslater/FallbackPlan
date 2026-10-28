@@ -29,6 +29,8 @@ Paths are the most common source of silent cross-platform data loss, so the rule
 
 **Indexing.** Index by a **casefold key** derived from the NFC form. This is what makes lookup work when the source is case-sensitive and the restore target is not.
 
+> **2026-10 ([ADR-0146](../adr/0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md)).** The key is taken when a lookup asks for it, a folder at a time through the catalogue's index of each folder's children, and is not stored. It is the same key.
+
 **Collision detection.** Detect collisions at **restore-plan** time ([`08-restore-and-recovery.md` §2](08-restore-and-recovery.md#2-restore-planning)), never mid-restore. `README.md` and `readme.md` captured from ext4 and restored to APFS is a conflict the user must be told about *before* files start landing, not after one has overwritten the other.
 
 **Length and reserved names.** Record the source's limits in the snapshot's filesystem capability record. Windows reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`), trailing dots and spaces, and paths exceeding the target's limit are all restore-plan conflicts with an explicit resolution, not runtime failures.
