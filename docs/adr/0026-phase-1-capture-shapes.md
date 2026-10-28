@@ -257,4 +257,3 @@ only cheap because the format is pre-freeze.
 | 2026-10 | Accepted | Decision 10's receipt is at schema 9, by [ADR-0126](0126-a-restore-receipt-names-the-set-it-restored.md): it names the set whose snapshot its run restored, where the run knew it. |
 | 2026-10 | Accepted | Decision 10's receipt is at schema 10, by [ADR-0127](0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md): it records the identity of the set it names. |
 | 2026-10 | Accepted | Decision 10's receipt is at schema 11, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): each file a resume wrote from the part its run had assembled says where it was resumed. |
-| 2026-10 | Accepted | Decision 10's receipt is at schema 11, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): each file a resume wrote from the part its run had assembled says where it was resumed. |
