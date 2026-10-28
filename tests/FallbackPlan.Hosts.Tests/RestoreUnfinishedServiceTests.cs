@@ -28,7 +28,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// it finishes or is let go, and those of a run no longer on record when the
 /// service starts. The result counts the files a resume took up from its
 /// parts, the receipt says where each was resumed (FR-RST-004), and the
-/// command line says so (ADR-0130). A plan of a resume counts nothing among
+/// command line says so (ADR-0130). Each run listed says what its parts
+/// hold, and the command line says it too (ADR-0133). A plan of a resume counts nothing among
 /// what the run reads of a file its run landed but its manifest, nor what
 /// its parts prove (ADR-0132).
 /// </summary>
@@ -457,6 +458,24 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
             await File.ReadAllTextAsync(
                 Path.Combine(PartsOf(cut.Run!), $"{Convert.ToHexStringLower(SHA256.HashData("deeper"u8))}.part"), _timeout.Token),
             "and a plan leaves a part as it found it");
+    }
+
+    [TestMethod]
+    public async Task ARunLeftUnfinished_SaysWhatItsPartsHold()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var cut = await CutShortAsync(handler);
+        Assert.AreEqual(0L, Assert.ContainsSingle(await RunsAsync(handler)).Held, "a run that kept no part holds nothing");
+
+        KeepPart(cut.Run!, "hello", "hel");
+        KeepPart(cut.Run!, "deeper", "deeper");
+
+        Assert.AreEqual(9L, Assert.ContainsSingle(await RunsAsync(handler)).Held, "what its parts hold under the state directory");
+        var listed = await CliAsync("restore-resume");
+        Assert.AreEqual(0, listed.ExitCode, listed.Output + listed.Error);
+        Assert.Contains("holding 9 bytes it had assembled", listed.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]

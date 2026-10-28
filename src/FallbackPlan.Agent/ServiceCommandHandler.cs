@@ -1402,10 +1402,14 @@ public sealed partial class ServiceCommandHandler(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>The runs left unfinished, without the paths they were asked for (ADR-0089).</summary>
+    /// <summary>
+    /// The runs left unfinished, without the paths they were asked for
+    /// (ADR-0089), each with what its parts hold (ADR-0133).
+    /// </summary>
     private RestoreRunsResult ListRestoreRuns() =>
         new([.. runtime.RestoreRuns.Unfinished.Select(run => new RestoreRunDescriptor(
-            run.Run, run.SnapshotId, run.SetName, run.OutputDirectory, run.BeganAt, run.Target, run.Existing, run.InPlace))]);
+            run.Run, run.SnapshotId, run.SetName, run.OutputDirectory, run.BeganAt, run.Target, run.Existing, run.InPlace,
+            RestoreParts.Held(runtime, run.Run)))]);
 
     /// <summary>
     /// The restore receipts this service keeps, newest first (contract 1.73,

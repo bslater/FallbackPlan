@@ -75,3 +75,4 @@ Each run on the list can be let go, once the person confirms it. The service nam
 | 2026-10 | Accepted | [ADR-0118](0118-the-console-runs-a-kept-plan-as-it-was-approved.md): the console runs a kept plan, which this record left to another. |
 | 2026-10 | Accepted | [ADR-0120](0120-a-resume-is-planned.md): a resume is planned from the command line, which this record left owed; the console plans none. |
 | 2026-10 | Accepted | [ADR-0121](0121-the-console-plans-a-resume.md): the resume mode plans the run before it resumes it. |
+| 2026-10 | Accepted | [ADR-0133](0133-a-run-left-unfinished-says-what-its-parts-hold.md): the console's list of runs left unfinished says what each holds of the files it was cut short in. |

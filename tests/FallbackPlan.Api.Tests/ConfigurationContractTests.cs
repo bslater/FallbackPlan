@@ -34,11 +34,29 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_WhatARestoreResumedWithin_IsRecordedAtOneSeventySix()
+    public void ContractVersion_WhatARunLeftUnfinishedHolds_IsRecordedAtOneSeventySeven()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.76", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.77", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void WhatARunLeftUnfinishedHolds_CrossesUnderItsWireName_AndAPre177ServiceSaysNone()
+    {
+        // Contract 1.77 (FR-RST-008, ADR-0133): what the parts a run kept
+        // hold under the service's state directory.
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreRunsResult([new RestoreRunDescriptor("0123456789abcdef", new string('e', 32), "docs", "/srv/restored", 1_000, Held: 9)]),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"held\":9", listed, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestoreRunsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(
+                $$"""{"result":"restore_runs","runs":[{"run":"0123456789abcdef","snapshot_id":"{{new string('e', 32)}}","began_at":1000}]}""",
+                FrameCodec.SerializerOptions),
+            out var older);
+        Assert.AreEqual(0L, Assert.ContainsSingle(older.Runs).Held);
     }
 
     [TestMethod]

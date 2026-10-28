@@ -776,8 +776,9 @@ internal sealed class ServiceGateway(
         var of = run.Set is { } set ? $" of set '{set}'" : string.Empty;
         var to = string.IsNullOrEmpty(run.OutputDirectory) ? "where its files came from" : run.OutputDirectory;
         var how = (run.InPlace ? ", in place" : string.Empty) + (run.Existing is { } existing ? $", {existing} where a file is in the way" : string.Empty);
+        var holding = run.Held > 0 ? $", holding {RestoreSpace.Bytes((ulong)run.Held)} it had assembled" : string.Empty;
         return string.Create(
-            CultureInfo.InvariantCulture, $"{run.Run}  snapshot {run.SnapshotId}{of} to {to}{how}, begun {began:yyyy-MM-dd HH:mm} UTC");
+            CultureInfo.InvariantCulture, $"{run.Run}  snapshot {run.SnapshotId}{of} to {to}{how}, begun {began:yyyy-MM-dd HH:mm} UTC{holding}");
     }
 
     /// <summary>What a restore through the service says, with how to resume it where it did not finish.</summary>

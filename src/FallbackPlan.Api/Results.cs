@@ -944,6 +944,12 @@ public sealed record RestoreResult(
 /// <param name="Target">Its target, as <see cref="RunRestoreCommand"/> takes it; null where none was asked.</param>
 /// <param name="Existing">Its existing-file policy, as <see cref="RunRestoreCommand"/> takes it; null for the default.</param>
 /// <param name="InPlace">Whether it lands in place rather than under quarantine.</param>
+/// <param name="Held">
+/// The bytes the parts it kept hold under the service's state directory
+/// (contract 1.77, ADR-0133): what it had assembled of the files it was cut
+/// short in, which a resume takes up and letting the run go removes. Zero
+/// from a service before 1.77.
+/// </param>
 public sealed record RestoreRunDescriptor(
     string Run,
     string SnapshotId,
@@ -952,7 +958,8 @@ public sealed record RestoreRunDescriptor(
     ulong BeganAt,
     string? Target = null,
     string? Existing = null,
-    bool InPlace = false);
+    bool InPlace = false,
+    long Held = 0);
 
 /// <summary>The restore runs left unfinished, oldest first (contract 1.71, ADR-0115).</summary>
 /// <param name="Runs">Each run, as <see cref="RestoreRunDescriptor"/> describes it.</param>

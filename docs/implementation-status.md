@@ -157,6 +157,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0130](adr/0130-a-restore-says-which-files-it-resumed-within.md) | A restore says which files it resumed within: the receipt, at schema 11, gives each file a resume wrote from its part `resumed_at`, how many of its bytes were taken up, and the result counts those files as `resumed_within` (contract 1.76), which `restore`, `restore-resume` and the console's result say | **Built** | `Repository/RestoreEngine` · `Restore/RestoreExecutor` · `Api/Results` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleRestoreResultScriptTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0130--a-restore-says-which-files-it-resumed-within) |
 | [0131](adr/0131-the-service-measures-a-restores-working-space-where-its-parts-are-kept.md) | The service measures a restore's working space where its parts are kept: its probe of room names the folder its runs keep their parts in as the working directory, so a plan and a run measure the room for the largest file on the state directory's volume; direct mode measures the temporary folder its engine spools in | **Built** | `Agent/ServiceRuntime` · `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0131--the-service-measures-a-restores-working-space-where-its-parts-are-kept) |
 | [0132](adr/0132-a-resumes-plan-counts-only-what-it-still-reads.md) | A resume's plan counts only what it still reads: nothing of a file its run landed at its length but the manifest, and through the service nothing a part its run kept proves, proved by the rule a resume takes a part up by, now shared by the engine and the plan; what is held is still probed for what is missing or archived | **Built** | `Restore/RestoreBlobSet` · `Repository/RestorePart` · `Repository/RestoreEngine` · `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreWithinAFileTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/RestoreOriginalDirectTests` · [notes](#0132--a-resumes-plan-counts-only-what-it-still-reads) |
+| [0133](adr/0133-a-run-left-unfinished-says-what-its-parts-hold.md) | A run left unfinished says what its parts hold: each run the service lists gains `held`, the bytes the parts it kept hold under the state directory, summed from its folder as the list is asked for (contract 1.77); `restore-resume` and the console's list say it | **Built** | `Agent/RestoreParts` · `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/OperationGateway` · `Hosts.Tests/RestoreUnfinishedServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreResumeVerbTests`, `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0133--a-run-left-unfinished-says-what-its-parts-hold) |
 
 ---
 
@@ -3748,7 +3749,8 @@ resume's plan counts each file it writes whole, and the receipt does not say
 a file was resumed within. ADR-0130 has since had the receipt say where each
 such file was resumed, and the result count them, ADR-0131 measures the
 working space where the parts are kept, and ADR-0132 has a resume's plan
-count nothing its parts prove.
+count nothing its parts prove, and ADR-0133 has each run left unfinished say
+what its parts hold.
 
 ### 0130 — a restore says which files it resumed within
 
@@ -3795,3 +3797,16 @@ names, as before. No contract change.
 What remains is recorded rather than done. The plan reads nothing of the
 destination but each landed file's length, and the room a resume needs
 still counts its largest file whole.
+
+### 0133 — a run left unfinished says what its parts hold
+
+A run left unfinished keeps the parts of the files it was cut short in
+under the state directory until it is resumed or let go, and nothing said
+how much they hold. The service's list of runs left unfinished now gives
+each its `held` bytes, summed from the run's own folder as the list is
+asked for, so it is what lies there now (contract 1.77). `restore-resume`
+and the console's list on its snapshots page say what each run holds, and
+a run holding nothing says nothing of it.
+
+What remains is recorded rather than done. A run's notice does not say
+it, and which files the parts are of is not said.

@@ -16,7 +16,7 @@ namespace FallbackPlan.Cli.Tests;
 /// before the passphrase is asked, and in direct mode no run is named at all.
 /// With <c>--plan</c> it plans the run's resume and resumes nothing
 /// (ADR-0120), naming the run as a resume or a letting go does, and not
-/// beside one.
+/// beside one. A run listed says what the parts it kept hold (ADR-0133).
 /// </summary>
 [TestClass]
 public sealed class RestoreResumeVerbTests : IDisposable
@@ -45,6 +45,29 @@ public sealed class RestoreResumeVerbTests : IDisposable
         Assert.Contains("2026-10-27", line, StringComparison.Ordinal);
         Assert.IsTrue(report.Lines.Any(printed => printed.Contains("restore-resume <run>", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
         Assert.IsEmpty(client.Received.OfType<OpenRestoreSourceCommand>(), "a list of runs names none of the backup's files");
+    }
+
+    [TestMethod]
+    public async Task ARunListed_SaysWhatItsPartsHold_AndOneHoldingNothingSaysNothing()
+    {
+        const string Other = "fedcba9876543210";
+        await using var client = new ScriptedClient(
+        [
+            new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000, Held: 2_097_152),
+            new RestoreRunDescriptor(Other, SnapshotId, "docs", "/srv/restored", 2_000),
+        ]);
+
+        var report = await ThroughAsync(client, (gateway, token) => gateway.RestoreRunsAsync(token));
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        Assert.Contains(
+            "holding 2097152 bytes (2.0 MiB) it had assembled",
+            Assert.ContainsSingle(printed => printed.Contains(Run, StringComparison.Ordinal), report.Lines),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "holding",
+            Assert.ContainsSingle(printed => printed.Contains(Other, StringComparison.Ordinal), report.Lines),
+            StringComparison.Ordinal);
     }
 
     [TestMethod]
