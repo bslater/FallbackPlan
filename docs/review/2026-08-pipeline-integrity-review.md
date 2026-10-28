@@ -250,6 +250,10 @@ Companion decisions, each with its written reason:
 - **A location row without a blob row stays a live candidate by design**: that is a rebuilt catalogue's ordinary state (store keys are derived, not looked up, for exactly this reason), and the existence probe is what defends it — not a join change that would refuse all reuse on every second device.
 - **Behind-the-store is cost only**, and **`segment_dedup` is dead on the publication path** — both now pinned so neither can silently change class.
 
+  > **2026-10 ([ADR-0145](../adr/0145-the-catalogue-keeps-no-map-from-content-to-object.md)).** `segment_dedup` is gone, and the pin
+  > with it: a case now holds that no catalogue table keeps a content
+  > identifier.
+
 ### Restore breadth, and the GET budget measured honestly
 
 `ExistingDestinationPolicy.Replace` and `.Fail` had never been set by any test; both are pinned (`RestoreBreadthTests`), and the full receipt JSON is pinned byte-for-byte by a golden fixture. **NFR-PERF-009 (restore GETs ≤ 1.2 × distinct blobs) is architecturally unmet**: the read path opens every blob in the repository at load — three range reads each, proportional to repository size — then issues one uncoalesced range read per manifest and per segment. The characterization test pins the exact current counts so the budget cannot be mistaken for met and the eventual fix (catalogue-directed blob loading plus range coalescing — real read-path engine work, now a named pickup item) has a test waiting to become its compliance gate.
