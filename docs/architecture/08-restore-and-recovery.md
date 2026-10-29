@@ -116,6 +116,8 @@ The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a f
 
 **Repository path text is untrusted.** A restore materialises only paths that are a sequence of plain name components resolving under the restore root; anything else — a traversal, an absolute path, a drive marker, an empty or dotted component — is refused and recorded as a failed item. The store is written by other participants and holds historical data, both of which the threat model treats as adversarial ([`../threat-model.md`](../threat-model.md)), so containment is a property of the executor rather than of whoever wrote the manifest.
 
+> **2026-10 ([ADR-0159](../adr/0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md)).** A path is followed through every link it passes, the root's own included, and refused at the first folder that leads out of where the root really is. A restore into a folder that is a link restores what lies below it.
+
 ### 3.1 Quarantine by default
 
 Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006

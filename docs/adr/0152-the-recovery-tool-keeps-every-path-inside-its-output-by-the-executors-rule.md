@@ -35,6 +35,8 @@ The executor's path resolution moves into Domain as it was, with three parts:
 
 The executor resolves every item through it and words a refusal as it always has.
 
+> **2026-10 ([ADR-0159](0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md)).** The third part followed the root through its link but read each folder below it by its spelling, so a root that is a link refused every path below its top level. It now follows the root and each folder below it in turn.
+
 ### 2. The recovery tool places every entry by it
 
 The tool holds a tree's name to the plain-name rule on its own first, since a name that holds a separator reads as two names once joined. It then resolves the entry's path under the output by the shared rule, for folders and files alike.
@@ -68,3 +70,4 @@ The tool now removes whatever stands at the spool's name, a link included, and t
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The executor's path resolution moves into Domain unchanged, and the recovery tool places every folder and file by it, so a link the output holds is written through by nothing. A file's spool is made new after whatever stood at its name is removed. |
+| 2026-10 | Accepted | [ADR-0159](0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md): the rule follows the root and each folder below it through their links, so a restore into a folder that is a link, by the executor or the recovery tool, restores what lies below its top level. |
