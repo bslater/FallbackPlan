@@ -199,6 +199,9 @@
   <data name="CliApplication_ForgetNamesTheRun" xml:space="preserve">
     <value>--forget lets one run go, so name it: restore-resume &lt;run&gt; --forget.</value>
   </data>
+  <data name="CliApplication_ForgetAllNamesNoRestoreRun" xml:space="preserve">
+    <value>--forget-all lets every run go: it names none, and takes no --forget or --plan.</value>
+  </data>
   <data name="CliApplication_PlanNamesTheRun" xml:space="preserve">
     <value>--plan plans the resume of one run, so name it: restore-resume &lt;run&gt; --plan.</value>
   </data>

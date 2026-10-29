@@ -431,6 +431,11 @@ internal static class Strings
     internal static string CliApplication_ForgetNamesTheRun => Get(nameof(CliApplication_ForgetNamesTheRun));
 
     /// <summary>
+    /// --forget-all lets every run go: it names none, and takes no --forget or --plan.
+    /// </summary>
+    internal static string CliApplication_ForgetAllNamesNoRestoreRun => Get(nameof(CliApplication_ForgetAllNamesNoRestoreRun));
+
+    /// <summary>
     /// --plan plans the resume of one run, so name it: restore-resume &lt;run&gt; --plan.
     /// </summary>
     internal static string CliApplication_PlanNamesTheRun => Get(nameof(CliApplication_PlanNamesTheRun));
