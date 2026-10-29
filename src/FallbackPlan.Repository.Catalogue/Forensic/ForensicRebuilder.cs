@@ -335,12 +335,16 @@ public sealed class ForensicRebuilder : IDisposable
 
             // Walk root tree → subdirectories → file versions → segments
             // through the indexed metadata records, projecting the paths.
+            // Its folders and the access time each states go in after the
+            // row that reaches them (ADR-0151, ADR-0153).
             List<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> folders = [];
+            List<(ObjectId TreeId, ulong AccessedAt)> times = [];
             await WalkTreeAsync(
-                folders, decoded.Manifest.RootTree, prefix: string.Empty,
+                folders, times, decoded.Manifest.RootTree, prefix: string.Empty,
                 indexed, needed, findings, catalogue, structure, chain: null, cancellationToken)
                 .ConfigureAwait(false);
             catalogue.RecordFolders(folders);
+            catalogue.RecordDirectoryAccessTimes(times);
             catalogue.RecordSnapshotStructure(decoded.Manifest.SnapshotId.Span, structure);
         }
 
@@ -349,6 +353,7 @@ public sealed class ForensicRebuilder : IDisposable
 
     private async ValueTask WalkTreeAsync(
         List<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> folders,
+        List<(ObjectId TreeId, ulong AccessedAt)> times,
         ObjectId treeId,
         string prefix,
         Dictionary<ObjectId, BlobId> indexed,
@@ -373,7 +378,7 @@ public sealed class ForensicRebuilder : IDisposable
         var tree = TreeManifestCodec.Decode(plaintext);
         if (tree.Metadata?.AccessedAt is { } accessedAt)
         {
-            catalogue.RecordDirectoryAccessTime(treeId, accessedAt);
+            times.Add((treeId, accessedAt));
         }
 
         // A sharded folder's entries span its chain, and all are its head's.
@@ -393,7 +398,7 @@ public sealed class ForensicRebuilder : IDisposable
             // (ADR-0026 §Decision 6) — the walk descends it.
             if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
             {
-                await WalkTreeAsync(folders, entry.ObjectId, path, indexed, needed, findings, catalogue, structure, chain: null, cancellationToken)
+                await WalkTreeAsync(folders, times, entry.ObjectId, path, indexed, needed, findings, catalogue, structure, chain: null, cancellationToken)
                     .ConfigureAwait(false);
                 continue;
             }
@@ -430,7 +435,7 @@ public sealed class ForensicRebuilder : IDisposable
 
         if (tree.Continuation is { } continuation)
         {
-            await WalkTreeAsync(folders, continuation, prefix, indexed, needed, findings, catalogue, structure, own, cancellationToken)
+            await WalkTreeAsync(folders, times, continuation, prefix, indexed, needed, findings, catalogue, structure, own, cancellationToken)
                 .ConfigureAwait(false);
         }
     }

@@ -653,13 +653,10 @@ public sealed partial class PublicationOrchestrator
         _catalogue.RecordSnapshotStructure(job.SnapshotId.Span, structure);
 
         // After the row that reaches them, so forgetting another snapshot
-        // in between cannot let go of a folder this one holds (ADR-0151).
+        // in between cannot let go of a folder this one holds, or of the
+        // access time it states (ADR-0151, ADR-0153).
         _catalogue.RecordFolders(walker.Folders);
-
-        foreach (var (treeId, accessedAt) in walker.DirectoryAccessTimes)
-        {
-            _catalogue.RecordDirectoryAccessTime(treeId, accessedAt);
-        }
+        _catalogue.RecordDirectoryAccessTimes(walker.DirectoryAccessTimes);
 
         foreach (var file in walker.Files)
         {

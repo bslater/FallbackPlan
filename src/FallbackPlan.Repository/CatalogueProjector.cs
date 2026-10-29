@@ -125,13 +125,16 @@ public sealed class CatalogueProjector
                 structure.Add(errors);
             }
 
-            // Every folder the walk reads, recorded together once it is done
-            // and after the row that reaches them (ADR-0151).
+            // Every folder the walk reads, and the access time each states,
+            // recorded together once it is done and after the row that
+            // reaches them (ADR-0151, ADR-0153).
             List<(ObjectId TreeId, IEnumerable<Catalogue.CatalogueFolderEntry> Entries)> folders = [];
+            List<(ObjectId TreeId, ulong AccessedAt)> times = [];
             var (entries, versions, unseen) = await ProjectTreeAsync(
-                target, reader, folders, manifest.RootTree, prefix: string.Empty, structure, cancellationToken)
+                target, reader, folders, times, manifest.RootTree, prefix: string.Empty, structure, cancellationToken)
                 .ConfigureAwait(false);
             target.RecordFolders(folders);
+            target.RecordDirectoryAccessTimes(times);
             target.RecordSnapshotStructure(manifest.SnapshotId.Span, structure);
             treeEntries += entries;
             fileVersions += versions;
@@ -145,6 +148,7 @@ public sealed class CatalogueProjector
         Catalogue.Catalogue target,
         RepositoryReader reader,
         List<(ObjectId TreeId, IEnumerable<Catalogue.CatalogueFolderEntry> Entries)> folders,
+        List<(ObjectId TreeId, ulong AccessedAt)> times,
         ObjectId treeId,
         string prefix,
         List<ObjectId> structure,
@@ -173,7 +177,7 @@ public sealed class CatalogueProjector
             var tree = TreeManifestCodec.Decode(read.Plaintext!);
             if (tree.Metadata?.AccessedAt is { } accessedAt)
             {
-                target.RecordDirectoryAccessTime(id, accessedAt);
+                times.Add((id, accessedAt));
             }
 
             foreach (var child in tree.Entries)
@@ -187,7 +191,7 @@ public sealed class CatalogueProjector
                 if (child.EntryKind == EntryKind.DirectoryPlaceholder)
                 {
                     var (childEntries, childVersions, childMissing) = await ProjectTreeAsync(
-                        target, reader, folders, child.ObjectId, path, structure, cancellationToken).ConfigureAwait(false);
+                        target, reader, folders, times, child.ObjectId, path, structure, cancellationToken).ConfigureAwait(false);
                     entries += childEntries;
                     versions += childVersions;
                     missing += childMissing;
