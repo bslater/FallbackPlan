@@ -193,6 +193,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0166](adr/0166-a-format-3-data-record-is-read-without-its-blobs-envelope.md) | A format-3 data record is read without its blob's envelope: a record read by its location is framed as format 3 frames it, and the envelope is read, and the record re-framed from the bytes already fetched, only when it does not read so | **Built** | `Repository.Packing/BlobReader` · `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · [notes](#0166--a-format-3-data-record-is-read-without-its-blobs-envelope) |
 | [0167](adr/0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md) | A format-3 metadata record is read without its blob's envelope: the catalogue answers each location with the key generation it recorded for the blob, and a metadata record is read at it as format 3 frames it, the envelope read only when the record does not read so | **Built** | `Repository.Catalogue/Catalogue` · `Repository.Packing/BlobReader` · `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/CatalogueTests` · [notes](#0167--a-format-3-metadata-record-is-read-without-its-blobs-envelope) |
 | [0168](adr/0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md) | A prefetch takes a blob's envelope only where the read may want it: once an envelope the reader framed shows format 3, and none shows an older one, a run over records it can read before their envelope starts at the first of them | **Built** | `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/RestoreBreadthTests` · [notes](#0168--a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it) |
+| [0169](adr/0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md) | The console lets go by age: the dialogs that let every run left unfinished and every kept receipt go take optional days, let go only what began or ended longer ago, say how many stay, and name a receipt that does not say when its run ended | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0169--the-console-lets-go-by-age-what-began-or-ended-longer-ago) |
 
 ---
 
@@ -4366,7 +4367,8 @@ in the dialog with its words, with how many of how many went, while the rest
 go; and where none was left by then it says so.
 
 What remains is recorded rather than done. Nothing is let go by age, and the
-console lets one go or every one, not a selection.
+console lets one go or every one, not a selection. It has since let go by age
+([0169](#0169--the-console-lets-go-by-age-what-began-or-ended-longer-ago)).
 
 ### 0164 — kept restore receipts are let go by age
 
@@ -4382,7 +4384,8 @@ named. Without `--forget-all`, or below one day, the days are refused before
 anything is removed or the service dialled.
 
 What remains is recorded rather than done. Nothing expires on its own, as
-ADR-0139 decided; the console does not go by age; and runs left unfinished
+ADR-0139 decided; the console does not go by age, though it has since
+([0169](#0169--the-console-lets-go-by-age-what-began-or-ended-longer-ago)); and runs left unfinished
 and direct mode's parts still go one by one or every one at once. They have
 since gone by age too ([0165](#0165--restores-left-unfinished-are-let-go-by-age)).
 
@@ -4401,7 +4404,8 @@ folder was last written is not that. All three verbs judge by one cutoff,
 `OlderThanDays`, so the same days mean the same age to each.
 
 What remains is recorded rather than done. Nothing expires on its own, and
-the console does not go by age.
+the console does not go by age. It has since, for the service's runs
+([0169](#0169--the-console-lets-go-by-age-what-began-or-ended-longer-ago)).
 
 ### 0166 — a format-3 data record is read without its blob's envelope
 
@@ -4459,3 +4463,20 @@ unfolded.
 What remains is recorded rather than done. The repository's descriptor would
 settle the question before any envelope is framed, but a restoring reader is
 not handed it, so the first prefetch of a format-3 repository still folds.
+
+### 0169 — the console lets go by age what began or ended longer ago
+
+The command line let the service's runs and receipts go by age, and the
+console let them go one at a time or every one at once. The two dialogs that
+let every one go now take optional days. Left empty, every one goes as before.
+Given, only the runs begun, or the receipts of runs that ended, longer ago
+than that go, judged by the rule `--older-than-days` applies against the
+listing the service already gives. How many stay is said in the command
+line's words, a receipt that does not say when its run ended stays and is
+named, and days below one or not whole are refused before anything is asked
+to go, leaving the dialog open.
+
+What remains is recorded rather than done. Direct mode's parts are the
+command line's, nothing expires on its own, and the console lets one go,
+every one, or every one older than the days, not a selection.
+

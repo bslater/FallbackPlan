@@ -40,6 +40,8 @@ A run or receipt the service refuses, say a run under way again, is named in the
 ## What this does not do
 
 - **Let them go by age.** Every one is let go, or one beside it.
+
+  > **2026-10 ([ADR-0169](0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md)).** Done: given days, the dialogs let go only what began, or ended, longer ago, and say what stays.
 - **Choose some.** The console lets one go or every one, not a selection.
 
 ## Alternatives considered
@@ -53,3 +55,4 @@ A run or receipt the service refuses, say a run under way again, is named in the
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The console offers to let every run left unfinished and every receipt kept go at once, asks the service for them afresh once the person confirms, and lets each go by its name, naming one it will not let go while the rest go. No contract change. |
+| 2026-10 | Accepted | Noted by [ADR-0169](0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md): the console lets go by age too, by the same days and the same cutoff. |
