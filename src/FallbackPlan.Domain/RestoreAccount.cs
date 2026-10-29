@@ -1,6 +1,4 @@
-using FallbackPlan.Domain;
-
-namespace FallbackPlan.Restore;
+namespace FallbackPlan.Domain;
 
 /// <summary>
 /// The account a restore runs as, which decides whose files it may give

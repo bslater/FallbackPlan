@@ -73,6 +73,16 @@ public sealed record RestoreTargetProfile
     /// <summary>The target's maximum path bytes, when known.</summary>
     public uint? MaxPathBytes { get; init; }
 
+    /// <summary>What this target lets a <see cref="MetadataWriter"/> write back.</summary>
+    public MetadataTarget Metadata => new()
+    {
+        SupportsPosixMetadata = SupportsPosixMetadata,
+        SupportsCreationTimes = SupportsCreationTimes,
+        SupportsExtendedAttributes = SupportsExtendedAttributes,
+        CapturedHere = CapturedHere,
+        Account = Account,
+    };
+
     /// <summary>The local defaults for this process's platform, and the account it runs as.</summary>
     public static RestoreTargetProfile ForLocalPlatform() => new()
     {

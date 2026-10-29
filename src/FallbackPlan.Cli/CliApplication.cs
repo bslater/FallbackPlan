@@ -977,8 +977,22 @@ public static class CliApplication
 
                 output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                     $"restored {result.Length} bytes to {outputPath} (whole-file hash verified)"));
+                WriteBackMetadata(outputPath, manifest.Metadata);
                 return 0;
             }));
+
+            // Metadata strictly after verified content, by the rule the
+            // executor holds every item to (architecture 08 §3; ADR-0149),
+            // and what did not land said in the receipt's words. The output
+            // is a file whatever the manifest's kind.
+            void WriteBackMetadata(string outputPath, EntryMetadata metadata)
+            {
+                var written = new MetadataWriter(MetadataTarget.ForLocalPlatform()).Write(outputPath, metadata, EntryKind.File);
+                if (MetadataRules.NotApplied(MetadataRules.Captured(metadata), written.Applied) is { } left)
+                {
+                    output.WriteLine($"not applied: {string.Join(", ", left)}" + (written.Detail is { } detail ? $" ({detail})" : string.Empty));
+                }
+            }
 
             async ValueTask<ObjectId> LocateSnapshotFileAsync(
                 CliSession session, RepositoryReader reader, string snapshotHex, CancellationToken cancellationToken)

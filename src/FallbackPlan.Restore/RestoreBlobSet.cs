@@ -272,8 +272,8 @@ public static class RestoreBlobSet
                 if (Decode(record, TreeManifestCodec.Decode)?.Metadata is { } own)
                 {
                     facts[item.ObjectId] = new RestoreItemFacts(
-                        EntryKind.DirectoryPlaceholder, 0, RestoreMetadata.Captured(own),
-                        own.OwnerName, own.GroupName, own.PosixMode, RestoreMetadata.KindsOf(own));
+                        EntryKind.DirectoryPlaceholder, 0, MetadataRules.Captured(own),
+                        own.OwnerName, own.GroupName, own.PosixMode, MetadataRules.KindsOf(own));
                 }
 
                 continue;
@@ -301,9 +301,9 @@ public static class RestoreBlobSet
                     : 0;
 
             facts[item.ObjectId] = new RestoreItemFacts(
-                manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), RestoreMetadata.Captured(manifest.Metadata),
+                manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), MetadataRules.Captured(manifest.Metadata),
                 manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode,
-                RestoreMetadata.KindsOf(manifest.Metadata), RestoreHardLinks.KeyOf(manifest),
+                MetadataRules.KindsOf(manifest.Metadata), RestoreHardLinks.KeyOf(manifest),
                 RestoreSpace.HeldBytes(manifest, heldSegments));
 
             // A lost segment makes the path missing whatever else of it is
