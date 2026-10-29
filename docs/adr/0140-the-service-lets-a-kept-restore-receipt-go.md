@@ -49,6 +49,8 @@ The Maintenance view offers each receipt it lists to be let go, an unreadable on
 ## What this does not do
 
 - **Let receipts go by age, or all at once.** One run at a time, by its name, as ADR-0139 has it.
+
+  > **2026-10 ([ADR-0161](0161-every-kept-restore-receipt-is-let-go-at-once.md)).** With `--connect`, `--forget-all` asks the service for every receipt it keeps and lets each go by its run's name, with no change to the contract. The console still lets one go at a time.
 - **Say what the receipt was of before it goes.** The console's dialog names the run. The listing beside it says what the run did.
 
 ## Alternatives considered
@@ -60,3 +62,4 @@ The Maintenance view offers each receipt it lists to be let go, an unreadable on
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. forget_restore_receipt at contract 1.79 lets one run's kept receipt go through the service, by the run's name alone, and only that one. restore-receipts with --connect, --run and --forget asks it, and the console's Maintenance view offers it once a person confirms. |
+| 2026-10 | Accepted | Noted by [ADR-0161](0161-every-kept-restore-receipt-is-let-go-at-once.md): the command line lets every receipt a paired service keeps go at once, each by its run's name. |

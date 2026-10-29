@@ -22,7 +22,11 @@ namespace FallbackPlan.Cli.Tests;
 /// run's name alone, and what it refuses is refused as it says (ADR-0140).
 /// With --json the receipts are listed as the service answers them, from the
 /// folder and through a paired service alike, under a limit and with how many
-/// are kept (ADR-0141).
+/// are kept (ADR-0141). With --forget-all every run's receipt is let go at
+/// once, each said, and nothing else the folder holds; through a paired
+/// service, each it lists is let go by its name, and one it no longer keeps is
+/// named while the rest go. A run named beside it is refused, before the
+/// service is dialled (FR-RST-004, ADR-0161).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsVerbTests : IDisposable
@@ -77,6 +81,39 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
                 command is FallbackPlan.Api.ForgetRestoreReceiptCommand forget && _kept.Remove(forget.Run)
                     ? new FallbackPlan.Api.AcknowledgedResult()
                     : new FallbackPlan.Api.ServiceError(FallbackPlan.Api.ServiceErrorReason.NotFound, "the service keeps no such receipt"));
+        }
+
+        public IAsyncEnumerable<FallbackPlan.Api.JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
+            AsyncEnumerable.Empty<FallbackPlan.Api.JobProgressEvent>();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// A service that keeps the receipts of the runs it was given, lists them,
+    /// and lets each go once; one it lists but no longer keeps is refused.
+    /// </summary>
+    private sealed class KeepingClient(string[] kept, params string[] listedButGone) : FallbackPlan.Api.IFallbackPlanClient
+    {
+        private readonly HashSet<string> _kept = new(kept, StringComparer.Ordinal);
+
+        public List<FallbackPlan.Api.ServiceCommand> Asked { get; } = [];
+
+        public FallbackPlan.Api.ContractVersion ServiceContractVersion => FallbackPlan.Api.ContractVersion.Current;
+
+        public ValueTask<FallbackPlan.Api.ServiceResult> ExecuteAsync(FallbackPlan.Api.ServiceCommand command, CancellationToken cancellationToken)
+        {
+            Asked.Add(command);
+            FallbackPlan.Api.ServiceResult answer = command switch
+            {
+                FallbackPlan.Api.ListRestoreReceiptsCommand { Limit: null } => new FallbackPlan.Api.RestoreReceiptsResult(
+                    [.. _kept.Concat(listedButGone).Select(run =>
+                        new FallbackPlan.Api.RestoreReceiptDescriptor(run, "complete", 1_700_000_000_000, new string('e', 32), "/srv/restored", 1, 0, 0, 0, 0))],
+                    _kept.Count + listedButGone.Length),
+                FallbackPlan.Api.ForgetRestoreReceiptCommand forget when _kept.Remove(forget.Run) => new FallbackPlan.Api.AcknowledgedResult(),
+                _ => new FallbackPlan.Api.ServiceError(FallbackPlan.Api.ServiceErrorReason.NotFound, "the service keeps no such receipt"),
+            };
+            return ValueTask.FromResult(answer);
         }
 
         public IAsyncEnumerable<FallbackPlan.Api.JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
@@ -393,6 +430,109 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
 
         Assert.AreEqual(1, forgot.ExitCode, forgot.All);
         Assert.Contains("sixteen", forgot.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_LetsEveryRunsReceiptGo_SayingEach()
+    {
+        Kept("0123456789abcdef", new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1 });
+        Kept("fedcba9876543210", new ReceiptItem { Path = "b.txt", Outcome = "restored", Bytes = 1 });
+
+        var forgot = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--forget-all");
+        var listed = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath);
+
+        Assert.AreEqual(0, forgot.ExitCode, forgot.All);
+        Assert.Contains($"let go the receipt of run 0123456789abcdef kept under '{Receipts}'", forgot.Output, StringComparison.Ordinal);
+        Assert.Contains($"let go the receipt of run fedcba9876543210 kept under '{Receipts}'", forgot.Output, StringComparison.Ordinal);
+        Assert.Contains($"let go 2 restore receipts kept under '{Receipts}'", forgot.Output, StringComparison.Ordinal);
+        Assert.Contains($"No restore receipt is kept under '{Receipts}'.", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_LeavesEverythingThatIsNotARunsReceipt()
+    {
+        Kept("0123456789abcdef", new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1 });
+        var notes = Path.Combine(Receipts, "notes.json");
+        var halfWritten = Path.Combine(Receipts, "fedcba9876543210.json.tmp");
+        var peers = Directory.CreateDirectory(Path.Combine(Receipts, "peers")).FullName;
+        await File.WriteAllTextAsync(notes, "{}");
+        await File.WriteAllTextAsync(halfWritten, "{");
+
+        var forgot = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--forget-all");
+
+        Assert.AreEqual(0, forgot.ExitCode, forgot.All);
+        Assert.IsFalse(File.Exists(Path.Combine(Receipts, "0123456789abcdef.json")), "the run's receipt is let go");
+        Assert.IsTrue(File.Exists(notes), "a file not named as a run's is kept");
+        Assert.IsTrue(File.Exists(halfWritten), "and so is one half-written beside a run's");
+        Assert.IsTrue(Directory.Exists(peers), "and so is a folder beside them");
+        Assert.Contains($"let go 1 restore receipt kept under '{Receipts}'", forgot.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_WhereNoneIsKept_SaysSo()
+    {
+        Directory.CreateDirectory(Receipts);
+
+        var forgot = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--forget-all");
+
+        Assert.AreEqual(0, forgot.ExitCode, forgot.All);
+        Assert.Contains($"No restore receipt is kept under '{Receipts}'.", forgot.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_WithARun_IsRefused_AndRemovesNothing()
+    {
+        Kept("0123456789abcdef", new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1 });
+
+        var forgot = await CliHarness.RunRawAsync(
+            "restore-receipts", "--state", _cli.StatePath, "--run", "0123456789abcdef", "--forget-all");
+
+        Assert.AreEqual(1, forgot.ExitCode, forgot.All);
+        Assert.Contains("--forget-all lets every run's receipt go: it names no run", forgot.Error, StringComparison.Ordinal);
+        Assert.IsTrue(File.Exists(Path.Combine(Receipts, "0123456789abcdef.json")));
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_ThroughAPairedService_LetsEachReceiptItListsGo_ByItsName()
+    {
+        await using var client = new KeepingClient(["0123456789abcdef", "fedcba9876543210"]);
+        using var output = new StringWriter();
+
+        Assert.AreEqual(0, await RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, CancellationToken.None));
+
+        Assert.IsInstanceOfType<FallbackPlan.Api.ListRestoreReceiptsCommand>(client.Asked[0], out var listed);
+        Assert.IsNull(listed.Limit, "every receipt it keeps is listed");
+        CollectionAssert.AreEquivalent(
+            new[] { "0123456789abcdef", "fedcba9876543210" },
+            client.Asked.OfType<FallbackPlan.Api.ForgetRestoreReceiptCommand>().Select(forget => forget.Run).ToArray());
+        Assert.Contains("let go the receipt of run 0123456789abcdef the service kept", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("let go 2 restore receipts the service kept", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_ThroughAPairedService_AReceiptItNoLongerKeeps_IsNamed_AndTheRestGo()
+    {
+        await using var client = new KeepingClient(["0123456789abcdef"], "fedcba9876543210");
+        using var output = new StringWriter();
+
+        var failed = await Assert.ThrowsExactlyAsync<CliFailureException>(
+            () => RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, CancellationToken.None));
+
+        Assert.Contains("fedcba9876543210", failed.Message, StringComparison.Ordinal);
+        Assert.Contains("the service keeps no such receipt", failed.Message, StringComparison.Ordinal);
+        Assert.Contains("let go the receipt of run 0123456789abcdef the service kept", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_ThroughAPairedService_WithARun_IsRefusedBeforeItIsDialled()
+    {
+        // Nothing listens on the port: a refusal that dialled first would say that instead.
+        var forgot = await CliHarness.RunRawAsync(
+            "restore-receipts", "--run", "0123456789abcdef", "--forget-all",
+            "--connect", "127.0.0.1:1", "--state", _cli.StatePath, "--fingerprint", new string('f', 64));
+
+        Assert.AreEqual(1, forgot.ExitCode, forgot.All);
+        Assert.Contains("--forget-all lets every run's receipt go: it names no run", forgot.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]

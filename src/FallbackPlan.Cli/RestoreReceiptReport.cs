@@ -144,6 +144,81 @@ internal static class RestoreReceiptReport
         return 0;
     }
 
+    /// <summary>
+    /// Lets every run's receipt kept under <paramref name="stateDirectory"/>
+    /// go at once (ADR-0161), and says each and how many.
+    /// </summary>
+    /// <exception cref="CliFailureException">When one was not removed.</exception>
+    public static void LetGoAll(TextWriter output, string stateDirectory)
+    {
+        var directory = Path.Combine(stateDirectory, "receipts");
+        var outcomes = RestoreReceipt.LetGoAll(directory);
+        if (outcomes.Count == 0)
+        {
+            output.WriteLine($"No restore receipt is kept under '{directory}'.");
+            return;
+        }
+
+        foreach (var outcome in outcomes.Where(outcome => outcome.Problem is null))
+        {
+            output.WriteLine($"let go the receipt of run {outcome.Run} kept under '{directory}'");
+        }
+
+        output.WriteLine(LetGoCount(outcomes.Count(outcome => outcome.Problem is null), $"kept under '{directory}'"));
+        RefuseUnlessAllLetGo([.. outcomes.Where(outcome => outcome.Problem is not null).Select(outcome => $"{outcome.Run}: {outcome.Problem}")]);
+    }
+
+    /// <summary>
+    /// Asks a paired service to let every receipt it keeps go (ADR-0161): each
+    /// it lists is let go by its run's name (contract 1.79, ADR-0140), and says
+    /// each and how many.
+    /// </summary>
+    /// <returns>The exit code.</returns>
+    /// <exception cref="CliFailureException">When the service let one it listed not go.</exception>
+    public static async Task<int> LetGoAllThroughServiceAsync(
+        TextWriter output, IFallbackPlanClient client, CancellationToken cancellationToken)
+    {
+        var listed = await AskAsync<RestoreReceiptsResult>(client, new ListRestoreReceiptsCommand(), cancellationToken)
+            .ConfigureAwait(false);
+        if (listed.Receipts.Count == 0)
+        {
+            output.WriteLine("No restore receipt is kept by the service.");
+            return 0;
+        }
+
+        var letGo = 0;
+        var refused = new List<string>();
+        foreach (var receipt in listed.Receipts)
+        {
+            try
+            {
+                _ = await AskAsync<AcknowledgedResult>(client, new ForgetRestoreReceiptCommand(receipt.Run), cancellationToken)
+                    .ConfigureAwait(false);
+                output.WriteLine($"let go the receipt of run {receipt.Run} the service kept");
+                letGo++;
+            }
+            catch (CliFailureException refusal)
+            {
+                refused.Add($"{receipt.Run}: {refusal.Message}");
+            }
+        }
+
+        output.WriteLine(LetGoCount(letGo, "the service kept"));
+        RefuseUnlessAllLetGo(refused);
+        return 0;
+    }
+
+    private static string LetGoCount(int letGo, string where) =>
+        string.Create(CultureInfo.InvariantCulture, $"let go {letGo} restore {(letGo == 1 ? "receipt" : "receipts")} {where}");
+
+    private static void RefuseUnlessAllLetGo(List<string> notLetGo)
+    {
+        if (notLetGo.Count > 0)
+        {
+            throw new CliFailureException(Strings.FormatRestoreReceiptReport_NotAllLetGo(notLetGo.Count, string.Join("; ", notLetGo)));
+        }
+    }
+
     /// <summary>Refuses what is not a run's name.</summary>
     /// <exception cref="CliFailureException">When it is not.</exception>
     public static void RefuseUnlessARun(string run)

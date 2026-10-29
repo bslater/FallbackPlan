@@ -185,6 +185,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0158](adr/0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md) | Every destination a restore in direct mode left unfinished is let go at once: `restore-parts --forget-all` lets every destination's folder go under the claim a run takes its folder under, passing over one a run holds, and `--forget` judges under the same claim | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/CliApplication` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0158--every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once) |
 | [0159](adr/0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md) | A restore into a folder that is itself a link restores what lies below it: the rule every way of restoring holds a path to follows the root and each folder below it through their links, refusing a path at the first folder that leads out | **Built** | `Domain/RestorePaths` · `Domain.Tests/RestorePathsTests` · `Cli.Tests/RestoreShapeCommandTests` · `Repository.Tests/EndToEnd/RecoveryContainmentTests` · [notes](#0159--a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it) |
 | [0160](adr/0160-a-restore-in-direct-mode-judges-where-it-lands-through-links.md) | A restore in direct mode judges where it lands through links: a run whose destination holds or lies inside one under way, as written or once each is followed through its links, is refused | **Built** | `Cli/DirectRestoreParts` · `Domain/RestorePaths` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0160--a-restore-in-direct-mode-judges-where-it-lands-through-links) |
+| [0161](adr/0161-every-kept-restore-receipt-is-let-go-at-once.md) | Every kept restore receipt is let go at once: `restore-receipts --forget-all` lets every run's receipt go from the state directory, and nothing else kept there, or asks a paired service to let each it lists go by its run's name | **Built** | `Restore/RestoreExecutor` · `Cli/RestoreReceiptReport` · `Cli/CliApplication` · `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0161--every-kept-restore-receipt-is-let-go-at-once) |
 
 ---
 
@@ -3933,7 +3934,8 @@ contract change.
 
 What remains is recorded rather than done. Neither the contract nor the
 console lets a receipt go, and none goes by age or all at once. ADR-0140
-lets the service and the console.
+lets the service and the console. Every one has since gone at
+once from the command line ([0161](#0161--every-kept-restore-receipt-is-let-go-at-once)).
 
 ### 0140 — the service lets a kept restore receipt go
 
@@ -3946,7 +3948,8 @@ and the console's Maintenance view offers each receipt it lists, letting
 it go once a person confirms and asking the list again.
 
 What remains is recorded rather than done. Receipts still go one run at a
-time, never by age.
+time, never by age. Every one has since gone at
+once from the command line ([0161](#0161--every-kept-restore-receipt-is-let-go-at-once)).
 
 ### 0141 — the kept restore receipts are listed as JSON
 
@@ -4303,3 +4306,18 @@ a link leads it elsewhere. The refusal names both folders as typed.
 What remains is recorded rather than done. A run in direct mode is still
 not judged against the service's runs, and two spellings of a destination
 still keep two folders of parts.
+
+### 0161 — every kept restore receipt is let go at once
+
+A kept restore receipt was let go one run at a time, by its name, from a
+state directory or through a paired service. `restore-receipts
+--forget-all` now lets every run's receipt go at once, reading only a file
+a run's receipt is kept in, so a half-written receipt, the peers' and
+anything else beside them stay. Through a paired service it asks for every
+receipt the service keeps and lets each go by its run's name, so the
+contract is unchanged. Each is said, a receipt not let go is named while
+the rest go, and a run named beside it is refused before anything is
+asked.
+
+What remains is recorded rather than done. Receipts are not let go by age,
+and the console still lets one go at a time.
