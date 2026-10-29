@@ -54,6 +54,8 @@ The bundle has no log in it. The tool keeps no log beyond the console, and its f
 | `restore.json` | What a restore did, and every file it could not restore, when one ran. |
 | `environment.json`, `manifest.json`, `README.txt` | The tool's version, the runtime and the operating system; the entries and whether paths are included; and the same in words, with what the bundle leaves out. |
 
+> **2026-10 ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** `restore.json` also counts, for each captured attribute some restored files and folders did not get back, how many did not, by the receipt's name for it. The name is the code's vocabulary and is rendered as such.
+
 `RecoveryRun`, the record the tool keeps of a run, holds only what the builder classifies. Each field is rendered through the rule by the type it is declared as. A path is a `LogPath`. An identifier is shortened. The tool's vocabulary (a verb, an option, an exception's type) is a `LogLabel`. A reader's or the platform's words are text no type cleared. A field added to the record later is absent from the bundle until the builder classifies it.
 
 ### 4. What it never carries
@@ -113,3 +115,4 @@ A note list longer than ten thousand is cut, and the bundle counts what it left 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first: the rule's move to Domain, a diagnostic bundle and its opt-in to paths on every verb of the recovery tool, the run record, structured notes, and the bundle inspection test against a real archive with planted secrets and damaged data blobs. |
+| 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the restore entry counts the captured attributes not applied, by name. |

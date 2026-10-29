@@ -147,6 +147,65 @@ public sealed class RecoveryHostTests : IDisposable
         Assert.AreEqual(new string('x', 4_000), File.ReadAllText(Path.Combine(destination, "nested", "data.bin")));
     }
 
+    [TestMethod]
+    public async Task Restore_ThePassphraseAlone_GivesTheFilesAndFoldersTheirCapturedMetadataBack()
+    {
+        // The tool writes back by the executor's rule (ADR-0150): a file's
+        // once it has landed, a folder's once everything in it has.
+        var fileModified = new DateTime(2021, 3, 4, 5, 6, 7, 890, DateTimeKind.Utc);
+        var folderModified = new DateTime(2020, 9, 13, 12, 26, 40, DateTimeKind.Utc);
+        await _harness.CreateRepositoryAsync();
+        var file = _harness.WriteSourceFile("nested/notes.txt", "recovery drill");
+        File.SetLastWriteTimeUtc(file, fileModified);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
+        }
+
+        Directory.SetLastWriteTimeUtc(Path.GetDirectoryName(file)!, folderModified);
+        await _harness.BackUpAsync();
+
+        var listing = await RunAsync(Arguments("snapshots"));
+        var snapshot = listing.Output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0]
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+
+        var destination = Path.Combine(_harness.WorkPath, "recovered");
+        var result = await RunAsync([.. Arguments("restore"), "--snapshot", snapshot, "--output", destination]);
+
+        Assert.IsTrue(result.ExitCode == 0, result.All);
+        var restored = Path.Combine(destination, "nested", "notes.txt");
+        Assert.AreEqual(fileModified, File.GetLastWriteTimeUtc(restored));
+        Assert.AreEqual(folderModified, Directory.GetLastWriteTimeUtc(Path.Combine(destination, "nested")));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.AreEqual(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead, File.GetUnixFileMode(restored));
+        }
+    }
+
+    [TestMethod]
+    public async Task Restore_AFolderAlreadyInTheOutput_KeepsItsOwn_AndTheToolSaysWhatWasNotApplied()
+    {
+        await PrepareAsync();
+
+        var listing = await RunAsync(Arguments("snapshots"));
+        var snapshot = listing.Output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0]
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+
+        // A folder's modification time is captured on every platform, and a
+        // folder already in the output keeps its own (ADR-0150).
+        var destination = Path.Combine(_harness.WorkPath, "recovered");
+        Directory.CreateDirectory(Path.Combine(destination, "nested"));
+        var result = await RunAsync([.. Arguments("restore"), "--snapshot", snapshot, "--output", destination]);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("metadata not applied: ", result.Error, StringComparison.Ordinal);
+        Assert.Contains("modified_at to 1 item(s)", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("not applied", result.Output, StringComparison.Ordinal);
+    }
+
     // ------------------------------------------------------------ failures
 
     [TestMethod]

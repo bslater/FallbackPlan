@@ -77,6 +77,8 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 
   > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's metadata back through the writer the executor uses, and makes no folder. The recovery tool still writes none.
 
+  > **2026-10 ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** The recovery tool now gives each folder it made its own metadata by this record's rule: last, deepest first, never through a link, and never to a folder already in the output or to the output itself.
+
 ## Alternatives considered
 
 - **Apply a folder's metadata when the folder is made.** Rejected. Its first child moves the modification time, and permissions that forbid writing refuse the rest of its contents.
@@ -93,3 +95,4 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes a folder's extended attributes back by the file's rule, in §2's end pass, so a folder's default ACL goes on after what is restored into it. |
 | 2026-10 | Accepted | [ADR-0099](0099-a-folder-that-was-only-read-keeps-its-tree.md) keeps a folder's tree when only its access time moved, so the access time this restores is the folder's when a tree with its contents was first captured, as a reused file version's already was. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's metadata back through the writer the executor uses, and makes no folder; the recovery tool still writes none. |
+| 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool gives each folder it made its own metadata by this record's rule, last and deepest first, never through a link; a folder already in the output and the output itself keep their own. |

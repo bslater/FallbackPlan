@@ -196,6 +196,8 @@ A standalone recovery executable, independent of the Agent and UI, that can:
 - operate from offline media;
 - produce a diagnostic bundle containing no secrets: a report of one run, asked for on that run, rendered through the rule the service's log uses ([ADR-0082](../adr/0082-the-recovery-tools-diagnostic-bundle.md)).
 
+> **2026-10 ([ADR-0150](../adr/0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** What the tool restores is given back the metadata captured with it, by the rule §3 holds the executor to and through the same writer: a file's once it has landed, and a folder's once nothing more will land in it, deepest first and never through a link. A folder already in the output, and the output itself, keep their own. The tool counts, by attribute, what did not land.
+
 Source and reproducible release artifacts are published for every major format version, and remain downloadable and buildable for as long as that format version is supported. A recovery tool that cannot be obtained when needed is not a recovery tool.
 
 ## 6. What must survive a clean machine

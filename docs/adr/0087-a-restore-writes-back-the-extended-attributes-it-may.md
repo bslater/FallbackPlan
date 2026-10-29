@@ -91,6 +91,8 @@ Each ACL line says the group keeps no more than the lists gave it. A target that
 
   > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's extended attributes back by this record's rule, through the writer the executor uses. The recovery tool still writes none.
 
+  > **2026-10 ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** The recovery tool now writes a file's and a folder's extended attributes back by this record's rule, through the same writer, withholding an ACL that names accounts by number.
+
 ## Alternatives considered
 
 - **Write every attribute and let the platform decide, as ownership is.** Rejected for ACLs and the root-only namespaces. The platform cannot tell that a number names the wrong account, so an ACL from another machine would land and grant. And a policy that lets an ordinary account write a label would make the receipt disagree with the plan.
@@ -106,3 +108,4 @@ Each ACL line says the group keeps no more than the lists gave it. A target that
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Extended attributes are written back on Linux and macOS, each alone and never through a link, after ownership and before the permissions. An ACL naming accounts by number comes back only where this installation captured the snapshot, macOS gets no POSIX ACL, and a restore that is not root leaves the root-only namespaces. An ACL that does not come back leaves the group no more than it gave, which corrects a widening every earlier restore made. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's extended attributes back by this record's rule, through the writer the executor uses; the recovery tool still writes none. The restore's account moves with the writer to Domain/RestoreAccount, and this record's citation follows it. |
+| 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's extended attributes back by this record's rule, through the writer the executor uses. |

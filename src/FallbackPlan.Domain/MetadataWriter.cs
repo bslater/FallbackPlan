@@ -5,8 +5,8 @@ namespace FallbackPlan.Domain;
 /// <summary>
 /// Writes an entry's captured metadata back onto what a restore made of it,
 /// by the rule every way of restoring holds to (<see cref="MetadataRules"/>;
-/// ADR-0149): the executor and the command line's single-file restore
-/// alike.
+/// ADR-0149): the executor, the command line's single-file restore and
+/// the recovery tool alike (ADR-0150).
 /// </summary>
 /// <param name="target">What the restore's target lets it write back.</param>
 public sealed class MetadataWriter(MetadataTarget target)

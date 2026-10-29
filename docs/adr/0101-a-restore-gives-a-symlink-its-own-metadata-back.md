@@ -72,6 +72,8 @@ The plan's lines now count links where they count files and folders, as in "2 fi
 
   > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's metadata back through the writer the executor uses, and makes no symlink. The recovery tool still writes none.
 
+  > **2026-10 ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** The recovery tool now writes back a file's and a folder's metadata through the same writer. It still makes no symlink.
+
 ## Alternatives considered
 
 - **Leave links as they were, and keep saying so.** Rejected. The calls that do not follow a link exist on both platforms that make links, and a restore already used most of them. One line a plan for every link said nothing a person could act on.
@@ -85,3 +87,4 @@ The plan's lines now count links where they count files and folders, as in "2 fi
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A link the restore makes gets its own times, owner, group, attributes and, on macOS, permissions and creation time, each by a call that changes the link itself. On Linux a link's permissions land only where they are those every link has, and a user attribute or ACL on a link is withheld and named. The plan counts links on the lines files and folders use. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's metadata back through the writer the executor uses, and makes no symlink; the recovery tool still writes none. |
+| 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's metadata back through the writer the executor uses, and still makes no symlink. |

@@ -47,6 +47,8 @@ The order is fixed by what each write disturbs. Permissions change no time, so t
 
 `FileTimes` lives in Domain, beside `SparseFile`, for the reason [ADR-0079](0079-sparse-restore.md) gives: the engine's restore and the standalone recovery tool both write restored files, and Domain is the one assembly both may reach. The recovery tool applies no metadata today; when it does, it uses the same call.
 
+> **2026-10 ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** It does now, through the writer the executor uses, which calls `FileTimes` as this section has it.
+
 ### 3. Each attribute stands alone, and the receipt records what landed
 
 Each attribute is written on its own. A write the platform refuses, with an `IOException` or `UnauthorizedAccessException`, leaves that attribute not applied, and the item keeps the outcome its content earned. The writes sit outside the landing's catch, so nothing about metadata can fail an item.
@@ -85,6 +87,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 
   > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's times back by this record's rule, through the writer the executor uses. The recovery tool still writes none.
 
+  > **2026-10 ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** The recovery tool now writes a file's and a folder's times back by this record's rule, through the same writer.
+
 ## Alternatives considered
 
 - **Use .NET's `File.SetCreationTimeUtc` and verify by reading the times back.** Rejected. Its fallback writes the modification time, so a read-back would have to detect a write it did not ask for and undo it. Where the captured creation and modification times are equal, it could not tell that anything had happened. The direct call refuses instead, which is the answer wanted.
@@ -100,3 +104,4 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 | 2026-10 | Accepted | [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) holds a folder the restore makes to §1's rule and order, once everything in it has landed. The owed directory metadata is built. |
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes extended attributes back after ownership and before the permissions in §1's order, each on its own as §3 has it. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's times back by this record's rule, through the writer the executor uses; the recovery tool still writes none. |
+| 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's times back by this record's rule, through the writer the executor uses. |

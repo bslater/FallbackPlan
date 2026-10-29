@@ -1,4 +1,5 @@
 using Bodu;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Domain;
@@ -18,7 +19,32 @@ namespace FallbackPlan.Recovery;
 public sealed record RecoveredSnapshot(SnapshotManifest Manifest, bool SignatureVerified);
 
 /// <summary>What one tree restore did.</summary>
-public sealed record RecoveryRestoreReport(int Restored, int Failed, int Skipped, IReadOnlyList<RecoveryNote> Notes);
+/// <param name="Restored">The files restored.</param>
+/// <param name="Failed">The entries that failed.</param>
+/// <param name="Skipped">The entries of a kind only the full client makes.</param>
+/// <param name="Notes">What the run could not do, entry by entry.</param>
+/// <param name="NotApplied">
+/// Each captured attribute that some restored files and folders did not get
+/// back, with how many, in the receipt's words and its order (ADR-0150).
+/// </param>
+public sealed record RecoveryRestoreReport(
+    int Restored, int Failed, int Skipped, IReadOnlyList<RecoveryNote> Notes, IReadOnlyList<RecoveryNotApplied> NotApplied)
+{
+    /// <summary>
+    /// What <see cref="NotApplied"/> says, as the operator's terminal shows
+    /// it, or null when every restored file and folder got back all that was
+    /// captured with it.
+    /// </summary>
+    public string? DescribeNotApplied() => NotApplied.Count == 0
+        ? null
+        : "metadata not applied: " + string.Join(", ", NotApplied.Select(entry =>
+            string.Create(CultureInfo.InvariantCulture, $"{entry.Attribute} to {entry.Items} item(s)")));
+}
+
+/// <summary>One captured attribute some restored items did not get back.</summary>
+/// <param name="Attribute">The attribute, by the receipt's name for it.</param>
+/// <param name="Items">How many restored files and folders did not get it back.</param>
+public sealed record RecoveryNotApplied(string Attribute, int Items);
 
 /// <summary>
 /// The last line of defence (architecture 08 §5; FR-DRL-001; ADR-0060):
@@ -403,6 +429,24 @@ public sealed class RecoverySession : IDisposable
     /// Symlinks and specials are counted as skipped with a note, never
     /// silently dropped.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// What is restored is given back the metadata captured with it, through
+    /// the executor's writer and by its rule (ADR-0150): for this platform,
+    /// as the account the tool runs as, and with no claim to have captured
+    /// it, since the tool has no installation to compare the snapshot's
+    /// device with. A file's goes on once its content has landed. A folder's
+    /// goes on once nothing more will land in it, deepest folder first, and
+    /// only onto a folder the tool made that still stands where it made it
+    /// (ADR-0086). A run that stops part way settles the folders it made.
+    /// </para>
+    /// <para>
+    /// The output folder is the person's choice and keeps its own, as a
+    /// folder already in the output does. A write the target refuses leaves
+    /// that attribute not applied and never fails the entry; the report
+    /// counts each attribute not applied.
+    /// </para>
+    /// </remarks>
     public async ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
         ObjectId rootTree, string outputDirectory, CancellationToken cancellationToken)
     {
@@ -413,11 +457,48 @@ public sealed class RecoverySession : IDisposable
         var restored = 0;
         var failed = 0;
         var skipped = 0;
+        var writer = new MetadataWriter(MetadataTarget.ForLocalPlatform());
+        var folders = new List<Folder>();
+        var notApplied = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        await WalkAsync(rootTree, string.Empty).ConfigureAwait(false);
-        return new RecoveryRestoreReport(restored, failed, skipped, notes);
+        try
+        {
+            await WalkAsync(rootTree, string.Empty, folder: null).ConfigureAwait(false);
+        }
+        finally
+        {
+            foreach (var folder in folders.OrderByDescending(folder => Depth(folder.Path)))
+            {
+                Count(
+                    folder.Captured,
+                    !folder.Found && IsStillTheFolderMade(outputDirectory, folder.Path)
+                        ? writer.Write(folder.Destination, folder.Values, EntryKind.DirectoryPlaceholder).Applied
+                        : CapturedMetadata.None);
+            }
+        }
 
-        async ValueTask WalkAsync(ObjectId treeId, string prefix)
+        return new RecoveryRestoreReport(
+            restored,
+            failed,
+            skipped,
+            notes,
+            [
+                .. MetadataRules.Vocabulary
+                    .Where(entry => notApplied.ContainsKey(entry.Name))
+                    .Select(entry => new RecoveryNotApplied(entry.Name, notApplied[entry.Name])),
+            ]);
+
+        void Count(CapturedMetadata captured, CapturedMetadata applied)
+        {
+            foreach (var name in MetadataRules.NotApplied(captured, applied) ?? [])
+            {
+                notApplied[name] = notApplied.GetValueOrDefault(name) + 1;
+            }
+        }
+
+        // folder: where the tool made the folder this tree is, and whether
+        // one already stood there; null for the snapshot's root.
+        async ValueTask WalkAsync(ObjectId treeId, string prefix, (string Destination, bool Found)? folder)
         {
             ObjectId? next = treeId;
             while (next is { } id)
@@ -431,6 +512,21 @@ public sealed class RecoverySession : IDisposable
                 }
 
                 var tree = TreeManifestCodec.Decode(treeBytes);
+
+                // A folder's own metadata rides on the first manifest of its
+                // chain. Only what the writer can apply is kept, so a tree of
+                // many folders holds no descriptors or streams.
+                if (id == treeId && folder is { } made)
+                {
+                    var own = tree.Metadata ?? EntryMetadata.Empty;
+                    folders.Add(new Folder(
+                        prefix,
+                        made.Destination,
+                        made.Found,
+                        MetadataRules.Captured(own),
+                        own with { WindowsSecurityDescriptor = null, AlternateStreams = [] }));
+                }
+
                 foreach (var entry in tree.Entries)
                 {
                     var name = Encoding.UTF8.GetString(entry.Name.Span);
@@ -451,9 +547,10 @@ public sealed class RecoverySession : IDisposable
 
                     if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
                     {
-                        Directory.CreateDirectory(
-                            Path.Combine(outputDirectory, path.Replace('/', Path.DirectorySeparatorChar)));
-                        await WalkAsync(entry.ObjectId, path).ConfigureAwait(false);
+                        var directory = Path.Combine(outputDirectory, path.Replace('/', Path.DirectorySeparatorChar));
+                        var found = Directory.Exists(directory);
+                        Directory.CreateDirectory(directory);
+                        await WalkAsync(entry.ObjectId, path, (directory, found)).ConfigureAwait(false);
                         continue;
                     }
 
@@ -565,6 +662,9 @@ public sealed class RecoverySession : IDisposable
                 }
 
                 File.Move(spool, destination, overwrite: true);
+                Count(
+                    MetadataRules.Captured(manifest.Metadata),
+                    writer.Write(destination, manifest.Metadata, EntryKind.File).Applied);
                 return true;
             }
             finally
@@ -575,6 +675,46 @@ public sealed class RecoverySession : IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// A folder the tool made or found, and what it is given once nothing
+    /// more will land in it.
+    /// </summary>
+    /// <param name="Path">Its path inside the snapshot, slash-separated.</param>
+    /// <param name="Destination">Where it was made.</param>
+    /// <param name="Found">Whether a folder already stood there.</param>
+    /// <param name="Captured">What was captured with it.</param>
+    /// <param name="Values">The captured values the writer can apply.</param>
+    private sealed record Folder(
+        string Path, string Destination, bool Found, CapturedMetadata Captured, EntryMetadata Values);
+
+    /// <summary>How many folders deep <paramref name="path"/> lies.</summary>
+    private static int Depth(string path) => path.Count(character => character == '/');
+
+    /// <summary>
+    /// Whether every folder from <paramref name="outputDirectory"/> down to
+    /// <paramref name="path"/> is still a folder and none is a link.
+    /// </summary>
+    /// <remarks>
+    /// A folder's metadata goes on at the end of the run, so whoever can
+    /// write beside it has had the rest of the run to put a link in its
+    /// place or in an ancestor's. Written through a link, the folder's
+    /// permissions and times would land on whatever the link points at.
+    /// </remarks>
+    private static bool IsStillTheFolderMade(string outputDirectory, string path)
+    {
+        var built = outputDirectory;
+        foreach (var component in path.Split('/'))
+        {
+            built = Path.Combine(built, component);
+            if (new DirectoryInfo(built) is not { Exists: true, LinkTarget: null })
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

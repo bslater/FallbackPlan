@@ -291,6 +291,11 @@ public static class RecoveryHost
                         error.WriteLine(note);
                     }
 
+                    if (report.DescribeNotApplied() is { } notApplied)
+                    {
+                        error.WriteLine(notApplied);
+                    }
+
                     Log.RecoveryComplete(log, report.Restored, report.Failed, report.Skipped);
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                         $"restored {report.Restored} file(s), {report.Failed} failed, {report.Skipped} skipped, to {destination}"));
