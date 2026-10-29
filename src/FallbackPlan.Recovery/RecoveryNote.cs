@@ -32,6 +32,9 @@ public enum RecoveryNoteKind
 
     /// <summary>A file or a link the output would not take at its name, failed alone (ADR-0155).</summary>
     WriteFailed = 8,
+
+    /// <summary>A later name of a hard-link group restored as a file of its own, and why (ADR-0156).</summary>
+    NotLinked = 9,
 }
 
 /// <summary>
@@ -74,6 +77,7 @@ public sealed record RecoveryNote(
         RecoveryNoteKind.RecordMissing => $"FAILED {Path ?? RootTree}: metadata record {Record} is in no readable blob",
         RecoveryNoteKind.RecordUnreadable => $"FAILED {Path ?? RootTree}: record read {Outcome} — {Detail}",
         RecoveryNoteKind.WriteFailed => $"FAILED {Path}: the output would not take it — {Detail}",
+        RecoveryNoteKind.NotLinked => $"{Path}: restored as a file of its own, not linked to its group — {Reason}",
         _ => Kind.ToString(),
     };
 }

@@ -945,11 +945,11 @@ public sealed class RestoreExecutor(
                     // that file, where it agrees with it and the target makes
                     // one; otherwise it is restored as a file of its own, and
                     // says why.
-                    var group = RestoreHardLinks.GroupOf(manifest);
+                    var group = HardLinkGroups.GroupOf(manifest);
                     string? notLinked = null;
                     if (group is not null && groups.TryGetValue(group, out var first))
                     {
-                        if (!string.Equals(first.Key, RestoreHardLinks.KeyOf(manifest), StringComparison.Ordinal))
+                        if (!string.Equals(first.Key, HardLinkGroups.KeyOf(manifest), StringComparison.Ordinal))
                         {
                             notLinked = $"not linked to {first.Path}: its content or attributes differ from that name's, so it was restored as a file of its own";
                         }
@@ -986,7 +986,7 @@ public sealed class RestoreExecutor(
                             notLinked, foundInPlace: true);
                         if (!keptDegraded && group is not null && notLinked is null)
                         {
-                            groups.TryAdd(group, new LandedName(RestoreHardLinks.KeyOf(manifest)!, item.Path, standing, keptNotApplied));
+                            groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, standing, keptNotApplied));
                         }
 
                         items.Add(kept);
@@ -1148,7 +1148,7 @@ public sealed class RestoreExecutor(
                         resumedAt: (ulong)result.Resumed);
                     if (!degraded && group is not null && notLinked is null)
                     {
-                        groups.TryAdd(group, new LandedName(RestoreHardLinks.KeyOf(manifest)!, item.Path, landing, notApplied));
+                        groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, landing, notApplied));
                     }
 
                     items.Add(settled);
@@ -1804,7 +1804,7 @@ public sealed class RestoreExecutor(
         parts.Where(part => part is not null).ToList() is { Count: > 0 } present ? string.Join("; ", present) : null;
 
     /// <summary>The first name of a hard-link group the run landed, which its later names are made again.</summary>
-    /// <param name="Key">What a later name must agree on with it (<see cref="RestoreHardLinks.KeyOf"/>).</param>
+    /// <param name="Key">What a later name must agree on with it (<see cref="HardLinkGroups.KeyOf"/>).</param>
     /// <param name="Path">Its path in the snapshot.</param>
     /// <param name="Landing">Where it landed.</param>
     /// <param name="NotApplied">What its file did not get back, which every name of it shares.</param>
