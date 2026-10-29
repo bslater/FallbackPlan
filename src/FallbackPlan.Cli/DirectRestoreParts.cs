@@ -129,7 +129,8 @@ internal static class DirectRestoreParts
     /// A run is refused too where a run under way lands in a folder that
     /// holds or lies inside one this run lands in, since the two would write
     /// the same files though each holds a folder of its own (ADR-0157). The
-    /// judgement is <see cref="PathContainment"/>'s, which folds case. It is
+    /// judgement is <see cref="PathContainment"/>'s, which folds case, made as
+    /// each folder is written and again where its links lead (ADR-0160). It is
     /// made, and the record written, under one claim of every destination's
     /// folder, so two runs starting at once each see the other. A run refused
     /// so leaves no folder it made, and keeps one a run before it left.
@@ -172,7 +173,7 @@ internal static class DirectRestoreParts
             {
                 foreach (var ours in run.LandsIn ?? [])
                 {
-                    if (PathContainment.IsAtOrUnder(theirs, ours) || PathContainment.IsAtOrUnder(ours, theirs))
+                    if (Nest(theirs, ours))
                     {
                         // A folder a run before this one left keeps what
                         // it holds; one made only to be judged is not listed.
@@ -191,6 +192,24 @@ internal static class DirectRestoreParts
 
         Record(parts, run);
         return hold;
+    }
+
+    /// <summary>
+    /// Whether two folders hold or lie inside one another, as written or
+    /// where their links lead (ADR-0157, ADR-0160): each spelling names a
+    /// folder of parts of its own, so only this finds two runs to one place
+    /// by two spellings.
+    /// </summary>
+    private static bool Nest(string one, string other)
+    {
+        if (PathContainment.IsAtOrUnder(one, other) || PathContainment.IsAtOrUnder(other, one))
+        {
+            return true;
+        }
+
+        var realOne = RestorePaths.ThroughLinks(one);
+        var realOther = RestorePaths.ThroughLinks(other);
+        return PathContainment.IsAtOrUnder(realOne, realOther) || PathContainment.IsAtOrUnder(realOther, realOne);
     }
 
     /// <summary>Every folder a run's record says it lands in, its one destination where it said no more.</summary>

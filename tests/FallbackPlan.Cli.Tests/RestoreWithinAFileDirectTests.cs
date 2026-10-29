@@ -29,6 +29,9 @@ namespace FallbackPlan.Cli.Tests;
 /// passing over one with a run under way and anything else kept beside them,
 /// and a destination is let go, one or all, under the claim a run takes its
 /// folder under, so none is let go as a run takes it (FR-RST-008, ADR-0158).
+/// Where each lands is judged through links too, so a run into a folder a
+/// link makes nest with a destination under way is refused, while one a link
+/// leads beside it goes ahead (FR-RST-008, ADR-0159).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileDirectTests : IDisposable
@@ -474,6 +477,98 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link is made there without a privilege")]
+    public async Task ARunThroughALinkIntoAFolderInsideADestinationUnderWay_IsRefused()
+    {
+        // Two destinations that only a link makes nest write the same files
+        // (ADR-0159).
+        var snapshot = await BackUpAsync();
+        var link = LinkTo(Destination);
+        using var underWay = HoldARunInto(Destination);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(link, "inner"));
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"Another restore in direct mode is under way into '{Destination}'", refused.Error, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(Path.Combine(Destination, "inner")), "nothing is written");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link is made there without a privilege")]
+    public async Task ARunIntoAFolderInsideWhereALinkUnderWayLeads_IsRefused()
+    {
+        var snapshot = await BackUpAsync();
+        var link = LinkTo(Destination);
+        using var underWay = HoldARunInto(link);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(Destination, "inner"));
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"Another restore in direct mode is under way into '{link}'", refused.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link is made there without a privilege")]
+    public async Task ARunIntoADestinationUnderWay_SpeltThroughALink_IsRefused()
+    {
+        // Each spelling names a folder of parts of its own, so only the
+        // judgement through links finds them one destination.
+        var snapshot = await BackUpAsync();
+        var link = LinkTo(Destination);
+        using var underWay = HoldARunInto(Destination);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", link);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"Another restore in direct mode is under way into '{Destination}', which holds or lies inside '{link}'", refused.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link is made there without a privilege")]
+    public async Task ARunThroughALinkIntoAFolderThatHoldsADestinationUnderWay_IsRefused()
+    {
+        var snapshot = await BackUpAsync();
+        var link = LinkTo(Destination);
+        var inside = Path.Combine(Destination, "inner");
+        using var underWay = HoldARunInto(inside);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", link);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"Another restore in direct mode is under way into '{inside}'", refused.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link is made there without a privilege")]
+    public async Task ARunThroughALinkLeadingBesideADestinationUnderWay_GoesAhead()
+    {
+        var snapshot = await BackUpAsync();
+        var link = LinkTo(Destination + "-beside");
+        using var underWay = HoldARunInto(Destination);
+
+        var beside = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(link, "inner"));
+
+        Assert.AreEqual(0, beside.ExitCode, beside.All);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link is made there without a privilege")]
+    public async Task ARunIntoAFolderInsideADestinationUnderWay_ThatALinkLeadsOutOf_IsStillRefused()
+    {
+        // By its spelling it lies inside, which is judged as before.
+        var snapshot = await BackUpAsync();
+        Directory.CreateDirectory(Destination);
+        var elsewhere = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "elsewhere")).FullName;
+        var outward = Path.Combine(Destination, "outward");
+        Directory.CreateSymbolicLink(outward, elsewhere);
+        using var underWay = HoldARunInto(Destination);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(outward, "inner"));
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+    }
+
+    [TestMethod]
     public async Task ARunThatEnds_LetsTheDestinationGo_ForTheNextRunThere()
     {
         var snapshot = await BackUpAsync();
@@ -646,6 +741,18 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
         Assert.AreEqual(0, letGo.ExitCode, letGo.All);
         Assert.Contains($"kept the parts under '{Parts}': a restore in direct mode is under way there", letGo.Output, StringComparison.Ordinal);
         Assert.IsNotEmpty(Directory.GetFiles(Parts, "*.part"), "nothing of it is let go");
+    }
+
+    /// <summary>
+    /// Makes <paramref name="target"/> a folder, and a link beside the
+    /// destination that leads to it.
+    /// </summary>
+    private string LinkTo(string target)
+    {
+        Directory.CreateDirectory(target);
+        var link = Path.Combine(_cli.WorkPath, "link");
+        Directory.CreateSymbolicLink(link, target);
+        return link;
     }
 
     /// <summary>Takes the claim a run holds while it takes its destination's folder (ADR-0157).</summary>
