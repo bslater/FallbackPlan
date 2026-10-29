@@ -2,6 +2,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
@@ -103,6 +104,36 @@ public abstract class ArchiveTestHarness : IDisposable
         new MonotonicBlobCounterAllocator(firstCounter),
         SpoolDirectory,
         FormatVersions.SealedDataPlane);
+
+    /// <summary>
+    /// The index entries an archive's records amount to, projected from the
+    /// blobs' own footers: the 07 §10 relationship, "every field in an index
+    /// entry is present in the footer".
+    /// </summary>
+    protected static async Task<List<IndexEntry>> IndexEntriesOfAsync(
+        Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, ArchiveResult archived)
+    {
+        var entries = new List<IndexEntry>();
+        using var probe = new RepositoryReader(Repo, keys, store, Authority);
+        await probe.LoadBlobsAsync(CancellationToken.None);
+
+        foreach (var reference in archived.SegmentReferences.DistinctBy(reference => reference.ObjectId))
+        {
+            Assert.IsTrue(probe.TryLocateRecord(reference.ObjectId, out var locatedKey, out var entry));
+
+            // A segment an earlier archive stored is that archive's to index.
+            if (archived.Blobs.SingleOrDefault(archivedBlob => archivedBlob.StoreKey.Equals(locatedKey)) is not { } blob)
+            {
+                continue;
+            }
+
+            entries.Add(new IndexEntry(
+                entry.ObjectId, blob.BlobId, entry.PhysicalOffset, entry.StoredLength,
+                entry.CompressionProfileValue, entry.EncryptionProfileValue, IndexEntryType.Insertion));
+        }
+
+        return entries;
+    }
 
     /// <summary>
     /// A deterministic ~3 MiB file: alternating 128 KiB regions of repeated
