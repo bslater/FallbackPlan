@@ -188,6 +188,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0161](adr/0161-every-kept-restore-receipt-is-let-go-at-once.md) | Every kept restore receipt is let go at once: `restore-receipts --forget-all` lets every run's receipt go from the state directory, and nothing else kept there, or asks a paired service to let each it lists go by its run's name | **Built** | `Restore/RestoreExecutor` · `Cli/RestoreReceiptReport` · `Cli/CliApplication` · `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0161--every-kept-restore-receipt-is-let-go-at-once) |
 | [0162](adr/0162-every-restore-run-the-service-left-unfinished-is-let-go-at-once.md) | Every restore run the service left unfinished is let go at once: `restore-resume --forget-all` lists them and lets each go by its name, naming one the service will not let go while the rest go | **Built** | `Cli/OperationGateway` · `Cli/CliApplication` · `Cli.Tests/RestoreResumeVerbTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · [notes](#0162--every-restore-run-the-service-left-unfinished-is-let-go-at-once) |
 | [0163](adr/0163-the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once.md) | The console lets every restore left unfinished, and every kept receipt, go at once: once a person confirms, it asks the service for them afresh and lets each go by its name, naming one the service will not let go while the rest go | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0163--the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once) |
+| [0164](adr/0164-kept-restore-receipts-are-let-go-by-age.md) | Kept restore receipts are let go by age: `restore-receipts --forget-all --older-than-days` lets go only the receipts of runs that ended longer ago, from a state directory or through a paired service, and keeps and names one that does not say when its run ended | **Built** | `Cli/RestoreReceiptReport` · `Cli/CliApplication` · `Cli.Tests/RestoreReceiptsVerbTests` · `Hosts.Tests/RestoreReceiptsRemoteTests` · [notes](#0164--kept-restore-receipts-are-let-go-by-age) |
 
 ---
 
@@ -4324,7 +4325,8 @@ asked.
 
 What remains is recorded rather than done. Receipts are not let go by age,
 and the console still lets one go at a time. The console has since let every
-one go at once ([0163](#0163--the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once)).
+one go at once ([0163](#0163--the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once)). Receipts have since gone by age on
+request ([0164](#0164--kept-restore-receipts-are-let-go-by-age)).
 
 ### 0162 — every restore run the service left unfinished is let go at once
 
@@ -4357,3 +4359,20 @@ go; and where none was left by then it says so.
 
 What remains is recorded rather than done. Nothing is let go by age, and the
 console lets one go or every one, not a selection.
+
+### 0164 — kept restore receipts are let go by age
+
+A state directory's receipts, and those a paired service keeps, were let go
+one run at a time or every one at once. `restore-receipts --forget-all
+--older-than-days <days>` now lets go only the receipts of runs that ended
+more than that many days ago, says each and how many, and how many stay.
+From the folder each is removed by its run's name; through the service every
+receipt is listed with no limit and each older one let go by its run's name,
+so the contract is unchanged. A receipt that does not read says nothing of
+when its run ended, and its file's age is not taken for it: it stays, and is
+named. Without `--forget-all`, or below one day, the days are refused before
+anything is removed or the service dialled.
+
+What remains is recorded rather than done. Nothing expires on its own, as
+ADR-0139 decided; the console does not go by age; and runs left unfinished
+and direct mode's parts still go one by one or every one at once.

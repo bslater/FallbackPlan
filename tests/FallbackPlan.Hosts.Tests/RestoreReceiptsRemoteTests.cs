@@ -22,7 +22,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// the files asked without the passphrase are each refused, naming no file.
 /// The console lets a receipt the service keeps go by its run alone, and the
 /// service keeps every other run's (contract 1.79, ADR-0140). Listed as JSON,
-/// they read as the service answers them (ADR-0141).
+/// they read as the service answers them (ADR-0141). Let go by age, only the
+/// receipts of runs that ended longer ago go, and the rest stay (ADR-0164).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsRemoteTests : IDisposable
@@ -85,6 +86,22 @@ public sealed class RestoreReceiptsRemoteTests : IDisposable
         Assert.IsTrue(File.Exists(Path.Combine(receipts, $"{NoSetRun}.json")), "and every other run's stays");
         Assert.AreEqual(1, again.ExitCode, again.Output);
         Assert.Contains(Run, again.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task APairedConsole_LetsGoOnlyTheReceiptsOfRunsThatEndedLongerAgoThanItSays()
+    {
+        await using var service = await StartServiceAsync();
+        var receipts = Path.Combine(_harness.StateDirectory, "receipts");
+        Keep(receipts, Run, _harness.DocsSetId, completedAt: (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Keep(receipts, NoSetRun, setId: null, completedAt: 1_699_000_000_000);
+
+        var forgot = await service.CliAsync("restore-receipts", "--forget-all", "--older-than-days", "30");
+
+        Assert.AreEqual(0, forgot.ExitCode, forgot.Error);
+        Assert.Contains($"let go the receipt of run {NoSetRun} the service kept", forgot.Output, StringComparison.Ordinal);
+        Assert.IsFalse(File.Exists(Path.Combine(receipts, $"{NoSetRun}.json")), "a run that ended longer ago goes");
+        Assert.IsTrue(File.Exists(Path.Combine(receipts, $"{Run}.json")), "one that ended within the days stays");
     }
 
     [TestMethod]

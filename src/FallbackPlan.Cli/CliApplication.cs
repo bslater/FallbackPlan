@@ -2858,6 +2858,11 @@ public static class CliApplication
                 Description = "Let every run's receipt go at once (ADR-0161): each run's file is removed from the state "
                     + "directory, and nothing else kept there. With --connect, the paired service lets each it lists go.",
             };
+            var receiptsOlderThanOption = new Option<int?>("--older-than-days")
+            {
+                Description = "With --forget-all, let go only the receipts of runs that ended more than this many days "
+                    + "ago (ADR-0164). A receipt that does not say when its run ended stays, and is named.",
+            };
             var command = new Command(
                 "restore-receipts",
                 "Read back the restore receipts kept under a state directory, by the service or in direct mode "
@@ -2865,12 +2870,14 @@ public static class CliApplication
                 + "wrote them, or one run's receipt whole. With --connect, those a paired service keeps (ADR-0128), "
                 + "and one run's files it did not restore, through the passphrase. With --run and --forget, let that "
                 + "run's receipt go, from the state directory or the paired service (ADR-0139, ADR-0140), and with "
-                + "--forget-all every run's (ADR-0161).");
+                + "--forget-all every run's (ADR-0161), or with --older-than-days only those of runs that ended "
+                + "longer ago (ADR-0164).");
             command.Options.Add(receiptsStateOption);
             command.Options.Add(receiptsRunOption);
             command.Options.Add(receiptsLimitOption);
             command.Options.Add(receiptsForgetOption);
             command.Options.Add(receiptsForgetAllOption);
+            command.Options.Add(receiptsOlderThanOption);
             command.Options.Add(receiptsListJsonOption);
             command.Options.Add(connectOption);
             command.Options.Add(fingerprintOption);
@@ -2883,9 +2890,20 @@ public static class CliApplication
                 var limit = parse.GetValue(receiptsLimitOption);
                 var forget = parse.GetValue(receiptsForgetOption);
                 var forgetAll = parse.GetValue(receiptsForgetAllOption);
+                var olderThanDays = parse.GetValue(receiptsOlderThanOption);
                 if (forgetAll && (run is not null || forget))
                 {
                     throw new CliFailureException(Strings.CliApplication_ForgetAllNamesNoRun);
+                }
+
+                if (olderThanDays is not null && !forgetAll)
+                {
+                    throw new CliFailureException(Strings.CliApplication_OlderThanDaysGoesWithForgetAll);
+                }
+
+                if (olderThanDays is <= 0)
+                {
+                    throw new CliFailureException(Strings.CliApplication_OlderThanDaysTakesAtLeastOne);
                 }
 
                 if (forget && run is null)
@@ -2910,7 +2928,7 @@ public static class CliApplication
                     return WithServiceAsync(
                         parse,
                         client => forgetAll
-                            ? RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, cancellationToken)
+                            ? RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, olderThanDays, cancellationToken)
                             : run is null
                             ? parse.GetValue(receiptsListJsonOption)
                                 ? RestoreReceiptReport.WriteServiceKeptJsonAsync(output, client, limit, cancellationToken)
@@ -2931,7 +2949,7 @@ public static class CliApplication
 
                 if (forgetAll)
                 {
-                    RestoreReceiptReport.LetGoAll(output, state);
+                    RestoreReceiptReport.LetGoAll(output, state, olderThanDays);
                     return Task.FromResult(0);
                 }
 

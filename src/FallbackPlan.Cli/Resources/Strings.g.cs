@@ -641,6 +641,16 @@ internal static class Strings
     internal static string CliApplication_ForgetAllNamesNoRun => Get(nameof(CliApplication_ForgetAllNamesNoRun));
 
     /// <summary>
+    /// --older-than-days says which receipts --forget-all lets go: it goes beside --forget-all. Nothing was let go.
+    /// </summary>
+    internal static string CliApplication_OlderThanDaysGoesWithForgetAll => Get(nameof(CliApplication_OlderThanDaysGoesWithForgetAll));
+
+    /// <summary>
+    /// --older-than-days takes at least one day. Nothing was let go.
+    /// </summary>
+    internal static string CliApplication_OlderThanDaysTakesAtLeastOne => Get(nameof(CliApplication_OlderThanDaysTakesAtLeastOne));
+
+    /// <summary>
     /// The receipts of {0} run(s) were not let go: {1}
     /// </summary>
     private static string RestoreReceiptReport_NotAllLetGo => Get(nameof(RestoreReceiptReport_NotAllLetGo));
