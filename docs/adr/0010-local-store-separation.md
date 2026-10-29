@@ -48,6 +48,11 @@ Separate files, not separate tables in one file, so "delete the catalogue and le
 > may run beside it opens its own — see
 > [Amendment 5](#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself).
 
+> **Amendment 6 (2026-10).** "Deleting or corrupting it" now holds for a
+> file SQLite cannot read at all: it is discarded and rebuilt like one
+> another schema wrote, rather than failing every open of its set — see
+> [Amendment 6](#amendment-6-2026-10--a-catalogue-file-sqlite-cannot-read-is-discarded).
+
 **Durable local state:** separate store, OS-key-store protected where available. The device *private key* is never written to the recovery kit — a recovering device establishes a new identity and is re-authorised.
 
 **Configuration:** file-based, schema-versioned, validated before use, exportable without secrets. Files rather than a database because users edit, version-control, and diff them.
@@ -200,6 +205,11 @@ source's throwaway copy, for adoption
 ([ADR-0062](0062-the-destination-is-the-rollback-witness.md)), and never
 for the set's own catalogue.
 
+> **Amendment 6 (2026-10).** Not every file it could not use: one SQLite
+> could not read as a database made `Catalogue.Open` throw, so the set did
+> not open until a person deleted it — see
+> [Amendment 6](#amendment-6-2026-10--a-catalogue-file-sqlite-cannot-read-is-discarded).
+
 So every catalogue schema change emptied the history of every set it met.
 The v7 change, when the consistency method became a column, said the
 catalogue would drop and rebuild on first open; only the drop happened.
@@ -338,6 +348,77 @@ How it is held:
   for it and then commits, and a read beside another connection's
   uncommitted write sees the last commit at once.
 
+## Amendment 6 (2026-10) — a catalogue file SQLite cannot read is discarded
+
+The decision prices a corrupt catalogue as a slow rebuild. NFR-REL-002
+says deleting or corrupting it shall not cause repository data loss, and
+Amendment 4 made the rebuild happen for a catalogue `Catalogue.Open`
+discards. Open discarded a file another schema version or another
+repository wrote. It did not discard a file SQLite cannot read as a
+database at all, which is what a disk error, a torn copy or a state
+directory restored from elsewhere can leave:
+
+- **Not a database.** The connection's first statement failed with "file is
+  not a database" (SQLite error 26), and the exception left Open.
+- **A damaged first page.** A file whose header still reads as a database
+  failed at the same statement, with "malformed" (error 11). The
+  connection's opening pragmas read the schema, so damage to any schema
+  page surfaces there.
+
+The cost was the one the
+[prior-art review](../review/2026-08-prior-art-learnings.md)'s T-3 names: a
+file that blocks every later operation, including the retry.
+
+- **The set did not open.** The service opens a set's catalogue when it
+  first opens the archive, and the exception escaped the command handler.
+- **Neither did any other set's listing.** One set's unreadable catalogue
+  made `list_snapshots` fail for every set.
+- **Until a person acted.** It stayed that way until someone found the file
+  and deleted it. Nothing was lost from the repository.
+
+Now:
+
+- **A file SQLite cannot read is discarded.** When a connection fails on
+  the file's contents (error 26 or 11), the attempt is disposed. The file is
+  then discarded and recreated as an incompatible one is, marked, and
+  rebuilt by Amendment 4's path.
+- **Nothing else a connection fails with discards.** A file that is busy or
+  locked is held by another connection. One that cannot be opened or
+  written is the operator's to fix. Deleting either would pull the file from
+  under whoever holds it, so those still fail the open as before.
+- **The compatibility read is unchanged, and so is its catch.** A catalogue
+  an older build wrote can fail that read with a plain SQL error, and has
+  always been discarded for it.
+- **The failed attempt is disposed before the delete**, because Windows
+  refuses to delete a file with a handle open on it.
+
+What it does not do:
+
+- **A rebuild that reports an incomplete result as complete.** That is
+  T-3's second ask, and it stays open. A rebuild at open clears its mark
+  when the projection saw every record it needed, whatever the index load
+  reported. So a delta that is listed and then cannot be fetched is a
+  finding in the log, and the catalogue is not tried again for it.
+
+How it is held:
+
+- **`Repository.Tests/CatalogueTests`:** two cases, each opening as a new
+  catalogue that needs rebuilding and that records and resolves a delta:
+  - a file of text at the catalogue's path;
+  - a catalogue whose first page is overwritten past the file header.
+
+  They failed before this amendment, with errors 26 and 11. The same suite
+  feeds the rule each result code. Only those two discard. Busy, locked,
+  read-only, an I/O error, cannot-open and no permission do not.
+- **`Hosts.Tests/CatalogueRebuildAtOpenTests`:** a set whose catalogue file
+  is not a database lists its snapshot and its files at the service's next
+  open. It failed before.
+- **T-3's other two asks** passed before, and are now pinned:
+  - in `Repository.Tests/CatalogueRebuildTests`, a rebuild cut short leaves
+    the catalogue marked, and the retry finishes whole and restores;
+  - in `Cli.Tests/CommandTests`, a rebuild over an empty store refuses and
+    leaves no catalogue.
+
 ## Status history
 
 | Date | Status | Note |
@@ -349,3 +430,4 @@ How it is held:
 | 2026-09 | Accepted (amended) | Amendment 3: the catalogue's connections are not pooled, so a pool clear anywhere in the process cannot dispose one under the operation that opened it, and the service no longer clears pools to delete a catalogue file. Set in `Repository.Catalogue/Catalogue`, held by `CataloguePoolingTests`. |
 | 2026-09 | Accepted (amended) | Amendment 4: a catalogue the service finds discarded or lost is rebuilt from the repository when it opens the set, before anything reads it, and a rebuild that could not see every record it needed is tried again at the next open. Marked by `Repository.Catalogue/Catalogue`, rebuilt by `Agent/ServiceRuntime` through `Agent/CatalogueRebuild`, held by `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
 | 2026-10 | Accepted (amended) | Amendment 5: a set's backup has the archive's catalogue connection to itself. A sync's verification, retention, a snapshot deletion and the heal each open one of their own (`Agent/ArchiveHandle`), and SQLite keeps the connections apart. Held by `ArchitectureTests/CatalogueConnectionTests`, by three tests run with the backup's connection closed, and by `Repository.Tests/Catalogue/CatalogueConnectionsTests`. |
+| 2026-10 | Accepted (amended) | Amendment 6: a catalogue file SQLite cannot read as a database is discarded and rebuilt like one another schema wrote, rather than failing every open of its set. A file that is busy, locked or cannot be written still fails the open. Set in `Repository.Catalogue/Catalogue`, held by `Repository.Tests/CatalogueTests` and `Hosts.Tests/CatalogueRebuildAtOpenTests`. |

@@ -119,6 +119,12 @@ Two gaps, both taught by #6205 and #6688 rather than by #4041:
 | `CatalogueRebuild_AnIndexDeltaIsUnreachable_ReportsAnIncompleteRebuildRatherThanSuccess` | Partial input must produce a stated partial result, not a quiet one. |
 | `CatalogueRebuild_TheStoreIsEmpty_ReportsNothingToRebuildAndLeavesNoDatabase` | #6205's literal case. |
 
+> **Partly resolved (2026-10).** The first gap was real in a form the tests above did not name.
+> - **A file SQLite cannot read blocked every open.** The catalogue discarded a file another schema wrote, but one that was not a database at all, or whose first page was damaged, made `Catalogue.Open` throw. The service could then open neither the set nor any set's snapshot listing, until a person deleted the file. That is #6205's shape exactly. It is now discarded and rebuilt like any other mismatch ([ADR-0010 Amendment 6](../adr/0010-local-store-separation.md#amendment-6-2026-10--a-catalogue-file-sqlite-cannot-read-is-discarded)). Held by `Repository.Tests/CatalogueTests` and `Hosts.Tests/CatalogueRebuildAtOpenTests`, which failed before the change.
+> - **An interrupted rebuild** is held verbatim-named in `Repository.Tests/CatalogueRebuildTests`. A rebuild cut short leaves a catalogue that still needs rebuilding, and the retry over it finishes whole and restores. It passed on the code as it stood.
+> - **An empty store** is held as `RebuildIndex_TheStoreIsEmpty_SaysItHoldsNoRepositoryAndLeavesNoCatalogue` in `Cli.Tests/CommandTests`. The name differs because the behaviour does: an empty store holds no repository to rebuild from, and the command refuses before it opens any catalogue.
+> - **Still open: an incomplete rebuild reported as complete.** The rebuild at open clears its mark when the manifest projection saw every record, whatever findings the index load reported. A delta that is listed and then cannot be fetched is logged as a finding, and is not tried again.
+
 ---
 
 ### T-4 — Compaction is where bytes actually get deleted
@@ -353,6 +359,12 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 
 **Test to add:** `Catalogue_OpenedAtAnOlderSchemaVersion_IsDiscardedAndRebuiltRatherThanRead`.
 
+> **Resolved (2026-10).** Held under two names since [ADR-0010 Amendment 4](../adr/0010-local-store-separation.md#amendment-4-2026-09--a-catalogue-discarded-is-rebuilt-before-it-is-read):
+> - **Discarded rather than read:** `Open_ACatalogueAnotherSchemaWrote_IsRecreated_AndNeedsRebuilding` in `Repository.Tests/CatalogueTests`. It stamps an older version, and the reopened catalogue holds nothing and says it needs rebuilding.
+> - **Rebuilt:** `ACatalogueAnotherSchemaLeft_IsRebuiltWhenTheServiceOpensTheSet` in `Hosts.Tests/CatalogueRebuildAtOpenTests`. The snapshot and its files are listed again at the next open.
+>
+> Opening compares the stored version for equality, so a newer file is discarded as an older one is. The version has moved from 4 to 17 since this was written.
+
 ---
 
 ## Part 3 — What to do, in order
@@ -377,6 +389,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 10. T-5, three tests — needs an index-delta forger in test support.
 
 > **2026-10.** T-6, T-8, T-9 and T-10 are resolved; each finding above says by which tests.
+>
+> **2026-10.** T-14 is resolved and T-3 partly; T-3's note says what stays open.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 
