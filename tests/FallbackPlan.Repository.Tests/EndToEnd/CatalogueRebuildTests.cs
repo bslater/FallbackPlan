@@ -188,34 +188,4 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
             SequenceAssert.AreEqual(data, restored.ToArray());
         }
     }
-
-    /// <summary>
-    /// The index entries an archive's records amount to, projected from the
-    /// blobs' own footers: the 07 §10 relationship, "every field in an index
-    /// entry is present in the footer".
-    /// </summary>
-    private static async Task<List<IndexEntry>> IndexEntriesOfAsync(
-        Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, ArchiveResult archived)
-    {
-        var entries = new List<IndexEntry>();
-        using var probe = new RepositoryReader(Repo, keys, store, Authority);
-        await probe.LoadBlobsAsync(CancellationToken.None);
-
-        foreach (var reference in archived.SegmentReferences.DistinctBy(reference => reference.ObjectId))
-        {
-            Assert.IsTrue(probe.TryLocateRecord(reference.ObjectId, out var locatedKey, out var entry));
-
-            // A segment an earlier archive stored is that archive's to index.
-            if (archived.Blobs.SingleOrDefault(archivedBlob => archivedBlob.StoreKey.Equals(locatedKey)) is not { } blob)
-            {
-                continue;
-            }
-
-            entries.Add(new IndexEntry(
-                entry.ObjectId, blob.BlobId, entry.PhysicalOffset, entry.StoredLength,
-                entry.CompressionProfileValue, entry.EncryptionProfileValue, IndexEntryType.Insertion));
-        }
-
-        return entries;
-    }
 }
