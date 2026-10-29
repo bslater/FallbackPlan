@@ -74,6 +74,13 @@ public sealed record ReuseCandidate(WriterId WriterId, bool Verified);
 /// are the winning entry's rank (07 §3): its generation is its delta's index
 /// generation, or zero for a delta that predates format 4. A delta a
 /// checkpoint carries ranks as it would read from its own key.
+/// <see cref="BlobKeyGeneration"/> is the key generation recorded for the
+/// blob by the backup that sealed it or a forensic rebuild that read its
+/// footer, from the same row and null on the same terms: no row, or a
+/// placeholder row, whose zero nobody recorded. It is a hint a read may
+/// frame a record under and never a fact it rests on: a generation that
+/// does not open the record sends the read to the blob's envelope
+/// ([ADR-0167](../../docs/adr/0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md)).
 /// </remarks>
 public sealed record ResolvedLocation(
     BlobId BlobId,
@@ -84,7 +91,8 @@ public sealed record ResolvedLocation(
     ushort EncryptionProfileValue,
     ulong Generation,
     WriterId WriterId,
-    ulong Sequence);
+    ulong Sequence,
+    KeyGeneration? BlobKeyGeneration = null);
 
 /// <summary>
 /// What damaged blobs are needed by, as far as the catalogue can trace it
@@ -1844,7 +1852,8 @@ public sealed class Catalogue : IDisposable
                    CASE WHEN b.store_blob_key = b.blob_id THEN NULL ELSE b.store_blob_key END,
                    l.physical_offset, l.stored_length,
                    l.compression_profile, l.encryption_profile, l.generation,
-                   (SELECT writer_id FROM location_writers WHERE writer_ref = l.writer_ref), l.sequence
+                   (SELECT writer_id FROM location_writers WHERE writer_ref = l.writer_ref), l.sequence,
+                   CASE WHEN b.blob_class = 0 THEN NULL ELSE b.key_generation END
             FROM object_locations l
             JOIN location_blobs n ON n.blob_ref = l.blob_ref
             LEFT JOIN blobs b ON b.blob_id = n.blob_id
@@ -1873,7 +1882,8 @@ public sealed class Catalogue : IDisposable
                     (ushort)reader.GetInt64(5),
                     rank.Generation,
                     WriterId.FromBytes(rank.Writer),
-                    rank.Sequence);
+                    rank.Sequence,
+                    reader.IsDBNull(9) ? null : new KeyGeneration((uint)reader.GetInt64(9)));
             }
         }
 

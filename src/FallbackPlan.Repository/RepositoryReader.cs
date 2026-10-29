@@ -829,7 +829,7 @@ public sealed class RepositoryReader : IDisposable
         var length = Math.Min(blob.Length - offset, RecordFraming.MaxRecordLength(location.StoredLength));
         var held = RunCovering(blob.Key, offset, length);
 
-        if (AssumedFraming(blob, location.BlobId) is { } assumed)
+        if (AssumedFraming(blob, location) is { } assumed)
         {
             // Fetched at the longest framing any container uses, so a blob
             // that turns out older is framed again from these same bytes
@@ -854,28 +854,42 @@ public sealed class RepositoryReader : IDisposable
 
     /// <summary>
     /// The framing a blob's record is first read under when its envelope is
-    /// not in hand (ADR-0166), or null where the envelope's own is wanted: a
-    /// blob already framed, one whose envelope a held run covers, a metadata
-    /// blob, whose record keys come from the envelope's key generation, and
-    /// a reader that holds no grant to open a record's share with.
+    /// not in hand (ADR-0166, ADR-0167), or null where the envelope's own is
+    /// wanted: a blob already framed, one whose envelope a held run covers, a
+    /// data blob read by a reader that holds no grant to open a record's
+    /// share with, and a metadata blob whose key generation the location
+    /// does not carry.
     /// </summary>
-    private BlobReader? AssumedFraming((ObjectKey Key, long Length) blob, BlobId blobId)
+    private BlobReader? AssumedFraming((ObjectKey Key, long Length) blob, ResolvedLocation location)
     {
-        if (_sealedContentKeyOpener is null
-            || _framing.ContainsKey(blob.Key)
-            || BlobStoreKeys.ClassOf(blob.Key) != BlobClass.Data
+        if (_framing.ContainsKey(blob.Key)
             || RunCovering(blob.Key, 0, BlobReader.EnvelopeReadLength(blob.Length)) is not null)
         {
             return null;
         }
 
-        if (!_assumed.TryGetValue(blob.Key, out var assumed))
+        if (_assumed.TryGetValue(blob.Key, out var assumed))
         {
-            assumed = BlobReader.AssumingRelocatableData(
-                _store, blob.Key, blob.Length, _repositoryId, _objectIdDeriver, blobId, _sealedContentKeyOpener);
-            _assumed[blob.Key] = assumed;
+            return assumed;
         }
 
+        switch (BlobStoreKeys.ClassOf(blob.Key))
+        {
+            case BlobClass.Data when _sealedContentKeyOpener is not null:
+                assumed = BlobReader.AssumingRelocatableData(
+                    _store, blob.Key, blob.Length, _repositoryId, _objectIdDeriver, location.BlobId,
+                    _sealedContentKeyOpener);
+                break;
+            case BlobClass.Metadata when location.BlobKeyGeneration is { } generation:
+                assumed = BlobReader.AssumingRelocatableMetadata(
+                    _store, blob.Key, blob.Length, _repositoryId, _keys.DeriveClassKey, _objectIdDeriver,
+                    location.BlobId, generation);
+                break;
+            default:
+                return null;
+        }
+
+        _assumed[blob.Key] = assumed;
         return assumed;
     }
 
