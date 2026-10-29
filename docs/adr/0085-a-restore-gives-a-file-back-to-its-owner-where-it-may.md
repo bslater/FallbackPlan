@@ -6,7 +6,7 @@
 **Related:** [ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md) (the times, and the rule this extends), [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (what a restore says it does not write back), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (owner and group: preserve where the principal resolves), [architecture 08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) (metadata after content), [ADR-0079](0079-sparse-restore.md) (why a restored file's helpers live in Domain)
 
 **Built:**
-- The ownership: `Domain/FileOwnership` resolves a captured name on the target, gives a file to what it names, and knows the account this process runs as. `Restore/RestoreAccount` is that account on the target profile. `Restore/RestoreMetadata` decides each file's ownership, and keeps a set-id bit only with the owner or group it runs as. `Restore/RestoreExecutor` writes ownership first. `Restore/RestoreBlobSet` gives the plan each file's captured names and mode.
+- The ownership: `Domain/FileOwnership` resolves a captured name on the target, gives a file to what it names, and knows the account this process runs as. `Domain/RestoreAccount` is that account on the target profile. `Restore/RestoreMetadata` decides each file's ownership, and keeps a set-id bit only with the owner or group it runs as. `Restore/RestoreExecutor` writes ownership first. `Restore/RestoreBlobSet` gives the plan each file's captured names and mode.
 - The tests:
   - `Domain.Tests/FileOwnershipTests` — names resolve to the ids the system gives them, or to nothing; owner and group land apart; another account is refused without privilege and given with it; the process's account matches an independent read
   - `Repository.Tests/RestoreMetadataHonestyTests` — an owner and group the account may give are written back and not listed, one it may not give is listed while the file stays its own, a privileged restore gives a file away, a set-id bit survives the ownership write and is dropped where its owner or group did not land, and the plan says all of it per file
@@ -35,7 +35,9 @@ Ownership by name means a name that belongs to a different person on the restori
 
 ### 2. Who may give what
 
-`Restore/RestoreAccount` is the account the restore runs as, on the target profile, read from the process: its user id, every group it is in, and whether it may give files away (root, or CAP_CHOWN read from `/proc/self/status`). An owner is given back where its name resolves and it is this account, or this account may give files away. A group is given back where its name resolves and this account is in it, or may give files away. Windows has no account here, because its owner lives in the security descriptor.
+`Domain/RestoreAccount` is the account the restore runs as, on the target profile, read from the process: its user id, every group it is in, and whether it may give files away (root, or CAP_CHOWN read from `/proc/self/status`). An owner is given back where its name resolves and it is this account, or this account may give files away. A group is given back where its name resolves and this account is in it, or may give files away. Windows has no account here, because its owner lives in the security descriptor.
+
+> **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The account now lives in Domain, beside the writer that resolves names through it, so a tool that may not reference the restore project can reach it.
 
 ### 3. Owner and group are written apart, and first
 
@@ -80,6 +82,8 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
   > **2026-10 ([Amendment 1](#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits)).** Decided: a quarantine restore keeps them, as any restore does, and the docs say what that means for the folder.
 - **The recovery tool and the CLI's `restore-file`**, which write no metadata.
 
+  > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's owner and group back by this record's rule, through the writer the executor uses. The recovery tool still writes none.
+
 ## Alternatives considered
 
 - **Predict by privilege alone.** Rejected. A person restoring their own files without privilege would be told their ownership will not be applied, when it will.
@@ -109,3 +113,4 @@ Two alternatives were weighed and not taken. Stripping set-id bits from a quaran
 | 2026-10 | Accepted | Amendment 1: a quarantine restore keeps set-id bits, as any restore does. The open question is decided and documented in architecture 08 §3.1, the threat model and SECURITY.md. No behaviour changes. |
 | 2026-10 | Accepted | [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) gives a folder the restore makes its owner and group by §2's rule, and its permissions by §4's. |
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes extended attributes back between §3's ownership and the permissions. A restore as root recreates file capabilities, which Amendment 1's advice covers. |
+| 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's owner and group back by this record's rule, through the writer the executor uses; the recovery tool still writes none. The restore's account moves with the writer to Domain/RestoreAccount, and this record's citation follows it. |
