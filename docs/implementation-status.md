@@ -174,6 +174,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0147](adr/0147-a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it.md) | A file version's catalogue row keeps only what is asked of it: schema 15 keeps no name, kind, whole-file hash, parent version or segment count, and no index on the hash, so file_versions falls from 345 B/version to 155 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0147--a-file-versions-catalogue-row-keeps-only-what-is-asked-of-it) |
 | [0148](adr/0148-a-tree-entry-is-keyed-by-its-folder-and-name.md) | A tree entry is keyed by its folder and name: schema 16 keeps no path and no covering parent index, and a snapshot's leaves are sorted into path order, so tree_entries falls from 378 B/version to 138 and the floor, at 395, is inside the budget | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0148--a-tree-entry-is-keyed-by-its-folder-and-name) |
 | [0149](adr/0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md) | The single-file restore writes back a file's metadata by the executor's rule: the writer, its rules, the account a restore runs as and the captured map move into Domain, the executor writes through it, and `restore-file` writes a file's metadata back once its content has verified and names what did not land | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Restore/RestoreExecutor` · `Cli/CliApplication` · `Cli.Tests/InspectionCommandTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0149--the-single-file-restore-writes-back-a-files-metadata) |
+| [0150](adr/0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) | The recovery tool gives what it restores its metadata back by the executor's rule: each file once it has landed and each folder it made last, deepest first and never through a link, through the shared writer; a folder already in the output and the output itself keep their own, and what did not land is counted by attribute on the terminal and in the bundle | **Built** | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Recovery/RecoveryBundle` · `Domain/MetadataWriter` · `Repository.Tests/RecoveryMetadataTests` · `Hosts.Tests/RecoveryHostTests` · `Hosts.Tests/RecoveryBundleTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0150--the-recovery-tool-writes-back-metadata) |
 
 ---
 
@@ -2508,7 +2509,8 @@ descriptors and alternate streams are still listed; extended attributes have
 since landed ([0087](#0087--extended-attributes)), and so has a symlink's own
 metadata ([0101](#0101--a-links-own)). The recovery tool and the CLI's
 `restore-file` write no metadata at all; the CLI's `restore-file` has since
-([0149](#0149--the-single-file-restore-writes-back-a-files-metadata)).
+([0149](#0149--the-single-file-restore-writes-back-a-files-metadata)), and
+so has the recovery tool ([0150](#0150--the-recovery-tool-writes-back-metadata)).
 
 ### 0085 — whose file it is
 
@@ -2652,7 +2654,8 @@ Windows security descriptors are not applied, and Windows keeps no extended
 attributes a restore writes. A symlink's own metadata has since landed
 ([0101](#0101--a-links-own)), and the recovery tool and the CLI's
 `restore-file` still write no metadata; the CLI's `restore-file` has since
-([0149](#0149--the-single-file-restore-writes-back-a-files-metadata)).
+([0149](#0149--the-single-file-restore-writes-back-a-files-metadata)), and
+so has the recovery tool ([0150](#0150--the-recovery-tool-writes-back-metadata)).
 
 ### 0088 — what is backed up
 
@@ -3229,7 +3232,9 @@ What remains is recorded rather than done. A link's metadata is written by
 path, so the window between making it and writing onto it is the one
 [0086](#0086--a-folders-own) records. Windows attribute bits, security
 descriptors and alternate streams are not applied, and the recovery tool and
-the CLI's `restore-file` still write no metadata.
+the CLI's `restore-file` still write no metadata. Both have since written a
+file's metadata ([0149](#0149--the-single-file-restore-writes-back-a-files-metadata),
+[0150](#0150--the-recovery-tool-writes-back-metadata)), and neither makes a link.
 
 ### 0102 — one file, every name
 
@@ -4065,4 +4070,27 @@ command line ever writes metadata through a copy of the writer.
 
 What remains is recorded rather than done. The recovery tool still
 writes no metadata, and `restore-file` withholds a Linux ACL that names
-accounts by number even on the machine that captured it.
+accounts by number even on the machine that captured it. The recovery
+tool has since written metadata through the same writer
+([0150](#0150--the-recovery-tool-writes-back-metadata)).
+
+### 0150 — the recovery tool writes back metadata
+
+The recovery tool restored content and nothing else, so a tree it brought
+back carried the times it was written, the tool's default permissions and
+the account it ran as. It now gives what it restores the metadata
+captured with it, through the writer the executor uses. A file's goes on
+once it has landed. A folder it made gets its own once nothing more will
+land in it, deepest folder first, and only while it and every folder above
+it are still folders and not links. A run stopped part way settles the
+folders it made. A folder already in the output keeps its own, and so does
+the output itself. Having no receipt, the tool counts by attribute what
+did not land, in the receipt's words. The terminal says it in one line
+after the notes, and the bundle's restore entry carries the counts. A
+canary holds the tool to the shared writer.
+
+What remains is recorded rather than done. The tool counts and does not
+say which entries missed an attribute, and it still makes no link. It
+checks that each tree name is a plain component, but not, as the executor
+does, that a path stays inside the output through links, so a file lands
+through a link planted in the output, and its metadata goes with it.

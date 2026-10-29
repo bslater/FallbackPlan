@@ -84,6 +84,8 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
 
   > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's owner and group back by this record's rule, through the writer the executor uses. The recovery tool still writes none.
 
+  > **2026-10 ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** The recovery tool now writes a file's and a folder's owner and group back by this record's rule, through the same writer.
+
 ## Alternatives considered
 
 - **Predict by privilege alone.** Rejected. A person restoring their own files without privilege would be told their ownership will not be applied, when it will.
@@ -114,3 +116,4 @@ Two alternatives were weighed and not taken. Stripping set-id bits from a quaran
 | 2026-10 | Accepted | [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) gives a folder the restore makes its owner and group by §2's rule, and its permissions by §4's. |
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes extended attributes back between §3's ownership and the permissions. A restore as root recreates file capabilities, which Amendment 1's advice covers. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's owner and group back by this record's rule, through the writer the executor uses; the recovery tool still writes none. The restore's account moves with the writer to Domain/RestoreAccount, and this record's citation follows it. |
+| 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's owner and group back by this record's rule, through the writer the executor uses. |
