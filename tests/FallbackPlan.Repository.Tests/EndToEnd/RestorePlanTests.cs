@@ -23,7 +23,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// the partial-rebuild drill: a targeted forensic rebuild resolves one
 /// snapshot's graph and restore works from it without the rest of the
 /// repository. Repository path text is treated as untrusted, so a manifest
-/// that does not name plain components under the root is refused. The three
+/// that does not name plain components under the root is refused. A plan is
+/// judged by the target's naming rules, stated rather than taken from the
+/// running platform: names a POSIX source wrote that Windows would refuse or
+/// alter are each named before any byte moves, and Windows' own names plan
+/// clean on a POSIX target (ADR-0170). The three
 /// selectors that exist — snapshot, path, destination — are exercised end to
 /// end; device, time and file-version selection is phase-2 work that has not
 /// been built, so FR-RST-001 is covered in part and says so.
@@ -121,6 +125,100 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             catalogue, snapshotId, string.Empty, RestoreTargetProfile.ForLocalPlatform() with { CaseSensitive = true });
         Assert.DoesNotContain(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal), sensitivePlan.Conflicts);
     }
+
+    [TestMethod]
+    public async Task RestorePlan_PosixNamesTargetingWindowsRules_ReportsEveryUnrepresentableNameBeforeAnyByteMoves()
+    {
+        // Names a POSIX source holds as written and Windows would refuse or
+        // alter: a device name it would open instead of a file, characters it
+        // refuses, a trailing period or space it strips, a component longer
+        // than it allows.
+        string[] windowsRefuses =
+        [
+            "names/CON", "names/aux.txt", "names/what?.txt", "names/star*.txt",
+            "names/trailing.", "names/trailing ", "names/" + new string('n', 256),
+        ];
+
+        // A name no target restores: a drive marker is refused everywhere.
+        const string NoTargetRestores = "names/drive:name";
+        string[] kept = ["names/fine.txt", "names/My Docs.txt"];
+
+        var source = new FakeFileSystemSource();
+        var seed = (byte)1;
+        foreach (var path in windowsRefuses.Append(NoTargetRestores).Concat(kept))
+        {
+            source.AddFile(path, Deterministic(64, seed++));
+        }
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA4), CancellationToken.None);
+        var snapshotId = Enumerable.Repeat((byte)0xA4, 16).ToArray();
+
+        var windows = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, new RestoreTargetProfile
+        {
+            CaseSensitive = false,
+            SupportsPosixMetadata = false,
+            SupportsSymlinks = false,
+            WindowsNamingRules = true,
+        });
+
+        // Each is named, with why, by the plan: nothing has been read or
+        // written yet, and the operator decides with the list in hand.
+        CollectionAssert.AreEquivalent(
+            windowsRefuses.Append(NoTargetRestores).ToArray(), windows.Conflicts.Select(conflict => conflict.Path).ToArray());
+        Assert.IsTrue(
+            windows.Conflicts.Where(conflict => conflict.Path != NoTargetRestores)
+                .All(conflict => conflict.Reason.Contains("Windows", StringComparison.Ordinal)),
+            string.Join(Environment.NewLine, windows.Conflicts));
+        Assert.HasCount(windows.Conflicts.Count, RestorePlanFigures.Conflicts(windows));
+
+        // On a POSIX target only the name no target restores is a conflict.
+        var posix = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, PosixTarget());
+        Assert.AreEqual(NoTargetRestores, Assert.ContainsSingle(posix.Conflicts).Path);
+
+        // And the profile of the platform the restore runs on names by
+        // Windows' rules exactly where that platform is Windows.
+        Assert.AreEqual(OperatingSystem.IsWindows(), RestoreTargetProfile.ForLocalPlatform().WindowsNamingRules);
+    }
+
+    [TestMethod]
+    public async Task RestorePlan_WindowsNamesTargetingPosixRules_PlansWithoutDegradation()
+    {
+        // The other direction is clean, and a test that says so is what keeps
+        // a fix for the first from turning it into a problem.
+        var source = new FakeFileSystemSource();
+        source.AddFile("Docs/Readme.TXT", Deterministic(64, 1));
+        source.AddFile("Docs/My Docs/a b.txt", Deterministic(64, 2));
+        source.AddFile("Docs/über straße " + new string('w', 200) + ".txt", Deterministic(64, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA5), CancellationToken.None);
+        var snapshotId = Enumerable.Repeat((byte)0xA5, 16).ToArray();
+
+        var posix = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, PosixTarget());
+        Assert.IsEmpty(posix.Conflicts);
+        Assert.IsEmpty(posix.Degradations);
+
+        // They are Windows' own names, so its rules keep them too.
+        var windows = RestorePlanner.Plan(
+            catalogue, snapshotId, string.Empty, PosixTarget() with { CaseSensitive = false, WindowsNamingRules = true });
+        Assert.IsEmpty(windows.Conflicts);
+    }
+
+    /// <summary>A case-sensitive target that keeps POSIX metadata and links, stated rather than taken from the running platform.</summary>
+    private static RestoreTargetProfile PosixTarget() => new()
+    {
+        CaseSensitive = true,
+        SupportsPosixMetadata = true,
+        SupportsSymlinks = true,
+        MaxPathBytes = 4096,
+    };
 
     [TestMethod]
     public async Task RestorePlan_AFileCarryingAlternateStreams_DeclaresTheDegradation()
