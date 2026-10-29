@@ -181,6 +181,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0154](adr/0154-the-single-file-restore-knows-who-captured-the-snapshot-it-names.md) | The single-file restore knows who captured the snapshot it names: `restore-file` given a snapshot compares the device it names with this installation's own, and gives back an ACL that names accounts by number where they agree | **Built** | `Cli/CliApplication` · `Cli.Tests/InspectionCommandTests` · `Cli.Tests/CliHarness` · [notes](#0154--the-single-file-restore-knows-who-captured-the-snapshot) |
 | [0155](adr/0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md) | The recovery tool makes a link a link, and fails only the entry the output refuses: a symlink is made pointing where it pointed, with its own metadata onto the link, and a write the output refuses at an entry's name fails that entry alone | **Built** | `Recovery/RecoverySession` · `Recovery/RecoveryNote` · `Repository.Tests/EndToEnd/RecoveryLinkTests` · [notes](#0155--the-recovery-tool-makes-a-link-a-link) |
 | [0156](adr/0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md) | The recovery tool gives a hard-link group back as one file, by the executor's rule: the rule moves into the format library unchanged, and the tool makes each agreeing later name a link to the file its first name landed as | **Built** | `Repository.Format/Manifests/HardLinkGroups` · `Recovery/RecoverySession` · `Repository.Tests/EndToEnd/RecoveryHardLinkTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0156--the-recovery-tool-gives-a-hard-link-group-back-as-one-file) |
+| [0157](adr/0157-a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way.md) | A restore in direct mode is refused a destination that nests with one under way: under one claim of every destination's folder, a run whose destination holds or lies inside one a run under way lands in is refused, and its record names every folder it lands in | **Built** | `Cli/DirectRestoreParts` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0157--a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way) |
 
 ---
 
@@ -3986,7 +3987,9 @@ the process, so a run the machine cut short leaves its folder free. No
 contract change.
 
 What remains is recorded rather than done. A run to a path inside
-another run's destination is a destination of its own, as it was.
+another run's destination is a destination of its own, as it was. Such a
+run has since been refused
+([0157](#0157--a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way)).
 
 ### 0144 — the catalogue names a location's blob and writer by number
 
@@ -4227,3 +4230,23 @@ rule.
 
 What remains is recorded rather than done. A special file is still
 skipped, and a group is formed within one run only.
+
+### 0157 — a restore in direct mode is refused a destination that nests with one under way
+
+A restore in direct mode holds a folder of parts named by where it lands,
+so a second run to the same place is refused. A run to a folder inside
+another's destination, or one holding it, held a folder of its own, and
+the two wrote the same files. A run now takes its folder under one claim
+of every destination's folder, reads where each run under way lands, and
+is refused, writing nothing, where one of those folders holds or lies
+inside one it lands in. It lets go the folder it made to be judged, and
+holds none a run before it left. The judgement is lexical and folds case, as the
+circular-capture guard's is. Its record now names every folder it lands
+in, each set's root where it restores to where the files were captured,
+and it is written before the claim goes, so two runs starting at once see
+each other. A run beside another's destination, or into one left
+unfinished, goes ahead.
+
+What remains is recorded rather than done. A run in direct mode is still
+not judged against the service's runs, and two destinations that only a
+link makes nest are judged apart.

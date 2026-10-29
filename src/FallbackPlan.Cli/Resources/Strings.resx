@@ -223,6 +223,9 @@
   <data name="DirectGateway_DestinationHeld" xml:space="preserve">
     <value>Another restore in direct mode holds this destination's folder '{0}' ({1}). Run this again once that one ends.</value>
   </data>
+  <data name="DirectGateway_DestinationOverlaps" xml:space="preserve">
+    <value>Another restore in direct mode is under way into '{0}', which holds or lies inside '{1}', where this one lands. Run this again once that one ends.</value>
+  </data>
   <data name="DirectRestorePartsReport_RunUnderWay" xml:space="preserve">
     <value>A restore in direct mode is under way to the destination whose parts are named '{0}', so they are not let go. Let them go once it ends, if it does not finish.</value>
   </data>

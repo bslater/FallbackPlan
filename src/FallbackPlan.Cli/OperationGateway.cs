@@ -1590,23 +1590,35 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             PartsDirectory = parts,
         };
 
-        // One run at a time to a destination (ADR-0143): a second would
-        // assemble into the same parts, and let them go under this one.
-        var hold = DirectRestoreParts.Take(parts, out var problem)
-            ?? throw new CliFailureException(Strings.FormatDirectGateway_DestinationHeld(parts, problem));
-        var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
-        try
-        {
-            // Beside its parts, what the run restores and where, so
-            // restore-parts can say whose they are while it is left
-            // unfinished (ADR-0142).
-            DirectRestoreParts.Record(parts, new DirectRestoreRun(
+        // One run at a time to a destination (ADR-0143), and none into one
+        // that holds or lies inside a destination under way (ADR-0157):
+        // either would write the same files, and the first a second would
+        // assemble into the same parts and let them go under this one.
+        // Beside its parts, what the run restores and where, so
+        // restore-parts can say whose they are while it is left unfinished
+        // (ADR-0142).
+        var hold = DirectRestoreParts.Take(
+            session.StateDirectory,
+            parts,
+            new DirectRestoreRun(
                 Convert.ToHexStringLower(snapshotId),
                 set?.Name,
                 request.ToOriginal ? null : Path.GetFullPath(request.OutputDirectory),
                 request.Existing,
-                began));
+                began,
+                [.. slices.Select(slice => Path.GetFullPath(slice.OutputDirectory))]),
+            out var problem,
+            out var overlap);
+        if (hold is null)
+        {
+            throw new CliFailureException(overlap is { } nested
+                ? Strings.FormatDirectGateway_DestinationOverlaps(nested.UnderWay, nested.Asked)
+                : Strings.FormatDirectGateway_DestinationHeld(parts, problem));
+        }
 
+        var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
+        try
+        {
             foreach (var slice in slices)
             {
                 receipts.Add((

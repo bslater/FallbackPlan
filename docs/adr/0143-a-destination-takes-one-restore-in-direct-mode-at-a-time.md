@@ -45,6 +45,8 @@ A run whose destination's folder another run holds is refused before it writes a
 ## What this does not do
 
 - **Keep a run to one destination from a run to another that overlaps it.** The folder is named by where each run lands. Two runs to paths inside one another are two destinations, as they were.
+
+  > **2026-10 ([ADR-0157](0157-a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way.md)).** A run is now refused where a run under way lands in a folder that holds or lies inside one it lands in, judged under one claim of every destination's folder.
 - **Keep a run in direct mode from the service's runs.** The service keeps its parts apart, under `restore-parts`, and holds its own runs.
 
 ## Alternatives considered
@@ -57,3 +59,4 @@ A run whose destination's folder another run holds is refused before it writes a
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A restore in direct mode holds its destination's folder of parts from before its record until it ends; a second run there is refused before it writes anything; restore-parts says a run is under way there and lets none of its parts go. No contract change. |
+| 2026-10 | Accepted | Noted by [ADR-0157](0157-a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way.md): a run whose destination nests with one under way is refused too, which this record left apart. |

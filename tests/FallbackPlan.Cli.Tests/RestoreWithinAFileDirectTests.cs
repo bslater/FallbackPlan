@@ -22,7 +22,10 @@ namespace FallbackPlan.Cli.Tests;
 /// restores and where, and lets one go by that name alone (ADR-0142). A run
 /// holds its destination's folder while it runs, so a second run there is
 /// refused before it writes anything, and the listing says a run is under
-/// way there and lets none of its parts go (ADR-0143).
+/// way there and lets none of its parts go (ADR-0143). So is a run into a
+/// folder inside the destination of a run under way, or holding one, while
+/// one beside it, or into one a run left unfinished, goes ahead (FR-RST-008,
+/// ADR-0157).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileDirectTests : IDisposable
@@ -380,6 +383,93 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ARunIntoAFolderInsideADestinationUnderWay_IsRefused_BeforeAnythingIsWritten()
+    {
+        // Two runs whose destinations nest write the same files, though each
+        // holds a folder of its own (ADR-0157).
+        var snapshot = await BackUpAsync();
+        using var underWay = HoldARunInto(Destination);
+        var inside = Path.Combine(Destination, "inner");
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", inside);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"Another restore in direct mode is under way into '{Destination}'", refused.Error, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(inside) && Directory.EnumerateFileSystemEntries(inside).Any(), "nothing is written");
+        Assert.IsFalse(Directory.Exists(DirectRestoreParts.Of(_cli.StatePath, inside)), "nor a folder of parts restore-parts would list");
+    }
+
+    [TestMethod]
+    public async Task ARefusedRun_LeavesWhatARunBeforeItLeftThere_AndHoldsItNoMore()
+    {
+        var snapshot = await BackUpAsync();
+        var inside = Path.Combine(Destination, "inner");
+        var insideParts = DirectRestoreParts.Of(_cli.StatePath, inside);
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", inside))).ExitCode);
+        using var underWay = HoldARunInto(Destination);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", inside);
+        var letGo = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget", Path.GetFileName(insideParts));
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.AreEqual(0, letGo.ExitCode, "the folder the run before it left is kept, and the refused run holds it no more: " + letGo.All);
+        Assert.Contains($"let go the parts kept under '{insideParts}'", letGo.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARunIntoAFolderThatHoldsADestinationUnderWay_IsRefused()
+    {
+        var snapshot = await BackUpAsync();
+        var inside = Path.Combine(Destination, "inner");
+        using var underWay = HoldARunInto(inside);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", Destination);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"Another restore in direct mode is under way into '{inside}'", refused.Error, StringComparison.Ordinal);
+        Assert.IsFalse(File.Exists(Path.Combine(Destination, "one.txt")), "nothing is written");
+    }
+
+    [TestMethod]
+    public async Task ARunUnderWayWhoseRecordNamesOneDestination_IsJudgedByIt()
+    {
+        // A record written before a run named every folder it lands in.
+        var snapshot = await BackUpAsync();
+        using var underWay = HoldARunInto(Destination, namingWhereItLands: false);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(Destination, "inner"));
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"Another restore in direct mode is under way into '{Destination}'", refused.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARunBesideADestinationUnderWay_GoesAhead()
+    {
+        // A name that begins with the other's is no folder inside it.
+        var snapshot = await BackUpAsync();
+        using var underWay = HoldARunInto(Destination);
+
+        var beside = await _cli.RunAsync("restore", snapshot, "--output", Destination + "-beside");
+
+        Assert.AreEqual(0, beside.ExitCode, beside.All);
+    }
+
+    [TestMethod]
+    public async Task ARunIntoAFolderInsideADestinationLeftUnfinished_GoesAhead()
+    {
+        // A run that ended holds nothing, whatever its record still says.
+        var snapshot = await BackUpAsync();
+        using (HoldARunInto(Destination))
+        {
+        }
+
+        var inside = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(Destination, "inner"));
+
+        Assert.AreEqual(0, inside.ExitCode, inside.All);
+    }
+
+    [TestMethod]
     public async Task ARunThatEnds_LetsTheDestinationGo_ForTheNextRunThere()
     {
         var snapshot = await BackUpAsync();
@@ -434,6 +524,21 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
         Assert.AreEqual(1, refused.ExitCode, refused.All);
         Assert.Contains($"A restore in direct mode is under way to the destination whose parts are named '{Name}'", refused.Error, StringComparison.Ordinal);
         Assert.IsTrue(File.Exists(Path.Combine(Parts, "run.json")), "nothing of it is let go");
+    }
+
+    /// <summary>
+    /// Holds the folder of a run landing at <paramref name="destination"/>,
+    /// having said where it lands, as a run under way has; by its one
+    /// destination alone, as a record written before ADR-0157 does, where
+    /// <paramref name="namingWhereItLands"/> is false.
+    /// </summary>
+    private FileStream HoldARunInto(string destination, bool namingWhereItLands = true)
+    {
+        var parts = DirectRestoreParts.Of(_cli.StatePath, destination);
+        Directory.CreateDirectory(parts);
+        DirectRestoreParts.Record(
+            parts, new DirectRestoreRun("00", null, destination, null, 0, namingWhereItLands ? [destination] : null));
+        return new FileStream(Path.Combine(parts, "run.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
 
     /// <summary>Holds the destination's folder as a run there does while it runs.</summary>

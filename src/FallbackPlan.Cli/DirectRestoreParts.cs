@@ -26,6 +26,13 @@ internal static class DirectRestoreParts
     /// <summary>The file a run holds while it runs, so no second run there starts (ADR-0143).</summary>
     private const string HoldName = "run.lock";
 
+    /// <summary>
+    /// The file a run holds while it takes its destination's folder, beside
+    /// every destination's, so two runs never judge where they land against
+    /// each other at once (ADR-0157).
+    /// </summary>
+    private const string ClaimName = "claim.lock";
+
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
     /// <summary>The folder every destination's parts are kept under, in a state directory.</summary>
@@ -112,15 +119,112 @@ internal static class DirectRestoreParts
     }
 
     /// <summary>
-    /// Takes a destination's folder for one run (ADR-0143). While the run
-    /// holds what this answers, a second run there is refused, and the
-    /// folder is listed as under way and let go by nothing. The hold is the
-    /// operating system's, so it goes with the process however that ends.
+    /// Takes a destination's folder for one run (ADR-0143) and says beside it
+    /// what the run restores and where (ADR-0142). While the run holds what
+    /// this answers, a second run there is refused, and the folder is listed
+    /// as under way and let go by nothing. The hold is the operating
+    /// system's, so it goes with the process however that ends.
     /// </summary>
+    /// <remarks>
+    /// A run is refused too where a run under way lands in a folder that
+    /// holds or lies inside one this run lands in, since the two would write
+    /// the same files though each holds a folder of its own (ADR-0157). The
+    /// judgement is <see cref="PathContainment"/>'s, which folds case. It is
+    /// made, and the record written, under one claim of every destination's
+    /// folder, so two runs starting at once each see the other. A run refused
+    /// so leaves no folder it made, and keeps one a run before it left.
+    /// </remarks>
+    /// <param name="stateDirectory">The command line's state directory.</param>
     /// <param name="parts">The folder.</param>
+    /// <param name="run">What the run restores and every folder it lands in.</param>
     /// <param name="problem">Why the folder could not be taken, where it could not.</param>
-    /// <returns>The hold, or null where another run holds the folder.</returns>
-    public static FileStream? Take(string parts, out string? problem)
+    /// <param name="overlap">The run under way whose destination nests with this one's, where one does.</param>
+    /// <returns>The hold, or null where the run is refused.</returns>
+    public static FileStream? Take(
+        string stateDirectory, string parts, DirectRestoreRun run, out string? problem, out DirectRestoreOverlap? overlap)
+    {
+        overlap = null;
+        var root = RootUnder(stateDirectory);
+        Directory.CreateDirectory(root);
+        using var claim = Claim(root, out problem);
+        if (claim is null)
+        {
+            return null;
+        }
+
+        var made = !Directory.Exists(parts);
+        var hold = Hold(parts, out problem);
+        if (hold is null)
+        {
+            return null;
+        }
+
+        var own = Path.GetFileName(parts);
+        foreach (var folder in new DirectoryInfo(root).EnumerateDirectories())
+        {
+            if (!IsName(folder.Name) || string.Equals(folder.Name, own, StringComparison.Ordinal)
+                || !IsUnderWay(folder.FullName) || ReadRecord(folder.FullName) is not { } other)
+            {
+                continue;
+            }
+
+            foreach (var theirs in LandingOf(other))
+            {
+                foreach (var ours in run.LandsIn ?? [])
+                {
+                    if (PathContainment.IsAtOrUnder(theirs, ours) || PathContainment.IsAtOrUnder(ours, theirs))
+                    {
+                        // A folder a run before this one left keeps what
+                        // it holds; one made only to be judged is not listed.
+                        hold.Dispose();
+                        if (made)
+                        {
+                            LetGo(parts);
+                        }
+
+                        overlap = new DirectRestoreOverlap(theirs, ours);
+                        return null;
+                    }
+                }
+            }
+        }
+
+        Record(parts, run);
+        return hold;
+    }
+
+    /// <summary>Every folder a run's record says it lands in, its one destination where it said no more.</summary>
+    private static IReadOnlyList<string> LandingOf(DirectRestoreRun run) =>
+        run.LandsIn ?? (run.OutputDirectory is { } destination ? [destination] : []);
+
+    /// <summary>
+    /// Claims every destination's folder while a run judges where it lands.
+    /// A judgement takes moments, so a run that finds the claim taken waits
+    /// for it rather than being refused.
+    /// </summary>
+    private static FileStream? Claim(string root, out string? problem)
+    {
+        var path = Path.Combine(root, ClaimName);
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                problem = null;
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (attempt < 100)
+            {
+                Thread.Sleep(50);
+            }
+            catch (IOException exception)
+            {
+                problem = exception.Message;
+                return null;
+            }
+        }
+    }
+
+    private static FileStream? Hold(string parts, out string? problem)
     {
         Directory.CreateDirectory(parts);
         try
@@ -251,12 +355,26 @@ internal static class DirectRestoreParts
 /// <param name="OutputDirectory">Where it lands, or null where it lands each file where it was captured.</param>
 /// <param name="Existing">The policy asked for a file in the way, or null for the default.</param>
 /// <param name="BeganAt">When it began, in Unix milliseconds.</param>
+/// <param name="LandsIn">
+/// Every folder it lands in, each set's root where it restores to where the
+/// files were captured, so a run whose destination nests with one under way
+/// is refused (ADR-0157); null in a record written before.
+/// </param>
 internal sealed record DirectRestoreRun(
     [property: JsonPropertyName("snapshot_id")] string SnapshotId,
     [property: JsonPropertyName("set")] string? Set,
     [property: JsonPropertyName("output_directory")] string? OutputDirectory,
     [property: JsonPropertyName("existing")] string? Existing,
-    [property: JsonPropertyName("began_at")] ulong BeganAt);
+    [property: JsonPropertyName("began_at")] ulong BeganAt,
+    [property: JsonPropertyName("lands_in")] IReadOnlyList<string>? LandsIn = null);
+
+/// <summary>
+/// A run under way whose destination nests with the one a run asked for
+/// (ADR-0157).
+/// </summary>
+/// <param name="UnderWay">The folder the run under way lands in.</param>
+/// <param name="Asked">The folder the refused run would land in, which holds or lies inside it.</param>
+internal sealed record DirectRestoreOverlap(string UnderWay, string Asked);
 
 /// <summary>A destination's folder of parts, as <c>restore-parts</c> lists it (ADR-0142).</summary>
 /// <param name="Name">The folder's name.</param>
