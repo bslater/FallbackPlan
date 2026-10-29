@@ -189,6 +189,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0162](adr/0162-every-restore-run-the-service-left-unfinished-is-let-go-at-once.md) | Every restore run the service left unfinished is let go at once: `restore-resume --forget-all` lists them and lets each go by its name, naming one the service will not let go while the rest go | **Built** | `Cli/OperationGateway` · `Cli/CliApplication` · `Cli.Tests/RestoreResumeVerbTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · [notes](#0162--every-restore-run-the-service-left-unfinished-is-let-go-at-once) |
 | [0163](adr/0163-the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once.md) | The console lets every restore left unfinished, and every kept receipt, go at once: once a person confirms, it asks the service for them afresh and lets each go by its name, naming one the service will not let go while the rest go | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0163--the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once) |
 | [0164](adr/0164-kept-restore-receipts-are-let-go-by-age.md) | Kept restore receipts are let go by age: `restore-receipts --forget-all --older-than-days` lets go only the receipts of runs that ended longer ago, from a state directory or through a paired service, and keeps and names one that does not say when its run ended | **Built** | `Cli/RestoreReceiptReport` · `Cli/CliApplication` · `Cli.Tests/RestoreReceiptsVerbTests` · `Hosts.Tests/RestoreReceiptsRemoteTests` · [notes](#0164--kept-restore-receipts-are-let-go-by-age) |
+| [0165](adr/0165-restores-left-unfinished-are-let-go-by-age.md) | Restores left unfinished are let go by age: `restore-resume` and `restore-parts` with `--forget-all --older-than-days` let go only the runs, and the destinations, that began longer ago, and keep and name a destination whose run said nothing of when it began | **Built** | `Cli/OlderThanDays` · `Cli/OperationGateway` · `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli.Tests/RestoreResumeVerbTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0165--restores-left-unfinished-are-let-go-by-age) |
 
 ---
 
@@ -4279,6 +4280,7 @@ afresh. No contract change.
 What remains is recorded rather than done. Folders are not let go by
 age, and the service's parts go one run at a time, by its name. The service's
 runs have since gone at once ([0162](#0162--every-restore-run-the-service-left-unfinished-is-let-go-at-once)).
+Folders have since gone by age on request ([0165](#0165--restores-left-unfinished-are-let-go-by-age)).
 
 ### 0159 — a restore into a folder that is itself a link restores what lies below it
 
@@ -4343,6 +4345,7 @@ is refused as every verb naming a run is.
 What remains is recorded rather than done. Runs are not let go by age,
 and the console still lets one go at a time. The console has since let every
 one go at once ([0163](#0163--the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once)).
+Runs have since gone by age on request ([0165](#0165--restores-left-unfinished-are-let-go-by-age)).
 
 ### 0163 — the console lets every restore left unfinished, and every kept receipt, go at once
 
@@ -4375,4 +4378,22 @@ anything is removed or the service dialled.
 
 What remains is recorded rather than done. Nothing expires on its own, as
 ADR-0139 decided; the console does not go by age; and runs left unfinished
-and direct mode's parts still go one by one or every one at once.
+and direct mode's parts still go one by one or every one at once. They have
+since gone by age too ([0165](#0165--restores-left-unfinished-are-let-go-by-age)).
+
+### 0165 — restores left unfinished are let go by age
+
+The runs the service left unfinished, and the destinations direct mode left
+unfinished, went one by one or every one at once. `restore-resume` and
+`restore-parts` with `--forget-all --older-than-days <days>` now let go only
+those that began more than that many days ago, each by its name, and say how
+many stay. The service lists when each run began, so the contract is
+unchanged, and the parts of a run that stays stay with it. Direct mode's
+destinations are judged under the one claim every destination is let go
+under, a destination with a run under way is passed over as before, and one
+whose record says nothing of when its run began stays and is named: when its
+folder was last written is not that. All three verbs judge by one cutoff,
+`OlderThanDays`, so the same days mean the same age to each.
+
+What remains is recorded rather than done. Nothing expires on its own, and
+the console does not go by age.

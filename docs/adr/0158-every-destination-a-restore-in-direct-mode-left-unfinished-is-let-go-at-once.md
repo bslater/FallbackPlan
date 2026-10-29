@@ -47,6 +47,8 @@ The listing's last line names `--forget-all` beside `--forget`.
 ## What this does not do
 
 - **Let folders go by age.** Every one is let go, or one by its name.
+
+  > **2026-10 ([ADR-0165](0165-restores-left-unfinished-are-let-go-by-age.md)).** `restore-parts --forget-all --older-than-days <days>` lets go only the destinations whose run began longer ago, and keeps and names one whose run said nothing of when it began.
 - **Let the service's parts go.** The service keeps its runs' parts apart, under its own state directory, and lets them go one run at a time by its name.
 
   > **2026-10 ([ADR-0162](0162-every-restore-run-the-service-left-unfinished-is-let-go-at-once.md)).** `restore-resume --forget-all` lets every run the service left unfinished go at once, each by its name, and its parts with it.
@@ -62,3 +64,4 @@ The listing's last line names `--forget-all` beside `--forget`.
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. restore-parts with --forget-all lets every destination's parts go under one claim, passing over one with a run under way and anything else beside them, and says what each held. --forget judges under the same claim. No contract change. |
 | 2026-10 | Accepted | Noted by [ADR-0162](0162-every-restore-run-the-service-left-unfinished-is-let-go-at-once.md): every run the service left unfinished is let go at once, which this record left one run at a time. |
+| 2026-10 | Accepted | Noted by [ADR-0165](0165-restores-left-unfinished-are-let-go-by-age.md): destinations are let go by age when a person asks, which this record left undone. |
