@@ -1684,6 +1684,11 @@ public static class CliApplication
                 Description = "Let every run left unfinished go at once (ADR-0162), each by its name as --forget lets one "
                     + "go: the service names them no more, and what each landed stays where it landed.",
             };
+            var olderThanOption = new Option<int?>("--older-than-days")
+            {
+                Description = "With --forget-all, let go only the runs that began more than this many days ago (ADR-0165); "
+                    + "every other stays, and its parts with it.",
+            };
             var ignoreFreeSpaceOption = new Option<bool>("--ignore-free-space")
             {
                 Description = "Resume even when the destination looks too small, as restore takes it.",
@@ -1700,6 +1705,7 @@ public static class CliApplication
             command.Arguments.Add(runArgument);
             command.Options.Add(forgetOption);
             command.Options.Add(forgetAllOption);
+            command.Options.Add(olderThanOption);
             command.Options.Add(ignoreFreeSpaceOption);
             command.Options.Add(planOption);
             command.Options.Add(directOption);
@@ -1710,9 +1716,20 @@ public static class CliApplication
                 var forget = parse.GetValue(forgetOption);
                 var plan = parse.GetValue(planOption);
                 var forgetAll = parse.GetValue(forgetAllOption);
+                var olderThanDays = parse.GetValue(olderThanOption);
                 if (forgetAll && (run is not null || forget || plan))
                 {
                     throw new CliFailureException(Strings.CliApplication_ForgetAllNamesNoRestoreRun);
+                }
+
+                if (olderThanDays is not null && !forgetAll)
+                {
+                    throw new CliFailureException(Strings.CliApplication_OlderThanDaysSaysWhichRuns);
+                }
+
+                if (olderThanDays is <= 0)
+                {
+                    throw new CliFailureException(Strings.CliApplication_OlderThanDaysTakesAtLeastOne);
                 }
 
                 if (run is null && forget)
@@ -1733,7 +1750,7 @@ public static class CliApplication
                 return ReadThroughGatewayAsync(
                     parse,
                     (gateway, token) => forgetAll
-                        ? gateway.ForgetRestoreRunsAsync(token)
+                        ? gateway.ForgetRestoreRunsAsync(olderThanDays, token)
                         : run is null
                         ? gateway.RestoreRunsAsync(token)
                         : forget
@@ -3001,15 +3018,21 @@ public static class CliApplication
                 Description = "Let every destination's parts go at once (ADR-0158): each folder is removed from the state "
                     + "directory but one a restore in direct mode is under way to, which keeps its parts.",
             };
+            var partsOlderThanOption = new Option<int?>("--older-than-days")
+            {
+                Description = "With --forget-all, let go only the parts of destinations whose run began more than this "
+                    + "many days ago (ADR-0165). One whose run did not say when it began stays, and is named.",
+            };
             var command = new Command(
                 "restore-parts",
                 "List each destination a restore in direct mode left unfinished under a state directory (ADR-0142): what "
                 + "its run restores and where, when it began, and what its parts keep of the backup's files. With --forget, "
-                + "let one destination's parts go, and with --forget-all every one's. The service lists its own runs with "
-                + "restore-resume.");
+                + "let one destination's parts go, and with --forget-all every one's, or with --older-than-days those whose "
+                + "run began longer ago (ADR-0165). The service lists its own runs with restore-resume.");
             command.Options.Add(partsStateOption);
             command.Options.Add(partsForgetOption);
             command.Options.Add(partsForgetAllOption);
+            command.Options.Add(partsOlderThanOption);
             root.Subcommands.Add(command);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() =>
@@ -3021,6 +3044,17 @@ public static class CliApplication
                 }
 
                 var forgetAll = parse.GetValue(partsForgetAllOption);
+                var olderThanDays = parse.GetValue(partsOlderThanOption);
+                if (olderThanDays is not null && !forgetAll)
+                {
+                    throw new CliFailureException(Strings.CliApplication_OlderThanDaysSaysWhichParts);
+                }
+
+                if (olderThanDays is <= 0)
+                {
+                    throw new CliFailureException(Strings.CliApplication_OlderThanDaysTakesAtLeastOne);
+                }
+
                 if (parse.GetValue(partsForgetOption) is { } name)
                 {
                     if (forgetAll)
@@ -3032,7 +3066,7 @@ public static class CliApplication
                 }
                 else if (forgetAll)
                 {
-                    DirectRestorePartsReport.LetGoAll(output, state);
+                    DirectRestorePartsReport.LetGoAll(output, state, olderThanDays);
                 }
                 else
                 {

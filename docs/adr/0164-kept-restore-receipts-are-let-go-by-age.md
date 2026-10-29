@@ -45,6 +45,8 @@ A receipt that does not read says nothing of when its run ended. When its file w
 - **Offer it in the console.** The Maintenance view lets one go, or every one.
 - **Go by age for runs left unfinished or for direct mode's parts.** Those still go one by one or every one at once.
 
+  > **2026-10 ([ADR-0165](0165-restores-left-unfinished-are-let-go-by-age.md)).** Both go by age now, by when their run began, judged by the same cutoff.
+
 ## Alternatives considered
 
 - **Take an unreadable receipt's age from its file.** Rejected. When the file was last written says nothing of when its run ended, and a receipt let go is gone.
@@ -56,3 +58,4 @@ A receipt that does not read says nothing of when its run ended. When its file w
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. restore-receipts with --forget-all and --older-than-days lets go only the receipts of runs that ended longer ago, from the state directory or through a paired service, keeping and naming a receipt that does not say when its run ended. No contract change. |
+| 2026-10 | Accepted | Noted by [ADR-0165](0165-restores-left-unfinished-are-let-go-by-age.md): runs left unfinished and direct mode's parts go by age too, by the same cutoff. |

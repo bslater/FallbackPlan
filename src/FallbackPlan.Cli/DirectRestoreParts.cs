@@ -373,7 +373,9 @@ internal static class DirectRestoreParts
     /// <summary>
     /// Lets the parts of every destination left unfinished under
     /// <paramref name="stateDirectory"/> go at once (ADR-0158), but a folder a
-    /// run holds. Nothing else kept beside them is let go.
+    /// run holds, or only those whose run began before
+    /// <paramref name="begunBefore"/> (ADR-0165). Nothing else kept beside
+    /// them is let go.
     /// </summary>
     /// <remarks>
     /// Judged under one claim, as <see cref="Forget"/> is, so no run takes a
@@ -381,9 +383,14 @@ internal static class DirectRestoreParts
     /// the rest are let go regardless.
     /// </remarks>
     /// <param name="stateDirectory">The command line's state directory.</param>
+    /// <param name="begunBefore">
+    /// The Unix milliseconds a run must have begun before for its parts to go,
+    /// or null for every one's. A folder whose run said nothing of when it
+    /// began then stays, since when it was written is not that.
+    /// </param>
     /// <returns>Each destination's folder, newest first, and what became of it.</returns>
     /// <exception cref="IOException">When the claim is not had.</exception>
-    public static IReadOnlyList<DirectRestoreLetGo> ForgetAll(string stateDirectory)
+    public static IReadOnlyList<DirectRestoreLetGo> ForgetAll(string stateDirectory, ulong? begunBefore)
     {
         var root = RootUnder(stateDirectory);
         if (!Directory.Exists(root))
@@ -398,6 +405,13 @@ internal static class DirectRestoreParts
             if (kept.UnderWay)
             {
                 outcomes.Add(new DirectRestoreLetGo(kept.Name, kept.Held, UnderWay: true, Problem: null));
+                continue;
+            }
+
+            if (begunBefore is { } cutoff && (kept.Run is not { } run || run.BeganAt >= cutoff))
+            {
+                outcomes.Add(new DirectRestoreLetGo(
+                    kept.Name, kept.Held, UnderWay: false, Problem: null, Undated: kept.Run is null, Younger: kept.Run is not null));
                 continue;
             }
 
@@ -469,7 +483,9 @@ internal sealed record DirectRestoreOverlap(string UnderWay, string Asked);
 /// <param name="Held">The bytes its parts held.</param>
 /// <param name="UnderWay">Whether a run holds it, so nothing of it was let go.</param>
 /// <param name="Problem">Why it was not all removed, where it was not.</param>
-internal sealed record DirectRestoreLetGo(string Name, long Held, bool UnderWay, string? Problem);
+/// <param name="Undated">Whether it stayed, let go by age, because its run said nothing of when it began (ADR-0165).</param>
+/// <param name="Younger">Whether it stayed, let go by age, because its run began within the days (ADR-0165).</param>
+internal sealed record DirectRestoreLetGo(string Name, long Held, bool UnderWay, string? Problem, bool Undated = false, bool Younger = false);
 
 /// <summary>A destination's folder of parts, as <c>restore-parts</c> lists it (ADR-0142).</summary>
 /// <param name="Name">The folder's name.</param>

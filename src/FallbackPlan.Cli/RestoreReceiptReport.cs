@@ -187,7 +187,7 @@ internal static class RestoreReceiptReport
             return;
         }
 
-        var before = EndedBefore(days);
+        var before = OlderThanDays.Cutoff(days);
         var letGo = 0;
         var younger = 0;
         var notLetGo = new List<string>();
@@ -243,7 +243,7 @@ internal static class RestoreReceiptReport
             return 0;
         }
 
-        var before = olderThanDays is { } days ? EndedBefore(days) : (ulong?)null;
+        var before = olderThanDays is { } days ? OlderThanDays.Cutoff(days) : (ulong?)null;
         var letGo = 0;
         var younger = 0;
         var refused = new List<string>();
@@ -290,10 +290,6 @@ internal static class RestoreReceiptReport
     private static string LetGoCount(int letGo, string where) =>
         string.Create(CultureInfo.InvariantCulture, $"let go {letGo} restore {(letGo == 1 ? "receipt" : "receipts")} {where}");
 
-    /// <summary>When a run must have ended before, in Unix milliseconds, to be more than <paramref name="days"/> days old.</summary>
-    private static ulong EndedBefore(int days) =>
-        (ulong)Math.Max(0L, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - (days * 86_400_000L));
-
     private static string Undated(string run) => $"the receipt of run {run} does not say when its run ended, so it stays";
 
     private static void SayYounger(TextWriter output, int younger, int days)
@@ -302,7 +298,7 @@ internal static class RestoreReceiptReport
         {
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"{younger} restore {(younger == 1 ? "receipt" : "receipts")} whose run ended within {days} {(days == 1 ? "day" : "days")} {(younger == 1 ? "stays" : "stay")}"));
+                $"{younger} restore {(younger == 1 ? "receipt" : "receipts")} whose run ended within {OlderThanDays.Days(days)} {(younger == 1 ? "stays" : "stay")}"));
         }
     }
 
