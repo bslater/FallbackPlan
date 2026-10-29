@@ -227,6 +227,11 @@ than a line.
   > a data record is read as format 3 frames it, with no envelope read, and the
   > envelope is read only for a record that will not read so. No catalogue
   > change. A metadata blob still costs two reads.
+  >
+  > **2026-10 ([ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md)).** Closed for format-3 metadata blobs the
+  > catalogue recorded, the same way, at the key generation it recorded for
+  > the blob. A metadata blob it knows only by a placeholder row still costs
+  > two reads.
 - **It does not change what the plan verb costs.** The probe still opens each
   metadata blob through its footer and reads each manifest, because it answers
   a different question and answers it before anything moves.
@@ -245,3 +250,4 @@ than a line.
 | 2026-09 | Accepted | Built over three commits against the characterisation the 2026-08 restore review left behind: the targeted load (`Restore/RestoreBlobSet` lifted out of the service, both restore paths off the whole-store load); the located read (`Repository.Catalogue/Catalogue.ResolveLocation` as the reader's location source, `BlobReader.OpenFramingAsync`, the lazy footer fallback); and the coalescing (`Repository/PrefetchPolicy`, `BlobRun`, the envelope fold, `Restore/RestoreExecutor`'s `PrefetchWave`). 93 GETs to 11 over eleven blobs, against a budget of 14. Two findings the design turned on: a location pointing at a valid neighbour passes every check but the object-id comparison, and prefetching one file at a time costs one read per (file, blob) pair |
 | 2026-09 | Accepted (related) | [ADR-0075](0075-a-restore-reads-around-damage.md) reads a record the own store will not serve from the set's other copies, at the location the catalogue gives it, and asks each copy's own footer before calling a failed location read damage there, as §2 does at the own store. `Repository/RepositoryReader`; `Repository.Tests/ReadAroundTests` |
 | 2026-10 | Accepted | Noted by [ADR-0166](0166-a-format-3-data-record-is-read-without-its-blobs-envelope.md): the sparse case this record left over the budget is closed for format-3 data blobs, without the catalogue change named among the alternatives. |
+| 2026-10 | Accepted | Noted by [ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md): the sparse case is closed for format-3 metadata blobs the catalogue recorded too, at the key generation it holds for each, still without the schema change named among the alternatives. |

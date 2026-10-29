@@ -352,6 +352,49 @@ public sealed class BlobReader : IDisposable
             recordKey: null, classKey: null, sealedContentKeyOpener, []);
     }
 
+    /// <summary>
+    /// A metadata blob framed as format 3 frames it, from nothing read but
+    /// the key generation its caller was told the blob was written at
+    /// (NFR-PERF-009, ADR-0167): a format-3 metadata record carries its own
+    /// nonce and is keyed by its type and id under that generation's class
+    /// key, so the generation is all an envelope would add that the record
+    /// does not. A record of an older format, or one written at another
+    /// generation, fails closed at its tag, and its caller frames the blob
+    /// from its envelope instead.
+    /// </summary>
+    /// <remarks>
+    /// The generation is taken as a hint and nothing more. A record keyed
+    /// under the wrong one does not open, and a record's additional data
+    /// binds the repository, the version, the type and the object id however
+    /// its blob was framed.
+    /// </remarks>
+    public static BlobReader AssumingRelocatableMetadata(
+        IObjectStore store,
+        ObjectKey key,
+        long blobLength,
+        RepositoryId repositoryId,
+        Func<BlobClass, KeyGeneration, byte[]> classKeyProvider,
+        ObjectIdDeriver objectIdDeriver,
+        BlobId blobId,
+        KeyGeneration keyGeneration)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(classKeyProvider);
+        ThrowHelper.ThrowIfNull(objectIdDeriver);
+
+        var assumed = new BlobEnvelope(
+            FormatVersions.RelocatableRecords,
+            BlobClass.Metadata,
+            keyGeneration,
+            blobId,
+            new byte[32],
+            blobCounter: 0,
+            WriterId.FromBytes(new byte[16]));
+        return new BlobReader(
+            store, key, blobLength, repositoryId, objectIdDeriver, assumed, new byte[BlobKeyDeriver.BlobKeyLength],
+            recordKey: null, classKeyProvider(BlobClass.Metadata, keyGeneration), opener: null, []);
+    }
+
     /// <summary>The longest leading stretch this blob's envelope can occupy.</summary>
     public static long EnvelopeReadLength(long blobLength) =>
         Math.Min(BlobEnvelope.MaxLength, blobLength - FooterLocator.Length);

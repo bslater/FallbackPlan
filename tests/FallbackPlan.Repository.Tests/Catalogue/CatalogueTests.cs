@@ -28,7 +28,10 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// forgetting a snapshot lets go of only what none of the rest reaches
 /// (NFR-PERF-011, ADR-0151). A folder's access time goes with the last
 /// snapshot that reaches its tree, and stays while any does (NFR-PERF-011,
-/// ADR-0153).
+/// ADR-0153). A location carries the key generation of a blob the writer
+/// recorded, and none for a blob the catalogue knows only by a placeholder
+/// row or not at all, which is what lets a format-3 metadata record be read
+/// without its blob's envelope (NFR-PERF-009, ADR-0167).
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -727,6 +730,41 @@ public sealed class CatalogueTests : IDisposable
 
         Assert.AreEqual(storeKey, catalogue.ResolveLocation(Object(1))!.StoreBlobKey);
         Assert.IsTrue(digest.AsSpan().SequenceEqual(catalogue.SignedDigestOf(Blob(1))!.Value.Span));
+    }
+
+    [TestMethod]
+    public void ResolveLocation_CarriesTheKeyGenerationOfABlobTheWriterRecorded_AndNoneOfAPlaceholder()
+    {
+        // A placeholder row's generation is a zero nobody recorded, and a
+        // reader that took it for the blob's would key the record wrongly.
+        using var catalogue = Open();
+        var digest = System.Security.Cryptography.SHA256.HashData("the sealed bytes"u8);
+        catalogue.RecordBlob(
+            Blob(1), StoreBlobKey.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")),
+            BlobClass.Metadata, new KeyGeneration(3), 1, 4096, digest: default);
+        catalogue.RecordBlob(
+            Blob(4), StoreBlobKey.FromBytes(Convert.FromHexString("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf")),
+            BlobClass.Metadata, KeyGeneration.Zero, 1, 4096, digest: default);
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            CoveredBlobIds = [Blob(2)],
+            CoveredBlobDigests = [digest],
+            Entries =
+            [
+                new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion),
+                new IndexEntry(Object(2), Blob(2), 88, 100, 1, 1, IndexEntryType.Insertion),
+                new IndexEntry(Object(3), Blob(3), 88, 100, 1, 1, IndexEntryType.Insertion),
+                new IndexEntry(Object(4), Blob(4), 88, 100, 1, 1, IndexEntryType.Insertion),
+            ],
+        });
+
+        Assert.AreEqual<KeyGeneration?>(new KeyGeneration(3), catalogue.ResolveLocation(Object(1))!.BlobKeyGeneration);
+        Assert.AreEqual<KeyGeneration?>(KeyGeneration.Zero, catalogue.ResolveLocation(Object(4))!.BlobKeyGeneration, "a recorded zero is a generation");
+        Assert.IsNull(catalogue.ResolveLocation(Object(2))!.BlobKeyGeneration, "a placeholder row the delta's digest made");
+        Assert.IsNull(catalogue.ResolveLocation(Object(3))!.BlobKeyGeneration, "no row at all");
     }
 
     [TestMethod]

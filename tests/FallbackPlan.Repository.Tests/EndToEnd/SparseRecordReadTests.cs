@@ -27,6 +27,16 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// A data blob the store answers for and will not serve is a finding from the
 /// footer path, as it was, never a throw.
 /// </summary>
+/// <remarks>
+/// A format-3 metadata record is read the same way, in one ranged read, under
+/// the key generation the catalogue recorded for its blob (NFR-PERF-009,
+/// ADR-0167). A blob the catalogue holds no row of, or one whose recorded
+/// generation does not open the record, is framed from its envelope from the
+/// bytes already in hand; so is a metadata blob of an older format, at no
+/// more reads than before. A write-only holder reads one too, since the
+/// structure plane needs no grant, and a metadata record that does not
+/// verify is still a damage finding.
+/// </remarks>
 [TestClass]
 public sealed class SparseRecordReadTests : ArchiveTestHarness
 {
@@ -104,7 +114,7 @@ public sealed class SparseRecordReadTests : ArchiveTestHarness
         var (segments, catalogue, inner, keys) = await PublishAsync(FormatVersions.RelocatableRecords, 0xA4);
         using var _ = keys;
         using var _c = catalogue;
-        RotOneByte(catalogue.ResolveLocation(segments[^1])!);
+        RotOneByte(catalogue.ResolveLocation(segments[^1])!, "data");
 
         using var reader = new RepositoryReader(Repo, keys, inner, Authority);
         reader.UseLocationSource(catalogue.ResolveLocation);
@@ -170,6 +180,178 @@ public sealed class SparseRecordReadTests : ArchiveTestHarness
 
         Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
         Assert.AreEqual(1, reader.LocationFallbacks);
+    }
+
+    [TestMethod]
+    public async Task AFormat3MetadataRecord_ReadByItsLocation_CostsOneRead_AndOpensNoEnvelope()
+    {
+        var (_, catalogue, inner, keys) = await PublishAsync(FormatVersions.RelocatableRecords, 0xB1);
+        using var _ = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xB1);
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        var read = await reader.ReadSegmentAsync(manifests[^1], CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        Assert.AreEqual(1L, counting.Reads, "one ranged read of the record, and none of its blob's envelope");
+        Assert.AreEqual(0, reader.FramedBlobs, "no envelope was opened");
+        Assert.AreEqual(0, reader.LocationFallbacks);
+    }
+
+    [TestMethod]
+    public async Task EachFurtherFormat3MetadataRecordOfThatBlob_CostsOneReadMore()
+    {
+        var (_, catalogue, inner, keys) = await PublishAsync(FormatVersions.RelocatableRecords, 0xB2);
+        using var _ = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xB2);
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        foreach (var manifest in manifests)
+        {
+            var read = await reader.ReadSegmentAsync(manifest, CancellationToken.None);
+            Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        }
+
+        Assert.AreEqual(manifests.Count, counting.Reads, "one read a record, the blob's envelope never among them");
+        Assert.AreEqual(0, reader.FramedBlobs);
+    }
+
+    [TestMethod]
+    public async Task AMetadataRecordWhoseBlobTheCatalogueHoldsNoRowOf_IsFramedFromItsEnvelope()
+    {
+        // The ordinary state of a catalogue rebuilt from the index plane: the
+        // location is known and the blob's key generation is not.
+        var (_, catalogue, inner, keys) = await PublishAsync(FormatVersions.RelocatableRecords, 0xB3);
+        using var _ = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xB3);
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(objectId => catalogue.ResolveLocation(objectId) is { } location
+            ? location with { BlobKeyGeneration = null }
+            : null);
+
+        var read = await reader.ReadSegmentAsync(manifests[0], CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        Assert.AreEqual(2L, counting.Reads, "the record and its blob's envelope, as before");
+        Assert.AreEqual(1, reader.FramedBlobs);
+        Assert.AreEqual(0, reader.LocationFallbacks);
+    }
+
+    [TestMethod]
+    public async Task AMetadataRecordUnderAGenerationItsBlobWasNotWrittenAt_IsFramedFromItsEnvelope_FromTheBytesInHand()
+    {
+        // A recorded generation that does not open the record is a reason to
+        // read the envelope, never an answer and never a second fetch of the
+        // record.
+        var (_, catalogue, inner, keys) = await PublishAsync(FormatVersions.RelocatableRecords, 0xB4);
+        using var _ = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xB4);
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(objectId => catalogue.ResolveLocation(objectId) is { } location
+            ? location with { BlobKeyGeneration = new KeyGeneration(7) }
+            : null);
+
+        var read = await reader.ReadSegmentAsync(manifests[0], CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        Assert.AreEqual(2L, counting.Reads, "the record and its blob's envelope, and the record not fetched again");
+        Assert.AreEqual(1, reader.FramedBlobs);
+        Assert.AreEqual(0, reader.LocationFallbacks, "a guess the envelope corrects is not a fallback to the footer");
+    }
+
+    [TestMethod]
+    public async Task AnOlderFormatsMetadataRecord_IsFramedFromItsEnvelope_AtNoMoreReadsThanBefore()
+    {
+        // Format 2 keys a metadata record from its blob's salt, which only
+        // the envelope carries, so a record read as format 3 cannot open.
+        var (_, catalogue, inner, keys) = await PublishAsync(FormatVersions.SealedDataPlane, 0xB5);
+        using var _ = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xB5);
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        var first = await reader.ReadSegmentAsync(manifests[0], CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, first.Outcome, first.Detail);
+        Assert.AreEqual(2L, counting.Reads, "the record and its blob's envelope, and the record not fetched again");
+
+        var second = await reader.ReadSegmentAsync(manifests[1], CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, second.Outcome, second.Detail);
+        Assert.AreEqual(3L, counting.Reads, "the blob's framing is held for the records after it");
+        Assert.AreEqual(1, reader.FramedBlobs);
+        Assert.AreEqual(0, reader.LocationFallbacks);
+    }
+
+    [TestMethod]
+    public async Task AWriteOnlyHolder_ReadsAFormat3MetadataRecord_InOneRead()
+    {
+        // The structure plane is keyed by the class key a writer holds, so
+        // no grant is needed for a metadata record, read either way.
+        var (_, catalogue, inner, keys) = await PublishAsync(FormatVersions.RelocatableRecords, 0xB6);
+        using var _ = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xB6);
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        var read = await reader.ReadSegmentAsync(manifests[0], CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        Assert.AreEqual(1L, counting.Reads);
+        Assert.AreEqual(0, reader.FramedBlobs);
+    }
+
+    [TestMethod]
+    public async Task AFormat3MetadataRecordThatDoesNotVerify_IsStillADamageFinding()
+    {
+        var (_, catalogue, inner, keys) = await PublishAsync(FormatVersions.RelocatableRecords, 0xB7);
+        using var _ = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xB7);
+        RotOneByte(catalogue.ResolveLocation(manifests[0])!, "meta");
+
+        using var reader = new RepositoryReader(Repo, keys, inner, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        var read = await reader.ReadSegmentAsync(manifests[0], CancellationToken.None);
+
+        Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreEqual(1, reader.LocationFallbacks, "the footer path is the one that says what is wrong");
+    }
+
+    /// <summary>
+    /// The file-version manifests of the snapshot <paramref name="seed"/>
+    /// names that share a metadata blob with the first of them, in order.
+    /// </summary>
+    private static List<ObjectId> ManifestsSharingABlob(CatalogueDb catalogue, byte seed)
+    {
+        var manifests = RestorePlanner.Plan(
+                catalogue, Enumerable.Repeat(seed, 16).ToArray(), string.Empty, RestoreTargetProfile.ForLocalPlatform())
+            .Items.Where(entry => entry.Kind == EntryKind.File)
+            .Select(entry => entry.ObjectId)
+            .ToList();
+        var blob = catalogue.ResolveLocation(manifests[0])!.BlobId;
+        var together = manifests.Where(id => catalogue.ResolveLocation(id)!.BlobId.Equals(blob)).ToList();
+        Assert.IsGreaterThanOrEqualTo(2, together.Count, "the fixture must put two manifests in one metadata blob");
+        return together;
     }
 
     /// <summary>
@@ -260,10 +442,10 @@ public sealed class SparseRecordReadTests : ArchiveTestHarness
     }
 
     /// <summary>Flips one byte inside a record's sealed bytes, where its tag or its key will catch it.</summary>
-    private void RotOneByte(Repository.Catalogue.ResolvedLocation location)
+    private void RotOneByte(Repository.Catalogue.ResolvedLocation location, string blobClass)
     {
         foreach (var path in Directory
-            .EnumerateFiles(Path.Combine(StoreRoot, "blobs", "data"), "*", SearchOption.AllDirectories)
+            .EnumerateFiles(Path.Combine(StoreRoot, "blobs", blobClass), "*", SearchOption.AllDirectories)
             .Where(path => new FileInfo(path).Length > (long)location.PhysicalOffset + 64))
         {
             using var file = File.Open(path, FileMode.Open, FileAccess.ReadWrite);

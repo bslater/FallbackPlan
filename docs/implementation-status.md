@@ -191,6 +191,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0164](adr/0164-kept-restore-receipts-are-let-go-by-age.md) | Kept restore receipts are let go by age: `restore-receipts --forget-all --older-than-days` lets go only the receipts of runs that ended longer ago, from a state directory or through a paired service, and keeps and names one that does not say when its run ended | **Built** | `Cli/RestoreReceiptReport` · `Cli/CliApplication` · `Cli.Tests/RestoreReceiptsVerbTests` · `Hosts.Tests/RestoreReceiptsRemoteTests` · [notes](#0164--kept-restore-receipts-are-let-go-by-age) |
 | [0165](adr/0165-restores-left-unfinished-are-let-go-by-age.md) | Restores left unfinished are let go by age: `restore-resume` and `restore-parts` with `--forget-all --older-than-days` let go only the runs, and the destinations, that began longer ago, and keep and name a destination whose run said nothing of when it began | **Built** | `Cli/OlderThanDays` · `Cli/OperationGateway` · `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli.Tests/RestoreResumeVerbTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0165--restores-left-unfinished-are-let-go-by-age) |
 | [0166](adr/0166-a-format-3-data-record-is-read-without-its-blobs-envelope.md) | A format-3 data record is read without its blob's envelope: a record read by its location is framed as format 3 frames it, and the envelope is read, and the record re-framed from the bytes already fetched, only when it does not read so | **Built** | `Repository.Packing/BlobReader` · `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · [notes](#0166--a-format-3-data-record-is-read-without-its-blobs-envelope) |
+| [0167](adr/0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md) | A format-3 metadata record is read without its blob's envelope: the catalogue answers each location with the key generation it recorded for the blob, and a metadata record is read at it as format 3 frames it, the envelope read only when the record does not read so | **Built** | `Repository.Catalogue/Catalogue` · `Repository.Packing/BlobReader` · `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/CatalogueTests` · [notes](#0167--a-format-3-metadata-record-is-read-without-its-blobs-envelope) |
 
 ---
 
@@ -1987,7 +1988,8 @@ Measured: **11 GETs over 11 blobs holding 60 records, against a budget of 14**,
 where the same restore cost 93. What is **not** covered is stated rather than
 absorbed: a sparse restore of one small record out of large blobs cannot fold
 the envelope, so it costs two reads a blob — since closed for format-3 data
-blobs ([0166](#0166--a-format-3-data-record-is-read-without-its-blobs-envelope)); and the plan verb's reachability
+blobs ([0166](#0166--a-format-3-data-record-is-read-without-its-blobs-envelope)), and for format-3 metadata blobs the catalogue recorded
+([0167](#0167--a-format-3-metadata-record-is-read-without-its-blobs-envelope)); and the plan verb's reachability
 probe (`Restore/RestoreBlobSet`, FR-RST-003) still opens each metadata blob
 through its footer, which is a different question asked before anything moves.
 
@@ -4415,6 +4417,26 @@ authenticated nothing of it, and a record's additional data binds the
 repository, version, type and id however its blob was framed.
 
 What remains is recorded rather than done. A metadata blob is still framed
-from its envelope, since its records' keys need its key generation; another
-copy's blob still is too; and the plan's read figure still counts each blob's
-envelope, so a sparse read now reads less than its plan says.
+from its envelope, since its records' keys need its key generation — since
+read without it where the catalogue recorded that generation
+([0167](#0167--a-format-3-metadata-record-is-read-without-its-blobs-envelope));
+another copy's blob still is too; and the plan's read figure still counts each
+blob's envelope, so a sparse read now reads less than its plan says.
+
+### 0167 — a format-3 metadata record is read without its blob's envelope
+
+A format-3 metadata record carries its own nonce and is keyed by its type and
+id under the metadata class key, so the one thing its blob's envelope adds is
+the key generation that class key is derived at. The catalogue records it for
+every blob a backup sealed and every blob a forensic rebuild read, so a
+location now carries it, and none for a placeholder row, whose zero nobody
+recorded. A metadata record is read at that generation as format 3 frames it,
+one read, by a write-only holder as well as a reader with a grant. A record of
+format 2, or one the recorded generation does not open, fails closed at its
+tag, and is framed from its envelope from the bytes already in hand, at the
+two reads it cost before and with no fall back to the footer.
+
+What remains is recorded rather than done. A catalogue rebuilt from the index
+plane knows each metadata blob by a placeholder row, so its reads still frame
+each from its envelope; another copy's blob still is; and format-2 blobs cost
+what they did. Compaction is not among them: it writes only data blobs.
