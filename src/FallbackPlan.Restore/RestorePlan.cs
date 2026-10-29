@@ -73,6 +73,15 @@ public sealed record RestoreTargetProfile
     /// <summary>The target's maximum path bytes, when known.</summary>
     public uint? MaxPathBytes { get; init; }
 
+    /// <summary>
+    /// Whether the target names files by Windows' rules
+    /// (<see cref="RestorePaths.IsWindowsName"/>), so a name another platform
+    /// wrote may be one it refuses or alters (ADR-0170). Stated rather than
+    /// taken from the running platform, so a plan for a Windows target can be
+    /// made, and tested, anywhere.
+    /// </summary>
+    public bool WindowsNamingRules { get; init; }
+
     /// <summary>What this target lets a <see cref="MetadataWriter"/> write back.</summary>
     public MetadataTarget Metadata => new()
     {
@@ -89,6 +98,7 @@ public sealed record RestoreTargetProfile
         CaseSensitive = !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS(),
         SupportsPosixMetadata = !OperatingSystem.IsWindows(),
         SupportsSymlinks = !OperatingSystem.IsWindows(),
+        WindowsNamingRules = OperatingSystem.IsWindows(),
         SupportsCreationTimes = FileTimes.CanSetCreationTime,
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
         Account = RestoreAccount.OfThisProcess(),
@@ -139,9 +149,10 @@ public sealed record MetadataDegradation(string Capability, string Detail);
 /// <summary>
 /// The plan (FR-RST-004; architecture 08 §2): the complete file set,
 /// conflicts (case collisions on a case-folding target, path-length
-/// overruns), the space estimate, and declared metadata degradations —
-/// all computed before any transfer starts, so the operator decides with
-/// facts instead of discovering them mid-restore.
+/// overruns, names the target cannot make), the space estimate, and
+/// declared metadata degradations — all computed before any transfer
+/// starts, so the operator decides with facts instead of discovering them
+/// mid-restore.
 /// </summary>
 public sealed record RestorePlan
 {
@@ -257,6 +268,23 @@ public static class RestorePlanner
                         item.Path,
                         $"Collides on a case-insensitive target with: {string.Join(", ", group.Select(other => other.Path).Where(path => path != item.Path))}."));
                 }
+            }
+        }
+
+        // Names the executor would refuse, or that the target would refuse or
+        // alter, said before any byte moves rather than met item by item at
+        // execution (ADR-0170). Each item is judged by its own last
+        // component: a folder's name is judged as the folder's item.
+        foreach (var item in items)
+        {
+            var name = item.Path[(item.Path.LastIndexOf('/') + 1)..];
+            if (!RestorePaths.IsPlainComponent(name, out var why))
+            {
+                conflicts.Add(new RestoreConflict(item.Path, $"No target can restore this name: {why}."));
+            }
+            else if (target.WindowsNamingRules && !RestorePaths.IsWindowsName(name, out why))
+            {
+                conflicts.Add(new RestoreConflict(item.Path, $"A Windows target cannot make this name: {why}."));
             }
         }
 
