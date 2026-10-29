@@ -177,6 +177,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0150](adr/0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) | The recovery tool gives what it restores its metadata back by the executor's rule: each file once it has landed and each folder it made last, deepest first and never through a link, through the shared writer; a folder already in the output and the output itself keep their own, and what did not land is counted by attribute on the terminal and in the bundle | **Built** | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Recovery/RecoveryBundle` · `Domain/MetadataWriter` · `Repository.Tests/RecoveryMetadataTests` · `Hosts.Tests/RecoveryHostTests` · `Hosts.Tests/RecoveryBundleTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0150--the-recovery-tool-writes-back-metadata) |
 | [0151](adr/0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md) | The catalogue keeps a folder's entries once, under its tree: schema 17 keys an entry by the folder's head tree and its name, a path is followed from the snapshot's root, a snapshot's folders are recorded together after its row, and forgetting snapshots lets go of what none of the rest reaches, so a set where a tenth of the files change per snapshot costs 930 B/version, not 2 005 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · `TestSupport/CatalogueTrees` · [notes](#0151--the-catalogue-keeps-a-folders-entries-once) |
 | [0152](adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) | The recovery tool keeps every path inside its output by the executor's rule: the rule moves into Domain unchanged, the executor and the tool resolve every path through it, so a link the output holds is written through by nothing, and a file's spool is made new rather than opened | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Repository.Tests/EndToEnd/RecoveryContainmentTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0152--the-recovery-tool-keeps-every-path-inside-its-output) |
+| [0153](adr/0153-a-folders-access-time-goes-with-the-last-snapshot-that-reaches-its-tree.md) | A folder's access time goes with the last snapshot that reaches its tree: forgetting snapshots lets go of every access time none of the rest reaches, in the transaction that lets go of their folders, and every writer records a snapshot's times after its folders | **Built** | `Repository.Catalogue/Catalogue` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/EndToEnd/FolderAccessTimeTests` · [notes](#0153--a-folders-access-time-goes-with-the-last-snapshot-reaching-it) |
 
 ---
 
@@ -4121,7 +4122,9 @@ tenth of the files change per snapshot costs 930 B/version, against
 What remains is recorded rather than done. A changed folder restates
 every entry, and so does each folder above it. What a snapshot is made of
 still names every tree of every snapshot, folder access times are never
-let go of, and a projection still reads every tree.
+let go of, and a projection still reads every tree. Folder access times
+have since been let go of with the folders
+([0153](#0153--a-folders-access-time-goes-with-the-last-snapshot-reaching-it)).
 
 ### 0152 — the recovery tool keeps every path inside its output
 
@@ -4142,3 +4145,21 @@ What remains is recorded rather than done. The path is checked before it
 is written and not in one step with it, so an account that can write in
 the output while the tool runs can still swap a folder for a link between
 the two.
+
+### 0153 — a folder's access time goes with the last snapshot reaching it
+
+The catalogue keeps the access time each folder's tree states, so a
+capture can give a folder that was only read its prior tree. Forgetting
+snapshots let go of every folder none of the rest reached, but never of
+those access times, so a set that keeps a bounded number of snapshots
+kept a time for every folder tree any of them ever had. Forgetting now
+lets go of every time whose folder none of the rest reaches, in the same
+transaction. Once the unreached folders are gone, the entries left say
+which folders are reached, so no second walk is needed. An empty folder's
+time stays while its parent is held. Every writer records a snapshot's
+times together after its row and its folders, so forgetting another
+snapshot in between cannot let one go.
+
+What remains is recorded rather than done. The size measurement seeds no
+access times, and what a snapshot is made of still names every tree of
+every snapshot.
