@@ -400,17 +400,28 @@ public sealed class RepositoryReader : IDisposable
             await OpenForFallbackAsync(location, cancellationToken).ConfigureAwait(false);
         }
 
-        if (!_records.TryGetValue(objectId, out var located))
+        if (_records.TryGetValue(objectId, out var located))
         {
-            return new OwnRead(
-                RecordReadResult.Failure(
-                    RecordReadOutcome.FormatViolation,
-                    $"No loaded blob carries a record for object {objectId}."),
-                fast);
+            try
+            {
+                return new OwnRead(
+                    await located.Reader.ReadRecordAsync(located.Entry, cancellationToken).ConfigureAwait(false), fast);
+            }
+            catch (BlobFormatException)
+            {
+                if (!await ForgetIfGoneAsync(
+                        located.Reader.Envelope.BlobId, located.Reader.StoreKey, cancellationToken).ConfigureAwait(false))
+                {
+                    throw;
+                }
+            }
         }
 
         return new OwnRead(
-            await located.Reader.ReadRecordAsync(located.Entry, cancellationToken).ConfigureAwait(false), fast);
+            RecordReadResult.Failure(
+                RecordReadOutcome.FormatViolation,
+                $"No loaded blob carries a record for object {objectId}."),
+            fast);
     }
 
     /// <summary>
@@ -793,6 +804,11 @@ public sealed class RepositoryReader : IDisposable
         }
         catch (BlobFormatException exception)
         {
+            if (await ForgetIfGoneAsync(location.BlobId, blob.Key, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
             // Damage, scoped to the blob it is in — the same posture the
             // full load takes, so a fallback cannot turn one torn blob
             // into a failed restore of everything else.
@@ -858,7 +874,47 @@ public sealed class RepositoryReader : IDisposable
             return null;
         }
 
-        return await framing.ReadRecordAsync(span, held, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await framing.ReadRecordAsync(span, held, cancellationToken).ConfigureAwait(false);
+        }
+        catch (BlobFormatException)
+        {
+            if (!await ForgetIfGoneAsync(location.BlobId, blob.Key, cancellationToken).ConfigureAwait(false))
+            {
+                throw;
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Forgets where a blob is once its store no longer holds it, and
+    /// answers whether it did.
+    /// </summary>
+    /// <remarks>
+    /// What a reader learns about a blob it keeps for the run, and a blob can
+    /// go during one: the collector sweeping what an expired snapshot alone
+    /// reached, or the staging trim removing what every destination holds,
+    /// neither of which waits for a restore (ADR-0172). A read of a blob that
+    /// has gone fails as one that will not frame, which is how damage fails,
+    /// so only the store can say which it was. With its location forgotten,
+    /// the blob is one the store does not hold: the next record it held asks
+    /// where it is and finds nothing, and is read around or failed as that,
+    /// never filed as damage. Its framing and footer are kept, since a copy
+    /// holds the same bytes at the same offsets.
+    /// </remarks>
+    private async ValueTask<bool> ForgetIfGoneAsync(
+        BlobId blobId, ObjectKey storeKey, CancellationToken cancellationToken)
+    {
+        if ((await _store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false)).Found)
+        {
+            return false;
+        }
+
+        _located.Remove(blobId);
+        return true;
     }
 
     /// <summary>
