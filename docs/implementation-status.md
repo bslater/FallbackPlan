@@ -184,6 +184,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0157](adr/0157-a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way.md) | A restore in direct mode is refused a destination that nests with one under way: under one claim of every destination's folder, a run whose destination holds or lies inside one a run under way lands in is refused, and its record names every folder it lands in | **Built** | `Cli/DirectRestoreParts` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0157--a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way) |
 | [0158](adr/0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md) | Every destination a restore in direct mode left unfinished is let go at once: `restore-parts --forget-all` lets every destination's folder go under the claim a run takes its folder under, passing over one a run holds, and `--forget` judges under the same claim | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/CliApplication` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0158--every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once) |
 | [0159](adr/0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md) | A restore into a folder that is itself a link restores what lies below it: the rule every way of restoring holds a path to follows the root and each folder below it through their links, refusing a path at the first folder that leads out | **Built** | `Domain/RestorePaths` · `Domain.Tests/RestorePathsTests` · `Cli.Tests/RestoreShapeCommandTests` · `Repository.Tests/EndToEnd/RecoveryContainmentTests` · [notes](#0159--a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it) |
+| [0160](adr/0160-a-restore-in-direct-mode-judges-where-it-lands-through-links.md) | A restore in direct mode judges where it lands through links: a run whose destination holds or lies inside one under way, as written or once each is followed through its links, is refused | **Built** | `Cli/DirectRestoreParts` · `Domain/RestorePaths` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0160--a-restore-in-direct-mode-judges-where-it-lands-through-links) |
 
 ---
 
@@ -4253,7 +4254,8 @@ unfinished, goes ahead.
 
 What remains is recorded rather than done. A run in direct mode is still
 not judged against the service's runs, and two destinations that only a
-link makes nest are judged apart.
+link makes nest are judged apart. Two such destinations have
+since been judged together ([0160](#0160--a-restore-in-direct-mode-judges-where-it-lands-through-links)).
 
 ### 0158 — every destination a restore in direct mode left unfinished is let go at once
 
@@ -4286,3 +4288,18 @@ that leads out. The same following is offered for any path.
 What remains is recorded rather than done. A folder is held to the root
 by its spelling, so a link whose target spells the root in another case
 is refused, as before.
+
+### 0160 — a restore in direct mode judges where it lands through links
+
+A restore in direct mode was refused where its destination nested with
+one under way as written, and two destinations that only a link made nest
+were judged apart. One destination spelt through a link and not held two
+folders of parts, since each spelling names its own, so two runs into it
+ran at once. Two folders nest now as written, as before, or once each is
+followed through its links (ADR-0159), each followed as the run is
+judged. A folder inside a destination as written is still refused where
+a link leads it elsewhere. The refusal names both folders as typed.
+
+What remains is recorded rather than done. A run in direct mode is still
+not judged against the service's runs, and two spellings of a destination
+still keep two folders of parts.
