@@ -49,6 +49,8 @@ The judgement and the record are made under one claim of every destination's fol
 - **Keep a run in direct mode from the service's runs.** The service keeps its parts apart and holds its own runs, as before.
 - **Judge through links.** The judgement is from the paths alone, so two destinations that one link makes nest are judged apart.
 
+  > **2026-10 ([ADR-0160](0160-a-restore-in-direct-mode-judges-where-it-lands-through-links.md)).** Two folders nest now as written or once each is followed through its links, so a destination spelt through a link is one destination.
+
 ## Alternatives considered
 
 - **One hold for every restore in direct mode.** Rejected. Two runs to unrelated folders need not wait for each other.
@@ -59,3 +61,4 @@ The judgement and the record are made under one claim of every destination's fol
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A restore in direct mode is refused where a run under way lands in a folder that holds or lies inside one it lands in, judged under one claim of every destination's folder, and its record names every folder it lands in. A run refused so leaves no folder it made. |
+| 2026-10 | Accepted | [ADR-0160](0160-a-restore-in-direct-mode-judges-where-it-lands-through-links.md): two destinations nest where they do as written or where their links lead, which this record left judged apart. |
