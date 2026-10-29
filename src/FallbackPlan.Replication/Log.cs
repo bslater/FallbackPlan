@@ -58,7 +58,7 @@ internal static partial class Log
         Message = "Converging {Destination} left {Phase} and every phase beneath it as it was: "
             + "{Refused} delete(s) above were not carried out, and what they kept may reach it")]
     internal static partial void ConvergeStoppedShort(
-        ILogger logger, LogLabel destination, long refused, LogLabel phase);
+        ILogger logger, LogLabel destination, LogLabel phase, long refused);
 
     [LoggerMessage(
         EventId = 3003, Level = LogLevel.Information,

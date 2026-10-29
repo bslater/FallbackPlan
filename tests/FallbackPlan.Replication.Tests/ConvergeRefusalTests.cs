@@ -1,7 +1,9 @@
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Replication;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Replication.Tests;
 
@@ -26,6 +28,9 @@ public sealed class ConvergeRefusalTests
     private const string NewSnapshot = "snapshots/bb/new";
     private const string OldOnlyBlob = "blobs/data/aaaa/old-only";
     private const string SharedBlob = "blobs/data/bbbb/shared";
+
+    private const int RefusedByStore = 3006;
+    private const int StoppedShort = 3007;
 
     private string _root = null!;
     private LocalFileSystemObjectStore _source = null!;
@@ -122,6 +127,27 @@ public sealed class ConvergeRefusalTests
         Assert.AreEqual(1L, outcome.Refused);
         Assert.IsFalse(await HoldsAsync(OldSnapshot));
         Assert.IsTrue(await HoldsAsync(OldOnlyBlob), "a blob no snapshot lists is space unreclaimed, not damage");
+    }
+
+    [TestMethod]
+    public async Task Converge_ARefusal_IsLoggedWithItsKey_AndSoIsThePhaseItHeldBack()
+    {
+        var refusing = new DeleteFaultingObjectStore(_replica);
+        refusing.ArmThrow(key => key.StartsWith("snapshots/", StringComparison.Ordinal));
+        var log = new RecordingLogger();
+
+        await StoreToStoreCopier.ConvergeAsync(
+            _source, refusing, Keeps, CancellationToken.None, destinationName: "spare", logger: log);
+
+        var refused = Assert.ContainsSingle(log.Records.Where(record => record.EventId == RefusedByStore));
+        Assert.AreEqual(LogLevel.Warning, refused.Level);
+        Assert.AreEqual(ObjectKey.Parse(OldSnapshot), refused.Values.First(value => value.Key == "Key").Value);
+        Assert.IsNotNull(refused.Exception, "the store's own words travel with it");
+
+        var stopped = Assert.ContainsSingle(log.Records.Where(record => record.EventId == StoppedShort));
+        Assert.AreEqual(LogLevel.Warning, stopped.Level);
+        Assert.AreEqual(1L, stopped.Values.First(value => value.Key == "Refused").Value);
+        Assert.AreEqual(LogLabel.Of("spare"), stopped.Values.First(value => value.Key == "Destination").Value);
     }
 
     [TestMethod]

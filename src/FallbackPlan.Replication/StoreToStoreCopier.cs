@@ -409,7 +409,7 @@ public static class StoreToStoreCopier
             // cost of space a later pass reclaims (ADR-0171, FR-GC-006).
             if (refused > 0)
             {
-                Log.ConvergeStoppedShort(log, new LogLabel(name), refused, new LogLabel(phase));
+                Log.ConvergeStoppedShort(log, new LogLabel(name), new LogLabel(phase), refused);
                 break;
             }
 
