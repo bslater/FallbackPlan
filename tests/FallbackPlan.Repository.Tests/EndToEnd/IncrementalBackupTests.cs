@@ -24,7 +24,13 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// queries — with the short-circuit conservatively disabled because
 /// identities are not durable (02 §2) — and a deleted file leaves the earlier
 /// snapshot whole, because a deletion is new snapshot state rather than a
-/// removal (FR-SNP-002).
+/// removal (FR-SNP-002). Two names of one inode in one snapshot leave a
+/// rename of either with no ancestry rather than the wrong one; a rename by
+/// case alone keeps its ancestry under the new spelling; content changed in
+/// place with its size and modification time put back is missed by the
+/// short-circuit, which is its stated risk, and caught by a backup that reads
+/// every file; and a modification time moved backwards is a change
+/// (FR-MAN-006, NFR-PERF-003).
 /// </summary>
 [TestClass]
 public sealed class IncrementalBackupTests : ArchiveTestHarness
@@ -650,6 +656,170 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
 
     [TestMethod]
+    public async Task SourceIdentityHints_TwoNamesShareOneInode_RecordsNoAncestryForEither()
+    {
+        // A hardlink group's two names: two versions, one inode, one snapshot.
+        // Neither is the other's ancestor, and nothing can tell which one a
+        // later rename means, so the hints answer nothing for that inode.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/one.bin", Deterministic(4_000, 17), linkCount: 2, fileId: 6_262);
+        source.AddFile("docs/two.bin", Deterministic(4_000, 17), linkCount: 2, fileId: 6_262);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        using (var live = OpenCatalogue())
+        {
+            await CreateOrchestrator(store, keys, credential, live)
+                .PublishAsync(Job(source, 0xC1), CancellationToken.None);
+        }
+
+        // Rebuilt, the catalogue knows no source identity, so a rename is
+        // found through the hints the snapshot published or not at all.
+        using var rebuilt = await RebuildCatalogueAsync(store, keys, credential);
+
+        Assert.IsTrue(source.Remove("docs/one.bin"));
+        source.AddFile("archive/moved.bin", Deterministic(4_000, 17), linkCount: 2, fileId: 6_262);
+
+        var second = await CreateOrchestrator(store, keys, credential, rebuilt)
+            .PublishAsync(
+                Job(source, 0xC2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xC1, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        var moved = second.Files.Single(file => file.RelativePath == "archive/moved.bin");
+        var manifest = await ReadManifestAsync(store, keys, rebuilt, moved.ObjectId);
+        Assert.IsNull(manifest.ParentVersion, "an inode with two names answers no ancestry, not the wrong one");
+    }
+
+    [TestMethod]
+    public async Task IncrementalBackup_TheFileWasRenamedByCaseAlone_KeepsItsAncestryUnderTheNewName()
+    {
+        // README.md to readme.md on a case-insensitive volume: the same
+        // inode, size and modification time, under a name that differs only
+        // in case. It is a rename, and keeps its history.
+        var source = new FakeFileSystemSource { Info = new(
+            CaseSensitive: false, SupportsSparse: true, Name: "fakefs",
+            MaxPathBytes: 4096, MaxComponentBytes: 255, ReservedNames: false) };
+        var file = source.AddFile("docs/README.md", Deterministic(4_000, 13), fileId: 5_151);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xE1), CancellationToken.None);
+        var before = first.Files.Single(entry => entry.RelativePath == "docs/README.md").ObjectId;
+
+        Assert.IsTrue(source.Remove("docs/README.md"));
+        source.AddNode(file with { RelativePath = "docs/readme.md" });
+        source.OpenedPaths.Clear();
+
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, 0xE2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xE1, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        var after = Assert.ContainsSingle(second.Files);
+        Assert.AreEqual("docs/readme.md", after.RelativePath, "the snapshot states the name as it now is");
+        var manifest = await ReadManifestAsync(store, keys, catalogue, after.ObjectId);
+        Assert.AreEqual(before, manifest.ParentVersion);
+        SequenceAssert.AreEqual("readme.md"u8.ToArray(), manifest.Name.ToArray());
+        Assert.IsEmpty(source.OpenedPaths, "a rename reads no content");
+    }
+
+    [TestMethod]
+    public async Task IncrementalBackup_ContentChangedInPlaceWithSizeAndTimestampPreserved_IsMissedByTheShortCircuitAndCaughtByAFullRead()
+    {
+        // The short-circuit's stated risk, pinned rather than argued: a tool
+        // that rewrites a file and puts its modification time back leaves
+        // nothing the short-circuit compares changed. A backup with no prior
+        // snapshot to compare against, which is what --full asks for, reads
+        // every file and catches it.
+        var source = new FakeFileSystemSource();
+        var ledger = source.AddFile("docs/ledger.bin", Deterministic(4_000, 19), fileId: 7_373);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xF5), CancellationToken.None);
+        var original = Assert.ContainsSingle(first.Files).ObjectId;
+
+        ledger.Content = Deterministic(4_000, 23);
+        source.OpenedPaths.Clear();
+
+        var incremental = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, 0xF6, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xF5, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        var missed = Assert.ContainsSingle(incremental.Files);
+        Assert.IsTrue(missed.Reused, "identity, size and modification time all match");
+        Assert.AreEqual(original, missed.ObjectId);
+        Assert.IsEmpty(source.OpenedPaths);
+
+        var full = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xF7, now: 1_722_700_000_002), CancellationToken.None);
+
+        var caught = Assert.ContainsSingle(full.Files);
+        Assert.IsFalse(caught.Reused);
+        Assert.AreNotEqual(original, caught.ObjectId);
+        var manifest = await ReadManifestAsync(store, keys, catalogue, caught.ObjectId);
+        SequenceAssert.AreEqual(
+            System.Security.Cryptography.SHA256.HashData(Deterministic(4_000, 23)), manifest.WholeFileHash.ToArray());
+    }
+
+    [TestMethod]
+    public async Task IncrementalBackup_TheTimestampMovesBackwards_StillTreatsTheFileAsChanged()
+    {
+        // A file restored from elsewhere, or a clock put right, can carry an
+        // older modification time than the last backup saw. Older is not
+        // unchanged: the comparison is equality, never "not newer".
+        var source = new FakeFileSystemSource();
+        var notes = source.AddFile("docs/notes.txt", Deterministic(4_000, 29), fileId: 8_484);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA7), CancellationToken.None);
+
+        notes.Content = Deterministic(4_000, 31);
+        notes.Metadata = notes.Metadata with { ModifiedAt = notes.Metadata.ModifiedAt - 86_400_000 };
+        source.OpenedPaths.Clear();
+
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, 0xA8, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xA7, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        var file = Assert.ContainsSingle(second.Files);
+        Assert.IsFalse(file.Reused);
+        SequenceAssert.AreEqual(["docs/notes.txt"], source.OpenedPaths.Distinct());
+        var manifest = await ReadManifestAsync(store, keys, catalogue, file.ObjectId);
+        SequenceAssert.AreEqual(
+            System.Security.Cryptography.SHA256.HashData(Deterministic(4_000, 31)), manifest.WholeFileHash.ToArray());
+    }
+
+    [TestMethod]
     public async Task IncrementalBackup_OneFileChanged_RewritesMetadataForItAloneAndNotTheRepository()
     {
         // 1 024 files across 32 directories: enough that "proportional to the
@@ -773,6 +943,28 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         using var buffer = new MemoryStream();
         await read.Content!.CopyToAsync(buffer, CancellationToken.None);
         return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// Deletes the catalogue and rebuilds it from the index plane and the
+    /// store, as a lost catalogue is rebuilt: it then knows no source
+    /// identity of its own.
+    /// </summary>
+    private async Task<CatalogueDb> RebuildCatalogueAsync(
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential)
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
+
+        var rebuilt = OpenCatalogue();
+        await new CatalogueRebuilder(new IndexLoader(store, Repo, credential)).RebuildAsync(
+            rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+            CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        await CatalogueProjector.ProjectAsync(rebuilt, reader, store, Repo, keys, credential, CancellationToken.None);
+        return rebuilt;
     }
 
     /// <summary>Reads a published file-version manifest back out of the store.</summary>

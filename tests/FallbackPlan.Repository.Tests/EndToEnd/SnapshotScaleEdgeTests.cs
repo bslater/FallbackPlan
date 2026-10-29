@@ -6,13 +6,17 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Filesystem;
+using FallbackPlan.Restore;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// Both ends of the range: a snapshot with nothing in it, and a directory
 /// with far more in it than any query was written for (FR-SNP-002, FR-MAN-002,
-/// NFR-PERF-004).
+/// NFR-PERF-004). Between them, a snapshot whose every file is empty: it holds
+/// files and no data blobs at all, and still restores each file, empty, from
+/// the catalogue the backup kept and from one rebuilt without it (FR-MAN-001,
+/// NFR-REL-002).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -97,6 +101,109 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         // did not run.
         Assert.ContainsSingle(catalogue.EnumerateSnapshots());
         Assert.IsEmpty(catalogue.ListDirectory(Enumerable.Repeat((byte)0xA1, 16).ToArray(), string.Empty));
+    }
+
+    [TestMethod]
+    public async Task Backup_EveryFileIsEmpty_PublishesASnapshotWithNoDataBlobsThatStillRestores()
+    {
+        var source = EmptyFiles();
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var published = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xC1), CancellationToken.None);
+
+        Assert.HasCount(3, published.Files);
+        Assert.IsEmpty(published.Failures);
+        Assert.AreEqual(0, published.ContentBlobs.Sum(blob => blob.RecordCount));
+        Assert.IsEmpty(await KeysUnderAsync(store, "blobs/data/"), "an empty file stores no data blob");
+
+        await AssertRestoresEmptyAsync(catalogue, store, keys, 0xC1, "restored-live");
+    }
+
+    [TestMethod]
+    public async Task CatalogueRebuild_TheSnapshotHoldsOnlyEmptyFiles_RebuildsAndRestoresThemAsEmpty()
+    {
+        var source = EmptyFiles();
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        using (var live = OpenCatalogue())
+        {
+            await CreateOrchestrator(store, keys, credential, live)
+                .PublishAsync(Job(source, 0xC2), CancellationToken.None);
+        }
+
+        // A rebuild with no data blob in the store has only the index plane
+        // and the metadata blobs to go on.
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
+        using var rebuilt = OpenCatalogue();
+        await new CatalogueRebuilder(new IndexLoader(store, Repo, credential)).RebuildAsync(
+            rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+            CancellationToken.None);
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            await CatalogueProjector.ProjectAsync(rebuilt, reader, store, Repo, keys, credential, CancellationToken.None);
+        }
+
+        Assert.ContainsSingle(rebuilt.EnumerateSnapshots());
+        await AssertRestoresEmptyAsync(rebuilt, store, keys, 0xC2, "restored-rebuilt");
+    }
+
+    /// <summary>Three empty files, two of them a folder down.</summary>
+    private static FakeFileSystemSource EmptyFiles()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("empty.txt", []);
+        source.AddFile("docs/blank.md", []);
+        source.AddFile("docs/nothing.bin", []);
+        return source;
+    }
+
+    /// <summary>Restores the snapshot <paramref name="seed"/> names and checks each of its three files lands, empty.</summary>
+    private async Task AssertRestoresEmptyAsync(
+        CatalogueDb catalogue, IObjectStore store, RepositoryKeySet keys, byte seed, string into)
+    {
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat(seed, 16).ToArray(), string.Empty, target);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+        var output = Path.Combine(SpoolDirectory, into);
+
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, output,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = into,
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        foreach (var path in new[] { "empty.txt", "docs/blank.md", "docs/nothing.bin" })
+        {
+            Assert.AreEqual("restored", receipt.Items.Single(item => item.Path == path).Outcome, path);
+            var restored = new FileInfo(Path.Combine(output, path));
+            Assert.IsTrue(restored.Exists, path);
+            Assert.AreEqual(0L, restored.Length, path);
+        }
+    }
+
+    private static async Task<List<ObjectKey>> KeysUnderAsync(Storage.Local.LocalFileSystemObjectStore store, string prefix)
+    {
+        var keys = new List<ObjectKey>();
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse(prefix), ListOptions.Default, CancellationToken.None))
+        {
+            keys.Add(entry.Key);
+        }
+
+        return keys;
     }
 
     /// <summary>
