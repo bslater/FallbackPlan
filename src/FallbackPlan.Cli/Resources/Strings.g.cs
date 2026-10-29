@@ -646,6 +646,16 @@ internal static class Strings
     internal static string CliApplication_OlderThanDaysGoesWithForgetAll => Get(nameof(CliApplication_OlderThanDaysGoesWithForgetAll));
 
     /// <summary>
+    /// --older-than-days says which runs --forget-all lets go: it goes beside --forget-all. Nothing was let go.
+    /// </summary>
+    internal static string CliApplication_OlderThanDaysSaysWhichRuns => Get(nameof(CliApplication_OlderThanDaysSaysWhichRuns));
+
+    /// <summary>
+    /// --older-than-days says which destinations' parts --forget-all lets go: it goes beside --forget-all. Nothing was let go.
+    /// </summary>
+    internal static string CliApplication_OlderThanDaysSaysWhichParts => Get(nameof(CliApplication_OlderThanDaysSaysWhichParts));
+
+    /// <summary>
     /// --older-than-days takes at least one day. Nothing was let go.
     /// </summary>
     internal static string CliApplication_OlderThanDaysTakesAtLeastOne => Get(nameof(CliApplication_OlderThanDaysTakesAtLeastOne));

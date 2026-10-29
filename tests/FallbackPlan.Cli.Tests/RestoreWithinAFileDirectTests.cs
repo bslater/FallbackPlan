@@ -31,7 +31,12 @@ namespace FallbackPlan.Cli.Tests;
 /// folder under, so none is let go as a run takes it (FR-RST-008, ADR-0158).
 /// Where each lands is judged through links too, so a run into a folder a
 /// link makes nest with a destination under way is refused, while one a link
-/// leads beside it goes ahead (FR-RST-008, ADR-0159).
+/// leads beside it goes ahead (FR-RST-008, ADR-0159). With
+/// <c>--older-than-days</c> beside <c>--forget-all</c>, only the destinations
+/// whose run began longer ago than that are let go, how many stay is said,
+/// and one whose run said nothing of when it began stays and is named;
+/// without <c>--forget-all</c>, or below one day, it is refused and nothing is
+/// let go (ADR-0165).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileDirectTests : IDisposable
@@ -679,6 +684,56 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
             $"No restore in direct mode left parts under '{DirectRestoreParts.RootUnder(_cli.StatePath)}'.",
             letGo.Output,
             StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task DestinationsLetGoByAge_OnlyThoseWhoseRunBeganLongerAgo_Go()
+    {
+        var elsewhere = Path.Combine(_cli.WorkPath, "elsewhere");
+        var elsewhereParts = DirectRestoreParts.Of(_cli.StatePath, elsewhere);
+        Directory.CreateDirectory(Parts);
+        DirectRestoreParts.Record(Parts, new DirectRestoreRun(new string('e', 32), null, Destination, null, BeganAt: 1_700_000_000_000));
+        Directory.CreateDirectory(elsewhereParts);
+        DirectRestoreParts.Record(
+            elsewhereParts,
+            new DirectRestoreRun(
+                new string('e', 32), null, elsewhere, null, BeganAt: (ulong)DateTimeOffset.UtcNow.AddDays(-2).ToUnixTimeMilliseconds()));
+
+        var letGo = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget-all", "--older-than-days", "30");
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.All);
+        Assert.IsFalse(Directory.Exists(Parts), "a destination whose run began longer ago is let go");
+        Assert.IsTrue(Directory.Exists(elsewhereParts), "one whose run began within the days stays");
+        Assert.Contains($"let go the parts kept under '{Parts}', 0 bytes", letGo.Output, StringComparison.Ordinal);
+        Assert.Contains(
+            "let go the parts of 1 destination, 0 bytes in all; 1 whose run began within 30 days stays", letGo.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task DestinationsLetGoByAge_OneWhoseRunSaidNothingOfWhenItBegan_Stays_AndIsNamed()
+    {
+        KeepPart("assembled before");
+
+        var letGo = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget-all", "--older-than-days", "1");
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.All);
+        Assert.IsTrue(Directory.Exists(Parts), "nothing of it is let go");
+        Assert.Contains($"kept the parts under '{Parts}': its run did not say when it began", letGo.Output, StringComparison.Ordinal);
+        Assert.Contains("let go the parts of 0 destinations, 0 bytes in all", letGo.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow("--older-than-days 30", "--older-than-days says which destinations' parts --forget-all lets go")]
+    [DataRow("--forget-all --older-than-days 0", "--older-than-days takes at least one day")]
+    public async Task DestinationsLetGoByAge_WithoutForgetAllOrBelowOneDay_AreRefused_AndLetNothingGo(string asked, string said)
+    {
+        KeepPart("assembled before");
+
+        var refused = await CliHarness.RunRawAsync(["restore-parts", "--state", _cli.StatePath, .. asked.Split(' ')]);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains(said, refused.Error, StringComparison.Ordinal);
+        Assert.IsTrue(Directory.Exists(Parts), "nothing is let go");
     }
 
     [TestMethod]

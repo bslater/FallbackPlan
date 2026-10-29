@@ -36,7 +36,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// so neither the plan of a resume nor the resume needs it again, and a
 /// resume runs where whole files would not fit (FR-RST-003, ADR-0136).
 /// The command line lets every run left unfinished go at once, and the
-/// parts of each with it (ADR-0162).
+/// parts of each with it (ADR-0162), or only those begun longer ago than it
+/// says, keeping the rest and their parts (ADR-0165).
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -370,6 +371,23 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         Assert.Contains("let go 1 restore run the service left unfinished", letGo.Output, StringComparison.Ordinal);
         Assert.IsEmpty(await RunsAsync(handler));
         Assert.IsFalse(Directory.Exists(PartsOf(run)));
+    }
+
+    [TestMethod]
+    public async Task RestoreResume_LettingRunsGoByAge_KeepsARunBegunWithinTheDays_AndItsParts()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var run = (await CutShortAsync(handler)).Run!;
+        KeepPart(run, "hello", "hello");
+
+        var letGo = await CliAsync("restore-resume", "--forget-all", "--older-than-days", "30");
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.Output + letGo.Error);
+        Assert.Contains("1 restore run begun within 30 days stays", letGo.Output, StringComparison.Ordinal);
+        Assert.AreEqual(run, Assert.ContainsSingle(await RunsAsync(handler)).Run, "a run begun within the days stays");
+        Assert.IsTrue(Directory.Exists(PartsOf(run)), "and so do its parts");
     }
 
     [TestMethod]

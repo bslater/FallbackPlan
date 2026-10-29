@@ -20,7 +20,10 @@ namespace FallbackPlan.Cli.Tests;
 /// With <c>--forget-all</c> every run listed is let go by its name, each said,
 /// and one the service will not let go is named with its words while the rest
 /// go; beside a run, <c>--forget</c> or <c>--plan</c> it is refused, and in
-/// direct mode no run is let go (FR-RST-008, ADR-0162).
+/// direct mode no run is let go (FR-RST-008, ADR-0162). With
+/// <c>--older-than-days</c> beside it, only the runs that began longer ago
+/// than that go, and how many stay is said; without <c>--forget-all</c>, or
+/// below one day, it is refused (ADR-0165).
 /// </summary>
 [TestClass]
 public sealed class RestoreResumeVerbTests : IDisposable
@@ -154,7 +157,7 @@ public sealed class RestoreResumeVerbTests : IDisposable
             new RestoreRunDescriptor(Other, SnapshotId, "docs", "/srv/elsewhere", 2_000),
         ]);
 
-        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(token));
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(olderThanDays: null, token));
 
         Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
         CollectionAssert.AreEquivalent(
@@ -170,7 +173,7 @@ public sealed class RestoreResumeVerbTests : IDisposable
     {
         await using var client = new ScriptedClient([]);
 
-        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(token));
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(olderThanDays: null, token));
 
         Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
         Assert.AreEqual("No restore run is left unfinished.", Assert.ContainsSingle(report.Lines));
@@ -188,13 +191,61 @@ public sealed class RestoreResumeVerbTests : IDisposable
         ],
         kept: [Other]);
 
-        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(token));
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(olderThanDays: null, token));
 
         Assert.IsFalse(report.Ok, "a run not let go fails the ask");
         Assert.IsTrue(report.Lines.Any(line => line.Contains($"Restore run {Run} is let go", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
         var refused = Assert.ContainsSingle(line => line.Contains(Other, StringComparison.Ordinal), report.Lines);
         Assert.Contains("the run is under way again", refused, StringComparison.Ordinal);
         Assert.Contains("let go 1 restore run the service left unfinished", report.Lines[^1], StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task LettingRunsGoByAge_LetsGoOnlyThoseThatBeganLongerAgo_AndSaysHowManyStay()
+    {
+        const string Other = "fedcba9876543210";
+        const string Third = "00112233445566ff";
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var client = new ScriptedClient(
+        [
+            new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_700_000_000_000),
+            new RestoreRunDescriptor(Other, SnapshotId, "docs", "/srv/elsewhere", now - 3_600_000),
+            new RestoreRunDescriptor(Third, SnapshotId, "docs", "/srv/third", now - 7_200_000),
+        ]);
+
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(olderThanDays: 1, token));
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        Assert.AreEqual(Run, Assert.ContainsSingle(client.Received.OfType<ForgetRestoreRunCommand>()).Run);
+        Assert.IsTrue(report.Lines.Any(line => line.Contains($"Restore run {Run} is let go", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+        Assert.IsTrue(
+            report.Lines.Any(line => line.Contains("let go 1 restore run the service left unfinished", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
+        Assert.Contains("2 restore runs begun within 1 day stay", report.Lines[^1], StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task LettingRunsGoByAge_WithoutForgetAll_IsRefused()
+    {
+        using var cli = new CliHarness();
+        await cli.InitAsync();
+
+        var refused = await cli.RunAsync("restore-resume", "--older-than-days", "30");
+
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains("--older-than-days says which runs --forget-all lets go", refused.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task LettingRunsGoByAge_BelowOneDay_IsRefused()
+    {
+        using var cli = new CliHarness();
+        await cli.InitAsync();
+
+        var refused = await cli.RunAsync("restore-resume", "--forget-all", "--older-than-days", "0");
+
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains("--older-than-days takes at least one day", refused.All, StringComparison.Ordinal);
     }
 
     [TestMethod]

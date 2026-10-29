@@ -80,17 +80,19 @@ internal static class DirectRestorePartsReport
 
     /// <summary>
     /// Lets every destination's parts under <paramref name="stateDirectory"/>
-    /// go at once (ADR-0158), but one with a run under way, and says what
-    /// became of each.
+    /// go at once (ADR-0158), but one with a run under way, or only those
+    /// whose run began more than <paramref name="olderThanDays"/> days ago
+    /// (ADR-0165), and says what became of each.
     /// </summary>
     /// <exception cref="CliFailureException">When none could be let go, or one was not all removed.</exception>
-    public static void LetGoAll(TextWriter output, string stateDirectory)
+    public static void LetGoAll(TextWriter output, string stateDirectory, int? olderThanDays)
     {
         var root = DirectRestoreParts.RootUnder(stateDirectory);
         IReadOnlyList<DirectRestoreLetGo> outcomes;
         try
         {
-            outcomes = DirectRestoreParts.ForgetAll(stateDirectory);
+            outcomes = DirectRestoreParts.ForgetAll(
+                stateDirectory, olderThanDays is { } days ? OlderThanDays.Cutoff(days) : null);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -110,20 +112,41 @@ internal static class DirectRestorePartsReport
             {
                 output.WriteLine($"kept the parts under '{parts}': a restore in direct mode is under way there");
             }
+            else if (outcome.Undated)
+            {
+                output.WriteLine($"kept the parts under '{parts}': its run did not say when it began");
+            }
+            else if (outcome.Younger)
+            {
+                continue;
+            }
             else if (outcome.Problem is null)
             {
                 output.WriteLine(LetGoLine(parts, outcome.Held));
             }
         }
 
-        var letGo = outcomes.Where(outcome => !outcome.UnderWay && outcome.Problem is null).ToList();
+        var letGo = outcomes
+            .Where(outcome => !outcome.UnderWay && !outcome.Undated && !outcome.Younger && outcome.Problem is null)
+            .ToList();
         var kept = outcomes.Count(outcome => outcome.UnderWay);
+        var younger = outcomes.Count(outcome => outcome.Younger);
         var summary = string.Create(
             CultureInfo.InvariantCulture,
             $"let go the parts of {letGo.Count} {(letGo.Count == 1 ? "destination" : "destinations")}, {RestoreSpace.Bytes((ulong)letGo.Sum(outcome => outcome.Held))} in all");
-        output.WriteLine(kept == 0
-            ? summary
-            : string.Create(CultureInfo.InvariantCulture, $"{summary}; {kept} with a run under way {(kept == 1 ? "is" : "are")} kept"));
+        if (kept > 0)
+        {
+            summary = string.Create(CultureInfo.InvariantCulture, $"{summary}; {kept} with a run under way {(kept == 1 ? "is" : "are")} kept");
+        }
+
+        if (olderThanDays is { } within && younger > 0)
+        {
+            summary = string.Create(
+                CultureInfo.InvariantCulture,
+                $"{summary}; {younger} whose run began within {OlderThanDays.Days(within)} {(younger == 1 ? "stays" : "stay")}");
+        }
+
+        output.WriteLine(summary);
 
         var failed = outcomes.Where(outcome => outcome.Problem is not null).ToList();
         if (failed.Count > 0)
