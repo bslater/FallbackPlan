@@ -70,8 +70,8 @@ public static class RestorePaths
         // GetFullPath is lexical — it normalises `..` and `.` but does not
         // follow symlinks. A link inside the root pointing out of it (seeded by
         // an attacker, or restored by an earlier item) would let a later path
-        // traverse it and escape though every component reads as plain. Resolve
-        // the deepest existing ancestor through its links and re-check: a real
+        // traverse it and escape though every component reads as plain. Follow
+        // each folder below the root through its links and re-check: a real
         // path that leaves the root is refused before anything is written.
         if (EscapesThroughALink(root, resolved))
         {
@@ -83,49 +83,96 @@ public static class RestorePaths
         return true;
     }
 
+    /// <summary>
+    /// <paramref name="path"/> where it really is: each component that is a
+    /// link on disk followed to where it leads, and the rest as written
+    /// (ADR-0159).
+    /// </summary>
+    /// <remarks>
+    /// A link's target is followed component by component in turn, so a
+    /// target that itself passes through a link lands where that one leads.
+    /// A chain longer than a platform follows is followed no further.
+    /// </remarks>
+    /// <param name="path">The path, absolute or relative to the working folder.</param>
+    /// <returns>The path, followed through its links.</returns>
+    public static string ThroughLinks(string path)
+    {
+        ThrowHelper.ThrowIfNull(path);
+
+        var links = 0;
+        return Follow(Path.GetFullPath(path), ref links);
+    }
+
+    /// <summary>The most links one path is followed through, as a platform's own walk bounds it.</summary>
+    private const int MostLinksFollowed = 40;
+
     private static bool EscapesThroughALink(string root, string resolved)
     {
         // Lexical containment already proved `resolved` is under `root`. What is
-        // left is a component *between* the root and the destination that exists
-        // on disk as a symlink leaving the root — the only way a link can be
-        // traversed by this write. The root itself is the executor's own
-        // directory and is not suspect; anything at or above it is out of scope.
-        var realRootFence = RealPath(root) + Path.DirectorySeparatorChar;
-        var rootFence = (root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar);
+        // left is a component between the root and the destination that exists
+        // on disk as a link leading out of where the root really is. The root
+        // is the person's own choice, so it is followed through its links
+        // first and each component below it from there: a root that is itself
+        // a link, or lies below one, fences where it really is (ADR-0159). A
+        // component that leads out is refused though a later one leads back.
+        var links = 0;
+        var realRoot = Follow(Path.GetFullPath(root), ref links);
+        var realFence = realRoot.EndsWith(Path.DirectorySeparatorChar) ? realRoot : realRoot + Path.DirectorySeparatorChar;
 
-        var component = Path.GetDirectoryName(resolved);
-        while (!string.IsNullOrEmpty(component)
-            && component.Length >= rootFence.Length
-            && (component + Path.DirectorySeparatorChar).StartsWith(rootFence, StringComparison.Ordinal))
+        var below = Path.GetRelativePath(root, Path.GetDirectoryName(resolved) ?? root);
+        if (below == ".")
         {
-            if (Directory.Exists(component) || File.Exists(component))
-            {
-                var real = RealPath(component) + Path.DirectorySeparatorChar;
-                if (!real.StartsWith(realRootFence, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
+            return false;
+        }
 
-            component = Path.GetDirectoryName(component);
+        var followed = realRoot;
+        foreach (var component in below.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            followed = Step(followed, component, ref links);
+            if (!(followed + Path.DirectorySeparatorChar).StartsWith(realFence, StringComparison.Ordinal))
+            {
+                return true;
+            }
         }
 
         return false;
     }
 
-    private static string RealPath(string path)
+    private static string Follow(string full, ref int links)
     {
-        // ResolveLinkTarget with returnFinalTarget follows a chain of links to
-        // the real object; a non-link returns null and the path stands.
+        var root = Path.GetPathRoot(full) ?? string.Empty;
+        var followed = root;
+        foreach (var component in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            followed = Step(followed, component, ref links);
+        }
+
+        return followed;
+    }
+
+    /// <summary>One component below a folder already followed, itself followed where it is a link.</summary>
+    private static string Step(string followed, string component, ref int links)
+    {
+        var next = Path.Combine(followed, component);
+        if (links >= MostLinksFollowed || LinkTargetOf(next) is not { } target)
+        {
+            return next;
+        }
+
+        links++;
+        return Follow(Path.GetFullPath(target, followed), ref links);
+    }
+
+    private static string? LinkTargetOf(string path)
+    {
         try
         {
-            var resolved = Directory.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName
-                ?? File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName;
-            return resolved is null ? Path.GetFullPath(path) : Path.GetFullPath(resolved);
+            // A folder's link is read as a folder's, which Windows asks.
+            return (Directory.Exists(path) ? new DirectoryInfo(path) : (FileSystemInfo)new FileInfo(path)).LinkTarget;
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return Path.GetFullPath(path);
+            return null;
         }
     }
 
