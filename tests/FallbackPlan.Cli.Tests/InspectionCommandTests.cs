@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
 
@@ -9,7 +10,8 @@ namespace FallbackPlan.Cli.Tests;
 /// commands an operator reaches for when something looks wrong, so they are
 /// exactly the ones that must not themselves be broken. <c>restore-file</c>
 /// writes a file's captured metadata back as the executor does (FR-RST-004;
-/// ADR-0149).
+/// ADR-0149), an ACL that names accounts by number included where this
+/// installation captured the snapshot it names (FR-RST-004; ADR-0154).
 /// </summary>
 [TestClass]
 public sealed class InspectionCommandTests : IDisposable
@@ -170,6 +172,99 @@ public sealed class InspectionCommandTests : IDisposable
                 File.GetUnixFileMode(destination),
                 restore.All);
         }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux keeps a POSIX ACL as an extended attribute")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task RestoreFile_ASnapshotThisInstallationCaptured_GivesBackAnAclThatNamesAccountsByNumber()
+    {
+        // The executor writes such an ACL back only where this installation
+        // captured the snapshot, since anywhere else the number may be
+        // someone else (ADR-0087). The snapshot restore-file names says who
+        // captured it (ADR-0154).
+        var snapshot = await BackUpAFileWithANumberedAclAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored-with-acl.txt");
+
+        var restore = await _cli.RunAsync("restore-file", "--snapshot", snapshot, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        CollectionAssert.AreEqual(NumberedAcl, Xattr.Get(destination, "system.posix_acl_access"), restore.All);
+        Assert.DoesNotContain("system.posix_acl_access", restore.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux keeps a POSIX ACL as an extended attribute")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task RestoreFile_ASnapshotAnotherInstallationCaptured_WithholdsAnAclThatNamesAccountsByNumber_AndSaysSo()
+    {
+        var snapshot = await BackUpAFileWithANumberedAclAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored-elsewhere.txt");
+
+        var restore = await _cli.RunAsAnotherInstallationAsync("restore-file", "--snapshot", snapshot, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        Assert.IsNull(Xattr.Get(destination, "system.posix_acl_access"), restore.All);
+        Assert.Contains(
+            "system.posix_acl_access (names accounts by number, and this installation did not capture the snapshot)",
+            restore.All,
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux keeps a POSIX ACL as an extended attribute")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task RestoreFile_AManifestNamedAlone_WithholdsAnAclThatNamesAccountsByNumber_EvenWhereThisInstallationCapturedIt()
+    {
+        // A file version names no device, and more than one device's
+        // snapshots may hold it, so a manifest named alone claims nothing.
+        await BackUpAFileWithANumberedAclAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored-by-manifest.txt");
+
+        var restore = await _cli.RunAsync("restore-file", "--manifest", await OnlyFileVersionAsync(), "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        Assert.IsNull(Xattr.Get(destination, "system.posix_acl_access"), restore.All);
+        Assert.Contains("this installation did not capture the snapshot", restore.All, StringComparison.Ordinal);
+    }
+
+    /// <summary>The one file version the repository's metadata blobs hold, as <c>inspect-blob</c> lists it.</summary>
+    private async Task<string> OnlyFileVersionAsync()
+    {
+        var versions = new List<string>();
+        foreach (var blob in Directory.EnumerateFiles(Path.Combine(_cli.RepositoryPath, "blobs", "meta"), "*", SearchOption.AllDirectories))
+        {
+            var inspect = await _cli.RunAsync(
+                "inspect-blob", Path.GetRelativePath(_cli.RepositoryPath, blob).Replace(Path.DirectorySeparatorChar, '/'));
+            Assert.IsTrue(inspect.ExitCode == 0, inspect.All);
+            versions.AddRange(Regex.Matches(inspect.Output, @"\bFileVersionManifest\b.*\b([0-9a-f]{64})\s*$", RegexOptions.Multiline)
+                .Select(match => match.Groups[1].Value));
+        }
+
+        return Assert.ContainsSingle(versions);
+    }
+
+    /// <summary>user::rw-, user:54321:r--, group::r--, mask::r--, other::---: an ACL naming an account by number.</summary>
+    private static byte[] NumberedAcl => Xattr.Acl(
+        (Xattr.AclUserObject, 6, Xattr.AclUndefinedId),
+        (Xattr.AclUser, 4, 54_321),
+        (Xattr.AclGroupObject, 4, Xattr.AclUndefinedId),
+        (Xattr.AclMask, 4, Xattr.AclUndefinedId),
+        (Xattr.AclOther, 0, Xattr.AclUndefinedId));
+
+    /// <summary>Backs up one file carrying <see cref="NumberedAcl"/> from this installation, and answers the snapshot's id.</summary>
+    private async Task<string> BackUpAFileWithANumberedAclAsync()
+    {
+        await _cli.InitAsync();
+        var source = _cli.WriteFile("acl/a.txt", "restore-file acl");
+        Xattr.Set(source, "system.posix_acl_access", NumberedAcl);
+
+        var backup = await _cli.RunAsync("backup", Path.GetDirectoryName(source)!);
+        Assert.IsTrue(backup.ExitCode == 0, backup.All);
+        var snapshots = await _cli.RunAsync("snapshots");
+        var snapshot = Regex.Match(snapshots.Output, @"\b[0-9a-f]{32}\b");
+        Assert.IsTrue(snapshot.Success, snapshots.All);
+        return snapshot.Value;
     }
 
     [TestMethod]
