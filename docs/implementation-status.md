@@ -194,6 +194,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0167](adr/0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md) | A format-3 metadata record is read without its blob's envelope: the catalogue answers each location with the key generation it recorded for the blob, and a metadata record is read at it as format 3 frames it, the envelope read only when the record does not read so | **Built** | `Repository.Catalogue/Catalogue` · `Repository.Packing/BlobReader` · `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/CatalogueTests` · [notes](#0167--a-format-3-metadata-record-is-read-without-its-blobs-envelope) |
 | [0168](adr/0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md) | A prefetch takes a blob's envelope only where the read may want it: once an envelope the reader framed shows format 3, and none shows an older one, a run over records it can read before their envelope starts at the first of them | **Built** | `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/RestoreBreadthTests` · [notes](#0168--a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it) |
 | [0169](adr/0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md) | The console lets go by age: the dialogs that let every run left unfinished and every kept receipt go take optional days, let go only what began or ended longer ago, say how many stay, and name a receipt that does not say when its run ended | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0169--the-console-lets-go-by-age-what-began-or-ended-longer-ago) |
+| [0170](adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) | A restore plan judges names by the target's naming rules: a name no target restores, and for a Windows target a name Windows would refuse or alter, is a conflict before any byte moves; a restore that runs on Windows refuses such a name rather than letting Windows write it under another | **Built** | `Domain/RestorePaths` · `Restore/RestorePlan` · `Domain.Tests/WindowsNamesTests` · `Repository.Tests/EndToEnd/RestorePlanTests` · [notes](#0170--a-restore-plan-judges-names-by-the-targets-naming-rules) |
 
 ---
 
@@ -4480,3 +4481,32 @@ What remains is recorded rather than done. Direct mode's parts are the
 command line's, nothing expires on its own, and the console lets one go,
 every one, or every one older than the days, not a selection.
 
+
+### 0170 — a restore plan judges names by the target's naming rules
+
+A snapshot keeps its names as the source wrote them, and every restore
+test planned on the platform that captured. Only the executor judged a
+name, by the rule every target shares, and only at execution. On Windows,
+a name such as `notes.` was normalised to `notes` inside the restore root
+and written there.
+
+`RestorePaths.IsWindowsName` now states which names Windows keeps:
+
+- none that is a device's name, with or without an extension;
+- none holding a refused character or a control character;
+- none ending in a space or a period;
+- none longer than 255 UTF-16 units.
+
+The target profile says whether it names by those rules, as it says
+whether it is case-sensitive, and the local profile sets it on Windows.
+The plan then names, as a conflict, each item whose own name the executor
+would refuse on any target. Under Windows' rules it also names each one
+Windows would not keep. A restore that runs on Windows refuses such a name
+rather than writing it under another, for the executor and the recovery
+tool alike.
+
+What remains is recorded rather than done:
+
+- a refused name is not restored under a mapped one;
+- a POSIX volume's own component limit is not judged;
+- the flag follows the platform, not the volume a destination lies on.

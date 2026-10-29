@@ -223,6 +223,12 @@ The gap is that no test *takes a snapshot captured under POSIX rules and plans a
 | `RestorePlan_NamesDifferingOnlyByCaseTargetingACaseInsensitiveVolume_ReportsTheCollisionRatherThanOverwriting` | Already partly covered; make the target rules explicit rather than ambient. |
 | `RestorePlan_WindowsNamesTargetingPosixRules_PlansWithoutDegradation` | The other direction, which should be clean — and a test that says so is what stops someone "fixing" it into a problem. |
 
+> **Resolved (2026-10).** The refactor the review asked for came first: the target's naming rules are a stated part of its profile, not ambient ([ADR-0170](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md)).
+> - **POSIX names under Windows' rules** is verbatim-named in `Repository.Tests/RestorePlanTests`. Seven names a POSIX source wrote, each named by the plan with why: a device's name, with and without an extension, two refused characters, a trailing period, a trailing space and a 256-unit component. A drive marker is named too, on every target, since no target restores it. All of this happens before any byte moves.
+> - **Case collisions** were already held with the target's rules stated, by `RestorePlan_CaseCollisionsAndDegradations_AreSurfacedBeforeAnyByteMoves`.
+> - **Windows names under POSIX rules** is verbatim-named and plans with no conflict and no degradation.
+> - **The executor.** Planning alone would not have stopped the harm. On Windows the path for `notes.` is normalised to `notes` inside the root, so it passed the containment fence and was written there. A restore on Windows now refuses such a name (`Domain.Tests/WindowsNamesTests`).
+
 ---
 
 ### T-8 — The degenerate cases: empty files, empty metadata, empty snapshots
@@ -391,6 +397,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 > **2026-10.** T-6, T-8, T-9 and T-10 are resolved; each finding above says by which tests.
 >
 > **2026-10.** T-14 is resolved and T-3 partly; T-3's note says what stays open.
+>
+> **2026-10.** T-7 is resolved, by the refactor it named first.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 

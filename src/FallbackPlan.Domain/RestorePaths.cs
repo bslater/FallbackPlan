@@ -55,6 +55,15 @@ public static class RestorePaths
                 return false;
             }
 
+            // Windows does not refuse these; it writes them somewhere else, a
+            // device or the name with its trailing period gone, and the
+            // fence below cannot tell (ADR-0170).
+            if (OperatingSystem.IsWindows() && !IsWindowsName(component, out why))
+            {
+                reason = $"the manifest path component cannot be made on Windows: {why}";
+                return false;
+            }
+
             built = Path.Combine(built, component);
         }
 
@@ -228,4 +237,62 @@ public static class RestorePaths
 
         return true;
     }
+
+    /// <summary>
+    /// Whether Windows keeps <paramref name="component"/> as it is written
+    /// (ADR-0170): not a device's name, with or without an extension; holding
+    /// none of <c>&lt; &gt; : " / \ | ? *</c> or a control character; ending
+    /// in neither a space nor a period; and no longer than 255 UTF-16 units.
+    /// </summary>
+    /// <remarks>
+    /// Judged on any platform, so a plan made anywhere can say what a Windows
+    /// target would not keep. A name another platform wrote can be any of
+    /// these, and Windows refuses some and quietly alters the rest.
+    /// </remarks>
+    /// <param name="component">One component of a repository path. Untrusted.</param>
+    /// <param name="why">Why it is not, in the code's own words.</param>
+    public static bool IsWindowsName(string component, out string why)
+    {
+        ThrowHelper.ThrowIfNull(component);
+
+        why = string.Empty;
+
+        if (component.Length > MostWindowsComponentUnits)
+        {
+            why = $"the name is longer than the {MostWindowsComponentUnits} UTF-16 units Windows allows in one component";
+            return false;
+        }
+
+        if (component.Any(character => character < ' ' || WindowsRefusedCharacters.Contains(character)))
+        {
+            why = "the name holds a character Windows refuses in a name";
+            return false;
+        }
+
+        if (component.EndsWith(' ') || component.EndsWith('.'))
+        {
+            why = "the name ends in a space or a period, which Windows strips";
+            return false;
+        }
+
+        // A device's name names the device whatever extension follows it.
+        var stem = component.Split('.')[0].TrimEnd(' ');
+        if (WindowsDeviceNames.Contains(stem))
+        {
+            why = "the name is reserved for a device on Windows";
+            return false;
+        }
+
+        return true;
+    }
+
+    private const int MostWindowsComponentUnits = 255;
+
+    private const string WindowsRefusedCharacters = "<>:\"/\\|?*";
+
+    private static readonly HashSet<string> WindowsDeviceNames = new(
+        ["CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³"],
+        StringComparer.OrdinalIgnoreCase);
 }

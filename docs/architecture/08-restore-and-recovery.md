@@ -29,6 +29,8 @@ A plan is constructed **before** any transfer, and it is the mechanism by which 
   > **Built 2026-10 ([ADR-0083 Amendment 2](../adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads)).** No store the product admits lacks range reads, and the two still differ: a store holds content compressed, once however many files repeat it, nothing of a hole, and every record sealed. The plan says what its run will read, each record once as the reader sizes it and each blob's envelope once, beside what the files write.
 - target conflicts: existing files, and the resolution policy that will apply to each;
 - **path and case collisions** ([`06-filesystem-capture.md` §2](06-filesystem-capture.md#2-path-handling));
+
+  > **Built 2026-10 ([ADR-0170](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md)).** Names too: a name no target restores, and, for a target that names by Windows' rules, a name Windows would refuse or alter (a device's name, a refused character, a trailing space or period, a component over 255 UTF-16 units). The rules are the target's, stated in its profile rather than taken from the host, so a plan for Windows is made the same anywhere. A restore that runs on Windows refuses such a name rather than letting Windows write it under another.
 - metadata that cannot be preserved on this target, per the matrix in [`06-filesystem-capture.md` §3](06-filesystem-capture.md#3-metadata-matrix);
 - free-space assessment against the physical requirement;
 - privileges required — restoring ACLs or ownership may need elevation the current user lacks;
