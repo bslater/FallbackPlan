@@ -16,7 +16,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// Capture under adverse I/O: files that will not open, files that fail
 /// part-way through a read, files deleted out from under the reader, and files
 /// rewritten while they are being read (architecture 06 §1; ADR-0026
-/// §Decisions 2–3; NFR-OPS-002).
+/// §Decisions 2–3; NFR-OPS-002). A file truncated under the reader is captured
+/// whole at its new length, never torn; and a file that never settles, as a
+/// log being appended to does, publishes its last complete read, which
+/// restores to exactly the bytes that read saw.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -260,6 +263,86 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         // Two opens: the torn attempt was rejected and the file read again.
         Assert.AreEqual(2, source.OpenedPaths.Count(path => path == "ledger.bin"));
         var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
+        Assert.Contains("captured-inconsistent: 2", manifest.CaptureDiagnostics);
+    }
+
+    [TestMethod]
+    public async Task AFileTruncatedUnderTheReader_IsCapturedWholeAtItsNewLength_NeverTorn()
+    {
+        // Disjoint alphabets again, and a shorter second version: the read in
+        // flight runs off the new end, and nothing of the old tail may reach
+        // the version that is published.
+        var source = new FakeFileSystemSource();
+        var before = LowBytes(256 * 1024, 62);
+        var after = HighBytes(96 * 1024, 63);
+
+        var ledger = source.AddFile("ledger.bin", before);
+        ledger.MutateAfterBytes = 64 * 1024;
+        ledger.MutatedContent = after;
+        ledger.MutatedModifiedAt = (ledger.Metadata.ModifiedAt ?? 0) + 5_000;
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
+            Job(source), CancellationToken.None);
+
+        Assert.IsEmpty(published.Failures);
+        Assert.IsNull(published.ErrorManifestObjectId);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var file = Assert.ContainsSingle(published.Files);
+        var restored = await RestoreAsync(reader, file.ObjectId);
+        SequenceAssert.AreEqual(after, restored);
+
+        var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
+        Assert.AreEqual((ulong)after.Length, manifest.LogicalLength);
+        Assert.AreEqual(2, source.OpenedPaths.Count(path => path == "ledger.bin"));
+    }
+
+    [TestMethod]
+    public async Task AFileThatNeverSettles_PublishesItsLastCompleteRead_WhichRestoresToExactlyWhatThatReadSaw()
+    {
+        // A log appended to while it is read, and still reported as changing
+        // on every look. Each read completes, so the version is the last of
+        // them, diagnosed, and the backup is not partial. What it must never
+        // be is a mixture: its length, its hash and its bytes all describe
+        // one read.
+        var source = new FakeFileSystemSource();
+        var head = LowBytes(128 * 1024, 64);
+        var grown = head.Concat(LowBytes(64 * 1024, 65)).ToArray();
+
+        var log = source.AddFile("app.log", head);
+        log.MutateAfterBytes = 96 * 1024;
+        log.MutatedContent = grown;
+        log.MutatedModifiedAt = (log.Metadata.ModifiedAt ?? 0) + 1_000;
+        log.RevalidationChangesRemaining = 10;
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
+            Job(source), CancellationToken.None);
+
+        Assert.IsEmpty(published.Failures, "a file that keeps changing is diagnosed, not failed");
+        Assert.IsNull(published.ErrorManifestObjectId);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var file = Assert.ContainsSingle(published.Files);
+        var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
+        var restored = await RestoreAsync(reader, file.ObjectId);
+
+        // The last read saw the grown log whole.
+        SequenceAssert.AreEqual(grown, restored);
+        Assert.AreEqual((ulong)restored.Length, manifest.LogicalLength);
+        SequenceAssert.AreEqual(
+            System.Security.Cryptography.SHA256.HashData(restored), manifest.WholeFileHash.ToArray());
         Assert.Contains("captured-inconsistent: 2", manifest.CaptureDiagnostics);
     }
 

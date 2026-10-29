@@ -189,6 +189,12 @@ Two gaps sit on the *capture* side:
 - `SourceIdentityHints_TwoNamesShareOneInode_RecordsNoAncestryForEither`
 - `IncrementalBackup_TheFileWasRenamedByCaseAlone_KeepsItsAncestryUnderTheNewName`
 
+> **Resolved (2026-10).** Both exist verbatim-named and pass in `Repository.Tests/IncrementalBackupTests`.
+> - **Hardlinks.** Two names of one inode publish no hint for it. After a catalogue rebuild, a rename of either finds no ancestor rather than the wrong one.
+> - **A case-only rename.** On a case-insensitive volume, a rename by case alone takes the rename path. The snapshot records the new spelling, and the version keeps the prior one as its parent, with no content read.
+> - **The change preview.** The preview calls the same rename unchanged (`Repository.Tests/SourceComparerTests`), by its own rule that the volume holds the two spellings as one name. That does not contradict what the backup records.
+> - **Mutations.** Each test kills one mutant that no other test catches: the hardlink case catches keeping the first name's hint, and the case-only rename catches a short-circuit that matches a path in any case.
+
 ---
 
 ### T-7 — Restoring somewhere unlike where it was captured
@@ -228,6 +234,8 @@ The gap is that no test *takes a snapshot captured under POSIX rules and plans a
 - `CatalogueRebuild_TheSnapshotHoldsOnlyEmptyFiles_RebuildsAndRestoresThemAsEmpty`
 - `Backup_EveryFileIsEmpty_PublishesASnapshotWithNoDataBlobsThatStillRestores`
 
+> **Resolved (2026-10).** Both exist verbatim-named and pass in `Repository.Tests/SnapshotScaleEdgeTests`, beside the empty snapshot already there. Three empty files publish a snapshot with no data blob at all. They restore, each empty, from the catalogue the backup kept, and from one rebuilt from the index plane and the metadata blobs. No code path treats an empty file specially: it is a version that names no segments. So these guard the degenerate input rather than a branch, and no mutant was written for them.
+
 ---
 
 ### T-9 — The source moves while you are reading it
@@ -247,6 +255,15 @@ What is untested is the file **changing during the read** — grown or truncated
 - `Backup_TheFileGrowsWhileItIsBeingRead_PublishesASelfConsistentManifestForWhatItRead`
 - `Backup_TheFileIsTruncatedWhileItIsBeingRead_PublishesASelfConsistentManifestOrAFailureEvent`
 - `Backup_TheFileIsDeletedBetweenEnumerationAndRead_IsAFailureEventAndNotAnAbortedScan`
+
+> **Resolved (2026-10).** These are held in `Repository.Tests/AdverseCaptureTests`, where the fake source owns the timing, and against a real source in `Repository.Tests/LocalTreeAdverseCaptureTests`, rather than in `Filesystem.Tests`.
+> - **A file grown under the reader** was already held by `AFileRewrittenUnderTheReader_IsCapturedWholeOnTheSecondAttempt_NeverTorn`.
+> - **A file truncated under the reader** is captured whole at its new length, never torn: `AFileTruncatedUnderTheReader_IsCapturedWholeAtItsNewLength_NeverTorn`.
+> - **A file that never settles**, as a log being appended to does, publishes its last complete read. Its length, hash and bytes describe that one read; it carries the `captured-inconsistent` diagnostic and fails nothing: `AFileThatNeverSettles_PublishesItsLastCompleteRead_WhichRestoresToExactlyWhatThatReadSaw`.
+> - **A file deleted between enumeration and read** is a failure event and not an aborted scan, held by:
+>   - `AnOpenThatIsRefused_LandsTheRightReasonForEachKindOfRefusal`, where it is reason not-found;
+>   - `AFileThatVanishesWhileItIsRead_IsPublishedWholeAndMarkedInconsistent`.
+> - **Mutations.** A read judged consistent on its length alone, and a read that never settled left undiagnosed, are each killed by both new cases and by cases already there. So the new cases add the behaviour they pin, the new length and the one read's bytes, rather than mutation strength.
 
 ---
 
@@ -271,6 +288,16 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 | `IncrementalBackup_ContentChangedInPlaceWithSizeAndTimestampPreserved_IsMissedByTheShortCircuitAndCaughtByAFullRead` | `IncrementalBackupTests` — names the accepted risk *and* the escape |
 | `IncrementalBackup_TheTimestampMovesBackwards_StillTreatsTheFileAsChanged` | The clock-correction case; "unchanged" must mean equal, never "not newer" |
 | `AgentPass_TheScheduleCrossesADaylightSavingTransition_RunsExactlyOnce` | `AgentPassTests`, both directions, per `CheckRepeatScheduleIsStableOverDST*` |
+
+> **Resolved (2026-10).** The two incremental cases exist verbatim-named and pass in `Repository.Tests/IncrementalBackupTests`.
+> - **Content rewritten in place**, with its size and modification time put back, is reused by the short-circuit. That is the accepted risk, now pinned. It is caught by a backup with no prior snapshot to compare against, which is what a full backup asks for.
+> - **A modification time moved backwards** is a change: the file is read and captured.
+> - **Daylight saving** is held at the schedule's own level rather than through an agent pass, by `Application.Tests/ScheduleClockBoundaryTests`:
+>   - a daily schedule fires once on the night an hour repeats;
+>   - it still fires on the night an hour does not exist;
+>   - it fires every day across both northern transitions;
+>   - an interval schedule counts elapsed time, not wall-clock time.
+> - **Mutation.** An older modification time taken as unchanged is killed.
 
 ---
 
@@ -348,6 +375,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 8. T-7, three tests — restore planning needs target platform rules as a parameter rather than as ambient truth. That is a small refactor and it pays for itself immediately.
 9. T-9, three tests — needs a source that mutates mid-scan; `FakeFileSystemSource` is close.
 10. T-5, three tests — needs an index-delta forger in test support.
+
+> **2026-10.** T-6, T-8, T-9 and T-10 are resolved; each finding above says by which tests.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 
