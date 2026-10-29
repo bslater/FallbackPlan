@@ -1373,6 +1373,48 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task Sync_ToAStoreThatRefusesEveryDelete_StaysInSync_KeepsWhatItRefused_AndSaysSo()
+    {
+        // A store under a write-once policy, or a credential without the
+        // right to delete: every delete is refused. The store's retention
+        // asks for deletes all the same once a newer snapshot supersedes the
+        // first, and a refusal is not an outage: the sync goes on, what was
+        // refused and what it reaches stays, and a notice says so.
+        WriteConfiguration(directShip: false, retention: new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 });
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var now = DateTimeOffset.Now;
+        await BackUpAsync(runtime, now);
+
+        Store.FailFrom(0, 403, "AccessDenied", method: "DELETE");
+        Harness.WriteSourceFile("docs/c.txt", "written after the first backup, so held by the second snapshot alone");
+        var mark = Store.Requests.Count;
+        await BackUpAsync(runtime, now.AddHours(1));
+
+        Assert.IsTrue(
+            Store.Requests.Skip(mark).Any(request => request.Method == "DELETE"),
+            "the premise: the store's retention asked for a delete");
+        var refused = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, refused.State, refused.LastError);
+        var notice = DeletesRefusedNotice(runtime);
+        Assert.IsNotNull(notice, "a refused delete is said, not just logged");
+        Assert.Contains("refused", notice.Message, StringComparison.Ordinal);
+
+        // Nothing the store kept is short of what it reaches.
+        var line = await VerifyAsync(runtime);
+        Assert.DoesNotContain("damaged", line, StringComparison.Ordinal);
+
+        // Once the store will delete, the next sync does, and the notice goes.
+        Store.Recover();
+        Harness.WriteSourceFile("docs/d.txt", "written once the store would delete again");
+        await BackUpAsync(runtime, now.AddHours(2));
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
+        Assert.IsNull(DeletesRefusedNotice(runtime));
+    }
+
+    [TestMethod]
     public async Task Sync_WhileTheStoresListingsLagItsWrites_DeletesNothingAKeptSnapshotNeeds()
     {
         // A store whose listings lag its writes (ADR-0012's eventual
@@ -1487,6 +1529,11 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="request">The request as the store answered it.</param>
     private static bool Landed(ObjectStoreTestServer.RecordedRequest request) =>
         request.Method == "PUT" && request.Status is >= 200 and < 300;
+
+    /// <summary>The notice that the store refused deletes its retention asked for, or null.</summary>
+    /// <param name="runtime">The service.</param>
+    private Notice? DeletesRefusedNotice(ServiceRuntime runtime) =>
+        runtime.Notices.Unacknowledged.SingleOrDefault(notice => notice.Key == $"destination-deletes-refused:{Harness.DocsSetId}:cloud");
 
     /// <summary>The notice that the store holds some of the set's objects only in an archival tier, or null.</summary>
     /// <param name="runtime">The service.</param>

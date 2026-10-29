@@ -136,6 +136,13 @@ deferral bound of ADR-0011 Amendment 2 has been raised as a warning.
 > them would delete the last copy of history a wide sibling has not received
 > — see ADR-0046 Amendment 1.
 
+> **Refusal note (2026-10).** A destination may refuse a delete the plan asks
+> for: a store under a write-once or object-lock policy, or a credential
+> without the right to delete. That delete is counted, logged and noticed, and
+> no longer fails the sync. Nothing beneath a refused delete is dropped that
+> pass, so the replica still restores every snapshot it lists — see
+> [ADR-0171](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md).
+
 ### 5. Destinations are named configuration, referenced by sets
 
 Destinations are declared once, at the top level of the client configuration,
@@ -370,3 +377,4 @@ folder stayed empty.
 | 2026-09 | Built (amended) | §6's first residual cost retired by [ADR-0075](0075-a-restore-reads-around-damage.md): a restore of the set's own archive reads what staging trimmed from the set's destinations, and the plan counts a file missing only when no copy of the set holds it. `Agent/SetCopies`; `Hosts.Tests/RestoreReadAroundTests` |
 | 2026-10 | Amended (§5) | `s3` is served ([ADR-0091](0091-an-s3-compatible-destination.md)): its address is in the configuration and its access key in the service's state directory; `azure-blob` and `dropbox` stay reserved |
 | 2026-10 | Amended (§5) | `azure-blob` is served ([ADR-0093](0093-an-azure-blob-destination.md)): its address is in the configuration and its account key or shared access signature in the service's state directory; `dropbox` alone stays reserved |
+| 2026-10 | Amended (§4) | A delete a destination refuses no longer fails the sync, and holds back every deeper phase that pass ([ADR-0171](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md)). `Replication/StoreToStoreCopier`; `Replication.Tests/ConvergeRefusalTests` |

@@ -340,6 +340,14 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 
 **Verdict: Deferred.** Criterion to add: *a destination that refuses deletes must leave the collector reporting unreclaimed space, never failing the run and never leaving a partially-applied reclamation.*
 
+> **Partly resolved (2026-10).** The criterion holds wherever this product deletes, except that what goes unreclaimed is counted in deletes, not bytes.
+> - **The staging sweep** already met it. A delete that throws or does not happen is a finding, never the pass's failure. A refused snapshot keeps the blobs it reaches ([ADR-0009 Amendment 8](../adr/0009-garbage-collection-safety.md#amendment-8-2026-10--a-backup-builds-on-more-than-its-intent-names)). Compaction deletes only through that sweep.
+> - **A destination's convergence** did not. A refused delete failed the sync on every pass, and a delete answered "not found" was believed while the blobs beneath it were dropped. [ADR-0171](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) counts the refusal, raises a notice and holds back every deeper phase that pass, so the replica restores every snapshot it lists. `Replication.Tests/ConvergeRefusalTests` and `Hosts.Tests/ObjectStoreDestinationTests`, against S3 and Azure Blob stores refusing every delete, hold it.
+> - **What stays open:**
+>   - the space left unreclaimed, in bytes, at either;
+>   - a versioned S3 bucket, whose delete marker answers as a delete while the bytes stay;
+>   - a direct-ship sink, which reports a delete done when any one destination did.
+
 ---
 
 ### T-13 — Diagnostics leak the thing being protected
@@ -413,6 +421,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 > **2026-10.** T-13 is resolved; its test found the redaction of a job's detail unguarded, not broken.
 >
 > **2026-10.** T-5 is resolved, without the forger it was waiting on.
+>
+> **2026-10.** T-12 is partly resolved ahead of its phase: a destination that refuses a delete no longer fails its sync. Its note says what stays open.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 

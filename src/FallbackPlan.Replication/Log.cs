@@ -44,6 +44,22 @@ internal static partial class Log
     internal static partial void ConvergeDeleteRefused(
         ILogger logger, LogLabel destination, ObjectKey key, DeleteOutcome outcome);
 
+    // A delete the store answered with a refusal (ADR-0171): a write-once
+    // policy, an immutable blob, a credential without the right to delete.
+    [LoggerMessage(
+        EventId = 3006, Level = LogLevel.Warning,
+        Message = "Converging {Destination} did not delete {Key}: the store refused. "
+            + "The replica still holds it, and the next pass will try again")]
+    internal static partial void ConvergeDeleteRefusedByStore(
+        ILogger logger, LogLabel destination, ObjectKey key, Exception exception);
+
+    [LoggerMessage(
+        EventId = 3007, Level = LogLevel.Warning,
+        Message = "Converging {Destination} left {Phase} and every phase beneath it as it was: "
+            + "{Refused} delete(s) above were not carried out, and what they kept may reach it")]
+    internal static partial void ConvergeStoppedShort(
+        ILogger logger, LogLabel destination, LogLabel phase, long refused);
+
     [LoggerMessage(
         EventId = 3003, Level = LogLevel.Information,
         Message = "Replication to {Destination} finished ({Pass}): {Copied} copied, "

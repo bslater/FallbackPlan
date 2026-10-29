@@ -65,7 +65,12 @@ public enum CopyScope
 /// <param name="AlreadyHeld">Objects the destination already held and keeps.</param>
 /// <param name="Deleted">Objects the destination held and its policy no longer keeps.</param>
 /// <param name="Spared">Objects the policy dropped but a sibling is still owed — held for now (FR-GC-009).</param>
-public sealed record ConvergeOutcome(long Copied, long AlreadyHeld, long Deleted, long Spared = 0);
+/// <param name="Refused">
+/// Objects the policy dropped whose delete the destination did not carry out,
+/// and so still holds (ADR-0171). The objects they may reach were left with
+/// them, uncounted.
+/// </param>
+public sealed record ConvergeOutcome(long Copied, long AlreadyHeld, long Deleted, long Spared = 0, long Refused = 0);
 
 /// <summary>
 /// Copies one repository archive's missing objects from any object store to
@@ -390,11 +395,22 @@ public static class StoreToStoreCopier
         // the strength of a stale opening inventory (ADR-0029 Amendment 2).
         var deleted = 0L;
         var spared = 0L;
+        var refused = 0L;
         foreach (var phase in PhasePrefixes.Reverse())
         {
             if (Skip(phase, scope))
             {
                 continue;
+            }
+
+            // What a refused delete left in place may reach what lies in the
+            // phases beneath it, so none of them is dropped this pass: the
+            // replica keeps restoring every snapshot it still lists, at the
+            // cost of space a later pass reclaims (ADR-0171, FR-GC-006).
+            if (refused > 0)
+            {
+                Log.ConvergeStoppedShort(log, new LogLabel(name), new LogLabel(phase), refused);
+                break;
             }
 
             var present = await HeldUnderAsync(destination, phase, cancellationToken).ConfigureAwait(false)
@@ -422,16 +438,29 @@ public static class StoreToStoreCopier
                     continue;
                 }
 
-                var outcome = await destination.DeleteAsync(
-                    ObjectKey.Parse(key), DeleteConditions.None, cancellationToken).ConfigureAwait(false);
+                DeleteResult outcome;
+                try
+                {
+                    outcome = await destination.DeleteAsync(
+                        ObjectKey.Parse(key), DeleteConditions.None, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (IsRefusal(exception))
+                {
+                    refused++;
+                    Log.ConvergeDeleteRefusedByStore(log, new LogLabel(name), ObjectKey.Parse(key), exception);
+                    continue;
+                }
+
                 if (outcome.Outcome == DeleteOutcome.Deleted)
                 {
                     deleted++;
                 }
                 else
                 {
-                    // Counted as not-deleted and, until now, said nowhere: a
-                    // replica quietly keeping what its policy dropped.
+                    // Listed a moment ago, so a store that answers it held
+                    // nothing has not shown the object gone, and it is
+                    // counted with the refusals.
+                    refused++;
                     Log.ConvergeDeleteRefused(log, new LogLabel(name), ObjectKey.Parse(key), outcome.Outcome);
                 }
             }
@@ -444,8 +473,19 @@ public static class StoreToStoreCopier
 
         Log.ReplicationComplete(log, new LogLabel(name), new LogLabel("converge"), copied, alreadyHeld, deleted);
 
-        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared);
+        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared, refused);
     }
+
+    /// <summary>
+    /// Whether a delete failed because the destination answered no, rather
+    /// than because it could not be reached (ADR-0171). A refusal is the
+    /// store's standing answer, a write-once policy or a credential without
+    /// the right, and failing the sync for it would fail every sync after.
+    /// A store that is busy or unreachable fails the pass, which is tried again.
+    /// </summary>
+    private static bool IsRefusal(Exception exception) =>
+        exception is UnauthorizedAccessException
+        || (exception is IOException && exception is not StoreUnavailableException);
 
     /// <summary>
     /// Copies one listed object, or answers null for a delta the source

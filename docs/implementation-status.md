@@ -195,6 +195,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0168](adr/0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md) | A prefetch takes a blob's envelope only where the read may want it: once an envelope the reader framed shows format 3, and none shows an older one, a run over records it can read before their envelope starts at the first of them | **Built** | `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/RestoreBreadthTests` · [notes](#0168--a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it) |
 | [0169](adr/0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md) | The console lets go by age: the dialogs that let every run left unfinished and every kept receipt go take optional days, let go only what began or ended longer ago, say how many stay, and name a receipt that does not say when its run ended | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0169--the-console-lets-go-by-age-what-began-or-ended-longer-ago) |
 | [0170](adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) | A restore plan judges names by the target's naming rules: a name no target restores, and for a Windows target a name Windows would refuse or alter, is a conflict before any byte moves; a restore that runs on Windows refuses such a name rather than letting Windows write it under another | **Built** | `Domain/RestorePaths` · `Restore/RestorePlan` · `Domain.Tests/WindowsNamesTests` · `Repository.Tests/EndToEnd/RestorePlanTests` · [notes](#0170--a-restore-plan-judges-names-by-the-targets-naming-rules) |
+| [0171](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) | A destination that refuses a delete keeps what it reaches, and the sync goes on: a delete the store refuses, or answers "not found" for an object still listed, is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync | **Built** | `Replication/StoreToStoreCopier` · `Agent/FanOut` · `Replication.Tests/ConvergeRefusalTests` · `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0171--a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on) |
 
 ---
 
@@ -4510,3 +4511,35 @@ What remains is recorded rather than done:
 - a refused name is not restored under a mapped one;
 - a POSIX volume's own component limit is not judged;
 - the flag follows the platform, not the volume a destination lies on.
+
+### 0171 — a destination that refuses a delete keeps what it reaches, and the sync goes on
+
+Retention at a destination is the convergence's drop half, phase by
+phase, snapshots first and blobs last. A store that refused a delete
+threw, so a bucket under object lock, an immutability policy or a
+credential without the right to delete failed the sync on every pass
+once retention asked for anything. A delete answered "not found" was
+believed, and the blobs a still-listed snapshot reaches were deleted
+under it.
+
+The convergence now counts a delete the destination did not carry out
+as refused:
+
+- an `IOException` that is not a store-unavailable one, which is how the
+  S3 and Azure Blob providers answer a 403 or a 409;
+- an `UnauthorizedAccessException`, from a local path that may not be
+  written;
+- a "not found" for an object the pass just listed.
+
+The rest of that phase runs, and no deeper phase is dropped that pass,
+since the convergence carries no keys to say what the refused object
+reaches. Fan-out raises one notice per destination and set with the
+count, and the first pass that refuses nothing resolves it. A store that
+is busy or unreachable still fails the pass.
+
+What remains is recorded rather than done:
+
+- the notice counts deletes, not the bytes they would have freed;
+- the staging sweep does not total what it could not reclaim;
+- a versioned bucket's delete marker is taken for a delete;
+- a direct-ship sink reports a delete done when any one destination did.
