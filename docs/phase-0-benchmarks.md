@@ -259,6 +259,26 @@ it turns out to be the main term.
 > scale M is ~20 GB; at a hundredth, ~126 GB. The tree plane, the smallest
 > at the headline's shape, is then the largest by far.
 
+> **Re-measured 2026-10 ([ADR-0151](adr/0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md)).** A folder's entries
+> are kept once, under its tree, so snapshots that hold a folder unchanged
+> share them, and a snapshot pays for the folders it changed, each whole,
+> and each folder above them. At 20 000 versions the tree plane costs
+> 115 B/version, against 138, the catalogue **919 in all**, and the floor
+> **372**. The snapshot shapes:
+>
+> | Files changed per snapshot | Snapshots | Snapshots holding each version | B/version |
+> |---|---:|---:|---:|
+> | 100% | 10 | 1.0 | 920 |
+> | 10% | 91 | 9.1 | **930** |
+> | 1% | 901 | 90.1 | **1 428** |
+>
+> The seeding puts a hundred files in a folder and changes them in turn,
+> so a snapshot changing a hundredth of 2 000 files changes one folder
+> whole, its parent and the four above. At a tenth changing, scale M is
+> ~9 GB; at a hundredth, ~14 GB. What a snapshot still costs is the folders
+> it changed, restated whole, and the measurement seeds no
+> `snapshot_structure`, which still names every tree of every snapshot.
+
 Every segment reference here is a **distinct** object, which is the no-dedup
 upper bound on `object_locations`; a corpus with cross-version dedup holds
 fewer rows there for the same reference count. The floor is unaffected by
@@ -313,3 +333,4 @@ forced the question.
 | 2026-09 | NFR-PERF-012 | ≥ 500 blobs/s **and** scale M in ≤ 2 hours | **internally inconsistent, and in the wrong unit** — the two clauses differ by ~100×, and a rebuild's work is per record | §6. Scale M is ~24 000 blobs at the default blob size, so ≥ 500 blobs/s is under a minute. Settling the unit is what the row needs before a number can be set. |
 | 2026-10 | NFR-PERF-011 | contradicted, with a structural floor of ~1 175 B | **still missed, by 2.4×, and no longer structural.** It measured 942 B, with the floor at 395 B, inside the budget ([ADR-0148](adr/0148-a-tree-entry-is-keyed-by-its-folder-and-name.md)) | §5. A version with no segments now fits, so what is over the budget is the ~110 B each segment reference costs in `object_locations`, five of them at scale M's shape. A replacement number is still a location-schema or segmentation-target decision. |
 | 2026-10 | NFR-PERF-011 | still missed, by 2.4×, and no longer structural | **missed by more than the headline says, by a term the target does not state.** 2 005 B/version where a tenth of the files change per snapshot, and 12 590 where a hundredth do | §5. The headline names each version in one snapshot, but a set lists every file in every snapshot it keeps, at ~131 B a file. A replacement number needs a stated number of snapshots, and a decision on what a kept snapshot costs. |
+| 2026-10 | NFR-PERF-011 | missed by more than the headline says | **missed by 2.3× at the headline and by 2.3× to 3.6× across the snapshot shapes.** 919 B/version, 930 where a tenth of the files change per snapshot, and 1 428 where a hundredth do ([ADR-0151](adr/0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md)) | §5. A folder's entries are kept once, under its tree, so what a snapshot costs is the folders it changed. A replacement number is still a location-schema or segmentation-target decision. |

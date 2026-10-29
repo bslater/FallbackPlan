@@ -28,11 +28,15 @@ At scale M's shape `tree_entries` cost 378 B/version of the catalogue's 1 183 ([
 
 Schema 16's `tree_entries` keeps an entry's snapshot, folder, name, kind and object, keyed by snapshot, folder and name, with no other index. A folder's listing is a range of that key, in name order, and within one folder that is path order.
 
+> **2026-10 ([ADR-0151](0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md)).** Schema 17 keys an entry by its folder's head tree and its name instead, and no row names a snapshot. Snapshots that hold a folder unchanged share its rows, and a snapshot reaches its own from its root tree. A listing is still a range of the key in name order.
+
 ### 2. A path is split and rebuilt one way
 
 A path's folder is everything before its last separator, and its name everything after. A path whose only separator is its first character names no folder. It is kept whole as a name at the root, apart from the same name without the separator. No codec refuses a separator inside a tree's names.
 
 Where a query returns a path, it rebuilds it: a root entry's name, or else the folder, a separator and the name.
+
+> **2026-10 ([ADR-0151](0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md)).** A path is now followed from the root a name at a time, so one that begins with a separator names an empty one first and is found nowhere, and a name that holds a separator is listed but is never what a path reaches.
 
 ### 3. A snapshot's leaves are sorted into path order
 
@@ -69,3 +73,4 @@ Path order is not folder order followed by name order. Some siblings' names have
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Catalogue schema 16 keys a tree entry by snapshot, folder and name, with no path and no covering index, and a snapshot's leaves are sorted into path order. At scale M's shape tree_entries falls from 378 B/version to 138 and the catalogue from 1 183 to 942, and the floor, at 395, is inside the budget. NFR-PERF-011 is still not met. |
+| 2026-10 | Accepted (amended) | [ADR-0151](0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md): an entry is keyed by its folder's head tree and its name rather than by snapshot, folder and name, so snapshots that hold a folder unchanged share its rows; a path is followed from the root a name at a time. |

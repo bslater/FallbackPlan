@@ -77,3 +77,4 @@ A tree still states an access time under key 2, and a reader cannot tell which b
 | Date | Status | Note |
 |---|---|---|
 | 2026-10 | Accepted; built | A folder whose tree would be the prior one but for its access time states the prior time and is the prior tree; the catalogue keeps each tree's access time at schema 11, written by the capture, the projector and the forensic rebuilder (`Repository/SnapshotPublication`, `Repository.Catalogue/Catalogue`, `Repository.Tests/EndToEnd/FolderAccessTimeTests`) |
+| 2026-10 | Accepted; built | [ADR-0151](0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md): a folder that keeps its tree keeps its catalogue entries too, since the catalogue keeps a folder's entries once, under its tree. |
