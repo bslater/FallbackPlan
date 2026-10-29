@@ -215,11 +215,12 @@ public sealed partial class ServiceCommandHandler
         var after = await StagingMark.SurveyAsync(archive.Store, archive.Repository, cancellationToken)
             .ConfigureAwait(false);
         var outcomes = new List<SnapshotDeletionOutcome>();
+        var forgotten = new List<byte[]>();
         foreach (var snapshot in named)
         {
             if (after.Snapshots.All(remaining => remaining.ManifestObjectId != snapshot.ManifestObjectId))
             {
-                catalogue.ForgetSnapshot(snapshot.Manifest.SnapshotId.Span);
+                forgotten.Add(snapshot.Manifest.SnapshotId.ToArray());
                 outcomes.Add(new SnapshotDeletionOutcome(snapshot.Fact.SnapshotId, "deleted", []));
                 continue;
             }
@@ -228,6 +229,7 @@ public sealed partial class ServiceCommandHandler
             outcomes.Add(new SnapshotDeletionOutcome(snapshot.Fact.SnapshotId, "pending", held?.AwaitingDestinations ?? []));
         }
 
+        catalogue.ForgetSnapshots(forgotten);
         return new DeleteSnapshotsResult(set.Id, Applied: true, outcomes, lines);
     }
 

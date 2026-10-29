@@ -125,9 +125,13 @@ public sealed class CatalogueProjector
                 structure.Add(errors);
             }
 
+            // Every folder the walk reads, recorded together once it is done
+            // and after the row that reaches them (ADR-0151).
+            List<(ObjectId TreeId, IEnumerable<Catalogue.CatalogueFolderEntry> Entries)> folders = [];
             var (entries, versions, unseen) = await ProjectTreeAsync(
-                target, reader, manifest.SnapshotId, manifest.RootTree, prefix: string.Empty, structure, cancellationToken)
+                target, reader, folders, manifest.RootTree, prefix: string.Empty, structure, cancellationToken)
                 .ConfigureAwait(false);
+            target.RecordFolders(folders);
             target.RecordSnapshotStructure(manifest.SnapshotId.Span, structure);
             treeEntries += entries;
             fileVersions += versions;
@@ -140,7 +144,7 @@ public sealed class CatalogueProjector
     private static async ValueTask<(int Entries, int Versions, int Missing)> ProjectTreeAsync(
         Catalogue.Catalogue target,
         RepositoryReader reader,
-        ReadOnlyMemory<byte> snapshotId,
+        List<(ObjectId TreeId, IEnumerable<Catalogue.CatalogueFolderEntry> Entries)> folders,
         ObjectId treeId,
         string prefix,
         List<ObjectId> structure,
@@ -149,6 +153,10 @@ public sealed class CatalogueProjector
         var entries = 0;
         var versions = 0;
         var missing = 0;
+
+        // A sharded folder's entries span its chain, and all are its head's.
+        var own = new List<Catalogue.CatalogueFolderEntry>();
+        folders.Add((treeId, own));
 
         ObjectId? next = treeId;
         while (next is { } id)
@@ -173,13 +181,13 @@ public sealed class CatalogueProjector
                 var name = Encoding.UTF8.GetString(child.Name.Span);
                 var path = prefix.Length == 0 ? name : prefix + "/" + name;
 
-                target.RecordTreeEntry(snapshotId.Span, path, child.EntryKind, child.ObjectId);
+                own.Add(new Catalogue.CatalogueFolderEntry(name, child.EntryKind, child.ObjectId));
                 entries++;
 
                 if (child.EntryKind == EntryKind.DirectoryPlaceholder)
                 {
                     var (childEntries, childVersions, childMissing) = await ProjectTreeAsync(
-                        target, reader, snapshotId, child.ObjectId, path, structure, cancellationToken).ConfigureAwait(false);
+                        target, reader, folders, child.ObjectId, path, structure, cancellationToken).ConfigureAwait(false);
                     entries += childEntries;
                     versions += childVersions;
                     missing += childMissing;

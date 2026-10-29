@@ -596,9 +596,10 @@ public sealed partial class PublicationOrchestrator
     /// <summary>
     /// Projects one completed publication into the live catalogue: blobs,
     /// the applied deltas, the snapshot row with its capture time, every
-    /// tree path, and each new file version with the identity and time the
-    /// next incremental compares (NFR-PERF-003). Reused versions get a
-    /// tree-entry row only — their file-version rows already exist. What each
+    /// folder's entries under its tree, and each new file version with the
+    /// identity and time the next incremental compares (NFR-PERF-003). A
+    /// folder an earlier snapshot recorded is already held, and a reused
+    /// version's row already exists (ADR-0151). What each
     /// new version needs and what the snapshot is made of are recorded too,
     /// which is what a damaged object is traced back through (FR-VER-005).
     /// </summary>
@@ -651,10 +652,9 @@ public sealed partial class PublicationOrchestrator
 
         _catalogue.RecordSnapshotStructure(job.SnapshotId.Span, structure);
 
-        foreach (var (path, treeId) in walker.Directories)
-        {
-            _catalogue.RecordTreeEntry(job.SnapshotId.Span, path, EntryKind.DirectoryPlaceholder, treeId);
-        }
+        // After the row that reaches them, so forgetting another snapshot
+        // in between cannot let go of a folder this one holds (ADR-0151).
+        _catalogue.RecordFolders(walker.Folders);
 
         foreach (var (treeId, accessedAt) in walker.DirectoryAccessTimes)
         {
@@ -663,8 +663,6 @@ public sealed partial class PublicationOrchestrator
 
         foreach (var file in walker.Files)
         {
-            _catalogue.RecordTreeEntry(job.SnapshotId.Span, file.RelativePath, file.EntryKind, file.ObjectId);
-
             if (file.Reused)
             {
                 continue;
@@ -722,7 +720,7 @@ public sealed partial class PublicationOrchestrator
         private readonly Stack<Frame> _frames = new();
         private readonly List<PublishedFileVersion> _files = [];
         private readonly List<CaptureFailure> _failures = [];
-        private readonly List<(string Path, ObjectId ObjectId)> _directories = [];
+        private readonly List<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> _folders = [];
         private readonly List<ObjectId> _trees = [];
         private readonly List<(ObjectId TreeId, ulong AccessedAt)> _accessTimes = [];
         private readonly Dictionary<SourceKey, SourceIdentityPackEntry?> _hints = [];
@@ -735,8 +733,8 @@ public sealed partial class PublicationOrchestrator
 
         public List<CaptureFailure> Failures => _failures;
 
-        /// <summary>Every published subdirectory (path, head tree id); the root is the snapshot's own row.</summary>
-        public IReadOnlyList<(string Path, ObjectId ObjectId)> Directories => _directories;
+        /// <summary>Every published directory's head tree and what it holds, the root's included (ADR-0151).</summary>
+        public IReadOnlyList<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> Folders => _folders;
 
         /// <summary>Every tree manifest this walk appended — each directory's head and its continuations, the root's included.</summary>
         public IReadOnlyList<ObjectId> Trees => _trees;
@@ -850,6 +848,9 @@ public sealed partial class PublicationOrchestrator
                 _accessTimes.Add((headId, accessedAt));
             }
 
+            _folders.Add((headId, [.. frame.Entries.Select(static entry => new CatalogueFolderEntry(
+                Encoding.UTF8.GetString(entry.Name.Span), entry.EntryKind, entry.ObjectId))]));
+
             if (isRoot)
             {
                 RootTreeId = headId;
@@ -858,7 +859,6 @@ public sealed partial class PublicationOrchestrator
             {
                 _frames.Peek().Entries.Add(
                     new TreeEntry(frame.Directory.NameBytes, headId, EntryKind.DirectoryPlaceholder));
-                _directories.Add((frame.Directory.RelativePath, headId));
             }
         }
 

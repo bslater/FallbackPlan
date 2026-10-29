@@ -1,6 +1,7 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Index;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Catalogue;
 
@@ -98,9 +99,8 @@ public sealed class CatalogueReachTests : IDisposable
         Version(catalogue, v2, s2, s3);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
         Snapshot(catalogue, SnapshotB, Object(0x22), Object(0x32));
-        catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
-        catalogue.RecordTreeEntry(SnapshotA, "docs/notes.txt", EntryKind.File, v2);
-        catalogue.RecordTreeEntry(SnapshotB, "docs/notes.txt", EntryKind.File, v2);
+        CatalogueTrees.Record(catalogue, [("docs/report.txt", EntryKind.File, v1), ("docs/notes.txt", EntryKind.File, v2)], Object(0x31));
+        CatalogueTrees.Record(catalogue, [("docs/notes.txt", EntryKind.File, v2)], Object(0x32));
 
         var reach = catalogue.ReachOf([Blob(0xD2)], sampleLimit: 5);
 
@@ -114,6 +114,27 @@ public sealed class CatalogueReachTests : IDisposable
     }
 
     [TestMethod]
+    public void ReachOf_AFolderTwoSnapshotsShare_ReachesBoth_AtTheOnePath()
+    {
+        // The folder's entries are kept once, under its tree (ADR-0151), and
+        // each snapshot that holds the tree holds what is in it.
+        using var catalogue = Open();
+        var (s1, v1, docs) = (Object(0x01), Object(0x11), Object(0x61));
+        Locate(catalogue, 1, 0, (s1, Blob(0xD1)));
+        Version(catalogue, v1, s1);
+        Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
+        Snapshot(catalogue, SnapshotB, Object(0x22), Object(0x32));
+        CatalogueTrees.Record(catalogue, [("docs", EntryKind.DirectoryPlaceholder, docs), ("docs/report.txt", EntryKind.File, v1), ("a.txt", EntryKind.File, Object(0x13))], Object(0x31));
+        CatalogueTrees.Record(catalogue, [("docs", EntryKind.DirectoryPlaceholder, docs), ("docs/report.txt", EntryKind.File, v1), ("b.txt", EntryKind.File, Object(0x14))], Object(0x32));
+
+        var reach = catalogue.ReachOf([Blob(0xD1)], sampleLimit: 5);
+
+        CollectionAssert.AreEquivalent(new[] { Hex(SnapshotA), Hex(SnapshotB) }, reach.Snapshots.ToList());
+        Assert.AreEqual("docs/report.txt", Assert.ContainsSingle(reach.FileSample));
+        Assert.AreEqual(1, reach.Files);
+    }
+
+    [TestMethod]
     public void ReachOf_ABlobOnlyOneSnapshotNeeds_LeavesTheOtherOut()
     {
         using var catalogue = Open();
@@ -124,8 +145,8 @@ public sealed class CatalogueReachTests : IDisposable
         Version(catalogue, v2, s3);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
         Snapshot(catalogue, SnapshotB, Object(0x22), Object(0x32));
-        catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
-        catalogue.RecordTreeEntry(SnapshotB, "docs/report.txt", EntryKind.File, v2);
+        CatalogueTrees.Record(catalogue, [("docs/report.txt", EntryKind.File, v1)], Object(0x31));
+        CatalogueTrees.Record(catalogue, [("docs/report.txt", EntryKind.File, v2)], Object(0x32));
 
         var reach = catalogue.ReachOf([Blob(0xD1)], sampleLimit: 5);
 
@@ -141,7 +162,7 @@ public sealed class CatalogueReachTests : IDisposable
         Locate(catalogue, 1, 0, (v1, Blob(0xE1)));
         Version(catalogue, v1);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
-        catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
+        CatalogueTrees.Record(catalogue, [("docs/report.txt", EntryKind.File, v1)], Object(0x31));
 
         var reach = catalogue.ReachOf([Blob(0xE1)], sampleLimit: 5);
 
@@ -181,7 +202,7 @@ public sealed class CatalogueReachTests : IDisposable
         Locate(catalogue, 2, 1, (s1, Blob(0xD9)));
         Version(catalogue, v1, s1);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
-        catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
+        CatalogueTrees.Record(catalogue, [("docs/report.txt", EntryKind.File, v1)], Object(0x31));
 
         var old = catalogue.ReachOf([Blob(0xD1)], sampleLimit: 5);
         var current = catalogue.ReachOf([Blob(0xD9)], sampleLimit: 5);
@@ -200,7 +221,7 @@ public sealed class CatalogueReachTests : IDisposable
         Locate(catalogue, 1, 0, (traced, Blob(0xD1)), (stray, Blob(0xD1)));
         Version(catalogue, v1, traced);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
-        catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
+        CatalogueTrees.Record(catalogue, [("docs/report.txt", EntryKind.File, v1)], Object(0x31));
 
         var reach = catalogue.ReachOf([Blob(0xD1)], sampleLimit: 5);
 
@@ -216,12 +237,15 @@ public sealed class CatalogueReachTests : IDisposable
         var segment = Object(0x01);
         Locate(catalogue, 1, 0, (segment, Blob(0xD1)));
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
+        var entries = new List<(string, EntryKind, ObjectId)>();
         for (byte i = 0; i < 8; i++)
         {
             var version = Object((byte)(0x50 + i));
             Version(catalogue, version, segment);
-            catalogue.RecordTreeEntry(SnapshotA, $"docs/file-{7 - i}.txt", EntryKind.File, version);
+            entries.Add(($"docs/file-{7 - i}.txt", EntryKind.File, version));
         }
+
+        CatalogueTrees.Record(catalogue, entries, Object(0x31));
 
         var reach = catalogue.ReachOf([Blob(0xD1)], sampleLimit: 3);
 
@@ -241,7 +265,7 @@ public sealed class CatalogueReachTests : IDisposable
         Locate(catalogue, 1, 0, (segment, Blob(0xD1)));
         Version(catalogue, v1, segment);
         Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
-        catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
+        CatalogueTrees.Record(catalogue, [("docs/report.txt", EntryKind.File, v1)], Object(0x31));
 
         using var writer = new Microsoft.Data.Sqlite.SqliteConnection(
             new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = CataloguePath, Pooling = false }.ToString());

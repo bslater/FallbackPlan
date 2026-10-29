@@ -25,7 +25,7 @@ public sealed record CatalogueSnapshot(
     long? ObservedClockSkewMs = null);
 
 /// <summary>
-/// One path within a snapshot (schema v2 <c>tree_entries</c>), joined with
+/// One path within a snapshot (schema v17 <c>folder_entries</c>), joined with
 /// the file-version columns the NFR-PERF-003 short-circuit compares. The
 /// identity columns are scan-time local facts — never durable in the
 /// repository — so they are null in a rebuilt catalogue, and a null
@@ -41,6 +41,13 @@ public sealed record CatalogueTreeEntry(
     ulong? IdentityFileId,
     bool HasAlternateStreams = false,
     ReadOnlyMemory<byte>? MetadataDigest = null);
+
+/// <summary>
+/// One entry a folder's tree holds (schema v17 <c>folder_entries</c>;
+/// ADR-0151): its name in the folder, its kind, and the object it names,
+/// which for a folder is the folder's head tree.
+/// </summary>
+public readonly record struct CatalogueFolderEntry(string Name, EntryKind Kind, ObjectId ObjectId);
 
 /// <summary>
 /// A folder's head tree within one snapshot (schema v11), with the access time
@@ -136,13 +143,57 @@ public sealed record SnapshotContent(long Files, IReadOnlyList<ContentBlob> Blob
 public sealed class Catalogue : IDisposable
 {
     /// <summary>
-    /// A tree entry's path, from the folder and name it is keyed by
-    /// (ADR-0148), as a column of a query that names the table <c>t</c>.
+    /// An entry's path, as a column of a query that joins the folder
+    /// <c>d</c> a walk reached to the entry <c>t</c> its tree holds.
     /// </summary>
-    private const string EntryPath = "CASE t.parent WHEN '' THEN t.name ELSE t.parent || '/' || t.name END";
+    private const string ChildPath = "CASE d.prefix WHEN '' THEN t.name ELSE d.prefix || '/' || t.name END";
+
+    /// <summary>
+    /// The folders snapshot <c>$snapshot</c> holds, as the common table
+    /// <c>folders</c> of each folder's head tree and its path: the root tree,
+    /// then each folder named by an entry of one already reached
+    /// (ADR-0151). A tree's identity derives from what it holds, so no tree
+    /// reaches itself.
+    /// </summary>
+    private static readonly string SnapshotFolders = $"""
+        WITH RECURSIVE folders(tree_id, prefix) AS (
+            SELECT root_tree, '' FROM snapshots WHERE snapshot_id = $snapshot
+            UNION ALL
+            SELECT t.object_id, {ChildPath}
+            FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
+            WHERE t.entry_kind = {(int)EntryKind.DirectoryPlaceholder}
+        )
+        """;
+
+    /// <summary>
+    /// The folder snapshot <c>$snapshot</c> holds at the path
+    /// <c>$folder</c>, as the common table <c>walk</c> of each folder's head
+    /// tree and the rest of the path below it: its row with no rest left is
+    /// that folder, and there is none when the snapshot holds no folder
+    /// there. One statement, a key seek a name (ADR-0151).
+    /// </summary>
+    private static readonly string FolderAt = $"""
+        WITH RECURSIVE walk(tree_id, rest) AS (
+            SELECT root_tree, NULLIF($folder, '') FROM snapshots WHERE snapshot_id = $snapshot
+            UNION ALL
+            SELECT t.object_id, CASE instr(w.rest, '/') WHEN 0 THEN NULL ELSE substr(w.rest, instr(w.rest, '/') + 1) END
+            FROM walk w CROSS JOIN folder_entries t
+              ON t.tree_id = w.tree_id
+             AND t.name = CASE instr(w.rest, '/') WHEN 0 THEN w.rest ELSE substr(w.rest, 1, instr(w.rest, '/') - 1) END
+            WHERE w.rest IS NOT NULL AND t.entry_kind = {(int)EntryKind.DirectoryPlaceholder}
+        )
+        """;
 
     private readonly SqliteConnection _connection;
     private readonly ILogger _log;
+
+    /// <summary>
+    /// The folder the last lookup resolved, and its tree, so the files of
+    /// one folder, which a capture asks for in turn, resolve it once. A
+    /// snapshot's trees never change, and this catalogue's own writes to
+    /// snapshots and folders clear it.
+    /// </summary>
+    private (byte[] Snapshot, string Folder, ObjectId? Tree)? _lastFolder;
 
     private Catalogue(SqliteConnection connection, ILogger? logger)
     {
@@ -530,40 +581,108 @@ public sealed class Catalogue : IDisposable
         return path.Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant();
     }
 
-    /// <summary>Records one path of a snapshot's tree (schema v2 <c>tree_entries</c>).</summary>
-    public void RecordTreeEntry(
-        ReadOnlySpan<byte> snapshotId,
-        string path,
-        EntryKind entryKind,
-        ObjectId objectId)
+    /// <summary>
+    /// Records what the folder tree <paramref name="treeId"/> holds, as
+    /// <see cref="RecordFolders"/> records a snapshot's folders.
+    /// </summary>
+    public void RecordFolder(ObjectId treeId, IEnumerable<CatalogueFolderEntry> entries) =>
+        RecordFolders([(treeId, entries)]);
+
+    /// <summary>
+    /// Records what each folder tree holds (schema v17 <c>folder_entries</c>;
+    /// ADR-0151), in one transaction, passing over a tree whose entries are
+    /// already recorded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A tree's identity derives from what it holds, so a folder a snapshot
+    /// left as it was is the tree an earlier snapshot recorded, and this one
+    /// reaches the rows that one paid for. A tree's entries are recorded
+    /// whole or not at all, so a tree that has any is passed over.
+    /// </para>
+    /// <para>
+    /// Record the snapshot that reaches the folders first. Forgetting a
+    /// snapshot lets go of every folder no recorded snapshot reaches
+    /// (<see cref="ForgetSnapshots"/>), so a folder recorded before the row
+    /// that reaches it could be let go of before that row lands.
+    /// </para>
+    /// </remarks>
+    public void RecordFolders(IEnumerable<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> folders)
     {
-        ThrowHelper.ThrowIfNullOrEmpty(path);
+        ThrowHelper.ThrowIfNull(folders);
+        _lastFolder = null;
 
-        var (parent, name) = FolderAndName(path);
+        using var transaction = _connection.BeginTransaction();
+        using var held = _connection.CreateCommand();
+        held.Transaction = transaction;
+        held.CommandText = "SELECT EXISTS (SELECT 1 FROM folder_entries WHERE tree_id = $tree);";
+        var heldTree = held.Parameters.Add("$tree", SqliteType.Blob);
 
-        using var command = _connection.CreateCommand();
-        command.CommandText = """
-            INSERT OR REPLACE INTO tree_entries (snapshot_id, parent, name, entry_kind, object_id)
-            VALUES ($snapshot, $parent, $name, $kind, $object);
+        using var insert = _connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT OR IGNORE INTO folder_entries (tree_id, name, entry_kind, object_id)
+            VALUES ($tree, $name, $kind, $object);
             """;
-        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
-        command.Parameters.AddWithValue("$parent", parent);
-        command.Parameters.AddWithValue("$name", name);
-        command.Parameters.AddWithValue("$kind", (int)entryKind);
-        command.Parameters.AddWithValue("$object", objectId.ToArray());
-        command.ExecuteNonQuery();
+        var tree = insert.Parameters.Add("$tree", SqliteType.Blob);
+        var name = insert.Parameters.Add("$name", SqliteType.Text);
+        var kind = insert.Parameters.Add("$kind", SqliteType.Integer);
+        var named = insert.Parameters.Add("$object", SqliteType.Blob);
+        foreach (var (treeId, entries) in folders)
+        {
+            ThrowHelper.ThrowIfNull(entries);
+            heldTree.Value = tree.Value = treeId.ToArray();
+            if ((long)held.ExecuteScalar()! > 0)
+            {
+                continue;
+            }
+
+            foreach (var entry in entries)
+            {
+                ThrowHelper.ThrowIfNullOrEmpty(entry.Name);
+                name.Value = entry.Name;
+                kind.Value = (int)entry.Kind;
+                named.Value = entry.ObjectId.ToArray();
+                insert.ExecuteNonQuery();
+            }
+        }
+
+        transaction.Commit();
     }
 
     /// <summary>
-    /// The folder and name a path is kept under (ADR-0148): the folder is all
-    /// before the last separator. A path whose only separator is its first
-    /// character names no folder, and is kept whole as a name at the root,
-    /// apart from the same name without one.
+    /// Binds the snapshot and the folder path a <see cref="FolderAt"/> walk
+    /// follows. The root is the empty string.
     /// </summary>
-    private static (string Parent, string Name) FolderAndName(string path)
+    private static void BindFolder(SqliteCommand command, ReadOnlySpan<byte> snapshotId, string folderPath)
     {
-        var slash = path.LastIndexOf('/');
-        return slash <= 0 ? (string.Empty, path) : (path[..slash], path[(slash + 1)..]);
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$folder", folderPath);
+    }
+
+    /// <summary>
+    /// The head tree of the folder a snapshot holds at
+    /// <paramref name="folderPath"/>, or <see langword="null"/> when it holds
+    /// none there. The root is the empty string.
+    /// </summary>
+    private ObjectId? FolderTree(ReadOnlySpan<byte> snapshotId, string folderPath)
+    {
+        if (_lastFolder is { } last
+            && string.Equals(last.Folder, folderPath, StringComparison.Ordinal)
+            && snapshotId.SequenceEqual(last.Snapshot))
+        {
+            return last.Tree;
+        }
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"""
+            {FolderAt}
+            SELECT tree_id FROM walk WHERE rest IS NULL;
+            """;
+        BindFolder(command, snapshotId, folderPath);
+        var tree = command.ExecuteScalar() is byte[] bytes ? ObjectId.FromBytes(bytes) : (ObjectId?)null;
+        _lastFolder = (snapshotId.ToArray(), folderPath, tree);
+        return tree;
     }
 
     /// <summary>
@@ -666,9 +785,10 @@ public sealed class Catalogue : IDisposable
     /// snapshots it could not rule out as untouched.
     /// </para>
     /// <para>
-    /// The paths come from one pass over the snapshots' listings, which
-    /// <c>tree_entries</c> keeps by snapshot, folder and name and not by version: the
-    /// cost of a listing's count, paid only when damage is outstanding.
+    /// The paths come from one walk of every snapshot's folders, since
+    /// <c>folder_entries</c> keeps a folder's entries by its tree and not by
+    /// version: the cost of every snapshot's listing, paid only when damage
+    /// is outstanding.
     /// </para>
     /// </remarks>
     /// <param name="blobs">The damaged blobs.</param>
@@ -827,7 +947,14 @@ public sealed class Catalogue : IDisposable
         {
             query.Transaction = transaction;
             query.CommandText = $"""
-                SELECT t.snapshot_id, {EntryPath} FROM tree_entries t
+                WITH RECURSIVE folders(snapshot_id, tree_id, prefix) AS (
+                    SELECT snapshot_id, root_tree, '' FROM snapshots
+                    UNION ALL
+                    SELECT d.snapshot_id, t.object_id, {ChildPath}
+                    FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
+                    WHERE t.entry_kind = {(int)EntryKind.DirectoryPlaceholder}
+                )
+                SELECT d.snapshot_id, {ChildPath} FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
                 WHERE t.entry_kind <> {(int)EntryKind.DirectoryPlaceholder}
                   AND t.object_id IN (SELECT id FROM reach_versions);
                 """;
@@ -850,27 +977,73 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>
-    /// Forgets a snapshot the store no longer holds: its row, its tree, and the
-    /// records it was made of (FR-GC-013). The catalogue is a cache of the
-    /// store, and a snapshot a person deleted is one nothing should list, offer
-    /// to restore, or trace damage to. What its files shared with other
-    /// snapshots stays, because those snapshots still hold it.
+    /// Forgets a snapshot the store no longer holds, as
+    /// <see cref="ForgetSnapshots"/> forgets several.
     /// </summary>
     /// <param name="snapshotId">The snapshot's 16-byte id.</param>
-    public void ForgetSnapshot(ReadOnlySpan<byte> snapshotId)
+    public void ForgetSnapshot(ReadOnlySpan<byte> snapshotId) => ForgetSnapshots([snapshotId.ToArray()]);
+
+    /// <summary>
+    /// Forgets snapshots the store no longer holds: their rows, the records
+    /// they were made of, and every folder no snapshot left reaches
+    /// (FR-GC-013; ADR-0151). The catalogue is a cache of the store, and a
+    /// snapshot a person deleted is one nothing should list, offer to
+    /// restore, or trace damage to. A folder another snapshot still holds
+    /// stays, and so does what the forgotten snapshots' files shared.
+    /// </summary>
+    /// <remarks>
+    /// Which folders are reached is found by walking every remaining
+    /// snapshot from its root, a folder once however many hold it, so it
+    /// costs a pass over the folders kept and is paid once for all the
+    /// snapshots given. It is one transaction with the deletions, so a
+    /// capture recording its folders sees either none of it or all of it.
+    /// </remarks>
+    /// <param name="snapshotIds">The snapshots' 16-byte ids.</param>
+    public void ForgetSnapshots(IEnumerable<byte[]> snapshotIds)
     {
-        using var transaction = _connection.BeginTransaction();
-        foreach (var table in (string[])["tree_entries", "snapshot_structure", "snapshots"])
+        ThrowHelper.ThrowIfNull(snapshotIds);
+
+        var forgotten = snapshotIds.ToList();
+        if (forgotten.Count == 0)
         {
-            using var command = _connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = $"DELETE FROM {table} WHERE snapshot_id = $snapshot;";
-            command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
-            command.ExecuteNonQuery();
+            return;
+        }
+
+        _lastFolder = null;
+        using var transaction = _connection.BeginTransaction();
+        using (var forget = _connection.CreateCommand())
+        {
+            forget.Transaction = transaction;
+            forget.CommandText = """
+                DELETE FROM snapshot_structure WHERE snapshot_id = $snapshot;
+                DELETE FROM snapshots WHERE snapshot_id = $snapshot;
+                """;
+            var snapshot = forget.Parameters.Add("$snapshot", SqliteType.Blob);
+            foreach (var snapshotId in forgotten)
+            {
+                snapshot.Value = snapshotId;
+                forget.ExecuteNonQuery();
+            }
+        }
+
+        using (var release = _connection.CreateCommand())
+        {
+            release.Transaction = transaction;
+            release.CommandText = $"""
+                WITH RECURSIVE reached(tree_id) AS (
+                    SELECT root_tree FROM snapshots
+                    UNION
+                    SELECT t.object_id FROM reached r CROSS JOIN folder_entries t ON t.tree_id = r.tree_id
+                    WHERE t.entry_kind = {(int)EntryKind.DirectoryPlaceholder}
+                )
+                DELETE FROM folder_entries WHERE tree_id NOT IN (SELECT tree_id FROM reached);
+                """;
+            release.ExecuteNonQuery();
         }
 
         transaction.Commit();
     }
+
 
     /// <summary>Every known snapshot, newest capture first.</summary>
     public IReadOnlyList<CatalogueSnapshot> EnumerateSnapshots()
@@ -937,11 +1110,12 @@ public sealed class Catalogue : IDisposable
     public bool HasIdentities(ReadOnlySpan<byte> snapshotId)
     {
         using var command = _connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = $"""
+            {SnapshotFolders}
             SELECT 1
-            FROM tree_entries t
+            FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
             JOIN file_versions f ON f.object_id = t.object_id
-            WHERE t.snapshot_id = $snapshot AND f.identity_file_id IS NOT NULL
+            WHERE f.identity_file_id IS NOT NULL
             LIMIT 1;
             """;
         command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
@@ -982,20 +1156,30 @@ public sealed class Catalogue : IDisposable
     {
         var started = Stopwatch.GetTimestamp();
 
+        // A file no earlier version shares an identity with, which is every
+        // new file, is answered from the identity index alone, before any
+        // walk of the snapshot's folders.
         using var command = _connection.CreateCommand();
-        command.CommandText = $"""
-            SELECT {EntryPath}, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
-            FROM file_versions f
-            JOIN tree_entries t ON t.object_id = f.object_id AND t.snapshot_id = $snapshot
-            WHERE f.identity_device = $device AND f.identity_file_id = $fileId
-            LIMIT 1;
-            """;
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM file_versions WHERE identity_device = $device AND identity_file_id = $fileId);";
         command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
         command.Parameters.AddWithValue("$device", (long)device);
         command.Parameters.AddWithValue("$fileId", (long)fileId);
 
-        using var reader = command.ExecuteReader();
-        var entry = reader.Read() ? ReadTreeEntry(reader) : null;
+        CatalogueTreeEntry? entry = null;
+        if ((long)command.ExecuteScalar()! > 0)
+        {
+            command.CommandText = $"""
+                {SnapshotFolders}
+                SELECT {ChildPath}, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
+                FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
+                JOIN file_versions f ON f.object_id = t.object_id
+                WHERE f.identity_device = $device AND f.identity_file_id = $fileId
+                LIMIT 1;
+                """;
+            using var reader = command.ExecuteReader();
+            entry = reader.Read() ? ReadTreeEntry(reader) : null;
+        }
+
         EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
         return entry;
     }
@@ -1005,20 +1189,23 @@ public sealed class Catalogue : IDisposable
         ThrowHelper.ThrowIfNullOrEmpty(path);
         var started = Stopwatch.GetTimestamp();
 
+        // A path is names joined by a separator, so one that begins with a
+        // separator names an empty one first, which no folder holds.
         CatalogueTreeEntry? entry = null;
-        if ((caseInsensitive ? FoldedPath(snapshotId, path) : path) is { } found)
+        if ((caseInsensitive ? FoldedPath(snapshotId, path) : path) is { } found
+            && found.LastIndexOf('/') is var slash && slash != 0
+            && FolderTree(snapshotId, slash < 0 ? string.Empty : found[..slash]) is { } folder)
         {
             using var command = _connection.CreateCommand();
-            var (parent, name) = FolderAndName(found);
-            command.CommandText = $"""
-                SELECT {EntryPath}, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
-                FROM tree_entries t
+            command.CommandText = """
+                SELECT $path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
+                FROM folder_entries t
                 LEFT JOIN file_versions f ON f.object_id = t.object_id
-                WHERE t.snapshot_id = $snapshot AND t.parent = $parent AND t.name = $name;
+                WHERE t.tree_id = $tree AND t.name = $name;
                 """;
-            command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
-            command.Parameters.AddWithValue("$parent", parent);
-            command.Parameters.AddWithValue("$name", name);
+            command.Parameters.AddWithValue("$tree", folder.ToArray());
+            command.Parameters.AddWithValue("$path", found);
+            command.Parameters.AddWithValue("$name", found[(slash + 1)..]);
 
             using var reader = command.ExecuteReader();
             entry = reader.Read() ? ReadTreeEntry(reader) : null;
@@ -1039,25 +1226,31 @@ public sealed class Catalogue : IDisposable
     private string? FoldedPath(ReadOnlySpan<byte> snapshotId, string path)
     {
         using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT name FROM tree_entries WHERE snapshot_id = $snapshot AND parent = $parent;";
+        command.CommandText = "SELECT root_tree FROM snapshots WHERE snapshot_id = $snapshot;";
         command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
-        var parent = command.Parameters.Add("$parent", SqliteType.Text);
+        if (command.ExecuteScalar() is not byte[] root)
+        {
+            return null;
+        }
 
-        List<string> candidates = [string.Empty];
+        command.CommandText = "SELECT name, object_id FROM folder_entries WHERE tree_id = $tree;";
+        var tree = command.Parameters.Add("$tree", SqliteType.Blob);
+
+        List<(string Path, byte[] Tree)> candidates = [(string.Empty, root)];
         foreach (var component in path.Split('/'))
         {
             var folded = Casefold(component);
-            List<string> matching = [];
+            List<(string Path, byte[] Tree)> matching = [];
             foreach (var candidate in candidates)
             {
-                parent.Value = candidate;
+                tree.Value = candidate.Tree;
                 using var reader = command.ExecuteReader();
                 while (reader.Read())
                 {
                     var name = reader.GetString(0);
                     if (string.Equals(Casefold(name), folded, StringComparison.Ordinal))
                     {
-                        matching.Add(candidate.Length == 0 ? name : candidate + "/" + name);
+                        matching.Add((candidate.Path.Length == 0 ? name : candidate.Path + "/" + name, (byte[])reader.GetValue(1)));
                     }
                 }
             }
@@ -1070,7 +1263,8 @@ public sealed class Catalogue : IDisposable
             candidates = matching;
         }
 
-        return candidates.Contains(path, StringComparer.Ordinal) ? path : candidates.Min(StringComparer.Ordinal);
+        var found = candidates.ConvertAll(candidate => candidate.Path);
+        return found.Contains(path, StringComparer.Ordinal) ? path : found.Min(StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -1082,32 +1276,15 @@ public sealed class Catalogue : IDisposable
     {
         ThrowHelper.ThrowIfNull(path);
 
-        using var command = _connection.CreateCommand();
-        command.CommandText = path.Length == 0
-            ? """
-              SELECT s.root_tree, d.accessed_at
-              FROM snapshots s
-              LEFT JOIN directory_access_times d ON d.object_id = s.root_tree
-              WHERE s.snapshot_id = $snapshot;
-              """
-            : """
-              SELECT t.object_id, d.accessed_at
-              FROM tree_entries t
-              LEFT JOIN directory_access_times d ON d.object_id = t.object_id
-              WHERE t.snapshot_id = $snapshot AND t.parent = $parent AND t.name = $name AND t.entry_kind = $directory;
-              """;
-        var (parent, name) = FolderAndName(path);
-        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
-        command.Parameters.AddWithValue("$parent", parent);
-        command.Parameters.AddWithValue("$name", name);
-        command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+        if (FolderTree(snapshotId, path) is not { } tree)
+        {
+            return null;
+        }
 
-        using var reader = command.ExecuteReader();
-        return reader.Read()
-            ? new CatalogueDirectoryVersion(
-                ObjectId.FromBytes((byte[])reader.GetValue(0)),
-                reader.IsDBNull(1) ? null : unchecked((ulong)reader.GetInt64(1)))
-            : null;
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT accessed_at FROM directory_access_times WHERE object_id = $tree;";
+        command.Parameters.AddWithValue("$tree", tree.ToArray());
+        return new CatalogueDirectoryVersion(tree, command.ExecuteScalar() is long accessedAt ? unchecked((ulong)accessedAt) : null);
     }
 
     /// <summary>
@@ -1118,18 +1295,23 @@ public sealed class Catalogue : IDisposable
     {
         ThrowHelper.ThrowIfNull(parentPath);
 
+        var entries = new List<CatalogueTreeEntry>();
+        if (FolderTree(snapshotId, parentPath) is not { } tree)
+        {
+            return entries;
+        }
+
         using var command = _connection.CreateCommand();
-        command.CommandText = $"""
-            SELECT {EntryPath}, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
-            FROM tree_entries t
+        command.CommandText = """
+            SELECT CASE $parent WHEN '' THEN t.name ELSE $parent || '/' || t.name END, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
+            FROM folder_entries t
             LEFT JOIN file_versions f ON f.object_id = t.object_id
-            WHERE t.snapshot_id = $snapshot AND t.parent = $parent
+            WHERE t.tree_id = $tree
             ORDER BY t.name;
             """;
-        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$tree", tree.ToArray());
         command.Parameters.AddWithValue("$parent", parentPath);
 
-        var entries = new List<CatalogueTreeEntry>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -1147,10 +1329,11 @@ public sealed class Catalogue : IDisposable
     {
         using var command = _connection.CreateCommand();
         command.CommandText = $"""
-            SELECT {EntryPath} AS path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
-            FROM tree_entries t
+            {SnapshotFolders}
+            SELECT {ChildPath} AS path, t.entry_kind, t.object_id, f.logical_length, f.modified_at, f.identity_device, f.identity_file_id, f.has_alternate_streams, f.metadata_digest
+            FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
             LEFT JOIN file_versions f ON f.object_id = t.object_id
-            WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory
+            WHERE t.entry_kind <> $directory
             ORDER BY path;
             """;
         command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
@@ -1170,9 +1353,10 @@ public sealed class Catalogue : IDisposable
     public long CountFiles(ReadOnlySpan<byte> snapshotId)
     {
         using var command = _connection.CreateCommand();
-        command.CommandText = """
-            SELECT COUNT(*) FROM tree_entries
-            WHERE snapshot_id = $snapshot AND entry_kind <> $directory;
+        command.CommandText = $"""
+            {SnapshotFolders}
+            SELECT COUNT(*) FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
+            WHERE t.entry_kind <> $directory;
             """;
         command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
         command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
@@ -1222,11 +1406,12 @@ public sealed class Catalogue : IDisposable
         }
 
         using var missing = _connection.CreateCommand();
-        missing.CommandText = """
+        missing.CommandText = $"""
+            {SnapshotFolders}
             SELECT COUNT(*) FROM (
-                SELECT DISTINCT t.parent, t.name FROM tree_entries t
+                SELECT DISTINCT d.prefix, t.name FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
                 JOIN version_contents c ON c.version_id = t.object_id
-                WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory
+                WHERE t.entry_kind <> $directory
                   AND NOT EXISTS (
                       SELECT 1 FROM located l
                       LEFT JOIN blobs b ON b.blob_id = l.blob_id
@@ -1266,13 +1451,14 @@ public sealed class Catalogue : IDisposable
     {
         using var command = _connection.CreateCommand();
         command.CommandText = $"""
-            SELECT {EntryPath}, c.object_id, l.blob_id, b.store_blob_key, b.blob_class,
+            {SnapshotFolders}
+            SELECT {ChildPath}, c.object_id, l.blob_id, b.store_blob_key, b.blob_class,
                    l.generation, l.writer_id, l.sequence
-            FROM tree_entries t
+            FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
             JOIN version_contents c ON c.version_id = t.object_id
             JOIN located l ON l.object_id = c.object_id
             LEFT JOIN blobs b ON b.blob_id = l.blob_id
-            WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory AND COALESCE(b.state, 1) <> 3;
+            WHERE t.entry_kind <> $directory AND COALESCE(b.state, 1) <> 3;
             """;
         command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
         command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
@@ -1386,6 +1572,7 @@ public sealed class Catalogue : IDisposable
         byte consistencyMethod = 1,
         long? observedClockSkewMs = null)
     {
+        _lastFolder = null;
         using var command = _connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO snapshots

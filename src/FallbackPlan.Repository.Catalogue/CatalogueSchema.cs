@@ -117,8 +117,17 @@ public static class CatalogueSchema
     /// and the path restated the folder; a listing now reads the key itself
     /// (NFR-PERF-011, ADR-0148).
     /// </para>
+    /// <para>
+    /// v17 over v16: <c>folder_entries</c> in place of <c>tree_entries</c>,
+    /// keyed by a folder's tree and the name. A snapshot listed every file it
+    /// held, changed or not, so the catalogue grew with the snapshots it kept;
+    /// a tree's identity derives from what it holds, so a folder a snapshot
+    /// left alone is the tree an earlier one recorded, and its rows are kept
+    /// once. A snapshot reaches its own from its root tree (NFR-PERF-011,
+    /// ADR-0151).
+    /// </para>
     /// </remarks>
-    public const int Version = 16;
+    public const int Version = 17;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -234,17 +243,18 @@ public static class CatalogueSchema
         CREATE INDEX ix_file_versions_identity
             ON file_versions (identity_device, identity_file_id);
 
-        -- One entry of a snapshot's tree, keyed by the folder it is in and its
-        -- name there, so a folder's listing reads the key in name order. Its
-        -- path is the folder and the name joined by a separator, and a root
-        -- entry's name is its path.
-        CREATE TABLE tree_entries (
-            snapshot_id   BLOB NOT NULL,
-            parent        TEXT NOT NULL,
+        -- One entry a folder's tree holds, keyed by the head tree of the folder
+        -- and its name there, so a folder's listing reads the key in name
+        -- order. A tree's identity derives from what it holds, so every
+        -- snapshot that holds a folder unchanged reaches the same rows: from
+        -- its root tree, a folder at a time, through the entries that name a
+        -- folder's tree.
+        CREATE TABLE folder_entries (
+            tree_id       BLOB NOT NULL,
             name          TEXT NOT NULL,
             entry_kind    INTEGER NOT NULL,
             object_id     BLOB NOT NULL,
-            PRIMARY KEY (snapshot_id, parent, name)
+            PRIMARY KEY (tree_id, name)
         ) WITHOUT ROWID;
 
         -- The access time a folder's head tree states, keyed by the tree: the

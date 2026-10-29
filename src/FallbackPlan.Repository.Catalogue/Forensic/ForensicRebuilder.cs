@@ -335,10 +335,12 @@ public sealed class ForensicRebuilder : IDisposable
 
             // Walk root tree → subdirectories → file versions → segments
             // through the indexed metadata records, projecting the paths.
+            List<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> folders = [];
             await WalkTreeAsync(
-                decoded.Manifest.SnapshotId, decoded.Manifest.RootTree, prefix: string.Empty,
-                indexed, needed, findings, catalogue, structure, cancellationToken)
+                folders, decoded.Manifest.RootTree, prefix: string.Empty,
+                indexed, needed, findings, catalogue, structure, chain: null, cancellationToken)
                 .ConfigureAwait(false);
+            catalogue.RecordFolders(folders);
             catalogue.RecordSnapshotStructure(decoded.Manifest.SnapshotId.Span, structure);
         }
 
@@ -346,7 +348,7 @@ public sealed class ForensicRebuilder : IDisposable
     }
 
     private async ValueTask WalkTreeAsync(
-        ReadOnlyMemory<byte> snapshotId,
+        List<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> folders,
         ObjectId treeId,
         string prefix,
         Dictionary<ObjectId, BlobId> indexed,
@@ -354,6 +356,7 @@ public sealed class ForensicRebuilder : IDisposable
         List<DamageFinding> findings,
         Catalogue catalogue,
         List<ObjectId> structure,
+        List<CatalogueFolderEntry>? chain,
         CancellationToken cancellationToken)
     {
         structure.Add(treeId);
@@ -373,17 +376,24 @@ public sealed class ForensicRebuilder : IDisposable
             catalogue.RecordDirectoryAccessTime(treeId, accessedAt);
         }
 
+        // A sharded folder's entries span its chain, and all are its head's.
+        var own = chain ?? [];
+        if (chain is null)
+        {
+            folders.Add((treeId, own));
+        }
+
         foreach (var entry in tree.Entries)
         {
             var name = System.Text.Encoding.UTF8.GetString(entry.Name.Span);
             var path = prefix.Length == 0 ? name : prefix + "/" + name;
-            catalogue.RecordTreeEntry(snapshotId.Span, path, entry.EntryKind, entry.ObjectId);
+            own.Add(new CatalogueFolderEntry(name, entry.EntryKind, entry.ObjectId));
 
             // A subdirectory entry names its child tree manifest
             // (ADR-0026 §Decision 6) — the walk descends it.
             if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
             {
-                await WalkTreeAsync(snapshotId, entry.ObjectId, path, indexed, needed, findings, catalogue, structure, cancellationToken)
+                await WalkTreeAsync(folders, entry.ObjectId, path, indexed, needed, findings, catalogue, structure, chain: null, cancellationToken)
                     .ConfigureAwait(false);
                 continue;
             }
@@ -420,7 +430,7 @@ public sealed class ForensicRebuilder : IDisposable
 
         if (tree.Continuation is { } continuation)
         {
-            await WalkTreeAsync(snapshotId, continuation, prefix, indexed, needed, findings, catalogue, structure, cancellationToken)
+            await WalkTreeAsync(folders, continuation, prefix, indexed, needed, findings, catalogue, structure, own, cancellationToken)
                 .ConfigureAwait(false);
         }
     }

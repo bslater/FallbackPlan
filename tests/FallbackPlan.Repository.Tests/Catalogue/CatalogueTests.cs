@@ -1,6 +1,8 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Index;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Catalogue;
 
@@ -21,7 +23,10 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// writer by numbers of the catalogue's own, and still ranks by the writer's
 /// id (NFR-PERF-011, ADR-0144). A tree entry is keyed by its folder and its
 /// name, and its path, a folder's listing and a snapshot's path order are as
-/// they were (NFR-PERF-011, ADR-0148).
+/// they were (NFR-PERF-011, ADR-0148). A folder's entries are kept once,
+/// under its tree, so snapshots that hold it unchanged share them, and
+/// forgetting a snapshot lets go of only what none of the rest reaches
+/// (NFR-PERF-011, ADR-0151).
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -217,10 +222,13 @@ public sealed class CatalogueTests : IDisposable
         // what is asked.
         using var catalogue = Open();
         var snapshot = Snapshot(0x42);
-        catalogue.RecordTreeEntry(snapshot, "Docs", EntryKind.DirectoryPlaceholder, Object(1));
-        catalogue.RecordTreeEntry(snapshot, "Docs/x.txt", EntryKind.File, Object(2));
-        catalogue.RecordTreeEntry(snapshot, "DOCS", EntryKind.DirectoryPlaceholder, Object(3));
-        catalogue.RecordTreeEntry(snapshot, "DOCS/y.txt", EntryKind.File, Object(4));
+        CatalogueTrees.RecordSnapshot(
+            catalogue,
+            snapshot,
+            ("Docs", EntryKind.DirectoryPlaceholder, Object(1)),
+            ("Docs/x.txt", EntryKind.File, Object(2)),
+            ("DOCS", EntryKind.DirectoryPlaceholder, Object(3)),
+            ("DOCS/y.txt", EntryKind.File, Object(4)));
 
         Assert.AreEqual("Docs/x.txt", catalogue.LookupPath(snapshot, "docs/X.TXT", caseInsensitive: true)?.Path);
         Assert.AreEqual("DOCS/y.txt", catalogue.LookupPath(snapshot, "docs/Y.txt", caseInsensitive: true)?.Path);
@@ -234,10 +242,13 @@ public sealed class CatalogueTests : IDisposable
     {
         using var catalogue = Open();
         var snapshot = Snapshot(0x43);
-        catalogue.RecordTreeEntry(snapshot, "Docs", EntryKind.DirectoryPlaceholder, Object(1));
-        catalogue.RecordTreeEntry(snapshot, "Docs/x.txt", EntryKind.File, Object(2));
-        catalogue.RecordTreeEntry(snapshot, "docs", EntryKind.DirectoryPlaceholder, Object(3));
-        catalogue.RecordTreeEntry(snapshot, "docs/x.txt", EntryKind.File, Object(4));
+        CatalogueTrees.RecordSnapshot(
+            catalogue,
+            snapshot,
+            ("Docs", EntryKind.DirectoryPlaceholder, Object(1)),
+            ("Docs/x.txt", EntryKind.File, Object(2)),
+            ("docs", EntryKind.DirectoryPlaceholder, Object(3)),
+            ("docs/x.txt", EntryKind.File, Object(4)));
 
         Assert.AreEqual("docs/x.txt", catalogue.LookupPath(snapshot, "docs/x.txt", caseInsensitive: true)?.Path);
         Assert.AreEqual("Docs/x.txt", catalogue.LookupPath(snapshot, "Docs/x.txt", caseInsensitive: true)?.Path);
@@ -249,26 +260,34 @@ public sealed class CatalogueTests : IDisposable
     {
         using var catalogue = Open();
         var snapshot = Snapshot(0x44);
-        catalogue.RecordTreeEntry(snapshot, "Cafe\u0301", EntryKind.DirectoryPlaceholder, Object(1));
-        catalogue.RecordTreeEntry(snapshot, "Cafe\u0301/menu.txt", EntryKind.File, Object(2));
+        CatalogueTrees.RecordSnapshot(
+            catalogue,
+            snapshot,
+            ("Cafe\u0301", EntryKind.DirectoryPlaceholder, Object(1)),
+            ("Cafe\u0301/menu.txt", EntryKind.File, Object(2)));
 
         Assert.AreEqual(Object(2), catalogue.LookupPath(snapshot, "CAF\u00c9/MENU.TXT", caseInsensitive: true)?.ObjectId);
     }
 
     [TestMethod]
-    public void RecordTreeEntry_APathWhoseOnlySeparatorLeadsIt_StaysApartFromTheSameNameWithoutOne()
+    public void RecordFolder_ANameThatHoldsASeparator_IsListed_ButIsNoPathsComponent()
     {
-        // A tree entry is keyed by its folder and its name (ADR-0148). A
-        // folder's name may hold a separator, which no codec refuses, and a
-        // path that only begins with one names no folder: it is a name at
-        // the root, and not the same one as the name without it.
+        // A folder's entries are kept by name under its tree (ADR-0151), and a
+        // path is followed a name at a time. A name that holds a separator,
+        // which no codec refuses and no capture makes, is listed as it is
+        // and is never what a path reaches.
         using var catalogue = Open();
         var snapshot = Snapshot(0x45);
-        catalogue.RecordTreeEntry(snapshot, "x", EntryKind.File, Object(1));
-        catalogue.RecordTreeEntry(snapshot, "/x", EntryKind.File, Object(2));
+        var root = Object(0x30);
+        catalogue.RecordFolder(
+            root,
+            [new CatalogueFolderEntry("/x", EntryKind.File, Object(2)), new CatalogueFolderEntry("x", EntryKind.File, Object(1))]);
+        catalogue.RecordSnapshot(
+            snapshot, new byte[16], new byte[16], Object(0x31), root, publicationGeneration: 0,
+            captureStatus: 1, signatureState: 1);
 
         Assert.AreEqual(Object(1), catalogue.LookupPath(snapshot, "x")?.ObjectId);
-        Assert.AreEqual(Object(2), catalogue.LookupPath(snapshot, "/x")?.ObjectId);
+        Assert.IsNull(catalogue.LookupPath(snapshot, "/x"));
         CollectionAssert.AreEqual(
             new[] { "/x", "x" }, catalogue.ListDirectory(snapshot, string.Empty).Select(entry => entry.Path).ToArray());
     }
@@ -281,16 +300,20 @@ public sealed class CatalogueTests : IDisposable
         // order is not the order of folders and then names.
         using var catalogue = Open();
         var snapshot = Snapshot(0x46);
-        catalogue.RecordTreeEntry(snapshot, "a0", EntryKind.File, Object(1));
-        catalogue.RecordTreeEntry(snapshot, "a", EntryKind.DirectoryPlaceholder, Object(2));
-        catalogue.RecordTreeEntry(snapshot, "a/z", EntryKind.File, Object(3));
-        catalogue.RecordTreeEntry(snapshot, "a-b", EntryKind.File, Object(4));
+        CatalogueTrees.RecordSnapshot(
+            catalogue,
+            snapshot,
+            ("a0", EntryKind.File, Object(1)),
+            ("a", EntryKind.DirectoryPlaceholder, Object(2)),
+            ("a/z", EntryKind.File, Object(3)),
+            ("a-b", EntryKind.File, Object(4)));
 
         CollectionAssert.AreEqual(
             new[] { "a-b", "a/z", "a0" }, catalogue.EnumerateLeaves(snapshot).Select(entry => entry.Path).ToArray());
         CollectionAssert.AreEqual(
             new[] { "a", "a-b", "a0" }, catalogue.ListDirectory(snapshot, string.Empty).Select(entry => entry.Path).ToArray());
         Assert.AreEqual(Object(2), catalogue.LookupDirectory(snapshot, "a")?.TreeId);
+        Assert.IsNull(catalogue.LookupDirectory(snapshot, "a0"), "a file is no folder, whatever it names");
         Assert.AreEqual("a/z", Assert.ContainsSingle(catalogue.ListDirectory(snapshot, "a")).Path);
     }
 
@@ -299,13 +322,138 @@ public sealed class CatalogueTests : IDisposable
     {
         using var catalogue = Open();
         var snapshot = Snapshot(0x47);
-        catalogue.RecordTreeEntry(snapshot, "a", EntryKind.DirectoryPlaceholder, Object(1));
-        catalogue.RecordTreeEntry(snapshot, "a/x", EntryKind.DirectoryPlaceholder, Object(2));
-        catalogue.RecordTreeEntry(snapshot, "b", EntryKind.DirectoryPlaceholder, Object(3));
-        catalogue.RecordTreeEntry(snapshot, "b/x", EntryKind.DirectoryPlaceholder, Object(4));
+        CatalogueTrees.RecordSnapshot(
+            catalogue,
+            snapshot,
+            ("a", EntryKind.DirectoryPlaceholder, Object(1)),
+            ("a/x", EntryKind.DirectoryPlaceholder, Object(2)),
+            ("b", EntryKind.DirectoryPlaceholder, Object(3)),
+            ("b/x", EntryKind.DirectoryPlaceholder, Object(4)));
 
         Assert.AreEqual(Object(2), catalogue.LookupDirectory(snapshot, "a/x")?.TreeId);
         Assert.AreEqual(Object(4), catalogue.LookupDirectory(snapshot, "b/x")?.TreeId);
+    }
+
+    [TestMethod]
+    public void TwoSnapshotsHoldingOneFolder_KeepItsEntriesOnce_AndEachFindsThemAtItsPath()
+    {
+        // A folder's entries are kept under its tree (ADR-0151), so a
+        // snapshot that left a folder as it was reaches the rows an earlier
+        // one recorded, and pays nothing for them.
+        using var catalogue = Open();
+        var (first, second) = SnapshotsSharingDocs(catalogue);
+
+        // Each root holds docs and b.txt, and docs holds a.txt, once.
+        Assert.AreEqual(5L, FolderEntries());
+        foreach (var snapshot in new[] { first, second })
+        {
+            Assert.AreEqual(Object(0x11), catalogue.LookupPath(snapshot, "docs/a.txt")?.ObjectId);
+            Assert.AreEqual("docs/a.txt", Assert.ContainsSingle(catalogue.ListDirectory(snapshot, "docs")).Path);
+            Assert.AreEqual(Object(0x10), catalogue.LookupDirectory(snapshot, "docs")?.TreeId);
+            Assert.AreEqual(2L, catalogue.CountFiles(snapshot));
+        }
+
+        Assert.AreEqual(Object(0x12), catalogue.LookupPath(first, "b.txt")?.ObjectId);
+        Assert.AreEqual(Object(0x13), catalogue.LookupPath(second, "b.txt")?.ObjectId);
+        CollectionAssert.AreEqual(
+            new[] { "b.txt", "docs/a.txt" }, catalogue.EnumerateLeaves(second).Select(entry => entry.Path).ToArray());
+    }
+
+    [TestMethod]
+    public void ForgettingASnapshot_KeepsTheFoldersAnotherStillReaches_AndLetsTheRestGo()
+    {
+        using var catalogue = Open();
+        var (first, second) = SnapshotsSharingDocs(catalogue);
+        Assert.IsNotNull(catalogue.LookupPath(first, "docs/a.txt"));
+
+        catalogue.ForgetSnapshot(first);
+
+        // docs is still held, by the second, so only the first's row going
+        // keeps the first from reaching it.
+        Assert.IsNull(catalogue.LookupPath(first, "docs/a.txt"));
+        Assert.AreEqual(Object(0x11), catalogue.LookupPath(second, "docs/a.txt")?.ObjectId);
+        Assert.AreEqual(3L, FolderEntries(), "the first root's entries go, and docs stays with the second");
+
+        catalogue.ForgetSnapshot(second);
+
+        Assert.AreEqual(0L, FolderEntries(), "nothing reaches docs any more");
+    }
+
+    [TestMethod]
+    public void LookupPath_ASnapshotRecordedAgain_IsReadFromItsNewTree()
+    {
+        // A lookup resolves a folder once for the files asked in it in turn,
+        // and that must not outlive the snapshot's row.
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x4B);
+        var (before, after) = (Object(0x30), Object(0x32));
+        CatalogueTrees.Record(
+            catalogue, [("docs", EntryKind.DirectoryPlaceholder, Object(0x10)), ("docs/a.txt", EntryKind.File, Object(0x11))], before);
+        CatalogueTrees.Record(
+            catalogue, [("docs", EntryKind.DirectoryPlaceholder, Object(0x14)), ("docs/b.txt", EntryKind.File, Object(0x15))], after);
+        Record(before);
+        Assert.IsNotNull(catalogue.LookupPath(snapshot, "docs/a.txt"));
+
+        // Only the row changes: both trees are already held.
+        Record(after);
+
+        Assert.IsNull(catalogue.LookupPath(snapshot, "docs/a.txt"));
+        Assert.AreEqual(Object(0x15), catalogue.LookupPath(snapshot, "docs/b.txt")?.ObjectId);
+
+        void Record(ObjectId root) =>
+            catalogue.RecordSnapshot(
+                snapshot, new byte[16], new byte[16], Object(0x31), root, publicationGeneration: 0,
+                captureStatus: 1, signatureState: 1);
+    }
+
+    [TestMethod]
+    public void LookupPath_AFolderRecordedAfterALookupMissedIt_IsFound()
+    {
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x4C);
+        var root = Object(0x30);
+        catalogue.RecordSnapshot(
+            snapshot, new byte[16], new byte[16], Object(0x31), root, publicationGeneration: 0,
+            captureStatus: 1, signatureState: 1);
+        Assert.IsNull(catalogue.LookupPath(snapshot, "docs/a.txt"));
+
+        CatalogueTrees.Record(
+            catalogue, [("docs", EntryKind.DirectoryPlaceholder, Object(0x10)), ("docs/a.txt", EntryKind.File, Object(0x11))], root);
+
+        Assert.AreEqual(Object(0x11), catalogue.LookupPath(snapshot, "docs/a.txt")?.ObjectId);
+    }
+
+    /// <summary>
+    /// Two snapshots whose roots differ by <c>b.txt</c> and which hold one
+    /// <c>docs</c> folder, tree <c>0x10</c>, holding <c>a.txt</c>.
+    /// </summary>
+    private static (byte[] First, byte[] Second) SnapshotsSharingDocs(Catalogue catalogue)
+    {
+        var (first, second) = (Snapshot(0x49), Snapshot(0x4A));
+        CatalogueTrees.RecordSnapshot(
+            catalogue,
+            first,
+            ("docs", EntryKind.DirectoryPlaceholder, Object(0x10)),
+            ("docs/a.txt", EntryKind.File, Object(0x11)),
+            ("b.txt", EntryKind.File, Object(0x12)));
+        CatalogueTrees.RecordSnapshot(
+            catalogue,
+            second,
+            ("docs", EntryKind.DirectoryPlaceholder, Object(0x10)),
+            ("docs/a.txt", EntryKind.File, Object(0x11)),
+            ("b.txt", EntryKind.File, Object(0x13)));
+        return (first, second);
+    }
+
+    /// <summary>How many folder entries the catalogue keeps, read beside the connection under test.</summary>
+    private long FolderEntries()
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = CataloguePath, Pooling = false }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM folder_entries;";
+        return (long)command.ExecuteScalar()!;
     }
 
     [TestMethod]
@@ -349,12 +497,15 @@ public sealed class CatalogueTests : IDisposable
             snapshot, new byte[16], new byte[16], manifest, root, publicationGeneration: 0,
             captureStatus: 1, signatureState: 1);
 
+        var entries = new List<(string, EntryKind, ObjectId)>();
         foreach (var (folder, version, content) in (ReadOnlySpan<(string, byte, byte)>)[("a", 0x51, 0x61), ("b", 0x52, 0x62)])
         {
-            catalogue.RecordTreeEntry(snapshot, folder, EntryKind.DirectoryPlaceholder, Object((byte)(version + 0x10)));
-            catalogue.RecordTreeEntry(snapshot, folder + "/report.txt", EntryKind.File, Object(version));
+            entries.Add((folder, EntryKind.DirectoryPlaceholder, Object((byte)(version + 0x10))));
+            entries.Add((folder + "/report.txt", EntryKind.File, Object(version)));
             catalogue.RecordVersionContents(Object(version), [Object(content)]);
         }
+
+        CatalogueTrees.Record(catalogue, entries, root);
 
         void Publish(ulong sequence, params (ObjectId Object, BlobId Blob)[] placed) =>
             catalogue.ApplyDelta(

@@ -34,9 +34,12 @@ namespace FallbackPlan.Repository.Tests.Catalogue;
 /// <para>
 /// The headline's shape names each version by one path in one snapshot,
 /// which is the set whose every file changes in every snapshot. A set where
-/// fewer change names each version in more snapshots, and
-/// <c>ASnapshotListsEveryFile_SoAFileItLeftUnchangedCostsItATreeEntry</c>
-/// pins what each of those costs.
+/// fewer change names each version in more snapshots. A folder's entries
+/// are kept once, under its tree (ADR-0151), so a snapshot pays for the
+/// folders it changed and nothing for those it left alone:
+/// <c>ASnapshotThatChangesNothing_CostsItsFilesNothing</c> and
+/// <c>ASnapshotPaysForTheFoldersItChanged_EachWhole_AndThoseAboveThem</c>
+/// pin both.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -72,7 +75,7 @@ public sealed class CatalogueSizeTests
 
     [TestMethod]
     [DataRow(CataloguePlanes.FileVersions, 165, 210, DisplayName = "file_versions and its identity index")]
-    [DataRow(CataloguePlanes.TreeEntries, 150, 190, DisplayName = "tree_entries")]
+    [DataRow(CataloguePlanes.TreeEntries, 125, 170, DisplayName = "folder_entries")]
     [DataRow(CataloguePlanes.Locations, 605, 775, DisplayName = "object_locations and ix_locations_blob")]
     public void EachPlaneCostsWhatItsRowsAndIndexesCost(CataloguePlanes plane, int floor, int ceiling)
     {
@@ -90,7 +93,7 @@ public sealed class CatalogueSizeTests
     [TestMethod]
     public void AFileVersionWithNoSegmentsAtAll_CostsAboutTheWholeBudget()
     {
-        // The floor: one file_versions row, the one tree_entries row that
+        // The floor: one file_versions row, the one folder_entries row that
         // makes the version reachable, and the one object_locations row for
         // its own manifest. A version no snapshot names is not restorable
         // and is not one of scale M's ten million, so nothing below this is
@@ -103,7 +106,8 @@ public sealed class CatalogueSizeTests
         // Stated as an assertion rather than left in prose. Until ADR-0148
         // the floor alone was more than the budget, so it was the schema that
         // missed it before any segment existed. It measured 395 B/version at
-        // 20 000 versions, inside the budget, and here, where the trees are
+        // 20 000 versions, inside the budget, and 372 once a folder's entries
+        // were keyed by its tree (ADR-0151), and here, where the trees are
         // less full, within a tenth of it. What a catalogue is over the
         // budget by is its segment references.
         Assert.IsLessThan(
@@ -113,22 +117,36 @@ public sealed class CatalogueSizeTests
     }
 
     [TestMethod]
-    public void ASnapshotListsEveryFile_SoAFileItLeftUnchangedCostsItATreeEntry()
+    public void ASnapshotThatChangesNothing_CostsItsFilesNothing()
     {
-        // Each snapshot lists every file of its set, changed or not, so a
-        // catalogue grows with the snapshots it keeps as well as with its
-        // versions. The headline's shape names each version by one path in
-        // one snapshot, which is a set whose every file changes in every
-        // snapshot. A set where fewer change pays this once per snapshot for
-        // each file it left alone: 132 B measured here, which at a tenth of
-        // the files changing per snapshot is about 2 000 B/version in all.
+        // Each snapshot holds every file of its set, changed or not. Kept by
+        // snapshot, each file a snapshot left alone cost it a tree entry,
+        // 132 B, so a catalogue grew with the snapshots it kept as well as
+        // with its versions. Kept under the folder's tree, a snapshot that
+        // changed nothing reaches the root an earlier one recorded.
         var (one, _) = CatalogueSeeding.MeasureSnapshotBytes(Versions, snapshots: 1, changedPerSnapshot: 0);
         var (two, versions) = CatalogueSeeding.MeasureSnapshotBytes(Versions, snapshots: 2, changedPerSnapshot: 0);
         Assert.AreEqual(Versions, versions, "a snapshot that changes nothing adds no version");
 
         var perFile = (two - one) / (double)Versions;
-        Assert.IsGreaterThan(115, perFile, $"{perFile:F0} B per unchanged file per snapshot");
-        Assert.IsLessThan(150, perFile, $"{perFile:F0} B per unchanged file per snapshot");
+        Assert.IsLessThan(1, perFile, $"{perFile:F2} B per unchanged file per snapshot");
+    }
+
+    [TestMethod]
+    public void ASnapshotPaysForTheFoldersItChanged_EachWhole_AndThoseAboveThem()
+    {
+        // One file changes. The snapshot pays for its version, for its
+        // folder's hundred entries, siblings included, and for each folder
+        // above it: the thirty the projects folder holds and one each in the
+        // three above that and the root. Nothing else.
+        const int changedFolderRows = 100 + 30 + 1 + 1 + 1 + 1;
+        var (one, _) = CatalogueSeeding.MeasureSnapshotBytes(Versions, snapshots: 1, changedPerSnapshot: 0);
+        var (two, versions) = CatalogueSeeding.MeasureSnapshotBytes(Versions, snapshots: 2, changedPerSnapshot: 1);
+        Assert.AreEqual(Versions + 1, versions);
+
+        var cost = two - one;
+        Assert.IsLessThan(changedFolderRows * 150 + 2_000, cost, $"{cost:N0} B for a snapshot that changed one file");
+        Assert.IsGreaterThan(changedFolderRows * 60, cost, $"{cost:N0} B for a snapshot that changed one file");
     }
 
     [TestMethod]
