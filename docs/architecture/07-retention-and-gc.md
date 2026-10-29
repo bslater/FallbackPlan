@@ -139,6 +139,18 @@ guard written for the purpose: compacting one would mean pulling a whole blob
 over a domestic uplink and pushing a new one back to reclaim space on someone
 else's disk ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 
+> **Built 2026-10 ([ADR-0171](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md)).**
+> A destination may refuse a delete its convergence asks for: a store under a
+> write-once or object-lock policy, or a credential without the right to
+> delete. A delete the store refuses, or answers "not found" for an object
+> the pass just listed, is counted and logged, and it does not fail the sync.
+> The rest of that phase runs, and no deeper phase is dropped that pass,
+> because what the refused object kept may reach anything beneath it and the
+> convergence carries no keys to say what. So the replica restores every
+> snapshot it lists, and the hub's notice names the destination, the set and
+> the count until a pass refuses nothing. A store that is busy or unreachable
+> has not answered, and that pass still fails.
+
 ### 3.1 Step 4 is the one that matters
 
 Step 4 is the [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot) fix. Without it, a writer's blobs are durable but referenced by nothing during the window between upload and index publication — potentially hours on an initial backup — and a collector cannot distinguish them from garbage. The result is data loss inside a snapshot that the user is told completed successfully.
