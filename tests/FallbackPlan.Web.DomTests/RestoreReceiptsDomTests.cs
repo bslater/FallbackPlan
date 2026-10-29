@@ -20,7 +20,10 @@ namespace FallbackPlan.Web.DomTests;
 /// (ADR-0140). Where more than one is kept, every one is let go at once once
 /// a person confirms, those the card does not show too, each by its run as
 /// the service names them then; one the service will not let go is named
-/// with its words while the rest go (ADR-0163).
+/// with its words while the rest go (ADR-0163). Given days, only the
+/// receipts of runs that ended longer ago than that go; how many ended within
+/// stay is said, and one that does not say when its run ended stays and is
+/// named (ADR-0169).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -253,6 +256,42 @@ public sealed class RestoreReceiptsDomTests
     }
 
     [TestMethod]
+    public async Task OnlyTheReceiptsWhoseRunEndedLongerAgo_AreLetGo_TheRestStay_AndOneThatSaysNotWhenIsNamed()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var kept = new KeptReceipts("0123456789abcdef", "fedcba9876543210", "00112233445566ff")
+            .Ended("fedcba9876543210", now - 3_600_000)
+            .Ended("00112233445566ff", null);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListDestinationsCommand => new DestinationsResult([]),
+            ListRestoreReceiptsCommand listed => kept.Listed(listed.Limit is null ? null : 2),
+            ForgetRestoreReceiptCommand forget => kept.LetGo(forget.Run),
+            _ => new AcknowledgedResult(),
+        };
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#maintenance");
+
+        await page.ClickAsync("[data-action=\"forget-all-receipts\"]");
+        await page.FillAsync("#forget-all-receipts-days", "30");
+        await page.ClickAsync("#forget-all-receipts-go");
+
+        var dialog = page.Locator("#dialog");
+        await Expect(dialog).ToContainTextAsync("Let go 1. 1 whose run ended within 30 days stays.");
+        await Expect(dialog).ToContainTextAsync("00112233445566ff — does not say when its run ended, so it stays");
+        CollectionAssert.AreEqual(
+            new[] { "0123456789abcdef" },
+            harness.Clients.Client.Received.OfType<ForgetRestoreReceiptCommand>().Select(forget => forget.Run).ToList());
+        var card = page.Locator("#restore-receipts-card");
+        await Expect(card).ToContainTextAsync("fedcba9876543210");
+        await Expect(card).Not.ToContainTextAsync("0123456789abcdef");
+    }
+
+    [TestMethod]
     public async Task AReceiptKeptAlone_OffersOnlyItsOwnLetGo()
     {
         await using var harness = await DomHarness.StartAsync();
@@ -321,6 +360,14 @@ public sealed class RestoreReceiptsDomTests
     {
         private readonly Lock _gate = new();
         private readonly HashSet<string> _letGo = [];
+        private readonly Dictionary<string, ulong?> _ended = [];
+
+        /// <summary>Says when <paramref name="run"/> ended, or that its receipt does not say.</summary>
+        public KeptReceipts Ended(string run, ulong? at)
+        {
+            _ended[run] = at;
+            return this;
+        }
 
         public RestoreReceiptsResult Listed(int? limit)
         {
@@ -342,8 +389,8 @@ public sealed class RestoreReceiptsDomTests
             return new AcknowledgedResult();
         }
 
-        private static RestoreReceiptDescriptor Receipt(string run) =>
-            new(run, "complete", 1_700_000_000_000, new string('e', 32), "/srv/restored",
+        private RestoreReceiptDescriptor Receipt(string run) =>
+            new(run, "complete", _ended.TryGetValue(run, out var at) ? at : 1_700_000_000_000, new string('e', 32), "/srv/restored",
                 Restored: 3, FoundInPlace: 0, Skipped: 0, Failed: 0, Degraded: 0);
     }
 }
