@@ -212,22 +212,22 @@ public sealed class Catalogue : IDisposable
     /// <summary>
     /// Opens (or creates) the catalogue at <paramref name="path"/> for
     /// <paramref name="repositoryId"/>. Any mismatch — schema version or
-    /// repository identity — deletes and recreates: it is a cache
-    /// (FR-MAN-002).
+    /// repository identity — or a file SQLite cannot read deletes and
+    /// recreates: it is a cache (FR-MAN-002).
     /// </summary>
     public static Catalogue Open(string path, RepositoryId repositoryId, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(path);
 
-        var connection = Connect(path);
+        var connection = ConnectUnlessUnreadable(path);
         var disposition = "reused";
 
-        if (!IsCompatible(connection, repositoryId))
+        if (connection is null || !IsCompatible(connection, repositoryId))
         {
-            connection.Dispose();
+            connection?.Dispose();
             File.Delete(path);
             connection = Connect(path);
-            disposition = "discarded and recreated — schema version or repository identity did not match";
+            disposition = "discarded and recreated — unreadable, or schema version or repository identity did not match";
         }
 
         if (!HasSchema(connection))
@@ -1937,21 +1937,60 @@ public sealed class Catalogue : IDisposable
             Mode = SqliteOpenMode.ReadWriteCreate,
             Pooling = false,
         }.ToString());
-        connection.Open();
 
-        // WAL keeps every commit atomic and the file consistent through a
-        // crash or a power loss; synchronous = NORMAL stops each commit
-        // flushing the log to disk, so a power loss can take the newest
-        // commits. That is the protection a cache gets (ADR-0010 Amendment 2):
-        // it leaves the catalogue behind the store, which costs a rewrite,
-        // never a restore. The default, FULL, flushes once for every row a
-        // publication records, and a flush on Windows costs milliseconds.
-        using var pragmas = connection.CreateCommand();
-        pragmas.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;";
-        pragmas.ExecuteNonQuery();
+        try
+        {
+            connection.Open();
 
-        return connection;
+            // WAL keeps every commit atomic and the file consistent through a
+            // crash or a power loss; synchronous = NORMAL stops each commit
+            // flushing the log to disk, so a power loss can take the newest
+            // commits. That is the protection a cache gets (ADR-0010 Amendment 2):
+            // it leaves the catalogue behind the store, which costs a rewrite,
+            // never a restore. The default, FULL, flushes once for every row a
+            // publication records, and a flush on Windows costs milliseconds.
+            using var pragmas = connection.CreateCommand();
+            pragmas.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;";
+            pragmas.ExecuteNonQuery();
+
+            return connection;
+        }
+        catch
+        {
+            // Released before anyone deletes the file, which Windows refuses
+            // while a handle on it is open.
+            connection.Dispose();
+            throw;
+        }
     }
+
+    /// <summary>
+    /// Connects to the file at <paramref name="path"/>, or answers
+    /// <see langword="null"/> when SQLite cannot read it as a database at all.
+    /// </summary>
+    private static SqliteConnection? ConnectUnlessUnreadable(string path)
+    {
+        try
+        {
+            return Connect(path);
+        }
+        catch (SqliteException exception) when (IsUnreadable(exception))
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether a connection failed on the file's contents rather than on
+    /// access to it (ADR-0010 Amendment 6). Only the contents make the file
+    /// the cache's to throw away: one busy or locked is held by another
+    /// connection, and one that cannot be written is the operator's to fix,
+    /// and deleting either would pull it from under whoever holds it. What a
+    /// connection that was made then reads wrongly is
+    /// <see cref="IsCompatible"/>'s to judge.
+    /// </summary>
+    internal static bool IsUnreadable(SqliteException exception) =>
+        exception.SqliteErrorCode is SQLitePCL.raw.SQLITE_NOTADB or SQLitePCL.raw.SQLITE_CORRUPT;
 
     private static bool HasSchema(SqliteConnection connection)
     {

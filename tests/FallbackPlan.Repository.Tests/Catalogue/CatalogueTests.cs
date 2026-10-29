@@ -19,7 +19,9 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// ADR-0010 Amendment 2 gives a cache. And that a catalogue it creates —
 /// new, or in place of one another schema wrote — says it needs rebuilding
 /// until a rebuild says otherwise (FR-MAN-002): a cache discarded is safe
-/// only while something fills it again. A location names its blob and its
+/// only while something fills it again. A file SQLite cannot read as a
+/// database, or whose schema page is damaged, is discarded the same way,
+/// rather than refusing every open until a person deletes it. A location names its blob and its
 /// writer by numbers of the catalogue's own, and still ranks by the writer's
 /// id (NFR-PERF-011, ADR-0144). A tree entry is keyed by its folder and its
 /// name, and its path, a folder's listing and a snapshot's path order are as
@@ -79,6 +81,21 @@ public sealed class CatalogueTests : IDisposable
         var bytes = new byte[16];
         Array.Fill(bytes, seed);
         return DeltaId.FromBytes(bytes);
+    }
+
+    /// <summary>A catalogue in place of a discarded file is one that works, not merely one that opened.</summary>
+    private static void AssertItRecordsAndResolves(Catalogue catalogue)
+    {
+        catalogue.ApplyDelta(Delta(2), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            Entries = [new IndexEntry(Object(2), Blob(2), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        Assert.AreEqual(1, catalogue.AppliedDeltaCount());
+        Assert.AreEqual<BlobId?>(Blob(2), catalogue.ResolveLocation(Object(2))?.BlobId);
     }
 
     [TestMethod]
@@ -951,6 +968,70 @@ public sealed class CatalogueTests : IDisposable
         // be told rather than left to take for a repository with no history.
         Assert.AreEqual(0, reopened.AppliedDeltaCount());
         Assert.IsTrue(reopened.NeedsRebuild);
+    }
+
+    [TestMethod]
+    public void Open_AFileThatIsNotADatabase_IsRecreated_AndNeedsRebuilding()
+    {
+        Directory.CreateDirectory(_root);
+        File.WriteAllBytes(CataloguePath, [.. Enumerable.Repeat("not a catalogue "u8.ToArray(), 512).SelectMany(bytes => bytes)]);
+
+        using var catalogue = Open();
+
+        Assert.AreEqual(0, catalogue.AppliedDeltaCount());
+        Assert.IsTrue(catalogue.NeedsRebuild);
+        AssertItRecordsAndResolves(catalogue);
+    }
+
+    [TestMethod]
+    public void Open_ACatalogueWhoseSchemaPageIsDamaged_IsRecreated_AndNeedsRebuilding()
+    {
+        using (var catalogue = Open())
+        {
+            catalogue.ApplyDelta(Delta(1), new IndexDelta
+            {
+                WriterId = Writer(1),
+                Sequence = 1,
+                Generation = 0,
+                Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+            });
+            catalogue.MarkRebuilt();
+        }
+
+        // Closing the last connection folds the log into the file and removes
+        // it, so the damage below is all there is to read.
+        Assert.IsFalse(File.Exists(CataloguePath + "-wal"));
+
+        // The file header stays a database's; the first page's own header,
+        // and the schema table it roots, are lost.
+        using (var file = new FileStream(CataloguePath, FileMode.Open, FileAccess.Write))
+        {
+            file.Position = 100;
+            file.Write([.. Enumerable.Repeat((byte)0xFF, 3996)]);
+        }
+
+        using var reopened = Open();
+
+        Assert.AreEqual(0, reopened.AppliedDeltaCount());
+        Assert.IsTrue(reopened.NeedsRebuild);
+        AssertItRecordsAndResolves(reopened);
+    }
+
+    [TestMethod]
+    [DataRow(SQLitePCL.raw.SQLITE_NOTADB, true, DisplayName = "not a database")]
+    [DataRow(SQLitePCL.raw.SQLITE_CORRUPT, true, DisplayName = "malformed")]
+    [DataRow(SQLitePCL.raw.SQLITE_BUSY, false, DisplayName = "busy")]
+    [DataRow(SQLitePCL.raw.SQLITE_LOCKED, false, DisplayName = "locked")]
+    [DataRow(SQLitePCL.raw.SQLITE_READONLY, false, DisplayName = "read-only")]
+    [DataRow(SQLitePCL.raw.SQLITE_IOERR, false, DisplayName = "an I/O error")]
+    [DataRow(SQLitePCL.raw.SQLITE_CANTOPEN, false, DisplayName = "cannot open")]
+    [DataRow(SQLitePCL.raw.SQLITE_PERM, false, DisplayName = "no permission")]
+    public void IsUnreadable_OnlyAFailureOnTheFilesContents_MakesItTheCachesToDiscard(int code, bool discards)
+    {
+        // A file busy or locked is held by another connection, and one that
+        // cannot be opened or written is the operator's: deleting either
+        // would pull it from under whoever holds it.
+        Assert.AreEqual(discards, Catalogue.IsUnreadable(new Microsoft.Data.Sqlite.SqliteException("refused", code)));
     }
 
     [TestMethod]

@@ -5,7 +5,8 @@ namespace FallbackPlan.Cli.Tests;
 /// surface a user actually touches, which until now was verified only by
 /// hand because every command lived in <c>Main</c> and nothing could call
 /// it. Each test asserts the exit code and the observable effect, not the
-/// exact prose of a message.
+/// exact prose of a message. A rebuild of the catalogue over a store that
+/// holds no repository refuses, and leaves no catalogue behind (FR-MAN-002).
 /// </summary>
 [TestClass]
 public sealed class CommandTests : IDisposable
@@ -222,6 +223,24 @@ public sealed class CommandTests : IDisposable
         var snapshots = await _cli.RunAsync("snapshots");
         Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
         Assert.IsFalse(string.IsNullOrWhiteSpace(snapshots.Output), "the rebuilt catalogue lists no snapshots");
+    }
+
+    [TestMethod]
+    public async Task RebuildIndex_TheStoreIsEmpty_SaysItHoldsNoRepositoryAndLeavesNoCatalogue()
+    {
+        // Nothing to rebuild from: the command says why and leaves no
+        // catalogue behind that a later command could take for one.
+        Directory.CreateDirectory(_cli.RepositoryPath);
+
+        var rebuild = await _cli.RunAsync("rebuild-index");
+
+        Assert.AreNotEqual(0, rebuild.ExitCode, rebuild.All);
+        Assert.Contains("does not hold a FallbackPlan repository", rebuild.All, StringComparison.Ordinal);
+        Assert.IsEmpty(
+            Directory.Exists(_cli.StatePath)
+                ? Directory.EnumerateFiles(_cli.StatePath, "*.db*", SearchOption.AllDirectories)
+                : [],
+            rebuild.All);
     }
 
     [TestMethod]
