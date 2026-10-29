@@ -30,7 +30,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// configuration, in a real backup's own records, in an unreadable-folder
 /// record whose platform message repeats the path, and in a notice. Every
 /// entry is then read back whole, a JSON entry as the strings it decodes to as
-/// well as its text.
+/// well as its text. A message the code formats from a resource, with a path
+/// in its hole, is withheld like one the platform wrote: a backup of a root
+/// that has gone keeps the root out of its job's detail, and the source's own
+/// refusal keeps it out of the log (NFR-PRIV-003).
 /// </para>
 /// <para>
 /// The scratch directory's random name is in every path the harness makes, so
@@ -72,6 +75,12 @@ public sealed class DiagnosticBundleTests : IDisposable
     private string SourceFolder => Path.Combine(_harness.SourceRoot, TellingFolder);
 
     private string DeniedMessage => $"Access to the path '{SourceFolder}' is denied.";
+
+    /// <summary>What a backup says of a root that has gone, the root interpolated.</summary>
+    private string MissingRootMessage => $"root '{SourceFolder}' does not exist";
+
+    /// <summary>The source's resource for a root it cannot scan, its hole filled with the root.</summary>
+    private string ScannableMessage => $"'{SourceFolder}' is not a scannable directory.";
 
     private static ServiceCommandHandler Handler(ServiceRuntime runtime, CallerScope scope) =>
         new(runtime, RemoteBindingState.Off, scope);
@@ -247,6 +256,54 @@ public sealed class DiagnosticBundleTests : IDisposable
         using var manifest = JsonDocument.Parse(entries["manifest.json"]);
         Assert.IsFalse(manifest.RootElement.GetProperty("includes_paths").GetBoolean());
         Assert.AreEqual(bundle.LogRecords, manifest.RootElement.GetProperty("log_records").GetInt32());
+    }
+
+    [TestMethod]
+    public async Task Telemetry_AnExceptionMessageFormattedFromAResource_RedactsTheUserPathsItInterpolated()
+    {
+        // Messages are resources whose holes the code fills (ADR-0031), and
+        // many are filled with paths. Two real ones, not planted text: a set
+        // whose root has gone fails, saying which root, and the source asked
+        // to scan that root refuses it in its own resource's words.
+        await using var runtime = await StartAsync();
+        Directory.Delete(SourceFolder, recursive: true);
+
+        var refused = await Assert.ThrowsExactlyAsync<DirectoryNotFoundException>(async () =>
+        {
+            await foreach (var _ in new Filesystem.Local.LocalFileSystemSource().ScanAsync(
+                SourceFolder, new Filesystem.ScanOptions(), _timeout.Token))
+            {
+            }
+        });
+        Assert.AreEqual(ScannableMessage, refused.Message);
+#pragma warning disable CA1848, CA1873 // A component's record of a refusal; the bundle is what is under test.
+        _logging!.Factory.CreateLogger("FallbackPlan.Test").LogWarning(new EventId(4244), refused, "the source refused a root");
+#pragma warning restore CA1848, CA1873
+
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await Handler(runtime, CallerScope.Local)
+                .ExecuteAsync(new RunBackupCommand("docs", Full: false), _timeout.Token),
+            out _);
+        while (runtime.Jobs.Jobs.Any(job => job.State is not (
+            Domain.Jobs.JobState.Complete
+            or Domain.Jobs.JobState.CompletedWithFailures
+            or Domain.Jobs.JobState.Cancelled
+            or Domain.Jobs.JobState.FailedRecoverable
+            or Domain.Jobs.JobState.FailedPermanent)))
+        {
+            await Task.Delay(10, _timeout.Token);
+        }
+
+        // The positive control: asked for paths, both are there, path and all.
+        var withPaths = Open(await ExportAsync(runtime, includePaths: true));
+        Assert.Contains(MissingRootMessage, BundleInspection.Readable(withPaths, "jobs.json"), StringComparison.Ordinal);
+        Assert.Contains(ScannableMessage, withPaths["log.txt"], StringComparison.Ordinal);
+
+        // By default, neither the folder's name nor any path crosses.
+        var bundle = await ExportAsync(runtime, includePaths: false);
+        var entries = Open(bundle);
+        AssertNowhere("telling folder name", TellingFolder, bundle, entries);
+        AssertNowhere("scratch directory (so a path)", Canary, bundle, entries);
     }
 
     [TestMethod]

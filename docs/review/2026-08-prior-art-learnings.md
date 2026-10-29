@@ -351,6 +351,11 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 
 **Test to add:** `Telemetry_AnExceptionMessageFormattedFromAResource_RedactsTheUserPathsItInterpolated`.
 
+> **Resolved (2026-10).** It exists verbatim-named and passes in `Hosts.Tests/DiagnosticBundleTests`. Redaction there is by type, not by pattern, so it cannot be outwritten by a resource's wording. An exception's message, whatever made it, is withheld and only its type crosses. So is any untyped text, such as a job's detail.
+> - **Two real messages, not planted text.** A backup of a set whose root has gone fails with the root interpolated in its job's detail. The local source, asked to scan that root, refuses it in its resource's words (`'…' is not a scannable directory.`), and that exception is logged.
+> - **What crosses.** A default bundle carries neither the folder's name nor any path. One asked for paths carries both messages whole.
+> - **Mutations.** A job's detail written raw is killed by this test alone. No test had guarded it, because every job in the other bundle tests succeeded. An exception's message let through redaction is killed by this test and by the existing ones.
+
 ---
 
 ### T-14 — The local database's own schema version
@@ -399,6 +404,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 > **2026-10.** T-14 is resolved and T-3 partly; T-3's note says what stays open.
 >
 > **2026-10.** T-7 is resolved, by the refactor it named first.
+>
+> **2026-10.** T-13 is resolved; its test found the redaction of a job's detail unguarded, not broken.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 
