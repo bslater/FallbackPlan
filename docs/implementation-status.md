@@ -186,6 +186,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0159](adr/0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md) | A restore into a folder that is itself a link restores what lies below it: the rule every way of restoring holds a path to follows the root and each folder below it through their links, refusing a path at the first folder that leads out | **Built** | `Domain/RestorePaths` · `Domain.Tests/RestorePathsTests` · `Cli.Tests/RestoreShapeCommandTests` · `Repository.Tests/EndToEnd/RecoveryContainmentTests` · [notes](#0159--a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it) |
 | [0160](adr/0160-a-restore-in-direct-mode-judges-where-it-lands-through-links.md) | A restore in direct mode judges where it lands through links: a run whose destination holds or lies inside one under way, as written or once each is followed through its links, is refused | **Built** | `Cli/DirectRestoreParts` · `Domain/RestorePaths` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0160--a-restore-in-direct-mode-judges-where-it-lands-through-links) |
 | [0161](adr/0161-every-kept-restore-receipt-is-let-go-at-once.md) | Every kept restore receipt is let go at once: `restore-receipts --forget-all` lets every run's receipt go from the state directory, and nothing else kept there, or asks a paired service to let each it lists go by its run's name | **Built** | `Restore/RestoreExecutor` · `Cli/RestoreReceiptReport` · `Cli/CliApplication` · `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0161--every-kept-restore-receipt-is-let-go-at-once) |
+| [0162](adr/0162-every-restore-run-the-service-left-unfinished-is-let-go-at-once.md) | Every restore run the service left unfinished is let go at once: `restore-resume --forget-all` lists them and lets each go by its name, naming one the service will not let go while the rest go | **Built** | `Cli/OperationGateway` · `Cli/CliApplication` · `Cli.Tests/RestoreResumeVerbTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · [notes](#0162--every-restore-run-the-service-left-unfinished-is-let-go-at-once) |
 
 ---
 
@@ -4274,7 +4275,8 @@ now judge and remove under the claim a run takes its folder under
 afresh. No contract change.
 
 What remains is recorded rather than done. Folders are not let go by
-age, and the service's parts go one run at a time, by its name.
+age, and the service's parts go one run at a time, by its name. The service's
+runs have since gone at once ([0162](#0162--every-restore-run-the-service-left-unfinished-is-let-go-at-once)).
 
 ### 0159 — a restore into a folder that is itself a link restores what lies below it
 
@@ -4320,4 +4322,19 @@ the rest go, and a run named beside it is refused before anything is
 asked.
 
 What remains is recorded rather than done. Receipts are not let go by age,
+and the console still lets one go at a time.
+
+### 0162 — every restore run the service left unfinished is let go at once
+
+A run the service left unfinished, and the parts of the files it was cut
+short in, were let go one at a time with `restore-resume <run> --forget`.
+`restore-resume --forget-all` now asks the service for every run it left
+unfinished and lets each go by its name, so the contract is unchanged and
+no passphrase is asked. Each is said in the single let-go's words and how
+many in all; one the service will not let go, say one under way again, is
+named with its words while the rest go, and the command fails after.
+Beside a run, `--forget` or `--plan` it is refused, and in direct mode it
+is refused as every verb naming a run is.
+
+What remains is recorded rather than done. Runs are not let go by age,
 and the console still lets one go at a time.
