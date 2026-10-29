@@ -18,7 +18,7 @@
 
 [ADR-0166](0166-a-format-3-data-record-is-read-without-its-blobs-envelope.md) reads a format-3 data record by its location with no envelope read, so a sparse restore costs one read for each data blob it touches. It left metadata blobs out. A format-3 metadata record carries its own nonce, as a data record does. Its key is expanded from the metadata class key by the record's type and object id, and the class key is derived at the blob's key generation. Of everything the envelope says, that generation is the one thing the record does not already give the reader. So a sparse read of a metadata blob still cost two reads: the envelope, for the generation, and then the record. A restore reads a file's version manifest and the trees above it out of metadata blobs before it reads any of its content.
 
-The catalogue already holds the generation. Every blob a backup seals is recorded with its class and its key generation, and so is every blob a forensic rebuild reads a footer of. A row the catalogue makes for a blob it has only seen named in a delta is a placeholder: class 0, generation 0, written by nobody who knew.
+The catalogue already holds the generation. Every blob a backup seals is recorded with its class and its key generation, and so is every blob a forensic rebuild reads a footer of. Only a backup writes metadata blobs: compaction rewrites data blobs alone and refuses a metadata one ([ADR-0067](0067-the-keyless-compactor.md)). So in the catalogue a backup keeps, every metadata blob has its generation recorded. A row the catalogue makes for a blob it has only seen named in a delta is a placeholder: class 0, generation 0, written by nobody who knew.
 
 ## Decision
 
@@ -51,13 +51,12 @@ The metadata class key is held by a write-only holder as well as by a reader wit
 ## What this does not do
 
 - **A catalogue rebuilt from the index plane.** A normal rebuild applies deltas ([ADR-0008](0008-index-generations-and-checkpoints.md)), and a delta names blobs without their key generations, so every metadata blob it knows of is a placeholder row. Its reads frame each metadata blob from its envelope, as before.
-- **A blob compaction wrote.** Compaction publishes the blobs it writes through deltas alone, so the catalogue knows them by placeholder rows too, and a read of one frames it from its envelope.
 - **Other copies.** A record read from another copy of the repository (FR-RST-007) frames its blob from that copy's envelope, as before.
 - **Format-2 blobs.** They still cost two reads for their first record.
 
 ## Alternatives considered
 
-- **Carry each blob's key generation in the index delta.** Rejected. It is a format change to save a read that only a rebuilt catalogue or a compacted blob still pays, and the forensic rebuild already records the generation from each blob's own footer.
+- **Carry each blob's key generation in the index delta.** Rejected. It is a format change to save a read that only a rebuilt catalogue still pays, and the forensic rebuild already records the generation from each blob's own footer.
 - **Try every generation the key set can derive.** Rejected. A blob is written at one generation, and the catalogue that located its record has, in the ordinary case, recorded which. Trying others would make a wrong guess cost a decryption for each generation ever used, to save a read the envelope gives at once.
 - **Take the newest generation as every blob's.** Rejected. Blobs written before a key rotation keep the generation they were written at, so each of them would pay a failed decryption and then the envelope.
 

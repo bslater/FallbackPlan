@@ -4437,6 +4437,6 @@ tag, and is framed from its envelope from the bytes already in hand, at the
 two reads it cost before and with no fall back to the footer.
 
 What remains is recorded rather than done. A catalogue rebuilt from the index
-plane knows each metadata blob by a placeholder row, and so does every catalogue
-for a blob compaction wrote, so those are still framed from their envelopes;
-another copy's blob still is; and format-2 blobs cost what they did.
+plane knows each metadata blob by a placeholder row, so its reads still frame
+each from its envelope; another copy's blob still is; and format-2 blobs cost
+what they did. Compaction is not among them: it writes only data blobs.
