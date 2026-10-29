@@ -176,6 +176,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0149](adr/0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md) | The single-file restore writes back a file's metadata by the executor's rule: the writer, its rules, the account a restore runs as and the captured map move into Domain, the executor writes through it, and `restore-file` writes a file's metadata back once its content has verified and names what did not land | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Restore/RestoreExecutor` · `Cli/CliApplication` · `Cli.Tests/InspectionCommandTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0149--the-single-file-restore-writes-back-a-files-metadata) |
 | [0150](adr/0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) | The recovery tool gives what it restores its metadata back by the executor's rule: each file once it has landed and each folder it made last, deepest first and never through a link, through the shared writer; a folder already in the output and the output itself keep their own, and what did not land is counted by attribute on the terminal and in the bundle | **Built** | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Recovery/RecoveryBundle` · `Domain/MetadataWriter` · `Repository.Tests/RecoveryMetadataTests` · `Hosts.Tests/RecoveryHostTests` · `Hosts.Tests/RecoveryBundleTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0150--the-recovery-tool-writes-back-metadata) |
 | [0151](adr/0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md) | The catalogue keeps a folder's entries once, under its tree: schema 17 keys an entry by the folder's head tree and its name, a path is followed from the snapshot's root, a snapshot's folders are recorded together after its row, and forgetting snapshots lets go of what none of the rest reaches, so a set where a tenth of the files change per snapshot costs 930 B/version, not 2 005 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · `TestSupport/CatalogueTrees` · [notes](#0151--the-catalogue-keeps-a-folders-entries-once) |
+| [0152](adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) | The recovery tool keeps every path inside its output by the executor's rule: the rule moves into Domain unchanged, the executor and the tool resolve every path through it, so a link the output holds is written through by nothing, and a file's spool is made new rather than opened | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Repository.Tests/EndToEnd/RecoveryContainmentTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0152--the-recovery-tool-keeps-every-path-inside-its-output) |
 
 ---
 
@@ -4097,6 +4098,8 @@ say which entries missed an attribute, and it still makes no link. It
 checks that each tree name is a plain component, but not, as the executor
 does, that a path stays inside the output through links, so a file lands
 through a link planted in the output, and its metadata goes with it.
+It has since placed every path by the executor's rule
+([0152](#0152--the-recovery-tool-keeps-every-path-inside-its-output)).
 
 ### 0151 — the catalogue keeps a folder's entries once
 
@@ -4119,3 +4122,23 @@ What remains is recorded rather than done. A changed folder restates
 every entry, and so does each folder above it. What a snapshot is made of
 still names every tree of every snapshot, folder access times are never
 let go of, and a projection still reads every tree.
+
+### 0152 — the recovery tool keeps every path inside its output
+
+The executor refused a path that was not plain names, that resolved
+outside its root, or that passed through a folder that is a link leading
+out of it. The recovery tool held each tree name to a copy of the first
+check alone, so a link already in the output carried every file under it
+to wherever it pointed. The rule now lives in Domain, unchanged, and the
+executor and the tool resolve every path through it; the tool holds a name
+to the plain-name rule on its own first, since one holding a separator
+reads as two once joined. A refused path is noted and failed with what it
+would have carried. The tool also spooled each file under a name beside
+its destination and opened that name for writing, which followed a link
+standing there. It now removes whatever stands at the spool's name and
+makes the spool new. A canary holds both to the shared rule.
+
+What remains is recorded rather than done. The path is checked before it
+is written and not in one step with it, so an account that can write in
+the output while the tool runs can still swap a folder for a link between
+the two.

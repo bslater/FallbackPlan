@@ -982,6 +982,30 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// Where a restore writes a repository path is one rule: a sequence of
+    /// plain names that stays under the folder restored into, through no link
+    /// leaving it (ADR-0152). The executor and the recovery tool both write
+    /// names a repository supplies, and this canary fails if either resolves
+    /// them through a copy of the rule.
+    /// </summary>
+    [TestMethod]
+    public void TheExecutorAndTheRecoveryTool_ResolveRestorePathsThroughTheSharedRule()
+    {
+        foreach (var assembly in new[] { Restore, Recovery })
+        {
+            var resolving = Types.InAssembly(assembly)
+                .That()
+                .HaveDependencyOn("FallbackPlan.Domain.RestorePaths")
+                .GetTypes()
+                .ToList();
+
+            Assert.IsNotEmpty(
+                resolving,
+                $"{assembly.GetName().Name} must resolve restore paths through Domain's RestorePaths, not a copy of it.");
+        }
+    }
+
+    /// <summary>
     /// The recovery tool gives what it restores its metadata back by the
     /// same rule (ADR-0150). Its closure stops short of the executor, so it
     /// reaches the rule in Domain; this canary fails if it ever writes

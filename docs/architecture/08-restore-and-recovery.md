@@ -198,6 +198,8 @@ A standalone recovery executable, independent of the Agent and UI, that can:
 
 > **2026-10 ([ADR-0150](../adr/0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** What the tool restores is given back the metadata captured with it, by the rule §3 holds the executor to and through the same writer: a file's once it has landed, and a folder's once nothing more will land in it, deepest first and never through a link. A folder already in the output, and the output itself, keep their own. The tool counts, by attribute, what did not land.
 
+> **2026-10 ([ADR-0152](../adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md)).** The tool keeps every path inside its output by the rule §3 holds the executor to: plain names, under the output, and through no link leading out of it. A file's spool is made new, never opened through a link.
+
 Source and reproducible release artifacts are published for every major format version, and remain downloadable and buildable for as long as that format version is supported. A recovery tool that cannot be obtained when needed is not a recovery tool.
 
 ## 6. What must survive a clean machine
