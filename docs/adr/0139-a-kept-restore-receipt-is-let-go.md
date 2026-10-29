@@ -49,6 +49,8 @@ Each record left the same thing undone: every receipt kept stays until a person 
 
   > **2026-10 ([ADR-0161](0161-every-kept-restore-receipt-is-let-go-at-once.md)).** `restore-receipts --forget-all` lets every run's receipt go at once, from the state directory or through a paired service. None goes by age.
 
+  > **2026-10 ([ADR-0164](0164-kept-restore-receipts-are-let-go-by-age.md)).** With `--older-than-days` beside it, only the receipts of runs that ended longer ago go, when a person asks. None expires on its own, as decided below.
+
 ## Alternatives considered
 
 - **Let the service let its receipts go through the contract now.** Rejected for this record. The folder is the receipts' home, as every reader of them has it, so the command line that reads it lets a receipt go there first. Through the service it would ask a command of its own, and the console a way to confirm one, which are a record of their own.
@@ -61,3 +63,4 @@ Each record left the same thing undone: every receipt kept stays until a person 
 | 2026-10 | Accepted | Built in one slice, tests first. restore-receipts with --run and --forget lets one run's kept receipt go from the state directory, and says so; every other receipt stays. A run that kept none, a name that is not a run's, --forget without a run, and --forget through a paired service are refused, and nothing is removed. No contract change. |
 | 2026-10 | Accepted | [ADR-0140](0140-the-service-lets-a-kept-restore-receipt-go.md): a receipt the service keeps is let go through the service, at contract 1.79, from the command line and the console; --forget with --connect asks it. |
 | 2026-10 | Accepted | Noted by [ADR-0161](0161-every-kept-restore-receipt-is-let-go-at-once.md): every run's receipt is let go at once with --forget-all, which this record left one at a time. |
+| 2026-10 | Accepted | Noted by [ADR-0164](0164-kept-restore-receipts-are-let-go-by-age.md): receipts are let go by age when a person asks, and none expires on its own. |
