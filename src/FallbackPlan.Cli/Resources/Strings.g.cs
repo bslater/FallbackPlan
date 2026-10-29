@@ -495,6 +495,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, DirectGateway_DestinationHeld, arg0, arg1);
 
     /// <summary>
+    /// Another restore in direct mode is under way into '{0}', which holds or lies inside '{1}', where this one lands. Run this again once that one ends.
+    /// </summary>
+    private static string DirectGateway_DestinationOverlaps => Get(nameof(DirectGateway_DestinationOverlaps));
+
+    /// <summary>
+    /// Another restore in direct mode is under way into '{0}', which holds or lies inside '{1}', where this one lands. Run this again once that one ends.
+    /// </summary>
+    internal static string FormatDirectGateway_DestinationOverlaps(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, DirectGateway_DestinationOverlaps, arg0, arg1);
+
+    /// <summary>
     /// A restore in direct mode is under way to the destination whose parts are named '{0}', so they are not let go. Let them go once it ends, if it does not finish.
     /// </summary>
     private static string DirectRestorePartsReport_RunUnderWay => Get(nameof(DirectRestorePartsReport_RunUnderWay));
