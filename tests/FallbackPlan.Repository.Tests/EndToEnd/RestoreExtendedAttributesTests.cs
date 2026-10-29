@@ -375,18 +375,18 @@ public sealed class RestoreExtendedAttributesTests : ArchiveTestHarness
     [TestMethod]
     public void AnAcl_NamesAccountsByNumber_OnlyWhenAnEntryIsAnAccountOrGroup_OrItWillNotParse()
     {
-        Assert.IsTrue(RestoreMetadata.NamesAccountsByNumber(Attribute("system.posix_acl_access", NumberedAcl)));
-        Assert.IsTrue(RestoreMetadata.NamesAccountsByNumber(Attribute(
+        Assert.IsTrue(MetadataRules.NamesAccountsByNumber(Attribute("system.posix_acl_access", NumberedAcl)));
+        Assert.IsTrue(MetadataRules.NamesAccountsByNumber(Attribute(
             "system.posix_acl_default",
             Xattr.Acl((Xattr.AclUserObject, 7, Xattr.AclUndefinedId), (Xattr.AclGroup, 5, Unclaimed), (Xattr.AclOther, 0, Xattr.AclUndefinedId)))));
-        Assert.IsFalse(RestoreMetadata.NamesAccountsByNumber(Attribute("system.posix_acl_access", AnonymousAcl)));
+        Assert.IsFalse(MetadataRules.NamesAccountsByNumber(Attribute("system.posix_acl_access", AnonymousAcl)));
 
         // Not an ACL at all, however it reads.
-        Assert.IsFalse(RestoreMetadata.NamesAccountsByNumber(Attribute("user.posix_acl_access", NumberedAcl)));
+        Assert.IsFalse(MetadataRules.NamesAccountsByNumber(Attribute("user.posix_acl_access", NumberedAcl)));
 
         // A value that will not parse is treated as naming someone: nothing
         // vouches for what it would grant.
-        Assert.IsTrue(RestoreMetadata.NamesAccountsByNumber(Attribute("system.posix_acl_access", [2, 0, 0, 0, 1, 0])));
+        Assert.IsTrue(MetadataRules.NamesAccountsByNumber(Attribute("system.posix_acl_access", [2, 0, 0, 0, 1, 0])));
     }
 
     [TestMethod]

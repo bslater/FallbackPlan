@@ -83,6 +83,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
   > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** A symlink's own metadata is now written back, onto the link itself: its times on Linux and macOS through a call that does not follow it, by §1's rule. Windows attribute bits, security descriptors and alternate streams remain owed.
 - **The recovery tool and the CLI's `restore-file`.** Both write content and no metadata, not even a modification time.
 
+  > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's times back by this record's rule, through the writer the executor uses. The recovery tool still writes none.
+
 ## Alternatives considered
 
 - **Use .NET's `File.SetCreationTimeUtc` and verify by reading the times back.** Rejected. Its fallback writes the modification time, so a read-back would have to detect a write it did not ask for and undo it. Where the captured creation and modification times are equal, it could not tell that anything had happened. The direct call refuses instead, which is the answer wanted.
@@ -97,3 +99,4 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 | 2026-10 | Accepted | [ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) writes ownership back, first in §1's order, and the permissions after it drop a set-id bit whose owner or group did not land. The receipt still records what each write did. |
 | 2026-10 | Accepted | [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) holds a folder the restore makes to §1's rule and order, once everything in it has landed. The owed directory metadata is built. |
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes extended attributes back after ownership and before the permissions in §1's order, each on its own as §3 has it. |
+| 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's times back by this record's rule, through the writer the executor uses; the recovery tool still writes none. |

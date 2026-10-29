@@ -75,6 +75,8 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 - **A handle-relative restore.** The run writes by path, and checks containment before each write rather than in one step with it. Opening each folder relative to its parent, as capture does, would close the window §4 narrows.
 - **The recovery tool and the CLI's `restore-file`**, which write no metadata.
 
+  > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's metadata back through the writer the executor uses, and makes no folder. The recovery tool still writes none.
+
 ## Alternatives considered
 
 - **Apply a folder's metadata when the folder is made.** Rejected. Its first child moves the modification time, and permissions that forbid writing refuse the rest of its contents.
@@ -90,3 +92,4 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 | 2026-10 | Accepted | Built in one slice, tests first. A folder the restore makes gets its captured times, permissions and ownership back by the file's rule, last and deepest first. One already there keeps its own, nothing is applied through a link, and the plan and receipt count folders apart from files. |
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes a folder's extended attributes back by the file's rule, in §2's end pass, so a folder's default ACL goes on after what is restored into it. |
 | 2026-10 | Accepted | [ADR-0099](0099-a-folder-that-was-only-read-keeps-its-tree.md) keeps a folder's tree when only its access time moved, so the access time this restores is the folder's when a tree with its contents was first captured, as a reused file version's already was. |
+| 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's metadata back through the writer the executor uses, and makes no folder; the recovery tool still writes none. |

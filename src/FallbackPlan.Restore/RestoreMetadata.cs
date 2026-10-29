@@ -1,75 +1,10 @@
 using Bodu;
-using System.Buffers.Binary;
 using System.Globalization;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Manifests;
 
 namespace FallbackPlan.Restore;
-
-/// <summary>
-/// The attributes of an entry's captured metadata (specification 06 §4.1),
-/// one flag each.
-/// </summary>
-[Flags]
-public enum CapturedMetadata
-{
-    /// <summary>Nothing captured.</summary>
-    None = 0,
-
-    /// <summary>The modification time (key 1).</summary>
-    ModifiedAt = 1 << 0,
-
-    /// <summary>The creation time (key 2).</summary>
-    CreatedAt = 1 << 1,
-
-    /// <summary>The access time (key 3).</summary>
-    AccessedAt = 1 << 2,
-
-    /// <summary>The POSIX mode bits (key 4).</summary>
-    PosixMode = 1 << 3,
-
-    /// <summary>The owner's name (key 5).</summary>
-    Owner = 1 << 4,
-
-    /// <summary>The group's name (key 6).</summary>
-    Group = 1 << 5,
-
-    /// <summary>The Windows security descriptor (key 7).</summary>
-    SecurityDescriptor = 1 << 6,
-
-    /// <summary>Extended attributes (key 8).</summary>
-    ExtendedAttributes = 1 << 7,
-
-    /// <summary>Alternate data streams (key 9).</summary>
-    AlternateStreams = 1 << 8,
-
-    /// <summary>The platform's attribute bits (key 10).</summary>
-    FileAttributes = 1 << 9,
-}
-
-/// <summary>
-/// The kinds of extended attribute an item carries that a restore does not
-/// write back everywhere (ADR-0087), one flag each.
-/// </summary>
-[Flags]
-public enum ExtendedAttributeKinds
-{
-    /// <summary>None of them.</summary>
-    None = 0,
-
-    /// <summary>One in Linux's security or trusted namespace, which only root writes.</summary>
-    Privileged = 1 << 0,
-
-    /// <summary>A Linux POSIX ACL that names an account or group by number, or that will not parse.</summary>
-    NumberedAcl = 1 << 1,
-
-    /// <summary>A Linux POSIX ACL that names no account or group: only the owner, the group, the mask and everyone else.</summary>
-    AnonymousAcl = 1 << 2,
-
-    /// <summary>One in Linux's user namespace, which Linux keeps on no symlink.</summary>
-    User = 1 << 3,
-}
 
 /// <summary>
 /// What a restore knows of one item from its manifest: the bytes restoring
@@ -117,12 +52,12 @@ public sealed record RestoreItemFacts(
 /// decided item by item. A set-user-id or set-group-id bit is kept only
 /// where the owner or group it goes with was given back. Extended
 /// attributes come back where the target writes them, each alone, with the
-/// exceptions <see cref="Withheld"/> names. Nothing else is written back
+/// exceptions <c>MetadataRules.Withheld</c> names. Nothing else is written back
 /// yet. A symlink the run makes is held to the same rule, onto the link
 /// itself, where the platform has a call that does not follow it: its
 /// permissions only where the platform keeps a link's own, and on Linux,
 /// which gives every link the same ones, a link's captured permissions land
-/// only where they are those (<see cref="LinkPermissionsLand"/>).
+/// only where they are those (<see cref="MetadataRules.LinkPermissionsLand"/>).
 /// The plan predicts by that rule. The receipt records what each write did
 /// (ADR-0084), which the rule cannot know in advance: a volume may refuse a
 /// write the platform supports, a captured time may lie beyond what a file
@@ -136,124 +71,15 @@ public sealed record RestoreItemFacts(
 /// </remarks>
 public static class RestoreMetadata
 {
-    /// <summary>The set-user-id bit of a POSIX mode.</summary>
-    private const uint SetUserId = 0x800;
-
-    /// <summary>The set-group-id bit of a POSIX mode.</summary>
-    private const uint SetGroupId = 0x400;
-
-    /// <summary>The bits of a POSIX mode a restore writes: permissions, set-id and sticky.</summary>
-    private const uint ModeBits = 0xFFF;
-
-    /// <summary>The group's permission bits of a POSIX mode.</summary>
-    private const uint GroupBits = 0x38;
-
-    /// <summary>The version a Linux ACL's value starts with.</summary>
-    private const uint AclVersion = 2;
-
-    /// <summary>A Linux ACL entry's tag for the file's owner.</summary>
-    private const ushort AclUserObject = 0x01;
-
-    /// <summary>A Linux ACL entry's tag for an account named by number.</summary>
-    private const ushort AclUser = 0x02;
-
-    /// <summary>A Linux ACL entry's tag for the file's group.</summary>
-    private const ushort AclGroupObject = 0x04;
-
-    /// <summary>A Linux ACL entry's tag for a group named by number.</summary>
-    private const ushort AclGroup = 0x08;
-
-    /// <summary>A Linux ACL entry's tag for the mask.</summary>
-    private const ushort AclMask = 0x10;
-
-    /// <summary>A Linux ACL entry's tag for everyone else.</summary>
-    private const ushort AclOther = 0x20;
-
-    /// <summary>The receipt's vocabulary, in the order the format numbers the attributes.</summary>
-    private static readonly (CapturedMetadata Attribute, string Name)[] Vocabulary =
-    [
-        (CapturedMetadata.ModifiedAt, "modified_at"),
-        (CapturedMetadata.CreatedAt, "created_at"),
-        (CapturedMetadata.AccessedAt, "accessed_at"),
-        (CapturedMetadata.PosixMode, "posix_mode"),
-        (CapturedMetadata.Owner, "owner"),
-        (CapturedMetadata.Group, "group"),
-        (CapturedMetadata.SecurityDescriptor, "security_descriptor"),
-        (CapturedMetadata.ExtendedAttributes, "extended_attributes"),
-        (CapturedMetadata.AlternateStreams, "alternate_streams"),
-        (CapturedMetadata.FileAttributes, "file_attributes"),
-    ];
-
-    /// <summary>The attributes <paramref name="metadata"/> carries.</summary>
-    public static CapturedMetadata Captured(EntryMetadata metadata)
-    {
-        ThrowHelper.ThrowIfNull(metadata);
-
-        var captured = CapturedMetadata.None;
-        if (metadata.ModifiedAt is not null)
-        {
-            captured |= CapturedMetadata.ModifiedAt;
-        }
-
-        if (metadata.CreatedAt is not null)
-        {
-            captured |= CapturedMetadata.CreatedAt;
-        }
-
-        if (metadata.AccessedAt is not null)
-        {
-            captured |= CapturedMetadata.AccessedAt;
-        }
-
-        if (metadata.PosixMode is not null)
-        {
-            captured |= CapturedMetadata.PosixMode;
-        }
-
-        if (metadata.OwnerName is not null)
-        {
-            captured |= CapturedMetadata.Owner;
-        }
-
-        if (metadata.GroupName is not null)
-        {
-            captured |= CapturedMetadata.Group;
-        }
-
-        // An empty one is no descriptor (06 §4.1 key 7), and is what earlier
-        // builds wrote for every entry captured where none was read.
-        if (metadata.WindowsSecurityDescriptor is { IsEmpty: false })
-        {
-            captured |= CapturedMetadata.SecurityDescriptor;
-        }
-
-        if (metadata.ExtendedAttributes.Count > 0)
-        {
-            captured |= CapturedMetadata.ExtendedAttributes;
-        }
-
-        if (metadata.AlternateStreams.Count > 0)
-        {
-            captured |= CapturedMetadata.AlternateStreams;
-        }
-
-        if (metadata.FileAttributes is not null)
-        {
-            captured |= CapturedMetadata.FileAttributes;
-        }
-
-        return captured;
-    }
-
     /// <summary>
     /// The attributes the executor writes back for an entry of
     /// <paramref name="kind"/> on <paramref name="target"/>: the same for a
     /// folder it makes as for a file it lands, what the platform's calls that
     /// never follow a link can write for a symlink it makes, and nothing for
     /// anything else. Extended attributes are counted written back where the
-    /// target writes them, though <see cref="Withheld"/> keeps some of them
+    /// target writes them, though <c>MetadataRules.Withheld</c> keeps some of them
     /// back item by item, as ownership is decided item by item, and as a
-    /// link's permissions are on Linux (<see cref="LinkPermissionsLand"/>).
+    /// link's permissions are on Linux (<see cref="MetadataRules.LinkPermissionsLand"/>).
     /// </summary>
     public static CapturedMetadata Applied(EntryKind kind, RestoreTargetProfile target)
     {
@@ -287,17 +113,6 @@ public static class RestoreMetadata
 
         return applied;
     }
-
-    /// <summary>
-    /// Whether a symlink captured with <paramref name="mode"/> can carry it on
-    /// this platform: anywhere that sets a link's own permissions, and on
-    /// Linux, which gives every link <see cref="SymlinkMetadata.LinuxPermissions"/>
-    /// and has no call to change them, only where the captured ones are those.
-    /// </summary>
-    /// <param name="mode">The link's captured mode.</param>
-    public static bool LinkPermissionsLand(uint mode) =>
-        SymlinkMetadata.CanSetPermissions
-        || (OperatingSystem.IsLinux() && (mode & ModeBits) == SymlinkMetadata.LinuxPermissions);
 
     /// <summary>
     /// What the executor writes onto a symlink it makes, by calls that never
@@ -338,173 +153,12 @@ public static class RestoreMetadata
         return applied;
     }
 
-    /// <summary>The kinds of extended attribute <paramref name="metadata"/> carries that are not written back everywhere.</summary>
-    public static ExtendedAttributeKinds KindsOf(EntryMetadata metadata)
-    {
-        ThrowHelper.ThrowIfNull(metadata);
-
-        var kinds = ExtendedAttributeKinds.None;
-        foreach (var attribute in metadata.ExtendedAttributes)
-        {
-            var name = attribute.Name.Span;
-            if (IsPrivileged(name))
-            {
-                kinds |= ExtendedAttributeKinds.Privileged;
-            }
-            else if (IsPosixAcl(name))
-            {
-                kinds |= NamesAccountsByNumber(attribute) ? ExtendedAttributeKinds.NumberedAcl : ExtendedAttributeKinds.AnonymousAcl;
-            }
-            else if (IsUser(name))
-            {
-                kinds |= ExtendedAttributeKinds.User;
-            }
-        }
-
-        return kinds;
-    }
-
-    /// <summary>
-    /// Whether <paramref name="attribute"/> is a Linux POSIX ACL that names
-    /// an account or a group by number. One whose value will not parse is
-    /// counted as naming one, because nothing vouches for what it grants.
-    /// </summary>
-    /// <param name="attribute">A captured extended attribute.</param>
-    public static bool NamesAccountsByNumber(ExtendedAttributeEntry attribute)
-    {
-        ThrowHelper.ThrowIfNull(attribute);
-        return IsPosixAcl(attribute.Name.Span) && (!TryReadAcl(attribute.Value.Span, out var acl) || acl.NamesAccounts);
-    }
-
-    /// <summary>
-    /// Why a restore to <paramref name="target"/> does not attempt to write
-    /// <paramref name="attribute"/> back onto a file, a folder or, where
-    /// <paramref name="link"/>, a symlink, or null when it does (ADR-0087,
-    /// ADR-0101).
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Linux keeps no user-namespace attribute and no ACL on a symlink, and
-    /// refuses either, so neither is attempted on one there.
-    /// </para>
-    /// <para>
-    /// A POSIX ACL is written back only on Linux, which keeps one as an
-    /// extended attribute. macOS keeps no POSIX ACLs, and would take it as an
-    /// attribute that grants nothing. An ACL that names an account or group by
-    /// number is written back only where this installation captured the
-    /// snapshot (<see cref="RestoreTargetProfile.CapturedHere"/>): anywhere
-    /// else the number may be someone else.
-    /// </para>
-    /// <para>
-    /// On Linux only root writes the security and trusted namespaces, so a
-    /// restore that is not root leaves them, as its plan said. A security
-    /// policy may let an account relabel its own file; a restore by that
-    /// account still leaves the label the policy gave the file it made.
-    /// </para>
-    /// </remarks>
-    internal static string? Withheld(ExtendedAttributeEntry attribute, RestoreTargetProfile target, bool link = false)
-    {
-        var name = attribute.Name.Span;
-        if (link && OperatingSystem.IsLinux())
-        {
-            if (IsPosixAcl(name))
-            {
-                return "Linux keeps no access control list on a symlink";
-            }
-
-            if (IsUser(name))
-            {
-                return "Linux keeps no user attributes on a symlink";
-            }
-        }
-
-        if (IsPosixAcl(name))
-        {
-            if (!OperatingSystem.IsLinux())
-            {
-                return "no POSIX access control lists on this target";
-            }
-
-            return !target.CapturedHere && NamesAccountsByNumber(attribute)
-                ? "names accounts by number, and this installation did not capture the snapshot"
-                : null;
-        }
-
-        return OperatingSystem.IsLinux() && IsPrivileged(name) && target.Account is not { IsSuperuser: true }
-            ? "writable only by root"
-            : null;
-    }
-
-    /// <summary>Whether <paramref name="name"/> is a Linux POSIX ACL that governs who may reach the file itself.</summary>
-    internal static bool IsAccessAcl(ReadOnlySpan<byte> name) => name.SequenceEqual("system.posix_acl_access"u8);
-
-    /// <summary>
-    /// The permissions a file or folder captured with <paramref name="mode"/>
-    /// may be given where its captured access ACL <paramref name="acl"/> did
-    /// not come back: its group no more than the ACL gave the group.
-    /// </summary>
-    /// <remarks>
-    /// While a file has an ACL, the group bits of its mode are the ACL's mask,
-    /// which bounds what every account and group the ACL names may do. Written
-    /// back without the ACL, they would give the file's group all of that.
-    /// What the ACL gave the group is its group entry as far as the mask lets
-    /// it, and nothing where the ACL will not parse.
-    /// </remarks>
-    internal static uint WithoutAcl(uint mode, ExtendedAttributeEntry acl)
-    {
-        var group = TryReadAcl(acl.Value.Span, out var read) && read.GroupObject is { } granted
-            ? granted & (read.Mask ?? 7)
-            : 0;
-        return (mode & ~GroupBits) | (mode & (group << 3));
-    }
-
-    /// <summary>
-    /// The permissions a file or folder captured with <paramref name="mode"/>
-    /// may be given once the halves of its ownership in
-    /// <paramref name="given"/> have landed (ADR-0085). A set-user-id file
-    /// runs as its owner, so its bit is kept only with the owner it was
-    /// captured under; on any other owner it would run as whoever restored
-    /// it. A set-group-id bit is kept only with its group, likewise: on a
-    /// folder it hands that group to everything made in it.
-    /// </summary>
-    /// <param name="mode">The captured mode.</param>
-    /// <param name="given">Which of the owner and group were given back.</param>
-    public static uint PermittedMode(uint mode, CapturedMetadata given)
-    {
-        var permitted = mode & ModeBits;
-        if ((given & CapturedMetadata.Owner) == 0)
-        {
-            permitted &= ~SetUserId;
-        }
-
-        if ((given & CapturedMetadata.Group) == 0)
-        {
-            permitted &= ~SetGroupId;
-        }
-
-        return permitted;
-    }
-
     /// <summary>
     /// The receipt's names for what was captured and is not applied by the
     /// rule, in the format's order, or null when nothing captured is left out.
     /// </summary>
     public static IReadOnlyList<string>? NotApplied(CapturedMetadata captured, EntryKind kind, RestoreTargetProfile target) =>
-        NotApplied(captured, Applied(kind, target));
-
-    /// <summary>
-    /// The receipt's names for what was captured and not <paramref name="applied"/>,
-    /// in the format's order, or null when nothing captured is left out.
-    /// </summary>
-    /// <param name="captured">What the entry carries.</param>
-    /// <param name="applied">What the writes for it actually did.</param>
-    public static IReadOnlyList<string>? NotApplied(CapturedMetadata captured, CapturedMetadata applied)
-    {
-        var missing = captured & ~applied;
-        return missing == CapturedMetadata.None
-            ? null
-            : [.. Vocabulary.Where(entry => missing.HasFlag(entry.Attribute)).Select(entry => entry.Name)];
-    }
+        MetadataRules.NotApplied(captured, Applied(kind, target));
 
     /// <summary>
     /// What the plan declares about metadata beyond the planner's own lines:
@@ -526,17 +180,17 @@ public static class RestoreMetadata
     /// </para>
     /// <para>
     /// A set-id bit whose owner or group will not be given back is dropped
-    /// (<see cref="PermittedMode"/>), and declared on its own line, because
+    /// (<see cref="MetadataRules.PermittedMode"/>), and declared on its own line, because
     /// the file lands with permissions other than those captured.
     /// </para>
     /// <para>
     /// On a target that writes extended attributes, those the rule withholds
-    /// (<see cref="Withheld"/>) are declared on lines of their own, one a
+    /// (<c>MetadataRules.Withheld</c>) are declared on lines of their own, one a
     /// reason: ACLs that name accounts by number where this installation did
     /// not capture the snapshot, every ACL where the target keeps none, and on
     /// Linux the namespaces only root writes, to an account that is not root.
     /// An ACL's line says the group keeps no more than the ACL gave it
-    /// (<see cref="WithoutAcl"/>).
+    /// (<c>MetadataRules.WithoutAcl</c>).
     /// </para>
     /// <para>
     /// What the planner already says is not said twice. On a target that
@@ -549,7 +203,7 @@ public static class RestoreMetadata
     /// A symlink the target makes is counted on the lines a file and a folder
     /// are, by the rule <see cref="Applied"/> gives it. Two lines are a
     /// link's alone: permissions captured on a link that Linux, which gives
-    /// every link the same ones, cannot carry (<see cref="LinkPermissionsLand"/>),
+    /// every link the same ones, cannot carry (<see cref="MetadataRules.LinkPermissionsLand"/>),
     /// and the user-namespace attributes and ACLs Linux keeps on no link.
     /// </para>
     /// </remarks>
@@ -592,7 +246,7 @@ public static class RestoreMetadata
             if (link
                 && (applied & CapturedMetadata.PosixMode) != 0
                 && known.Mode is { } linkMode
-                && !LinkPermissionsLand(linkMode))
+                && !MetadataRules.LinkPermissionsLand(linkMode))
             {
                 applied &= ~CapturedMetadata.PosixMode;
                 linkPermissions.Add(item.Kind);
@@ -600,7 +254,7 @@ public static class RestoreMetadata
 
             if ((applied & CapturedMetadata.PosixMode) != 0
                 && known.Mode is { } mode
-                && PermittedMode(mode, given) != (mode & ModeBits))
+                && MetadataRules.PermittedMode(mode, given) != (mode & MetadataRules.ModeBits))
             {
                 setIds.Add(item.Kind);
             }
@@ -651,7 +305,7 @@ public static class RestoreMetadata
                 unknown.Add(item.Kind);
             }
 
-            foreach (var (attribute, _) in Vocabulary.Where(entry => missing.HasFlag(entry.Attribute)))
+            foreach (var (attribute, _) in MetadataRules.Vocabulary.Where(entry => missing.HasFlag(entry.Attribute)))
             {
                 if (!attributes.TryGetValue(attribute, out var carried))
                 {
@@ -742,7 +396,7 @@ public static class RestoreMetadata
 
         return
         [
-            .. Vocabulary
+            .. MetadataRules.Vocabulary
                 .Where(entry => counts.ContainsKey(entry.Name))
                 .Select(entry => string.Create(CultureInfo.InvariantCulture, $"{entry.Name} not applied to {counts[entry.Name]} item(s)")
                     + (entry.Attribute is CapturedMetadata.Owner or CapturedMetadata.Group
@@ -794,64 +448,6 @@ public static class RestoreMetadata
 
         return (given, unresolved);
     }
-
-    /// <summary>Whether <paramref name="name"/> is in Linux's user namespace.</summary>
-    private static bool IsUser(ReadOnlySpan<byte> name) => name.StartsWith("user."u8);
-
-    /// <summary>Whether <paramref name="name"/> is in a Linux namespace only root writes: security or trusted.</summary>
-    private static bool IsPrivileged(ReadOnlySpan<byte> name) =>
-        name.StartsWith("security."u8) || name.StartsWith("trusted."u8);
-
-    /// <summary>Whether <paramref name="name"/> is a Linux POSIX ACL: the file's own, or a folder's default for what is made in it.</summary>
-    private static bool IsPosixAcl(ReadOnlySpan<byte> name) =>
-        IsAccessAcl(name) || name.SequenceEqual("system.posix_acl_default"u8);
-
-    /// <summary>
-    /// What a Linux ACL's value says, as far as a restore needs it: version 2,
-    /// then each entry's tag, permissions and id, eight bytes little-endian.
-    /// False where it will not parse, a tag it does not know among it.
-    /// </summary>
-    private static bool TryReadAcl(ReadOnlySpan<byte> value, out AclRead read)
-    {
-        read = default;
-        if (value.Length < 4 || (value.Length - 4) % 8 != 0 || BinaryPrimitives.ReadUInt32LittleEndian(value) != AclVersion)
-        {
-            return false;
-        }
-
-        var names = false;
-        uint? group = null;
-        uint? mask = null;
-        for (var at = 4; at < value.Length; at += 8)
-        {
-            var permissions = BinaryPrimitives.ReadUInt16LittleEndian(value[(at + 2)..]) & 7u;
-            switch (BinaryPrimitives.ReadUInt16LittleEndian(value[at..]))
-            {
-                case AclUser or AclGroup:
-                    names = true;
-                    break;
-                case AclGroupObject:
-                    group = permissions;
-                    break;
-                case AclMask:
-                    mask = permissions;
-                    break;
-                case AclUserObject or AclOther:
-                    break;
-                default:
-                    return false;
-            }
-        }
-
-        read = new AclRead(names, group, mask);
-        return true;
-    }
-
-    /// <summary>What a Linux ACL says, as far as a restore needs it.</summary>
-    /// <param name="NamesAccounts">Whether an entry names an account or a group by number.</param>
-    /// <param name="GroupObject">The permissions its group entry gives the file's group.</param>
-    /// <param name="Mask">Its mask, which bounds every entry but the owner's and everyone else's.</param>
-    private readonly record struct AclRead(bool NamesAccounts, uint? GroupObject, uint? Mask);
 
     /// <summary>
     /// How many files, folders and symlinks a declaration covers, said the way

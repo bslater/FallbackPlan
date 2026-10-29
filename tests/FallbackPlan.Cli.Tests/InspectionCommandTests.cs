@@ -7,7 +7,9 @@ namespace FallbackPlan.Cli.Tests;
 /// <c>inspect-manifest</c>, <c>restore-file</c> and <c>verify --file</c> —
 /// plus the sub-path forms of <c>ls</c> and <c>restore</c>. These are the
 /// commands an operator reaches for when something looks wrong, so they are
-/// exactly the ones that must not themselves be broken.
+/// exactly the ones that must not themselves be broken. <c>restore-file</c>
+/// writes a file's captured metadata back as the executor does (FR-RST-004;
+/// ADR-0149).
 /// </summary>
 [TestClass]
 public sealed class InspectionCommandTests : IDisposable
@@ -132,6 +134,42 @@ public sealed class InspectionCommandTests : IDisposable
 
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         Assert.AreEqual(content, File.ReadAllText(destination));
+    }
+
+    [TestMethod]
+    public async Task RestoreFile_GivesTheFileItsCapturedTimesAndPermissionsBack()
+    {
+        // The single-file restore writes back what the executor writes back,
+        // by the same rule and in the same order (ADR-0149): here the
+        // modification time everywhere, and the permissions where the target
+        // keeps POSIX ones. A backup captures them; archive captures none.
+        await _cli.InitAsync();
+        var source = _cli.WriteFile("tree/a.txt", "restore-file metadata");
+        var modified = new DateTime(2021, 3, 4, 5, 6, 7, 890, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(source, modified);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(source, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);
+        }
+
+        var backup = await _cli.RunAsync("backup", Path.GetDirectoryName(source)!);
+        Assert.IsTrue(backup.ExitCode == 0, backup.All);
+        var snapshots = await _cli.RunAsync("snapshots");
+        var snapshot = Regex.Match(snapshots.Output, @"\b[0-9a-f]{32}\b");
+        Assert.IsTrue(snapshot.Success, snapshots.All);
+        var destination = Path.Combine(_cli.WorkPath, "restored-with-metadata.txt");
+
+        var restore = await _cli.RunAsync("restore-file", "--snapshot", snapshot.Value, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        Assert.AreEqual(modified, File.GetLastWriteTimeUtc(destination), restore.All);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.AreEqual(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead,
+                File.GetUnixFileMode(destination),
+                restore.All);
+        }
     }
 
     [TestMethod]

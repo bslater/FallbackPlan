@@ -1,6 +1,6 @@
 using FallbackPlan.Domain.Identifiers;
 
-namespace FallbackPlan.Repository.Format.Manifests;
+namespace FallbackPlan.Domain;
 
 /// <summary>One extended attribute: raw name and value bytes (specification 06 §4.1 key 8).</summary>
 public sealed record ExtendedAttributeEntry(ReadOnlyMemory<byte> Name, ReadOnlyMemory<byte> Value);

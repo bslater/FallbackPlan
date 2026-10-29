@@ -957,6 +957,31 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// What a restore writes back of a file's metadata, and in what order,
+    /// is one rule (ADR-0084 to ADR-0087, ADR-0101), and every way of
+    /// restoring holds to it (ADR-0149). It lives in Domain, beside the calls
+    /// it orders, so that a tool that may not reference the executor can
+    /// still reach it; this canary fails if the executor or the CLI's
+    /// single-file restore ever writes metadata through a copy of it.
+    /// </summary>
+    [TestMethod]
+    public void TheExecutorAndTheCli_WriteMetadataThroughTheSharedWriter()
+    {
+        foreach (var assembly in new[] { Restore, Cli })
+        {
+            var writing = Types.InAssembly(assembly)
+                .That()
+                .HaveDependencyOn("FallbackPlan.Domain.MetadataWriter")
+                .GetTypes()
+                .ToList();
+
+            Assert.IsNotEmpty(
+                writing,
+                $"{assembly.GetName().Name} must write metadata back through Domain's MetadataWriter, not a copy of it.");
+        }
+    }
+
+    /// <summary>
     /// 11 §2: <c>Recovery</c> speaks to no service in any topology
     /// (NFR-OPS-005). A recovery tool that needed a running service would not
     /// be a recovery tool.

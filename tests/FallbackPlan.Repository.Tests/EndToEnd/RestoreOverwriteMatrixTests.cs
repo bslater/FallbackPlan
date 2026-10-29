@@ -274,7 +274,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
             RelativePath = "data/pipe",
             Kind = FallbackPlan.Filesystem.ScanEntryKind.Special,
             Diagnostics = ["special-kind: fifo"],
-            Metadata = new FallbackPlan.Repository.Format.Manifests.EntryMetadata
+            Metadata = new FallbackPlan.Domain.EntryMetadata
             {
                 ModifiedAt = 1_722_000_000_000, PosixMode = 0x1A4,
             },
@@ -388,7 +388,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
             RelativePath = "data/link",
             Kind = FallbackPlan.Filesystem.ScanEntryKind.Symlink,
             LinkTarget = System.Text.Encoding.UTF8.GetBytes(LinkTargetText),
-            Metadata = new FallbackPlan.Repository.Format.Manifests.EntryMetadata
+            Metadata = new FallbackPlan.Domain.EntryMetadata
             {
                 ModifiedAt = 1_722_000_000_000,
             },
