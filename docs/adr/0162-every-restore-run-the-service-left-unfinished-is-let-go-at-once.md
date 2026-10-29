@@ -44,6 +44,8 @@ A run the service refuses, say one under way again, is named with the service's 
 - **Let runs go by age.** Every one is let go, or one by its name.
 - **Offer it in the console.** The console lets each run go beside it, as before.
 
+  > **2026-10 ([ADR-0163](0163-the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once.md)).** The snapshots page lets every run the service left unfinished go at once, once a person confirms.
+
 ## Alternatives considered
 
 - **A contract command that lets every run go at once.** Rejected. The listing and the single let-go already say everything the person is asked, and a second way to let runs go would be a second way to get it wrong.
@@ -54,3 +56,4 @@ A run the service refuses, say one under way again, is named with the service's 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. restore-resume with --forget-all asks the service for every run it left unfinished and lets each go by its name, naming one it will not let go while the rest go. No contract change. |
+| 2026-10 | Accepted | Noted by [ADR-0163](0163-the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once.md): the console lets every run the service left unfinished go at once, which this record left one at a time. |

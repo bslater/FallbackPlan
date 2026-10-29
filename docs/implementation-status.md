@@ -187,6 +187,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0160](adr/0160-a-restore-in-direct-mode-judges-where-it-lands-through-links.md) | A restore in direct mode judges where it lands through links: a run whose destination holds or lies inside one under way, as written or once each is followed through its links, is refused | **Built** | `Cli/DirectRestoreParts` · `Domain/RestorePaths` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0160--a-restore-in-direct-mode-judges-where-it-lands-through-links) |
 | [0161](adr/0161-every-kept-restore-receipt-is-let-go-at-once.md) | Every kept restore receipt is let go at once: `restore-receipts --forget-all` lets every run's receipt go from the state directory, and nothing else kept there, or asks a paired service to let each it lists go by its run's name | **Built** | `Restore/RestoreExecutor` · `Cli/RestoreReceiptReport` · `Cli/CliApplication` · `Cli.Tests/RestoreReceiptsVerbTests` · [notes](#0161--every-kept-restore-receipt-is-let-go-at-once) |
 | [0162](adr/0162-every-restore-run-the-service-left-unfinished-is-let-go-at-once.md) | Every restore run the service left unfinished is let go at once: `restore-resume --forget-all` lists them and lets each go by its name, naming one the service will not let go while the rest go | **Built** | `Cli/OperationGateway` · `Cli/CliApplication` · `Cli.Tests/RestoreResumeVerbTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · [notes](#0162--every-restore-run-the-service-left-unfinished-is-let-go-at-once) |
+| [0163](adr/0163-the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once.md) | The console lets every restore left unfinished, and every kept receipt, go at once: once a person confirms, it asks the service for them afresh and lets each go by its name, naming one the service will not let go while the rest go | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0163--the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once) |
 
 ---
 
@@ -4322,7 +4323,8 @@ the rest go, and a run named beside it is refused before anything is
 asked.
 
 What remains is recorded rather than done. Receipts are not let go by age,
-and the console still lets one go at a time.
+and the console still lets one go at a time. The console has since let every
+one go at once ([0163](#0163--the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once)).
 
 ### 0162 — every restore run the service left unfinished is let go at once
 
@@ -4337,4 +4339,21 @@ Beside a run, `--forget` or `--plan` it is refused, and in direct mode it
 is refused as every verb naming a run is.
 
 What remains is recorded rather than done. Runs are not let go by age,
-and the console still lets one go at a time.
+and the console still lets one go at a time. The console has since let every
+one go at once ([0163](#0163--the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once)).
+
+### 0163 — the console lets every restore left unfinished, and every kept receipt, go at once
+
+The console let each run left unfinished go beside it on the snapshots page,
+and each receipt kept beside it in the Maintenance view, one confirmation at a
+time; the view shows only the newest fifty receipts, so the rest waited for
+those to go. Where more than one is left or kept, each card now offers to let
+them all go. Once a person confirms, the console asks the service for every
+one afresh, receipts with no limit, and lets each go by its name, as one at a
+time is, so the contract is unchanged and no passphrase is asked. Where every
+one went the dialog says how many; one the service will not let go is named
+in the dialog with its words, with how many of how many went, while the rest
+go; and where none was left by then it says so.
+
+What remains is recorded rather than done. Nothing is let go by age, and the
+console lets one go or every one, not a selection.

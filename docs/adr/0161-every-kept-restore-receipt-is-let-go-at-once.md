@@ -44,6 +44,8 @@ With `--connect`, the command asks the service for every receipt it keeps and th
 - **Let receipts go by age.** Every one is let go, or one by its run's name.
 - **Offer it in the console.** The console's Maintenance view lets each receipt go beside it, as before.
 
+  > **2026-10 ([ADR-0163](0163-the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once.md)).** The Maintenance view lets every receipt the service keeps go at once, those it does not show too, once a person confirms.
+
 ## Alternatives considered
 
 - **A contract command that lets every receipt go at once.** Rejected. The listing and the single let-go already say everything a person would be asked to confirm, and a second way to remove what the service keeps would be a second way to get it wrong.
@@ -54,3 +56,4 @@ With `--connect`, the command asks the service for every receipt it keeps and th
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. restore-receipts with --forget-all lets every run's receipt go from the state directory, and nothing else kept there, or asks a paired service to let each it lists go by its run's name, and says each and how many. No contract change. |
+| 2026-10 | Accepted | Noted by [ADR-0163](0163-the-console-lets-every-restore-left-unfinished-and-every-kept-receipt-go-at-once.md): the console lets every receipt the service keeps go at once, which this record left one at a time. |
