@@ -202,6 +202,8 @@ A standalone recovery executable, independent of the Agent and UI, that can:
 
 > **2026-10 ([ADR-0155](../adr/0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md)).** The tool makes a symlink a link where links can be made without a privilege, giving the link its own metadata onto it, and a write the output refuses at an entry's name fails that entry alone rather than the run.
 
+> **2026-10 ([ADR-0156](../adr/0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md)).** The tool gives a hard-link group back as one file under each of its names, by the rule §3 holds the executor to.
+
 Source and reproducible release artifacts are published for every major format version, and remain downloadable and buildable for as long as that format version is supported. A recovery tool that cannot be obtained when needed is not a recovery tool.
 
 ## 6. What must survive a clean machine
