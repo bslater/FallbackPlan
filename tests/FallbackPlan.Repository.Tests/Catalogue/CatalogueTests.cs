@@ -26,7 +26,9 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// they were (NFR-PERF-011, ADR-0148). A folder's entries are kept once,
 /// under its tree, so snapshots that hold it unchanged share them, and
 /// forgetting a snapshot lets go of only what none of the rest reaches
-/// (NFR-PERF-011, ADR-0151).
+/// (NFR-PERF-011, ADR-0151). A folder's access time goes with the last
+/// snapshot that reaches its tree, and stays while any does (NFR-PERF-011,
+/// ADR-0153).
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -380,6 +382,59 @@ public sealed class CatalogueTests : IDisposable
     }
 
     [TestMethod]
+    public void ForgettingASnapshot_LetsGoOfTheAccessTimeOfEachFolderNoneOfTheRestReaches()
+    {
+        // A folder's access time is kept under its tree, as its entries are,
+        // so it goes when the last snapshot reaching that tree does
+        // (ADR-0153).
+        using var catalogue = Open();
+        var (first, second) = SnapshotsSharingDocs(catalogue);
+        var (firstRoot, secondRoot) = (catalogue.LookupDirectory(first, "")!.TreeId, catalogue.LookupDirectory(second, "")!.TreeId);
+        catalogue.RecordDirectoryAccessTimes([(firstRoot, 100UL), (secondRoot, 200UL), (Object(0x10), 300UL)]);
+
+        catalogue.ForgetSnapshot(first);
+
+        Assert.AreEqual(2L, AccessTimes(), "the first root's time goes, and docs's stays with the second");
+        Assert.AreEqual(200UL, catalogue.LookupDirectory(second, "")?.AccessedAt);
+        Assert.AreEqual(300UL, catalogue.LookupDirectory(second, "docs")?.AccessedAt);
+
+        catalogue.ForgetSnapshot(second);
+
+        Assert.AreEqual(0L, AccessTimes(), "nothing reaches either folder any more");
+    }
+
+    [TestMethod]
+    public void ForgettingASnapshot_KeepsTheAccessTimeOfAnEmptyFolderAnotherStillReaches()
+    {
+        // An empty folder holds no entries of its own. It is reached through
+        // its parent's, and so is its access time.
+        using var catalogue = Open();
+        var (kept, forgotten) = (Snapshot(0x4D), Snapshot(0x4E));
+        CatalogueTrees.RecordSnapshot(catalogue, kept, ("empty", EntryKind.DirectoryPlaceholder, Object(0x20)));
+        CatalogueTrees.RecordSnapshot(catalogue, forgotten, ("other.txt", EntryKind.File, Object(0x21)));
+        catalogue.RecordDirectoryAccessTimes([(Object(0x20), 400UL)]);
+
+        catalogue.ForgetSnapshot(forgotten);
+
+        Assert.AreEqual(400UL, catalogue.LookupDirectory(kept, "empty")?.AccessedAt);
+    }
+
+    [TestMethod]
+    public void RecordDirectoryAccessTimes_ATreeAlreadyTimed_KeepsTheTimeItStates()
+    {
+        // A tree's identity derives from its bytes, which state its access
+        // time, so one tree states one time wherever it is met.
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x4F);
+        CatalogueTrees.RecordSnapshot(catalogue, snapshot, ("docs", EntryKind.DirectoryPlaceholder, Object(0x22)));
+
+        catalogue.RecordDirectoryAccessTimes([(Object(0x22), 500UL)]);
+        catalogue.RecordDirectoryAccessTimes([(Object(0x22), 600UL)]);
+
+        Assert.AreEqual(500UL, catalogue.LookupDirectory(snapshot, "docs")?.AccessedAt);
+    }
+
+    [TestMethod]
     public void LookupPath_ASnapshotRecordedAgain_IsReadFromItsNewTree()
     {
         // A lookup resolves a folder once for the files asked in it in turn,
@@ -446,13 +501,18 @@ public sealed class CatalogueTests : IDisposable
     }
 
     /// <summary>How many folder entries the catalogue keeps, read beside the connection under test.</summary>
-    private long FolderEntries()
+    private long FolderEntries() => Rows("folder_entries");
+
+    /// <summary>How many folder access times the catalogue keeps, read beside the connection under test.</summary>
+    private long AccessTimes() => Rows("directory_access_times");
+
+    private long Rows(string table)
     {
         using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
             new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = CataloguePath, Pooling = false }.ToString());
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM folder_entries;";
+        command.CommandText = $"SELECT COUNT(*) FROM {table};";
         return (long)command.ExecuteScalar()!;
     }
 

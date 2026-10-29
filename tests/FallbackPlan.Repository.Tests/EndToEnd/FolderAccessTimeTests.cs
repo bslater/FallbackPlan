@@ -18,7 +18,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// (NFR-PERF-003): reading a folder moves its access time wherever reads do,
 /// and a backup reads every folder it walks. A tree that took that as a change
 /// would be written anew for every folder, and every folder above it, on every
-/// backup, though nothing in the tree changed.
+/// backup, though nothing in the tree changed. The rule still holds once the
+/// snapshot before is forgotten, which lets go of only the access times no
+/// snapshot left reaches (NFR-PERF-011, ADR-0153).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -49,6 +51,8 @@ public sealed class FolderAccessTimeTests : ArchiveTestHarness
     private static readonly byte[] First = [.. Enumerable.Repeat((byte)0xA1, 16)];
 
     private static readonly byte[] Second = [.. Enumerable.Repeat((byte)0xB2, 16)];
+
+    private static readonly byte[] Third = [.. Enumerable.Repeat((byte)0xC3, 16)];
 
     private CatalogueDb OpenCatalogue(string name = "catalogue.db") =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, name), Repo);
@@ -141,6 +145,36 @@ public sealed class FolderAccessTimeTests : ArchiveTestHarness
         Assert.AreEqual(
             catalogue.LookupPath(First, "docs")!.ObjectId, catalogue.LookupPath(Second, "docs")!.ObjectId);
         Assert.AreEqual(FirstRead, (await ReadTreeAsync(keys, store, second.RootTreeObjectId)).Metadata!.AccessedAt);
+    }
+
+    [TestMethod]
+    public async Task OnlyTheFoldersAccessTimesMoved_AfterTheSnapshotBeforeIsForgotten_TheTreesAreStillKept()
+    {
+        // The second snapshot changes the root and keeps docs as the first
+        // left it. Forgetting the first lets go of the first root's access
+        // time, and docs's must stay: without it the third could not rebuild
+        // docs's identity, and would write docs and the root again.
+        var source = Source();
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, First, now: 1_722_600_000_000), CancellationToken.None);
+        ReadEveryFolder(source);
+        source.AddFile("notes.txt", [1, 2, 3]);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source), CancellationToken.None);
+        catalogue.ForgetSnapshot(First);
+
+        var third = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, Third, now: 1_722_800_000_001) with { PriorSnapshotId = Second, ParentSnapshots = [Second] },
+                CancellationToken.None);
+
+        Assert.AreEqual(second.RootTreeObjectId, third.RootTreeObjectId);
+        Assert.AreEqual(FirstRead, catalogue.LookupDirectory(Third, "docs")?.AccessedAt);
     }
 
     [TestMethod]

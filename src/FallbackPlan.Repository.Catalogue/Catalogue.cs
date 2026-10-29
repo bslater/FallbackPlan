@@ -686,19 +686,35 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>
-    /// Records the access time the folder tree <paramref name="treeId"/>
-    /// states (schema v11 <c>directory_access_times</c>), so a later capture
+    /// Records the access time each folder tree states (schema v11
+    /// <c>directory_access_times</c>), in one transaction, so a later capture
     /// can rebuild the identity that tree has without reading it.
     /// </summary>
-    public void RecordDirectoryAccessTime(ObjectId treeId, ulong accessedAt)
+    /// <remarks>
+    /// A writer records them after the row and the folders that reach them,
+    /// as it does a snapshot's folders, so forgetting another snapshot in
+    /// between cannot let go of a time this one states (ADR-0153).
+    /// </remarks>
+    public void RecordDirectoryAccessTimes(IEnumerable<(ObjectId TreeId, ulong AccessedAt)> times)
     {
+        ThrowHelper.ThrowIfNull(times);
+
+        using var transaction = _connection.BeginTransaction();
         using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             INSERT OR IGNORE INTO directory_access_times (object_id, accessed_at) VALUES ($object, $accessed);
             """;
-        command.Parameters.AddWithValue("$object", treeId.ToArray());
-        command.Parameters.AddWithValue("$accessed", unchecked((long)accessedAt));
-        command.ExecuteNonQuery();
+        var tree = command.Parameters.Add("$object", SqliteType.Blob);
+        var accessed = command.Parameters.Add("$accessed", SqliteType.Integer);
+        foreach (var (treeId, accessedAt) in times)
+        {
+            tree.Value = treeId.ToArray();
+            accessed.Value = unchecked((long)accessedAt);
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
     }
 
     /// <summary>
@@ -985,17 +1001,19 @@ public sealed class Catalogue : IDisposable
 
     /// <summary>
     /// Forgets snapshots the store no longer holds: their rows, the records
-    /// they were made of, and every folder no snapshot left reaches
-    /// (FR-GC-013; ADR-0151). The catalogue is a cache of the store, and a
-    /// snapshot a person deleted is one nothing should list, offer to
-    /// restore, or trace damage to. A folder another snapshot still holds
-    /// stays, and so does what the forgotten snapshots' files shared.
+    /// they were made of, and every folder no snapshot left reaches, with its
+    /// access time (FR-GC-013; ADR-0151, ADR-0153). The catalogue is a cache
+    /// of the store, and a snapshot a person deleted is one nothing should
+    /// list, offer to restore, or trace damage to. A folder another snapshot
+    /// still holds stays, and so does what the forgotten snapshots' files
+    /// shared.
     /// </summary>
     /// <remarks>
     /// Which folders are reached is found by walking every remaining
     /// snapshot from its root, a folder once however many hold it, so it
     /// costs a pass over the folders kept and is paid once for all the
-    /// snapshots given. It is one transaction with the deletions, so a
+    /// snapshots given; letting go of access times costs one more pass over
+    /// the entries left. It is one transaction with the deletions, so a
     /// capture recording its folders sees either none of it or all of it.
     /// </remarks>
     /// <param name="snapshotIds">The snapshots' 16-byte ids.</param>
@@ -1039,11 +1057,21 @@ public sealed class Catalogue : IDisposable
                 DELETE FROM folder_entries WHERE tree_id NOT IN (SELECT tree_id FROM reached);
                 """;
             release.ExecuteNonQuery();
+
+            // Every entry left now belongs to a reached folder, so the
+            // reached folders are the roots and the folders those entries
+            // name, an empty one included (ADR-0153).
+            release.CommandText = $"""
+                DELETE FROM directory_access_times WHERE object_id NOT IN (
+                    SELECT root_tree FROM snapshots
+                    UNION
+                    SELECT object_id FROM folder_entries WHERE entry_kind = {(int)EntryKind.DirectoryPlaceholder});
+                """;
+            release.ExecuteNonQuery();
         }
 
         transaction.Commit();
     }
-
 
     /// <summary>Every known snapshot, newest capture first.</summary>
     public IReadOnlyList<CatalogueSnapshot> EnumerateSnapshots()

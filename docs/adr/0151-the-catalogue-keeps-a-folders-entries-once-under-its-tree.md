@@ -83,6 +83,7 @@ A snapshot's folders are written in one transaction, where every entry was a com
 - **Keep a changed folder's unchanged entries.** A folder that changed is a new tree and restates every entry, siblings included, and so does every folder above it. Where a hundredth of the files change per snapshot, that is still 1 428 B/version against the budget's 400. A folder of many files changes whole for one of them.
 - **Share what a snapshot is made of.** `snapshot_structure` still names every tree of every snapshot, so damage to a tree is traced to each snapshot holding it. That grows with the snapshots too, by folder rather than by file. The measurement does not seed it.
 - **Let go of folder access times.** `directory_access_times` is keyed by tree and is still never let go of. It has a row for each folder tree a capture recorded, not for each file.
+  > **2026-10 ([ADR-0153](0153-a-folders-access-time-goes-with-the-last-snapshot-that-reaches-its-tree.md)).** Forgetting snapshots now lets go of every access time whose folder none of the rest reaches, in the same transaction, and every writer records a snapshot's times after its folders.
 - **Read fewer trees.** A projection from a store still reads every tree of every snapshot, because it lists each snapshot's trees for damage tracing. It writes only those it does not hold.
 - **Find a version by identity without a walk.** A lookup by a file's identity is answered from the identity index when no version has it, which is every new file. Otherwise it walks the snapshot's folders, as schema 16 scanned the snapshot's rows.
 
@@ -97,3 +98,4 @@ A snapshot's folders are written in one transaction, where every entry was a com
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Catalogue schema 17 keeps a folder's entries under its head tree and its name, so snapshots that hold a folder unchanged share its rows. A snapshot's folders are recorded together after its row, and forgetting snapshots lets go of every folder none of the rest reaches. At 20 000 versions a set where a tenth of the files change per snapshot costs 930 B/version against 2 005, and one where a hundredth do costs 1 428 against 12 590. |
+| 2026-10 | Accepted | Noted by [ADR-0153](0153-a-folders-access-time-goes-with-the-last-snapshot-that-reaches-its-tree.md): forgetting snapshots lets go of the folder access times none of the rest reaches too, which this record left kept. |
