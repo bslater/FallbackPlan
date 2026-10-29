@@ -58,6 +58,8 @@ A run there that does not finish says the command that lets its parts go, after 
   > **2026-10 ([ADR-0143](0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md)).** A run holds its folder while it runs. The listing says a run is under way there, and `--forget` lets none of its parts go.
 - **Sweep folders by age.** One destination at a time, by its name.
 
+  > **2026-10 ([ADR-0158](0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md)).** `restore-parts --forget-all` lets every destination's parts go at once, passing over one with a run under way. None goes by age.
+
 ## Alternatives considered
 
 - **Let parts go by naming the destination again, as the run was asked.** Rejected. A run to the original location of a set with several roots lands at all of them, and a destination typed another way names another folder. The folder's name is what both the listing and the run's last line give.
@@ -69,3 +71,4 @@ A run there that does not finish says the command that lets its parts go, after 
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A run in direct mode says beside its parts what it restores and where; restore-parts lists each destination left unfinished, newest first, with what its parts hold, and lets one go by its folder's name; a run that does not finish says how. No contract change. |
 | 2026-10 | Accepted | [ADR-0143](0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md): a destination with a run under way is listed as such, and --forget refuses it. |
+| 2026-10 | Accepted | Noted by [ADR-0158](0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md): every destination's parts are let go at once with --forget-all, which this record left one at a time. |

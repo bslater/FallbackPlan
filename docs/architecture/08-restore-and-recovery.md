@@ -84,6 +84,8 @@ Plans are exportable and resumable. A plan that reveals unacceptable degradation
 
 > **2026-10 ([ADR-0143](../adr/0143-a-destination-takes-one-restore-in-direct-mode-at-a-time.md)).** A run in direct mode holds its destination's folder while it runs, so a second run there is refused before it writes anything, and `restore-parts` says a run is under way there and lets none of its parts go.
 
+> **2026-10 ([ADR-0158](../adr/0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md)).** `restore-parts --forget-all` lets every destination's parts go at once, passing over one with a run under way, and a folder is let go, one or every one, under the claim a run takes its folder under.
+
 > **2026-10 ([ADR-0138](../adr/0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md)).** The working-space need is said as room to assemble the run's files one at a time, by the refusal, the command line's plan and the console, since a resume's need is the most that remains of any one file.
 
 > **2026-10 ([ADR-0113](../adr/0113-the-console-keeps-a-restores-plan.md)).** The console's wizard keeps the plan on screen as the file `restore --export` writes, which moves into the contract's assembly at version 2 to hold the run as the wizard asks it: several paths, a target, a policy and a landing in place. The console asks the service for the plan again and hands the browser the file; neither writes one.

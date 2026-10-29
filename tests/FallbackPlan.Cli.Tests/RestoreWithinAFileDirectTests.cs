@@ -25,7 +25,10 @@ namespace FallbackPlan.Cli.Tests;
 /// way there and lets none of its parts go (ADR-0143). So is a run into a
 /// folder inside the destination of a run under way, or holding one, while
 /// one beside it, or into one a run left unfinished, goes ahead (FR-RST-008,
-/// ADR-0157).
+/// ADR-0157). <c>--forget-all</c> lets every destination's parts go at once,
+/// passing over one with a run under way and anything else kept beside them,
+/// and a destination is let go, one or all, under the claim a run takes its
+/// folder under, so none is let go as a run takes it (FR-RST-008, ADR-0158).
 /// </summary>
 [TestClass]
 public sealed class RestoreWithinAFileDirectTests : IDisposable
@@ -274,6 +277,7 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
         Assert.IsGreaterThanOrEqualTo(0, newer, listed.All);
         Assert.IsGreaterThan(newer, older, "the newest is listed first");
         Assert.Contains("2 destinations a restore in direct mode left unfinished keep parts under", listed.Output, StringComparison.Ordinal);
+        Assert.Contains("--forget <name>, or --forget-all to let every one's go", listed.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -524,6 +528,131 @@ public sealed class RestoreWithinAFileDirectTests : IDisposable
         Assert.AreEqual(1, refused.ExitCode, refused.All);
         Assert.Contains($"A restore in direct mode is under way to the destination whose parts are named '{Name}'", refused.Error, StringComparison.Ordinal);
         Assert.IsTrue(File.Exists(Path.Combine(Parts, "run.json")), "nothing of it is let go");
+    }
+
+    [TestMethod]
+    public async Task EveryDestinationLeftUnfinished_IsLetGoAtOnce_SayingWhatEachHeld()
+    {
+        var snapshot = await BackUpAsync();
+        var elsewhere = Path.Combine(_cli.WorkPath, "elsewhere");
+        var elsewhereParts = DirectRestoreParts.Of(_cli.StatePath, elsewhere);
+        KeepPart("assembled before");
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", Destination))).ExitCode);
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", elsewhere))).ExitCode);
+
+        var letGo = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget-all");
+        var listed = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath);
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.All);
+        Assert.Contains(
+            $"let go the parts kept under '{Parts}', 16 bytes of the files a restore in direct mode had assembled",
+            letGo.Output,
+            StringComparison.Ordinal);
+        Assert.Contains($"let go the parts kept under '{elsewhereParts}', 0 bytes", letGo.Output, StringComparison.Ordinal);
+        Assert.Contains("let go the parts of 2 destinations, 16 bytes in all", letGo.Output, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(Parts), "each folder is gone");
+        Assert.IsFalse(Directory.Exists(elsewhereParts), "each folder is gone");
+        Assert.Contains("No restore in direct mode left parts under", listed.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ADestinationWithARunUnderWay_IsPassedOver_WhenEveryOtherIsLetGo()
+    {
+        var snapshot = await BackUpAsync();
+        var elsewhere = Path.Combine(_cli.WorkPath, "elsewhere");
+        Assert.AreNotEqual(0, (await WithContentUnreadableAsync(() => _cli.RunAsync("restore", snapshot, "--output", elsewhere))).ExitCode);
+        using var underWay = HoldARunInto(Destination);
+
+        var letGo = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget-all");
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.All);
+        Assert.Contains($"kept the parts under '{Parts}': a restore in direct mode is under way there", letGo.Output, StringComparison.Ordinal);
+        Assert.Contains("let go the parts of 1 destination, 0 bytes in all; 1 with a run under way is kept", letGo.Output, StringComparison.Ordinal);
+        Assert.IsTrue(File.Exists(Path.Combine(Parts, "run.json")), "nothing of it is let go");
+        Assert.IsFalse(Directory.Exists(DirectRestoreParts.Of(_cli.StatePath, elsewhere)), "every other destination's is");
+    }
+
+    [TestMethod]
+    public async Task LettingEveryDestinationGo_WhereNoneIsKept_SaysSo()
+    {
+        Directory.CreateDirectory(_cli.StatePath);
+
+        var letGo = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget-all");
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.All);
+        Assert.Contains(
+            $"No restore in direct mode left parts under '{DirectRestoreParts.RootUnder(_cli.StatePath)}'.",
+            letGo.Output,
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task WhatIsNotADestinationsFolder_IsLeft_WhenEveryOneIsLetGo()
+    {
+        KeepPart("assembled before");
+        var beside = Directory.CreateDirectory(Path.Combine(DirectRestoreParts.RootUnder(_cli.StatePath), "notes")).FullName;
+
+        var letGo = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget-all");
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.All);
+        Assert.IsFalse(Directory.Exists(Parts), "a destination's folder is let go");
+        Assert.IsTrue(Directory.Exists(beside), "and nothing else under the folder every destination's is kept in");
+    }
+
+    [TestMethod]
+    public async Task ForgetAndForgetAll_Together_AreRefused_AndLetNothingGo()
+    {
+        KeepPart("assembled before");
+
+        var refused = await CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget", Name, "--forget-all");
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains("--forget lets one destination's parts go and --forget-all every one's", refused.Error, StringComparison.Ordinal);
+        Assert.IsTrue(Directory.Exists(Parts), "nothing is let go");
+    }
+
+    [TestMethod]
+    public async Task LettingADestinationGo_WaitsForARunTakingItsFolder_AndThenSparesIt()
+    {
+        // A run takes its folder under the claim (ADR-0157). A folder let go
+        // between the check that no run holds it and its removal would cost
+        // the run that took it meanwhile what it assembles (ADR-0158).
+        KeepPart("assembled before");
+        var claim = TakeTheClaim();
+        var letting = Task.Run(() => CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget", Name));
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        using var underWay = HoldTheDestination();
+        claim.Dispose();
+
+        var refused = await letting;
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains($"A restore in direct mode is under way to the destination whose parts are named '{Name}'", refused.Error, StringComparison.Ordinal);
+        Assert.IsNotEmpty(Directory.GetFiles(Parts, "*.part"), "nothing of it is let go");
+    }
+
+    [TestMethod]
+    public async Task LettingEveryDestinationGo_WaitsForARunTakingItsFolder_AndThenSparesIt()
+    {
+        KeepPart("assembled before");
+        var claim = TakeTheClaim();
+        var letting = Task.Run(() => CliHarness.RunRawAsync("restore-parts", "--state", _cli.StatePath, "--forget-all"));
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        using var underWay = HoldTheDestination();
+        claim.Dispose();
+
+        var letGo = await letting;
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.All);
+        Assert.Contains($"kept the parts under '{Parts}': a restore in direct mode is under way there", letGo.Output, StringComparison.Ordinal);
+        Assert.IsNotEmpty(Directory.GetFiles(Parts, "*.part"), "nothing of it is let go");
+    }
+
+    /// <summary>Takes the claim a run holds while it takes its destination's folder (ADR-0157).</summary>
+    private FileStream TakeTheClaim()
+    {
+        var root = Directory.CreateDirectory(DirectRestoreParts.RootUnder(_cli.StatePath)).FullName;
+        return new FileStream(Path.Combine(root, "claim.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
     }
 
     /// <summary>

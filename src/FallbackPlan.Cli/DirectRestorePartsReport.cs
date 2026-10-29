@@ -9,8 +9,9 @@ namespace FallbackPlan.Cli;
 /// a restore in direct mode left unfinished under a state directory, by the
 /// name of the folder its parts are kept in, with what its run restores,
 /// where, and what the parts hold, or one destination's parts let go by that
-/// name. It names none of the backup's files, as the service's listing of
-/// its runs does not.
+/// name, or every destination's at once but where a run is under way
+/// (ADR-0158). It names none of the backup's files, as the service's listing
+/// of its runs does not.
 /// </summary>
 internal static class DirectRestorePartsReport
 {
@@ -34,7 +35,7 @@ internal static class DirectRestorePartsReport
             ? $"1 destination a restore in direct mode left unfinished keeps parts under '{root}'."
             : string.Create(CultureInfo.InvariantCulture, $"{kept.Count} destinations a restore in direct mode left unfinished keep parts under '{root}'."));
         output.WriteLine(
-            $"To restore what is left of one, run its restore again with --resume. To let one's parts go, run restore-parts --state '{stateDirectory}' --forget <name>.");
+            $"To restore what is left of one, run its restore again with --resume. To let one's parts go, run restore-parts --state '{stateDirectory}' --forget <name>, or --forget-all to let every one's go.");
     }
 
     /// <summary>
@@ -51,20 +52,21 @@ internal static class DirectRestorePartsReport
             throw new CliFailureException(Strings.FormatDirectRestorePartsReport_NotAPartsName(name));
         }
 
-        // A run there would lose what it is assembling (ADR-0143).
-        if (DirectRestoreParts.IsUnderWay(Path.Combine(DirectRestoreParts.RootUnder(stateDirectory), name)))
-        {
-            throw new CliFailureException(Strings.FormatDirectRestorePartsReport_RunUnderWay(name));
-        }
-
         long? held;
+        bool underWay;
         try
         {
-            held = DirectRestoreParts.Forget(stateDirectory, name);
+            held = DirectRestoreParts.Forget(stateDirectory, name, out underWay);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             throw new CliFailureException(Strings.FormatDirectRestorePartsReport_PartsNotLetGo(name, exception.Message));
+        }
+
+        // A run there would lose what it is assembling (ADR-0143).
+        if (underWay)
+        {
+            throw new CliFailureException(Strings.FormatDirectRestorePartsReport_RunUnderWay(name));
         }
 
         var root = DirectRestoreParts.RootUnder(stateDirectory);
@@ -73,9 +75,66 @@ internal static class DirectRestorePartsReport
             throw new CliFailureException(Strings.FormatDirectRestorePartsReport_NoPartsKept(name, root));
         }
 
-        output.WriteLine(
-            $"let go the parts kept under '{Path.Combine(root, name)}', {RestoreSpace.Bytes((ulong)bytes)} of the files a restore in direct mode had assembled");
+        output.WriteLine(LetGoLine(Path.Combine(root, name), bytes));
     }
+
+    /// <summary>
+    /// Lets every destination's parts under <paramref name="stateDirectory"/>
+    /// go at once (ADR-0158), but one with a run under way, and says what
+    /// became of each.
+    /// </summary>
+    /// <exception cref="CliFailureException">When none could be let go, or one was not all removed.</exception>
+    public static void LetGoAll(TextWriter output, string stateDirectory)
+    {
+        var root = DirectRestoreParts.RootUnder(stateDirectory);
+        IReadOnlyList<DirectRestoreLetGo> outcomes;
+        try
+        {
+            outcomes = DirectRestoreParts.ForgetAll(stateDirectory);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new CliFailureException(Strings.FormatDirectRestorePartsReport_NoneLetGo(root, exception.Message));
+        }
+
+        if (outcomes.Count == 0)
+        {
+            output.WriteLine($"No restore in direct mode left parts under '{root}'.");
+            return;
+        }
+
+        foreach (var outcome in outcomes)
+        {
+            var parts = Path.Combine(root, outcome.Name);
+            if (outcome.UnderWay)
+            {
+                output.WriteLine($"kept the parts under '{parts}': a restore in direct mode is under way there");
+            }
+            else if (outcome.Problem is null)
+            {
+                output.WriteLine(LetGoLine(parts, outcome.Held));
+            }
+        }
+
+        var letGo = outcomes.Where(outcome => !outcome.UnderWay && outcome.Problem is null).ToList();
+        var kept = outcomes.Count(outcome => outcome.UnderWay);
+        var summary = string.Create(
+            CultureInfo.InvariantCulture,
+            $"let go the parts of {letGo.Count} {(letGo.Count == 1 ? "destination" : "destinations")}, {RestoreSpace.Bytes((ulong)letGo.Sum(outcome => outcome.Held))} in all");
+        output.WriteLine(kept == 0
+            ? summary
+            : string.Create(CultureInfo.InvariantCulture, $"{summary}; {kept} with a run under way {(kept == 1 ? "is" : "are")} kept"));
+
+        var failed = outcomes.Where(outcome => outcome.Problem is not null).ToList();
+        if (failed.Count > 0)
+        {
+            throw new CliFailureException(Strings.FormatDirectRestorePartsReport_NotAllLetGo(
+                failed.Count, string.Join("; ", failed.Select(outcome => $"'{Path.Combine(root, outcome.Name)}': {outcome.Problem}"))));
+        }
+    }
+
+    private static string LetGoLine(string parts, long held) =>
+        $"let go the parts kept under '{parts}', {RestoreSpace.Bytes((ulong)held)} of the files a restore in direct mode had assembled";
 
     /// <summary>A destination left unfinished, as a person chooses whether to resume it or let it go.</summary>
     private static string Describe(KeptDirectRestoreParts kept)

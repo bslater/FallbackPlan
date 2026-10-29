@@ -2943,13 +2943,20 @@ public static class CliApplication
                 Description = "Let the parts of the destination this names go, by the name the listing gives it: its folder "
                     + "is removed from the state directory, and every other destination's stays.",
             };
+            var partsForgetAllOption = new Option<bool>("--forget-all")
+            {
+                Description = "Let every destination's parts go at once (ADR-0158): each folder is removed from the state "
+                    + "directory but one a restore in direct mode is under way to, which keeps its parts.",
+            };
             var command = new Command(
                 "restore-parts",
                 "List each destination a restore in direct mode left unfinished under a state directory (ADR-0142): what "
                 + "its run restores and where, when it began, and what its parts keep of the backup's files. With --forget, "
-                + "let one destination's parts go. The service lists its own runs with restore-resume.");
+                + "let one destination's parts go, and with --forget-all every one's. The service lists its own runs with "
+                + "restore-resume.");
             command.Options.Add(partsStateOption);
             command.Options.Add(partsForgetOption);
+            command.Options.Add(partsForgetAllOption);
             root.Subcommands.Add(command);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() =>
@@ -2960,9 +2967,19 @@ public static class CliApplication
                     throw new CliFailureException(Strings.FormatCliApplication_NoStateDirectoryKeepsReceipts(state));
                 }
 
+                var forgetAll = parse.GetValue(partsForgetAllOption);
                 if (parse.GetValue(partsForgetOption) is { } name)
                 {
+                    if (forgetAll)
+                    {
+                        throw new CliFailureException(Strings.DirectRestorePartsReport_ForgetAndForgetAll);
+                    }
+
                     DirectRestorePartsReport.LetGo(output, state, name);
+                }
+                else if (forgetAll)
+                {
+                    DirectRestorePartsReport.LetGoAll(output, state);
                 }
                 else
                 {

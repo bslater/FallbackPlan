@@ -182,6 +182,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0155](adr/0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md) | The recovery tool makes a link a link, and fails only the entry the output refuses: a symlink is made pointing where it pointed, with its own metadata onto the link, and a write the output refuses at an entry's name fails that entry alone | **Built** | `Recovery/RecoverySession` · `Recovery/RecoveryNote` · `Repository.Tests/EndToEnd/RecoveryLinkTests` · [notes](#0155--the-recovery-tool-makes-a-link-a-link) |
 | [0156](adr/0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md) | The recovery tool gives a hard-link group back as one file, by the executor's rule: the rule moves into the format library unchanged, and the tool makes each agreeing later name a link to the file its first name landed as | **Built** | `Repository.Format/Manifests/HardLinkGroups` · `Recovery/RecoverySession` · `Repository.Tests/EndToEnd/RecoveryHardLinkTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0156--the-recovery-tool-gives-a-hard-link-group-back-as-one-file) |
 | [0157](adr/0157-a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way.md) | A restore in direct mode is refused a destination that nests with one under way: under one claim of every destination's folder, a run whose destination holds or lies inside one a run under way lands in is refused, and its record names every folder it lands in | **Built** | `Cli/DirectRestoreParts` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0157--a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way) |
+| [0158](adr/0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md) | Every destination a restore in direct mode left unfinished is let go at once: `restore-parts --forget-all` lets every destination's folder go under the claim a run takes its folder under, passing over one a run holds, and `--forget` judges under the same claim | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/CliApplication` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0158--every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once) |
 
 ---
 
@@ -3972,7 +3973,8 @@ change.
 
 What remains is recorded rather than done. Parts go one destination at
 a time, never by age, and a run under way in another process is listed
-as one left unfinished. ADR-0143 tells the two apart.
+as one left unfinished. ADR-0143 tells the two apart. Every destination's
+parts have since gone at once ([0158](#0158--every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once)).
 
 ### 0143 — a destination takes one restore in direct mode at a time
 
@@ -4250,3 +4252,19 @@ unfinished, goes ahead.
 What remains is recorded rather than done. A run in direct mode is still
 not judged against the service's runs, and two destinations that only a
 link makes nest are judged apart.
+
+### 0158 — every destination a restore in direct mode left unfinished is let go at once
+
+`restore-parts --forget <name>` let one destination's parts go, and a
+person who would resume none named each. `--forget-all` now lets every
+destination's folder go at once, saying what each held and what they
+held in all. A folder a run holds is passed over and said, nothing kept
+beside the folders is touched, and a folder not all removed is named
+while the rest go. `--forget` asked whether a run held its folder and
+then removed it, so a run could take the folder between the two. Both
+now judge and remove under the claim a run takes its folder under
+(ADR-0157), so a run starting meanwhile waits and takes its folder
+afresh. No contract change.
+
+What remains is recorded rather than done. Folders are not let go by
+age, and the service's parts go one run at a time, by its name.

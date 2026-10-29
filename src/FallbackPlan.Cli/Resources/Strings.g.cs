@@ -550,6 +550,33 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, DirectRestorePartsReport_PartsNotLetGo, arg0, arg1);
 
     /// <summary>
+    /// --forget lets one destination's parts go and --forget-all every one's: ask one or the other. Nothing was let go.
+    /// </summary>
+    internal static string DirectRestorePartsReport_ForgetAndForgetAll => Get(nameof(DirectRestorePartsReport_ForgetAndForgetAll));
+
+    /// <summary>
+    /// No destination's parts under '{0}' were let go: {1}
+    /// </summary>
+    private static string DirectRestorePartsReport_NoneLetGo => Get(nameof(DirectRestorePartsReport_NoneLetGo));
+
+    /// <summary>
+    /// No destination's parts under '{0}' were let go: {1}
+    /// </summary>
+    internal static string FormatDirectRestorePartsReport_NoneLetGo(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, DirectRestorePartsReport_NoneLetGo, arg0, arg1);
+
+    /// <summary>
+    /// The parts of {0} destination(s) were not all let go: {1}
+    /// </summary>
+    private static string DirectRestorePartsReport_NotAllLetGo => Get(nameof(DirectRestorePartsReport_NotAllLetGo));
+
+    /// <summary>
+    /// The parts of {0} destination(s) were not all let go: {1}
+    /// </summary>
+    internal static string FormatDirectRestorePartsReport_NotAllLetGo(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, DirectRestorePartsReport_NotAllLetGo, arg0, arg1);
+
+    /// <summary>
     /// --run takes a run's name: the sixteen lowercase hex digits its receipt is kept under. restore-receipts with no run lists those kept.
     /// </summary>
     internal static string RestoreReceiptReport_NotARunsName => Get(nameof(RestoreReceiptReport_NotARunsName));

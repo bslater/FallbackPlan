@@ -238,6 +238,15 @@
   <data name="DirectRestorePartsReport_PartsNotLetGo" xml:space="preserve">
     <value>The parts named '{0}' were not all let go: {1}</value>
   </data>
+  <data name="DirectRestorePartsReport_ForgetAndForgetAll" xml:space="preserve">
+    <value>--forget lets one destination's parts go and --forget-all every one's: ask one or the other. Nothing was let go.</value>
+  </data>
+  <data name="DirectRestorePartsReport_NoneLetGo" xml:space="preserve">
+    <value>No destination's parts under '{0}' were let go: {1}</value>
+  </data>
+  <data name="DirectRestorePartsReport_NotAllLetGo" xml:space="preserve">
+    <value>The parts of {0} destination(s) were not all let go: {1}</value>
+  </data>
   <data name="RestoreReceiptReport_NotARunsName" xml:space="preserve">
     <value>--run takes a run's name: the sixteen lowercase hex digits its receipt is kept under. restore-receipts with no run lists those kept.</value>
   </data>
