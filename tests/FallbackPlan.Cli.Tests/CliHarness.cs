@@ -59,6 +59,23 @@ public sealed class CliHarness : IDisposable
         ]);
     }
 
+    /// <summary>
+    /// Runs one command as another installation of the same repository: the
+    /// same repository and passphrase, a state directory of its own, and so
+    /// a device of its own.
+    /// </summary>
+    public Task<Invocation> RunAsAnotherInstallationAsync(params string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        return RunRawAsync(
+        [
+            .. args,
+            "--repo", RepositoryPath,
+            "--passphrase-env", PassphraseVariable,
+            "--state", Path.Combine(_scratch, "another-state"),
+        ]);
+    }
+
     /// <summary>Runs one command with exactly the arguments given.</summary>
     public static async Task<Invocation> RunRawAsync(params string[] args)
     {

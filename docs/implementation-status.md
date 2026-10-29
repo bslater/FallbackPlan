@@ -178,6 +178,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0151](adr/0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md) | The catalogue keeps a folder's entries once, under its tree: schema 17 keys an entry by the folder's head tree and its name, a path is followed from the snapshot's root, a snapshot's folders are recorded together after its row, and forgetting snapshots lets go of what none of the rest reaches, so a set where a tenth of the files change per snapshot costs 930 B/version, not 2 005 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · `TestSupport/CatalogueTrees` · [notes](#0151--the-catalogue-keeps-a-folders-entries-once) |
 | [0152](adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) | The recovery tool keeps every path inside its output by the executor's rule: the rule moves into Domain unchanged, the executor and the tool resolve every path through it, so a link the output holds is written through by nothing, and a file's spool is made new rather than opened | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Repository.Tests/EndToEnd/RecoveryContainmentTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0152--the-recovery-tool-keeps-every-path-inside-its-output) |
 | [0153](adr/0153-a-folders-access-time-goes-with-the-last-snapshot-that-reaches-its-tree.md) | A folder's access time goes with the last snapshot that reaches its tree: forgetting snapshots lets go of every access time none of the rest reaches, in the transaction that lets go of their folders, and every writer records a snapshot's times after its folders | **Built** | `Repository.Catalogue/Catalogue` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/EndToEnd/FolderAccessTimeTests` · [notes](#0153--a-folders-access-time-goes-with-the-last-snapshot-reaching-it) |
+| [0154](adr/0154-the-single-file-restore-knows-who-captured-the-snapshot-it-names.md) | The single-file restore knows who captured the snapshot it names: `restore-file` given a snapshot compares the device it names with this installation's own, and gives back an ACL that names accounts by number where they agree | **Built** | `Cli/CliApplication` · `Cli.Tests/InspectionCommandTests` · `Cli.Tests/CliHarness` · [notes](#0154--the-single-file-restore-knows-who-captured-the-snapshot) |
 
 ---
 
@@ -4077,7 +4078,10 @@ What remains is recorded rather than done. The recovery tool still
 writes no metadata, and `restore-file` withholds a Linux ACL that names
 accounts by number even on the machine that captured it. The recovery
 tool has since written metadata through the same writer
-([0150](#0150--the-recovery-tool-writes-back-metadata)).
+([0150](#0150--the-recovery-tool-writes-back-metadata)), and
+`restore-file` given a snapshot has since given such an ACL back where
+this installation captured it
+([0154](#0154--the-single-file-restore-knows-who-captured-the-snapshot)).
 
 ### 0150 — the recovery tool writes back metadata
 
@@ -4163,3 +4167,21 @@ snapshot in between cannot let one go.
 What remains is recorded rather than done. The size measurement seeds no
 access times, and what a snapshot is made of still names every tree of
 every snapshot.
+
+### 0154 — the single-file restore knows who captured the snapshot
+
+A Linux ACL that names an account by number is written back only where
+this installation captured the snapshot, since anywhere else the number
+may be someone else. The executor judges that by the device the snapshot
+names. `restore-file` wrote through the same writer but claimed nothing,
+so it withheld such an ACL even on the machine that captured it. Given a
+snapshot, it already reads the snapshot's manifest, and a command-line
+session knows this installation's device, so it now compares the two
+and gives the ACL back where they agree. From another installation of
+the repository the ACL is withheld, and the line naming what did not
+land says why.
+
+What remains is recorded rather than done. Given a manifest alone,
+`restore-file` still claims nothing, since a file version names no
+device, and the recovery tool, which runs where there is no
+installation, withholds such an ACL wherever it runs.

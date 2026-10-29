@@ -59,6 +59,8 @@ It then names what did not land, in the receipt's words. A refused write leaves 
 
   > **2026-10 ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).** The recovery tool now writes a file's and a folder's metadata back through this writer, folders last and deepest first, and counts what did not land.
 - **Know that this installation captured the file.** `restore-file` withholds a Linux ACL that names accounts by number even on the machine that captured it, since it does not compare the snapshot's device with its own.
+
+  > **2026-10 ([ADR-0154](0154-the-single-file-restore-knows-who-captured-the-snapshot-it-names.md)).** Given a snapshot, `restore-file` now compares the device it names with this installation's own, and writes such an ACL back where they agree. Given a manifest alone, it still withholds one.
 - **Make a folder, a link or a hard-link group.** `restore-file` writes one regular file.
 
 ## Alternatives considered
@@ -73,3 +75,4 @@ It then names what did not land, in the receipt's words. A refused write leaves 
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The metadata writer, its rules, the account a restore runs as and the captured map move into Domain; the executor writes through the writer, and the command line's restore-file writes a file's metadata back once its content has verified and names what did not land. The recovery tool still writes none. |
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes metadata back through the writer this record moved into Domain, and the canary holds it to that writer too. |
+| 2026-10 | Accepted | [ADR-0154](0154-the-single-file-restore-knows-who-captured-the-snapshot-it-names.md): `restore-file` given a snapshot knows whether this installation captured it, and gives back an ACL that names accounts by number where it did. |

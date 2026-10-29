@@ -939,14 +939,18 @@ public static class CliApplication
                 using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                 await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
+                // A manifest named alone says nothing of who captured it; a
+                // snapshot names its device, by claim, as the executor takes
+                // it (ADR-0020, ADR-0154).
                 ObjectId manifestId;
+                var capturedHere = false;
                 if (parse.GetValue(manifestOption) is { } manifestHex)
                 {
                     manifestId = ParseObjectId(manifestHex);
                 }
                 else if (parse.GetValue(snapshotOption) is { } snapshotHex)
                 {
-                    manifestId = await LocateSnapshotFileAsync(session, reader, snapshotHex, cancellationToken).ConfigureAwait(false);
+                    (manifestId, capturedHere) = await LocateSnapshotFileAsync(session, reader, snapshotHex, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -977,7 +981,7 @@ public static class CliApplication
 
                 output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                     $"restored {result.Length} bytes to {outputPath} (whole-file hash verified)"));
-                WriteBackMetadata(outputPath, manifest.Metadata);
+                WriteBackMetadata(outputPath, manifest.Metadata, capturedHere);
                 return 0;
             }));
 
@@ -985,16 +989,17 @@ public static class CliApplication
             // executor holds every item to (architecture 08 §3; ADR-0149),
             // and what did not land said in the receipt's words. The output
             // is a file whatever the manifest's kind.
-            void WriteBackMetadata(string outputPath, EntryMetadata metadata)
+            void WriteBackMetadata(string outputPath, EntryMetadata metadata, bool capturedHere)
             {
-                var written = new MetadataWriter(MetadataTarget.ForLocalPlatform()).Write(outputPath, metadata, EntryKind.File);
+                var written = new MetadataWriter(MetadataTarget.ForLocalPlatform() with { CapturedHere = capturedHere })
+                    .Write(outputPath, metadata, EntryKind.File);
                 if (MetadataRules.NotApplied(MetadataRules.Captured(metadata), written.Applied) is { } left)
                 {
                     output.WriteLine($"not applied: {string.Join(", ", left)}" + (written.Detail is { } detail ? $" ({detail})" : string.Empty));
                 }
             }
 
-            async ValueTask<ObjectId> LocateSnapshotFileAsync(
+            async ValueTask<(ObjectId File, bool CapturedHere)> LocateSnapshotFileAsync(
                 CliSession session, RepositoryReader reader, string snapshotHex, CancellationToken cancellationToken)
             {
                 var wanted = Convert.FromHexString(snapshotHex);
@@ -1029,7 +1034,7 @@ public static class CliApplication
                     var tree = TreeManifestCodec.Decode(treeRead.Plaintext!);
                     var file = tree.Entries.FirstOrDefault(treeEntry => treeEntry.EntryKind == EntryKind.File)
                         ?? throw new CliFailureException(Strings.CliApplication_SnapshotSTreeHoldsNo);
-                    return file.ObjectId;
+                    return (file.ObjectId, decoded.Manifest.DeviceId.Span.SequenceEqual(session.DeviceId));
                 }
 
                 throw new CliFailureException(Strings.FormatCliApplication_NoSnapshotExistsRepository(snapshotHex));
