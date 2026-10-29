@@ -1204,7 +1204,41 @@ function renderUnfinishedRuns() {
           <button type="button" class="btn small" data-action="resume-run" data-run="${esc(runDescriptor.run)}">Restore what is left…</button>
           <button type="button" class="btn small" data-action="forget-run" data-run="${esc(runDescriptor.run)}">Let it go…</button>
         </div>`).join("")}
+      ${S.restoreRuns.length > 1 ? `
+      <div class="actions-row">
+        <button type="button" class="btn small" data-action="forget-all-runs">Let them all go…</button>
+      </div>` : ""}
     </div>`;
+}
+
+// Each is let go by its name, as one at a time is (ADR-0163), and one the
+// service will not let go is named in its words while every other is still
+// asked, so the person learns which before the dialog closes.
+async function letEachGo(names, ask) {
+  if (!names.length) {
+    closeDialog();
+    toast("warn", "Nothing was left to let go.");
+    return;
+  }
+  const refused = [];
+  for (const name of names) {
+    const answer = await api(ask(name)).catch(error => ({ result: "error", message: error.message }));
+    if (answer.result === "error") refused.push({ name, message: answer.message });
+  }
+  if (!refused.length) {
+    closeDialog();
+    toast("ok", `Let go ${fmtCount(names.length)}.`);
+    return;
+  }
+  openDialog(`
+    <h3>Not every one was let go</h3>
+    <p class="dlg-sub">Let go ${fmtCount(names.length - refused.length)} of ${fmtCount(names.length)}. The service would
+    not let these go:</p>
+    <ul class="warnings">${refused.map(({ name, message }) =>
+      `<li><span class="mono">${esc(name)}</span> — ${esc(message)}</li>`).join("")}</ul>
+    <div class="dlg-actions">
+      <button type="button" class="btn primary" data-action="close-dialog">Close</button>
+    </div>`);
 }
 
 /* ----- a kept plan run as it was approved (ADR-0118) ----- */
@@ -1701,6 +1735,12 @@ function renderRestoreReceiptsCard() {
   // (ADR-0140), once they confirm which run's it is.
   const letGo = row => `<button type="button" class="btn small" data-action="forget-receipt"
       data-run="${esc(row.run)}">Let go…</button>`;
+  // Every one kept, those not shown among them, can go at once (ADR-0163).
+  const letAllGo = S.restoreReceipts?.length && S.restoreReceiptsTotal > 1
+    ? `<div class="actions-row">
+        <button type="button" class="btn small" data-action="forget-all-receipts">Let them all go…</button>
+      </div>`
+    : "";
 
   let body;
   if (S.restoreReceipts === null) {
@@ -1743,7 +1783,8 @@ function renderRestoreReceiptsCard() {
     <h3>📥 Restores</h3>
     <p class="sub">Each restore this service ran, newest first, as its receipt keeps it: what became of its files and
        where it wrote them (ADR-0125).${shown}</p>
-    ${body}`;
+    ${body}
+    ${letAllGo}`;
 }
 
 function renderReceiptsCard() {
@@ -3074,6 +3115,54 @@ const actions = {
         refreshSnapshots();
         refreshStatus();
       }
+    });
+  },
+
+  "forget-all-runs"() {
+    openDialog(`
+      <h3>Let every restore left unfinished go</h3>
+      <p class="dlg-sub">${fmtCount(S.restoreRuns.length)} restores left unfinished, each let go by its name as the
+      service names them when you confirm.</p>
+      <p class="dlg-sub">The service will name them no more, and their notices are withdrawn. What each landed stays
+      where it landed, and can still be resumed from the command line by its folder's name.</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" id="forget-all-runs-go" data-action="forget-all-runs-go">Let them all go</button>
+      </div>`);
+  },
+
+  // Asked again as the person confirms, so a run that finished since the
+  // card was drawn is not asked after, and one left unfinished since is.
+  async "forget-all-runs-go"(el) {
+    await withBusy(el, async () => {
+      const listed = await run({ command: "list_restore_runs" }, { errToast: "Not let go" });
+      if (!listed) return;
+      await letEachGo(listed.runs.map(named => named.run), named => ({ command: "forget_restore_run", run: named }));
+      refreshSnapshots();
+      refreshStatus();
+    });
+  },
+
+  "forget-all-receipts"() {
+    openDialog(`
+      <h3>Let every receipt go</h3>
+      <p class="dlg-sub">The ${fmtCount(S.restoreReceiptsTotal)} receipts the service keeps, those not shown here too,
+      each let go by its run as the service names them when you confirm.</p>
+      <p class="dlg-sub">The service will keep them no more, and nothing brings them back. What their runs restored
+      stays where it landed.</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" id="forget-all-receipts-go" data-action="forget-all-receipts-go">Let them all go</button>
+      </div>`);
+  },
+
+  // Asked with no limit, since the card shows only the newest.
+  async "forget-all-receipts-go"(el) {
+    await withBusy(el, async () => {
+      const listed = await run({ command: "list_restore_receipts" }, { errToast: "Not let go" });
+      if (!listed) return;
+      await letEachGo(listed.receipts.map(kept => kept.run), named => ({ command: "forget_restore_receipt", run: named }));
+      refreshRestoreReceipts();
     });
   },
 

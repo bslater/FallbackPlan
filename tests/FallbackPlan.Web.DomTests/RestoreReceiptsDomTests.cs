@@ -17,7 +17,10 @@ namespace FallbackPlan.Web.DomTests;
 /// restored everything offers nothing to show. A run says how many of its
 /// files were resumed within (ADR-0134). A receipt is let go by its run once
 /// a person confirms, asking no passphrase, and the list is asked again
-/// (ADR-0140).
+/// (ADR-0140). Where more than one is kept, every one is let go at once once
+/// a person confirms, those the card does not show too, each by its run as
+/// the service names them then; one the service will not let go is named
+/// with its words while the rest go (ADR-0163).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -187,6 +190,91 @@ public sealed class RestoreReceiptsDomTests
     }
 
     [TestMethod]
+    public async Task EveryReceiptKept_IsLetGoAtOnce_ThoseNotShownToo_OnceAPersonConfirms()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var kept = new KeptReceipts("0123456789abcdef", "fedcba9876543210", "00112233445566ff");
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListDestinationsCommand => new DestinationsResult([]),
+            // Asked under a limit, the service answers fewer than it keeps.
+            ListRestoreReceiptsCommand listed => kept.Listed(listed.Limit is null ? null : 2),
+            ForgetRestoreReceiptCommand forget => kept.LetGo(forget.Run),
+            _ => new AcknowledgedResult(),
+        };
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#maintenance");
+        await Expect(page.Locator("#restore-receipts-card")).ToContainTextAsync("Showing the newest 2 of 3 kept.");
+
+        await page.ClickAsync("[data-action=\"forget-all-receipts\"]");
+        await Expect(page.Locator("#dialog")).ToContainTextAsync("The 3 receipts the service keeps");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ForgetRestoreReceiptCommand>(), "nothing is let go before the person confirms");
+        await page.ClickAsync("#forget-all-receipts-go");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("Let go 3.");
+        await Expect(page.Locator("#restore-receipts-card")).ToContainTextAsync("No restore has kept a receipt here yet.");
+        CollectionAssert.AreEquivalent(
+            new[] { "0123456789abcdef", "fedcba9876543210", "00112233445566ff" },
+            harness.Clients.Client.Received.OfType<ForgetRestoreReceiptCommand>().Select(forget => forget.Run).ToList());
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<OpenRestoreSourceCommand>(), "letting receipts go asks no passphrase");
+    }
+
+    [TestMethod]
+    public async Task AReceiptTheServiceWillNotLetGo_IsNamedWithItsWords_AndTheRestGo()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var kept = new KeptReceipts("0123456789abcdef", "fedcba9876543210");
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListDestinationsCommand => new DestinationsResult([]),
+            ListRestoreReceiptsCommand => kept.Listed(null),
+            ForgetRestoreReceiptCommand { Run: "fedcba9876543210" } =>
+                new ServiceError(ServiceErrorReason.NotFound, "the service keeps no such receipt"),
+            ForgetRestoreReceiptCommand forget => kept.LetGo(forget.Run),
+            _ => new AcknowledgedResult(),
+        };
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#maintenance");
+        await page.ClickAsync("[data-action=\"forget-all-receipts\"]");
+        await page.ClickAsync("#forget-all-receipts-go");
+
+        var dialog = page.Locator("#dialog");
+        await Expect(dialog).ToContainTextAsync("Let go 1 of 2.");
+        await Expect(dialog).ToContainTextAsync("fedcba9876543210 — the service keeps no such receipt");
+        var card = page.Locator("#restore-receipts-card");
+        await Expect(card).Not.ToContainTextAsync("0123456789abcdef");
+        await Expect(card).ToContainTextAsync("fedcba9876543210");
+    }
+
+    [TestMethod]
+    public async Task AReceiptKeptAlone_OffersOnlyItsOwnLetGo()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var kept = new KeptReceipts("0123456789abcdef");
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListDestinationsCommand => new DestinationsResult([]),
+            ListRestoreReceiptsCommand => kept.Listed(null),
+            _ => new AcknowledgedResult(),
+        };
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#maintenance");
+
+        var card = page.Locator("#restore-receipts-card");
+        await Expect(card.Locator("[data-action=\"forget-receipt\"][data-run=\"0123456789abcdef\"]")).ToBeVisibleAsync();
+        await Expect(card.Locator("[data-action=\"forget-all-receipts\"]")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
     public async Task AServiceThatKeptNone_SaysSo()
     {
         await using var harness = await DomHarness.StartAsync();
@@ -226,5 +314,36 @@ public sealed class RestoreReceiptsDomTests
         await Expect(page.Locator("#restore-receipts-card")).ToContainTextAsync("No restore has kept a receipt here yet.");
         await harness.ReceivedAsync<ListRestoreReceiptsCommand>();
         await Expect(page.Locator("#toasts")).Not.ToContainTextAsync("unknown command");
+    }
+
+    /// <summary>The receipts a scripted service keeps, newest first, less those it has let go.</summary>
+    private sealed class KeptReceipts(params string[] runs)
+    {
+        private readonly Lock _gate = new();
+        private readonly HashSet<string> _letGo = [];
+
+        public RestoreReceiptsResult Listed(int? limit)
+        {
+            lock (_gate)
+            {
+                var kept = runs.Where(run => !_letGo.Contains(run)).ToList();
+                return new RestoreReceiptsResult(
+                    [.. kept.Take(limit ?? kept.Count).Select(Receipt)], kept.Count);
+            }
+        }
+
+        public AcknowledgedResult LetGo(string run)
+        {
+            lock (_gate)
+            {
+                _letGo.Add(run);
+            }
+
+            return new AcknowledgedResult();
+        }
+
+        private static RestoreReceiptDescriptor Receipt(string run) =>
+            new(run, "complete", 1_700_000_000_000, new string('e', 32), "/srv/restored",
+                Restored: 3, FoundInPlace: 0, Skipped: 0, Failed: 0, Degraded: 0);
     }
 }

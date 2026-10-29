@@ -20,13 +20,19 @@ namespace FallbackPlan.Web.DomTests;
 /// planned (ADR-0121): what the run already landed, what is left to write,
 /// and whether it fits, and one that will not fit is armed only when the
 /// person says to go on; a service that cannot plan it still resumes it.
-/// Each run says what the parts it kept hold (ADR-0133).
+/// Each run says what the parts it kept hold (ADR-0133). Where more than one
+/// is left, every one is let go at once once a person confirms, each by its
+/// name as the service names them then, asking no passphrase; one the
+/// service will not let go is named with its words while the rest go
+/// (ADR-0163).
 /// </summary>
 [TestClass]
 [BrowserCondition]
 public sealed class RestoreUnfinishedDomTests
 {
     private const string Run = "0123456789abcdef";
+    private const string Other = "fedcba9876543210";
+    private const string Later = "00112233445566ff";
 
     private static readonly ulong Now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -259,6 +265,113 @@ public sealed class RestoreUnfinishedDomTests
     }
 
     [TestMethod]
+    public async Task EveryRunLeftUnfinished_IsLetGoAtOnce_EachByItsName_AsTheServiceNamesThemOnceAPersonConfirms()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var shown = false;
+        var runs = new LeftUnfinished(Unfinished, Unfinished with { Run = Other });
+        var fakes = Fakes();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            // Asked again once the card is shown, the service names one more.
+            ListRestoreRunsCommand => runs.Listed(shown ? Unfinished with { Run = Later } : null),
+            ForgetRestoreRunCommand forget => runs.LetGo(forget.Run),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await Expect(page.Locator("#unfinished-runs")).ToContainTextAsync(Other);
+        shown = true;
+
+        await page.ClickAsync("[data-action=\"forget-all-runs\"]");
+        await Expect(page.Locator("#dialog")).ToContainTextAsync("stays where it landed");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ForgetRestoreRunCommand>(), "nothing is let go before the person confirms");
+        await page.ClickAsync("#forget-all-runs-go");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("Let go 3.");
+        await Expect(page.Locator("#unfinished-runs")).ToHaveCountAsync(0);
+        CollectionAssert.AreEquivalent(
+            new[] { Run, Other, Later },
+            harness.Clients.Client.Received.OfType<ForgetRestoreRunCommand>().Select(forget => forget.Run).ToList());
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<OpenRestoreSourceCommand>(), "letting runs go asks no passphrase");
+    }
+
+    [TestMethod]
+    public async Task ARunTheServiceWillNotLetGo_IsNamedWithItsWords_AndTheRestGo()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var runs = new LeftUnfinished(Unfinished, Unfinished with { Run = Other });
+        var fakes = Fakes();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            ListRestoreRunsCommand => runs.Listed(null),
+            ForgetRestoreRunCommand { Run: Run } => new ServiceError(ServiceErrorReason.NotFound, "it is under way again"),
+            ForgetRestoreRunCommand forget => runs.LetGo(forget.Run),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await page.ClickAsync("[data-action=\"forget-all-runs\"]");
+        await page.ClickAsync("#forget-all-runs-go");
+
+        var dialog = page.Locator("#dialog");
+        await Expect(dialog).ToContainTextAsync("Let go 1 of 2.");
+        await Expect(dialog).ToContainTextAsync($"{Run} — it is under way again");
+        var card = page.Locator("#unfinished-runs");
+        await Expect(card).Not.ToContainTextAsync(Other);
+        await Expect(card).ToContainTextAsync(Run);
+        CollectionAssert.AreEquivalent(
+            new[] { Run, Other },
+            harness.Clients.Client.Received.OfType<ForgetRestoreRunCommand>().Select(forget => forget.Run).ToList());
+    }
+
+    [TestMethod]
+    public async Task LettingEveryRunGo_WithNoneLeftByThen_SaysSo_AndAsksNoneToGo()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var confirming = false;
+        var runs = new LeftUnfinished(Unfinished, Unfinished with { Run = Other });
+        var fakes = Fakes();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            // Another client let them go while the dialog was open.
+            ListRestoreRunsCommand => confirming ? new RestoreRunsResult([]) : runs.Listed(null),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await page.ClickAsync("[data-action=\"forget-all-runs\"]");
+        await Expect(page.Locator("#forget-all-runs-go")).ToBeVisibleAsync();
+        confirming = true;
+        await page.ClickAsync("#forget-all-runs-go");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("Nothing was left to let go.");
+        await Expect(page.Locator("#unfinished-runs")).ToHaveCountAsync(0);
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ForgetRestoreRunCommand>());
+    }
+
+    [TestMethod]
+    public async Task ARunLeftUnfinishedAlone_OffersOnlyItsOwnLetGo()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Fakes();
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+
+        var card = page.Locator("#unfinished-runs");
+        await Expect(card.Locator($"[data-action=\"forget-run\"][data-run=\"{Run}\"]")).ToBeVisibleAsync();
+        await Expect(card.Locator("[data-action=\"forget-all-runs\"]")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
     public async Task TheNoticeOfARunLeftUnfinished_OffersToRestoreWhatIsLeft()
     {
         await using var harness = await DomHarness.StartAsync();
@@ -331,5 +444,31 @@ public sealed class RestoreUnfinishedDomTests
         await Expect(page.Locator("#rst-set")).ToBeVisibleAsync();
         await page.ClickAsync("[data-action=\"rst-continue\"]");
         await Expect(page.Locator("#rst-resume-go")).ToBeVisibleAsync();
+    }
+
+    /// <summary>The runs a scripted service left unfinished, less those it has let go.</summary>
+    private sealed class LeftUnfinished(params RestoreRunDescriptor[] runs)
+    {
+        private readonly Lock _gate = new();
+        private readonly HashSet<string> _letGo = [];
+
+        public RestoreRunsResult Listed(RestoreRunDescriptor? more)
+        {
+            IEnumerable<RestoreRunDescriptor> named = more is null ? runs : [.. runs, more];
+            lock (_gate)
+            {
+                return new RestoreRunsResult([.. named.Where(run => !_letGo.Contains(run.Run))]);
+            }
+        }
+
+        public AcknowledgedResult LetGo(string run)
+        {
+            lock (_gate)
+            {
+                _letGo.Add(run);
+            }
+
+            return new AcknowledgedResult();
+        }
     }
 }
