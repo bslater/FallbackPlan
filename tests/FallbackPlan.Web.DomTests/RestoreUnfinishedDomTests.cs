@@ -24,7 +24,9 @@ namespace FallbackPlan.Web.DomTests;
 /// is left, every one is let go at once once a person confirms, each by its
 /// name as the service names them then, asking no passphrase; one the
 /// service will not let go is named with its words while the rest go
-/// (ADR-0163).
+/// (ADR-0163). Given days, only the runs begun longer ago than that go, and
+/// how many begun within stay is said; days below one, or not whole, are
+/// refused before anything is asked to go (ADR-0169).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -354,6 +356,95 @@ public sealed class RestoreUnfinishedDomTests
         await Expect(page.Locator("#toasts")).ToContainTextAsync("Nothing was left to let go.");
         await Expect(page.Locator("#unfinished-runs")).ToHaveCountAsync(0);
         Assert.IsEmpty(harness.Clients.Client.Received.OfType<ForgetRestoreRunCommand>());
+    }
+
+    [TestMethod]
+    public async Task OnlyTheRunsBegunLongerAgoThanThePersonSays_AreLetGo_AndThoseBegunWithinStay()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var runs = new LeftUnfinished(
+            Unfinished with { Run = Later, BeganAt = 1_700_000_000_000 },
+            Unfinished,
+            Unfinished with { Run = Other, BeganAt = Now - 7_200_000 });
+        var fakes = Fakes();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            ListRestoreRunsCommand => runs.Listed(null),
+            ForgetRestoreRunCommand forget => runs.LetGo(forget.Run),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await page.ClickAsync("[data-action=\"forget-all-runs\"]");
+        await page.FillAsync("#forget-all-runs-days", "30");
+        await page.ClickAsync("#forget-all-runs-go");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("Let go 1. 2 begun within 30 days stay.");
+        CollectionAssert.AreEqual(
+            new[] { Later },
+            harness.Clients.Client.Received.OfType<ForgetRestoreRunCommand>().Select(forget => forget.Run).ToList());
+        var card = page.Locator("#unfinished-runs");
+        await Expect(card).ToContainTextAsync(Run);
+        await Expect(card).ToContainTextAsync(Other);
+        await Expect(card).Not.ToContainTextAsync(Later);
+    }
+
+    [TestMethod]
+    [DataRow("0")]
+    [DataRow("2.5")]
+    public async Task DaysBelowOneOrNotWhole_AreRefused_AndNoRunIsAskedToGo(string days)
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var runs = new LeftUnfinished(
+            Unfinished with { BeganAt = 1_700_000_000_000 },
+            Unfinished with { Run = Other, BeganAt = 1_700_000_000_000 });
+        var fakes = Fakes();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            ListRestoreRunsCommand => runs.Listed(null),
+            ForgetRestoreRunCommand forget => runs.LetGo(forget.Run),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await page.ClickAsync("[data-action=\"forget-all-runs\"]");
+
+        await page.FillAsync("#forget-all-runs-days", days);
+        await page.ClickAsync("#forget-all-runs-go");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("The days take a whole number, at least one. Nothing was let go.");
+        await Expect(page.Locator("#forget-all-runs-go")).ToBeVisibleAsync();
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ForgetRestoreRunCommand>());
+        await Expect(page.Locator("#unfinished-runs")).ToContainTextAsync(Other);
+    }
+
+    [TestMethod]
+    public async Task WhenEveryRunBeganWithinTheDays_NoneIsAskedToGo_AndTheConsoleSaysSo()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var runs = new LeftUnfinished(Unfinished, Unfinished with { Run = Other, BeganAt = Now - 7_200_000 });
+        var fakes = Fakes();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            ListRestoreRunsCommand => runs.Listed(null),
+            ForgetRestoreRunCommand forget => runs.LetGo(forget.Run),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await page.ClickAsync("[data-action=\"forget-all-runs\"]");
+        await page.FillAsync("#forget-all-runs-days", "1");
+        await page.ClickAsync("#forget-all-runs-go");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("Nothing was let go. 2 begun within 1 day stay.");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ForgetRestoreRunCommand>());
+        await Expect(page.Locator("#unfinished-runs")).ToContainTextAsync(Other);
     }
 
     [TestMethod]

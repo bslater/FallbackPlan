@@ -43,6 +43,8 @@ A receipt that does not read says nothing of when its run ended. When its file w
 
 - **Expire receipts on its own.** Nothing goes unless a person asks, as [ADR-0139](0139-a-kept-restore-receipt-is-let-go.md) decided.
 - **Offer it in the console.** The Maintenance view lets one go, or every one.
+
+  > **2026-10 ([ADR-0169](0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md)).** Done: the Maintenance view lets go by the same days, and names a receipt that does not say when its run ended.
 - **Go by age for runs left unfinished or for direct mode's parts.** Those still go one by one or every one at once.
 
   > **2026-10 ([ADR-0165](0165-restores-left-unfinished-are-let-go-by-age.md)).** Both go by age now, by when their run began, judged by the same cutoff.
@@ -59,3 +61,4 @@ A receipt that does not read says nothing of when its run ended. When its file w
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. restore-receipts with --forget-all and --older-than-days lets go only the receipts of runs that ended longer ago, from the state directory or through a paired service, keeping and naming a receipt that does not say when its run ended. No contract change. |
 | 2026-10 | Accepted | Noted by [ADR-0165](0165-restores-left-unfinished-are-let-go-by-age.md): runs left unfinished and direct mode's parts go by age too, by the same cutoff. |
+| 2026-10 | Accepted | Noted by [ADR-0169](0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md): the console lets go by age too, by the same days and the same cutoff. |

@@ -1213,9 +1213,11 @@ function renderUnfinishedRuns() {
 
 // Each is let go by its name, as one at a time is (ADR-0163), and one the
 // service will not let go is named in its words while every other is still
-// asked, so the person learns which before the dialog closes.
-async function letEachGo(names, ask) {
-  if (!names.length) {
+// asked, so the person learns which before the dialog closes. What a by-age
+// let-go leaves is said beside it (ADR-0169): how many are too young, and by
+// name any that cannot be judged.
+async function letEachGo(names, ask, stays = { note: "", named: [] }) {
+  if (!names.length && !stays.note && !stays.named.length) {
     closeDialog();
     toast("warn", "Nothing was left to let go.");
     return;
@@ -1225,20 +1227,47 @@ async function letEachGo(names, ask) {
     const answer = await api(ask(name)).catch(error => ({ result: "error", message: error.message }));
     if (answer.result === "error") refused.push({ name, message: answer.message });
   }
-  if (!refused.length) {
+  const note = stays.note ? ` ${stays.note}` : "";
+  const went = names.length ? `Let go ${fmtCount(names.length)}.` : "Nothing was let go.";
+  if (!refused.length && !stays.named.length) {
     closeDialog();
-    toast("ok", `Let go ${fmtCount(names.length)}.`);
+    toast(names.length ? "ok" : "warn", went + note);
     return;
   }
   openDialog(`
-    <h3>Not every one was let go</h3>
-    <p class="dlg-sub">Let go ${fmtCount(names.length - refused.length)} of ${fmtCount(names.length)}. The service would
+    <h3>${refused.length ? "Not every one was let go" : "Some stay"}</h3>
+    ${refused.length ? `
+    <p class="dlg-sub">Let go ${fmtCount(names.length - refused.length)} of ${fmtCount(names.length)}.${esc(note)} The service would
     not let these go:</p>
     <ul class="warnings">${refused.map(({ name, message }) =>
-      `<li><span class="mono">${esc(name)}</span> — ${esc(message)}</li>`).join("")}</ul>
+      `<li><span class="mono">${esc(name)}</span> — ${esc(message)}</li>`).join("")}</ul>` : `
+    <p class="dlg-sub">${esc(went + note)}</p>`}
+    ${stays.named.length ? `
+    <p class="dlg-sub">These stay:</p>
+    <ul class="warnings">${stays.named.map(({ name, message }) =>
+      `<li><span class="mono">${esc(name)}</span> — ${esc(message)}</li>`).join("")}</ul>` : ""}
     <div class="dlg-actions">
       <button type="button" class="btn primary" data-action="close-dialog">Close</button>
     </div>`);
+}
+
+// The days a by-age let-go goes by, as the command line's --older-than-days
+// takes them (ADR-0164, ADR-0165): empty is every one, and anything but a
+// whole number of at least one is refused before anything is asked to go.
+// What is older ended, or began, before the cutoff, never before the epoch.
+function olderThanDays(id) {
+  const raw = (document.getElementById(id)?.value ?? "").trim();
+  if (!raw) return { days: null };
+  if (!/^[0-9]+$/.test(raw) || Number(raw) < 1) return { refused: true };
+  const days = Number(raw);
+  return { days, cutoff: Math.max(0, Date.now() - days * 86_400_000), within: `${days} ${days === 1 ? "day" : "days"}` };
+}
+
+function daysField(id, what) {
+  return `
+      <label class="field" for="${id}">Only those ${what} longer ago than this many days <span class="sub">(optional; left
+      empty, every one goes)</span></label>
+      <input id="${id}" type="text" inputmode="numeric" autocomplete="off" placeholder="every one">`;
 }
 
 /* ----- a kept plan run as it was approved (ADR-0118) ----- */
@@ -3124,7 +3153,7 @@ const actions = {
       <p class="dlg-sub">${fmtCount(S.restoreRuns.length)} restores left unfinished, each let go by its name as the
       service names them when you confirm.</p>
       <p class="dlg-sub">The service will name them no more, and their notices are withdrawn. What each landed stays
-      where it landed, and can still be resumed from the command line by its folder's name.</p>
+      where it landed, and can still be resumed from the command line by its folder's name.</p>${daysField("forget-all-runs-days", "begun")}
       <div class="dlg-actions">
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
         <button type="button" class="btn primary" id="forget-all-runs-go" data-action="forget-all-runs-go">Let them all go</button>
@@ -3134,10 +3163,17 @@ const actions = {
   // Asked again as the person confirms, so a run that finished since the
   // card was drawn is not asked after, and one left unfinished since is.
   async "forget-all-runs-go"(el) {
+    const age = olderThanDays("forget-all-runs-days");
+    if (age.refused) { toast("warn", "The days take a whole number, at least one. Nothing was let go."); return; }
     await withBusy(el, async () => {
       const listed = await run({ command: "list_restore_runs" }, { errToast: "Not let go" });
       if (!listed) return;
-      await letEachGo(listed.runs.map(named => named.run), named => ({ command: "forget_restore_run", run: named }));
+      const asked = listed.runs.filter(named => age.days === null || Number(named.beganAt) < age.cutoff);
+      const younger = listed.runs.length - asked.length;
+      await letEachGo(asked.map(named => named.run), named => ({ command: "forget_restore_run", run: named }), {
+        note: younger ? `${fmtCount(younger)} begun within ${age.within} ${younger === 1 ? "stays" : "stay"}.` : "",
+        named: [],
+      });
       refreshSnapshots();
       refreshStatus();
     });
@@ -3149,7 +3185,7 @@ const actions = {
       <p class="dlg-sub">The ${fmtCount(S.restoreReceiptsTotal)} receipts the service keeps, those not shown here too,
       each let go by its run as the service names them when you confirm.</p>
       <p class="dlg-sub">The service will keep them no more, and nothing brings them back. What their runs restored
-      stays where it landed.</p>
+      stays where it landed.</p>${daysField("forget-all-receipts-days", "whose run ended")}
       <div class="dlg-actions">
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
         <button type="button" class="btn primary" id="forget-all-receipts-go" data-action="forget-all-receipts-go">Let them all go</button>
@@ -3158,10 +3194,20 @@ const actions = {
 
   // Asked with no limit, since the card shows only the newest.
   async "forget-all-receipts-go"(el) {
+    const age = olderThanDays("forget-all-receipts-days");
+    if (age.refused) { toast("warn", "The days take a whole number, at least one. Nothing was let go."); return; }
     await withBusy(el, async () => {
       const listed = await run({ command: "list_restore_receipts" }, { errToast: "Not let go" });
       if (!listed) return;
-      await letEachGo(listed.receipts.map(kept => kept.run), named => ({ command: "forget_restore_receipt", run: named }));
+      // A receipt that does not say when its run ended cannot be judged, so
+      // it stays and is named, as the command line names it.
+      const undated = age.days === null ? [] : listed.receipts.filter(kept => !kept.endedAt);
+      const asked = listed.receipts.filter(kept => age.days === null || (kept.endedAt && Number(kept.endedAt) < age.cutoff));
+      const younger = listed.receipts.length - asked.length - undated.length;
+      await letEachGo(asked.map(kept => kept.run), named => ({ command: "forget_restore_receipt", run: named }), {
+        note: younger ? `${fmtCount(younger)} whose run ended within ${age.within} ${younger === 1 ? "stays" : "stay"}.` : "",
+        named: undated.map(kept => ({ name: kept.run, message: "does not say when its run ended, so it stays" })),
+      });
       refreshRestoreReceipts();
     });
   },

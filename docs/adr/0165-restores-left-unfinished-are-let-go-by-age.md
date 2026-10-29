@@ -45,6 +45,8 @@ On either verb, `--older-than-days` without `--forget-all`, or below one day, is
 - **Expire them on their own.** Nothing goes unless a person asks.
 - **Offer it in the console.** The console lets one run go, or every one.
 
+  > **2026-10 ([ADR-0169](0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md)).** Done for the service's runs: the snapshots page lets them go by the same days. Direct mode's parts stay the command line's.
+
 ## Alternatives considered
 
 - **Take a folder's age from when it was last written.** Rejected, as for receipts ([ADR-0164](0164-kept-restore-receipts-are-let-go-by-age.md)). A part written to an hour ago belongs to a run that may have begun last year, and parts let go are gone.
@@ -55,3 +57,4 @@ On either verb, `--older-than-days` without `--forget-all`, or below one day, is
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. restore-resume and restore-parts with --forget-all and --older-than-days let go only the runs, and the destinations, that began longer ago, keeping and naming a destination whose run said nothing of when it began. No contract change. |
+| 2026-10 | Accepted | Noted by [ADR-0169](0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md): the console lets go by age too, by the same days and the same cutoff. |
