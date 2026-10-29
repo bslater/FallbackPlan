@@ -36,6 +36,8 @@ A run whose destination's folder another run holds is refused before it writes a
 
 `restore-parts` says of a destination it lists that a run there is under way. `--forget` refuses that destination's name, and lets nothing go.
 
+> **2026-10 ([ADR-0158](0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md)).** `--forget` asked whether a run held the folder and then removed it, so a run could take the folder between the two. It now does both under the claim a run takes its folder under, as `--forget-all` does.
+
 ## Consequences
 
 - Two runs to one destination no longer assemble into the same parts, or let go of each other's.
@@ -60,3 +62,4 @@ A run whose destination's folder another run holds is refused before it writes a
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A restore in direct mode holds its destination's folder of parts from before its record until it ends; a second run there is refused before it writes anything; restore-parts says a run is under way there and lets none of its parts go. No contract change. |
 | 2026-10 | Accepted | Noted by [ADR-0157](0157-a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way.md): a run whose destination nests with one under way is refused too, which this record left apart. |
+| 2026-10 | Accepted | Noted by [ADR-0158](0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md): --forget judges whether a run holds a folder, and removes it, under the claim a run takes its folder under, so none is let go as a run takes it. |
