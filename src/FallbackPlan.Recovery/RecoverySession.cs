@@ -451,7 +451,8 @@ public sealed class RecoverySession : IDisposable
         ObjectId rootTree, string outputDirectory, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(outputDirectory);
-        Directory.CreateDirectory(outputDirectory);
+        var root = Path.GetFullPath(outputDirectory);
+        Directory.CreateDirectory(root);
 
         var notes = new List<RecoveryNote>();
         var restored = 0;
@@ -471,7 +472,7 @@ public sealed class RecoverySession : IDisposable
             {
                 Count(
                     folder.Captured,
-                    !folder.Found && IsStillTheFolderMade(outputDirectory, folder.Path)
+                    !folder.Found && IsStillTheFolderMade(root, folder.Path)
                         ? writer.Write(folder.Destination, folder.Values, EntryKind.DirectoryPlaceholder).Applied
                         : CapturedMetadata.None);
             }
@@ -534,11 +535,9 @@ public sealed class RecoverySession : IDisposable
 
                     // A tree entry's name is repository text, and this session
                     // exists precisely for repositories in the worst state to
-                    // trust: a name that is not a plain component — '..', a
-                    // separator, a rooted form — would let Path.Combine below
-                    // write outside the chosen output. Refused per entry, with
-                    // the subtree it would have carried; the drill continues.
-                    if (!IsPlainName(name, out var why))
+                    // trust. Refused per entry, with the subtree it would have
+                    // carried; the drill continues.
+                    if (!TryPlace(root, path, name, out var destination, out var why))
                     {
                         failed++;
                         notes.Add(new RecoveryNote(RecoveryNoteKind.Refused, path, Reason: why));
@@ -547,7 +546,7 @@ public sealed class RecoverySession : IDisposable
 
                     if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
                     {
-                        var directory = Path.Combine(outputDirectory, path.Replace('/', Path.DirectorySeparatorChar));
+                        var directory = destination;
                         var found = Directory.Exists(directory);
                         Directory.CreateDirectory(directory);
                         await WalkAsync(entry.ObjectId, path, (directory, found)).ConfigureAwait(false);
@@ -571,7 +570,7 @@ public sealed class RecoverySession : IDisposable
                         continue;
                     }
 
-                    if (await RestoreFileAsync(manifest, path).ConfigureAwait(false))
+                    if (await RestoreFileAsync(manifest, path, destination).ConfigureAwait(false))
                     {
                         restored++;
                     }
@@ -585,9 +584,8 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
-        async ValueTask<bool> RestoreFileAsync(FileVersionManifest manifest, string path)
+        async ValueTask<bool> RestoreFileAsync(FileVersionManifest manifest, string path, string destination)
         {
-            var destination = Path.Combine(outputDirectory, path.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             var spool = destination + ".fbp-recover-tmp";
 
@@ -602,7 +600,11 @@ public sealed class RecoverySession : IDisposable
                         (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
                     .OrderBy(piece => piece.Item1);
 
-                var output = SparseFile.Create(spool, FileMode.Create, holes: manifest.SparseExtents.Count > 0);
+                // Whatever stands at the spool's name, a link included, is
+                // removed rather than opened, and the spool is then made new,
+                // which refuses a name that is there again (ADR-0152).
+                File.Delete(spool);
+                var output = SparseFile.Create(spool, FileMode.CreateNew, holes: manifest.SparseExtents.Count > 0);
                 await using (output.ConfigureAwait(false))
                 {
                     foreach (var (_, reference, extent) in pieces)
@@ -678,6 +680,28 @@ public sealed class RecoverySession : IDisposable
     }
 
     /// <summary>
+    /// Where a tree entry named <paramref name="name"/> at
+    /// <paramref name="path"/> is written under <paramref name="root"/>, by
+    /// the executor's rule (ADR-0152), or why it is not.
+    /// </summary>
+    /// <remarks>
+    /// A name that is not a plain component — '..', a separator, a rooted
+    /// form — or a path that leaves the output through a link already there
+    /// would write outside it. The name is held to the rule alone first,
+    /// since one holding a separator reads as two once joined.
+    /// </remarks>
+    private static bool TryPlace(string root, string path, string name, out string destination, out string why)
+    {
+        if (!RestorePaths.IsPlainComponent(name, out why))
+        {
+            destination = string.Empty;
+            return false;
+        }
+
+        return RestorePaths.TryResolve(root, path, out destination, out why);
+    }
+
+    /// <summary>
     /// A folder the tool made or found, and what it is given once nothing
     /// more will land in it.
     /// </summary>
@@ -712,50 +736,6 @@ public sealed class RecoverySession : IDisposable
             {
                 return false;
             }
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Whether a tree-entry name is a single plain path component — the same
-    /// rule the full client's executor enforces, because both write
-    /// repository-supplied names under a chosen root.
-    /// </summary>
-    private static bool IsPlainName(string name, out string why)
-    {
-        why = string.Empty;
-
-        if (name.Length == 0)
-        {
-            why = "the tree names an empty component";
-            return false;
-        }
-
-        if (name is "." or "..")
-        {
-            why = $"the tree names a '{name}' component";
-            return false;
-        }
-
-        if (name.Contains('\0', StringComparison.Ordinal))
-        {
-            why = "the tree name contains a NUL";
-            return false;
-        }
-
-        if (name.Contains('/', StringComparison.Ordinal)
-            || name.Contains('\\', StringComparison.Ordinal)
-            || name.Contains(':', StringComparison.Ordinal))
-        {
-            why = "the tree name contains a separator or drive marker";
-            return false;
-        }
-
-        if (Path.IsPathRooted(name))
-        {
-            why = "the tree name is rooted";
-            return false;
         }
 
         return true;
