@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Catalogue;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.PerformanceTests;
 
@@ -35,8 +36,9 @@ public static class PathLookupBenchmark
         static ObjectId ObjectFrom(int seed) => ObjectId.FromBytes(SHA256.HashData(BitConverter.GetBytes(seed)));
 
         // Seed: dirs of 50 files, 40 dirs per parent, through the same
-        // RecordTreeEntry/RecordFileVersion path live publication uses.
+        // RecordFolder/RecordFileVersion path live publication uses.
         var paths = new string[Files];
+        var entries = new List<(string, EntryKind, ObjectId)>(Files);
         var seed = new Stopwatch();
         seed.Start();
         for (var index = 0; index < Files; index++)
@@ -46,12 +48,13 @@ public static class PathLookupBenchmark
             var filePath = $"{parent}/file-{index % FilesPerDirectory:d3}.bin";
             paths[index] = filePath;
 
-            catalogue.RecordTreeEntry(snapshotId, filePath, EntryKind.File, ObjectFrom(index));
+            entries.Add((filePath, EntryKind.File, ObjectFrom(index)));
             catalogue.RecordFileVersion(
                 ObjectFrom(index), 4096,
                 modifiedAt: 1_722_600_000_000, identityDevice: 7, identityFileId: (ulong)index);
         }
 
+        CatalogueTrees.RecordSnapshot(catalogue, snapshotId, [.. entries]);
         seed.Stop();
 
         var stopwatch = new Stopwatch();
@@ -70,6 +73,23 @@ public static class PathLookupBenchmark
 
         stopwatch.Stop();
         var lookupMicros = stopwatch.Elapsed.TotalMicroseconds / Probes;
+
+        // The same lookup, each in a folder the last one did not ask for, so
+        // every probe resolves its folder from the root (ADR-0151). A capture
+        // asks a folder's files in turn, which the probes above resemble.
+        const int Folders = Files / FilesPerDirectory;
+        stopwatch.Restart();
+        var foundCold = 0;
+        for (var probe = 0; probe < Folders; probe++)
+        {
+            if (catalogue.LookupPath(snapshotId, paths[probe * 7 % Folders * FilesPerDirectory]) is not null)
+            {
+                foundCold++;
+            }
+        }
+
+        stopwatch.Stop();
+        var coldMicros = stopwatch.Elapsed.TotalMicroseconds / Folders;
 
         // The `ls` query: one directory's immediate children.
         stopwatch.Restart();
@@ -101,12 +121,14 @@ public static class PathLookupBenchmark
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"LookupPath   {lookupMicros,8:f1} us/op over {Probes} probes ({found} found)"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"LookupPath, each in another folder {coldMicros,8:f1} us/op over {Folders} probes ({foundCold} found)"));
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"ListDirectory{listMicros,8:f1} us/op over {Probes / 10} probes ({listed} entries listed)"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"EnumerateLeaves{leavesMillis,6:f1} ms/op over {Passes} passes ({enumerated / Passes} files each)"));
         Console.WriteLine("scale caveat: 100k files is 1/10 of NFR-PERF-004's stated scale; single-machine, tmpfs-adjacent.");
 
         File.Delete(path);
-        return found == Probes && enumerated == Files * Passes ? 0 : 1;
+        return found == Probes && foundCold == Folders && enumerated == Files * Passes ? 0 : 1;
     }
 }

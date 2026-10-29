@@ -33,20 +33,20 @@ public static class CatalogueSizeBenchmark
         Console.WriteLine("|---|---:|---:|");
 
         Report("`file_versions` and its identity index", versions, CataloguePlanes.FileVersions);
-        Report("`tree_entries`", versions, CataloguePlanes.TreeEntries);
+        Report("`folder_entries`", versions, CataloguePlanes.TreeEntries);
         Report("`object_locations` and `ix_locations_blob`", versions, CataloguePlanes.Locations);
         Report("**all three, scale M's shape**", versions, CataloguePlanes.All);
         Report("**the floor — no segments at all**", versions, CataloguePlanes.All, segmentsPerVersion: 0);
 
         // The shape above names each version by one path in one snapshot,
         // which is a set whose every file changes in every snapshot. A set
-        // lists every file in every snapshot it keeps, so where fewer change
-        // it takes more snapshots, and more tree entries, to reach scale M's
-        // ten versions per file.
+        // holds every file in every snapshot it keeps, so where fewer change
+        // it takes more snapshots to reach scale M's ten versions per file,
+        // and each pays for the folders it changed (ADR-0151).
         Console.WriteLine();
-        Console.WriteLine("With every snapshot listing every file, ten versions per file as scale M states:");
+        Console.WriteLine("With every snapshot holding every file, ten versions per file as scale M states:");
         Console.WriteLine();
-        Console.WriteLine("| Files changed per snapshot | Snapshots | Tree entries per version | B/version |");
+        Console.WriteLine("| Files changed per snapshot | Snapshots | Snapshots holding each version | B/version |");
         Console.WriteLine("|---|---:|---:|---:|");
         var files = Math.Max(1, versions / 10);
         foreach (var percent in (int[])[100, 10, 1])

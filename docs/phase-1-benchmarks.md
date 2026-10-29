@@ -52,6 +52,21 @@ caches to rebuild; a cache is never migrated.
 >
 > None of them changes beyond what this machine varies by between runs.
 
+> **2026-10, schema v17 ([ADR-0151](adr/0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md)).** A folder's entries are
+> kept under its tree, so a path is followed from the snapshot's root a
+> name at a time, and the folder the last lookup resolved is remembered for
+> the next. At the same 100 000 files, against schema 16 on the same
+> machine:
+>
+> - `LookupPath`, a folder's files asked in turn: 37 µs/op, against 45.
+> - `LookupPath`, each in a folder the last lookup did not ask, now
+>   measured too: 116 µs/op.
+> - `ListDirectory`: 353 µs/op, against 303.
+> - `EnumerateLeaves`: 525 ms, against 533.
+>
+> The seeding records each folder's entries under its tree, through
+> `RecordFolder`.
+
 Segmentation-profile dedup numbers live in
 [segmentation-benchmark.md](segmentation-benchmark.md); phase-0 engine
 numbers in [phase-0-benchmarks.md](phase-0-benchmarks.md).

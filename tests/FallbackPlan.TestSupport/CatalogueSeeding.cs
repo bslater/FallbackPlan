@@ -16,7 +16,7 @@ public enum CataloguePlanes
     /// <summary><c>file_versions</c> and its identity index.</summary>
     FileVersions = 1,
 
-    /// <summary><c>tree_entries</c>, keyed by snapshot, folder and name.</summary>
+    /// <summary><c>folder_entries</c>, keyed by a folder's tree and the name, and the snapshot that reaches them.</summary>
     TreeEntries = 2,
 
     /// <summary><c>object_locations</c>, <c>ix_locations_blob</c> and the applied-delta ledger.</summary>
@@ -43,9 +43,10 @@ public enum CataloguePlanes
 /// </para>
 /// <para>
 /// It writes through the same <see cref="Catalogue.RecordFileVersion"/>,
-/// <see cref="Catalogue.RecordTreeEntry"/> and <see cref="Catalogue.ApplyDelta"/>
-/// calls publication uses, so
-/// what is measured is the schema's cost and not a model's guess at it.
+/// <see cref="Catalogue.RecordFolder"/>, <see cref="Catalogue.RecordSnapshot"/>
+/// and <see cref="Catalogue.ApplyDelta"/> calls publication uses, and records
+/// a folder only when what it holds changed, as publication does, so what
+/// is measured is the schema's cost and not a model's guess at it.
 /// </para>
 /// <para>
 /// Every segment reference is a <b>distinct</b> object, which is the
@@ -58,8 +59,10 @@ public enum CataloguePlanes
 /// <para>
 /// One path in one snapshot per version is the set whose every file
 /// changes in every snapshot. <see cref="FillSnapshots"/> seeds the shape a
-/// set has when fewer change: every snapshot lists every file, so a file a
-/// snapshot left alone still costs it a tree entry.
+/// set has when fewer change: every snapshot holds every file, and pays for
+/// the folders it changed, each whole, and every folder above them
+/// (ADR-0151). A hundred files share a folder, as <c>PathOf</c> lays them
+/// out.
 /// </para>
 /// </remarks>
 public static class CatalogueSeeding
@@ -91,19 +94,25 @@ public static class CatalogueSeeding
 
         var entries = new List<IndexEntry>();
         var sequence = 0UL;
+        var tree = new SeededTree(catalogue);
         for (var version = 0; version < versions; version++)
         {
             RecordVersion(catalogue, version, identityFileId: (ulong)version + 10_000, segmentsPerVersion, planes, entries);
 
             if (planes.HasFlag(CataloguePlanes.TreeEntries))
             {
-                catalogue.RecordTreeEntry(snapshotId, PathOf(version), EntryKind.File, ObjectFrom(version));
+                tree.Set(PathOf(version), ObjectFrom(version));
             }
 
             if (entries.Count >= 1000)
             {
                 Flush(catalogue, entries, ref sequence);
             }
+        }
+
+        if (planes.HasFlag(CataloguePlanes.TreeEntries))
+        {
+            RecordSnapshot(catalogue, snapshotId, tree.Commit());
         }
 
         Flush(catalogue, entries, ref sequence);
@@ -133,6 +142,7 @@ public static class CatalogueSeeding
         ArgumentOutOfRangeException.ThrowIfNegative(segmentsPerVersion);
 
         var current = new int[files];
+        var tree = new SeededTree(catalogue);
         var entries = new List<IndexEntry>();
         var sequence = 0UL;
         var versions = 0;
@@ -143,6 +153,7 @@ public static class CatalogueSeeding
             {
                 var file = snapshot == 0 ? renewed : turn++ % files;
                 current[file] = versions;
+                tree.Set(PathOf(file), ObjectFrom(versions));
                 RecordVersion(catalogue, versions++, identityFileId: (ulong)file + 10_000, segmentsPerVersion, CataloguePlanes.All, entries);
                 if (entries.Count >= 1000)
                 {
@@ -151,10 +162,7 @@ public static class CatalogueSeeding
             }
 
             var snapshotId = SHA256.HashData(BitConverter.GetBytes(snapshot + 3_000_000)).AsSpan(0, 16).ToArray();
-            for (var file = 0; file < files; file++)
-            {
-                catalogue.RecordTreeEntry(snapshotId, PathOf(file), EntryKind.File, ObjectFrom(current[file]));
-            }
+            RecordSnapshot(catalogue, snapshotId, tree.Commit());
         }
 
         Flush(catalogue, entries, ref sequence);
@@ -272,9 +280,84 @@ public static class CatalogueSeeding
         entries.Clear();
     }
 
+    /// <summary>Records a seeded snapshot's row, reaching its tree from <paramref name="rootTree"/>.</summary>
+    private static void RecordSnapshot(Catalogue catalogue, byte[] snapshotId, ObjectId rootTree) =>
+        catalogue.RecordSnapshot(
+            snapshotId, new byte[16], new byte[16], ObjectFrom(BitConverter.ToInt32(snapshotId) + 4_000_000L), rootTree,
+            publicationGeneration: 0, captureStatus: 1, signatureState: 1);
+
     private static string PathOf(int file) =>
         $"home/user/Documents/Projects/folder-{file / 100:D4}/report-{file:D7}.docx";
 
     private static ObjectId ObjectFrom(long seed) =>
         ObjectId.FromBytes(SHA256.HashData(BitConverter.GetBytes(seed)));
+
+    /// <summary>
+    /// The files a seeding has placed, as folders, each recorded once for
+    /// what it holds: a commit records the folders a change reached and
+    /// answers the root, as a capture records only the trees it wrote.
+    /// </summary>
+    private sealed class SeededTree(Catalogue catalogue)
+    {
+        private readonly Dictionary<string, SortedDictionary<string, CatalogueFolderEntry>> _folders =
+            new(StringComparer.Ordinal) { [string.Empty] = new(StringComparer.Ordinal) };
+
+        private readonly HashSet<string> _changed = new(StringComparer.Ordinal);
+        private readonly HashSet<ObjectId> _recorded = [];
+        private ObjectId _root;
+
+        /// <summary>Places a file at <paramref name="path"/>.</summary>
+        public void Set(string path, ObjectId version)
+        {
+            var slash = path.LastIndexOf('/');
+            var folder = slash < 0 ? string.Empty : path[..slash];
+            var name = path[(slash + 1)..];
+            FolderAt(folder)[name] = new CatalogueFolderEntry(name, EntryKind.File, version);
+            for (var changed = folder; _changed.Add(changed) && changed.Length > 0;)
+            {
+                var up = changed.LastIndexOf('/');
+                changed = up < 0 ? string.Empty : changed[..up];
+            }
+        }
+
+        /// <summary>Records every folder a change since the last commit reached, deepest first, and answers the root's tree.</summary>
+        public ObjectId Commit()
+        {
+            foreach (var folder in _changed.OrderByDescending(path => path.Length == 0 ? 0 : path.Count(c => c == '/') + 1))
+            {
+                var children = _folders[folder].Values.ToList();
+                var tree = CatalogueTrees.Derived(children);
+                if (_recorded.Add(tree))
+                {
+                    catalogue.RecordFolder(tree, children);
+                }
+
+                if (folder.Length == 0)
+                {
+                    _root = tree;
+                    continue;
+                }
+
+                var slash = folder.LastIndexOf('/');
+                var parent = slash < 0 ? string.Empty : folder[..slash];
+                var name = folder[(slash + 1)..];
+                _folders[parent][name] = new CatalogueFolderEntry(name, EntryKind.DirectoryPlaceholder, tree);
+            }
+
+            _changed.Clear();
+            return _root;
+        }
+
+        private SortedDictionary<string, CatalogueFolderEntry> FolderAt(string path)
+        {
+            if (!_folders.TryGetValue(path, out var folder))
+            {
+                _folders[path] = folder = new SortedDictionary<string, CatalogueFolderEntry>(StringComparer.Ordinal);
+                var slash = path.LastIndexOf('/');
+                FolderAt(slash < 0 ? string.Empty : path[..slash]);
+            }
+
+            return folder;
+        }
+    }
 }

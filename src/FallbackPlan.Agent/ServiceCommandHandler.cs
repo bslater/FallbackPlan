@@ -454,10 +454,10 @@ public sealed partial class ServiceCommandHandler(
             // A person's deletion this pass finished is one nothing should
             // list any more (FR-GC-013). An expiry's snapshot keeps its row,
             // as it always has.
-            foreach (var gone in report.Swept?.DeletedSnapshots.Where(fact => fact.DeletionRequest is not null) ?? [])
-            {
-                catalogue.ForgetSnapshot(Convert.FromHexString(gone.SnapshotId));
-            }
+            catalogue.ForgetSnapshots(
+                [.. (report.Swept?.DeletedSnapshots ?? [])
+                    .Where(fact => fact.DeletionRequest is not null)
+                    .Select(fact => Convert.FromHexString(fact.SnapshotId))]);
 
             if (ungranted.Contains(set.Id))
             {

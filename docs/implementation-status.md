@@ -175,6 +175,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0148](adr/0148-a-tree-entry-is-keyed-by-its-folder-and-name.md) | A tree entry is keyed by its folder and name: schema 16 keeps no path and no covering parent index, and a snapshot's leaves are sorted into path order, so tree_entries falls from 378 B/version to 138 and the floor, at 395, is inside the budget | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · [notes](#0148--a-tree-entry-is-keyed-by-its-folder-and-name) |
 | [0149](adr/0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md) | The single-file restore writes back a file's metadata by the executor's rule: the writer, its rules, the account a restore runs as and the captured map move into Domain, the executor writes through it, and `restore-file` writes a file's metadata back once its content has verified and names what did not land | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Restore/RestoreExecutor` · `Cli/CliApplication` · `Cli.Tests/InspectionCommandTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0149--the-single-file-restore-writes-back-a-files-metadata) |
 | [0150](adr/0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) | The recovery tool gives what it restores its metadata back by the executor's rule: each file once it has landed and each folder it made last, deepest first and never through a link, through the shared writer; a folder already in the output and the output itself keep their own, and what did not land is counted by attribute on the terminal and in the bundle | **Built** | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Recovery/RecoveryBundle` · `Domain/MetadataWriter` · `Repository.Tests/RecoveryMetadataTests` · `Hosts.Tests/RecoveryHostTests` · `Hosts.Tests/RecoveryBundleTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0150--the-recovery-tool-writes-back-metadata) |
+| [0151](adr/0151-the-catalogue-keeps-a-folders-entries-once-under-its-tree.md) | The catalogue keeps a folder's entries once, under its tree: schema 17 keys an entry by the folder's head tree and its name, a path is followed from the snapshot's root, a snapshot's folders are recorded together after its row, and forgetting snapshots lets go of what none of the rest reaches, so a set where a tenth of the files change per snapshot costs 930 B/version, not 2 005 | **Built** | `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CatalogueSizeTests` · `TestSupport/CatalogueTrees` · [notes](#0151--the-catalogue-keeps-a-folders-entries-once) |
 
 ---
 
@@ -4054,6 +4055,8 @@ from 1 183 to 942, and the floor from 636 to 395, inside the budget.
 
 What remains is recorded rather than done. The catalogue is still more
 than twice its budget, and what is over it is the segment references.
+An entry has since been keyed by its folder's tree, not its snapshot
+([0151](#0151--the-catalogue-keeps-a-folders-entries-once)).
 
 ### 0149 — the single-file restore writes back a file's metadata
 
@@ -4094,3 +4097,25 @@ say which entries missed an attribute, and it still makes no link. It
 checks that each tree name is a plain component, but not, as the executor
 does, that a path stays inside the output through links, so a file lands
 through a link planted in the output, and its metadata goes with it.
+
+### 0151 — the catalogue keeps a folder's entries once
+
+Every snapshot holds every file of its set, and the catalogue kept an
+entry for each file of each snapshot, so it grew with the snapshots a set
+kept as well as with its versions. A folder's tree is an object whose
+identity derives from what it holds, so a folder a snapshot left alone is
+the tree an earlier one recorded. Schema 17 keeps a folder's entries once,
+keyed by its head tree and the name, and a snapshot reaches its own from
+its root tree. A path is followed a name at a time, and the folder the
+last lookup resolved is remembered for the files asked in it next. The
+capture, the projection and the forensic rebuild record a snapshot's
+folders together after its row. Forgetting snapshots lets go of every
+folder none of the rest reaches, in one transaction, and a retention pass
+forgets its deleted snapshots together. At 20 000 versions a set where a
+tenth of the files change per snapshot costs 930 B/version, against
+2 005, and one where a hundredth do costs 1 428, against 12 590.
+
+What remains is recorded rather than done. A changed folder restates
+every entry, and so does each folder above it. What a snapshot is made of
+still names every tree of every snapshot, folder access times are never
+let go of, and a projection still reads every tree.
