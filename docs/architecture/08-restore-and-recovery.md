@@ -200,6 +200,8 @@ A standalone recovery executable, independent of the Agent and UI, that can:
 
 > **2026-10 ([ADR-0152](../adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md)).** The tool keeps every path inside its output by the rule §3 holds the executor to: plain names, under the output, and through no link leading out of it. A file's spool is made new, never opened through a link.
 
+> **2026-10 ([ADR-0155](../adr/0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md)).** The tool makes a symlink a link where links can be made without a privilege, giving the link its own metadata onto it, and a write the output refuses at an entry's name fails that entry alone rather than the run.
+
 Source and reproducible release artifacts are published for every major format version, and remain downloadable and buildable for as long as that format version is supported. A recovery tool that cannot be obtained when needed is not a recovery tool.
 
 ## 6. What must survive a clean machine

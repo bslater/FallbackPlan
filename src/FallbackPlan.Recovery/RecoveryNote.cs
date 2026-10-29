@@ -29,6 +29,9 @@ public enum RecoveryNoteKind
 
     /// <summary>A metadata record that did not read.</summary>
     RecordUnreadable = 7,
+
+    /// <summary>A file or a link the output would not take at its name, failed alone (ADR-0155).</summary>
+    WriteFailed = 8,
 }
 
 /// <summary>
@@ -70,6 +73,7 @@ public sealed record RecoveryNote(
         RecoveryNoteKind.HashMismatch => $"FAILED {Path}: the whole-file hash does not verify (FR-RST-002)",
         RecoveryNoteKind.RecordMissing => $"FAILED {Path ?? RootTree}: metadata record {Record} is in no readable blob",
         RecoveryNoteKind.RecordUnreadable => $"FAILED {Path ?? RootTree}: record read {Outcome} — {Detail}",
+        RecoveryNoteKind.WriteFailed => $"FAILED {Path}: the output would not take it — {Detail}",
         _ => Kind.ToString(),
     };
 }

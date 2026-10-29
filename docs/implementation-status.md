@@ -179,6 +179,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0152](adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) | The recovery tool keeps every path inside its output by the executor's rule: the rule moves into Domain unchanged, the executor and the tool resolve every path through it, so a link the output holds is written through by nothing, and a file's spool is made new rather than opened | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Repository.Tests/EndToEnd/RecoveryContainmentTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0152--the-recovery-tool-keeps-every-path-inside-its-output) |
 | [0153](adr/0153-a-folders-access-time-goes-with-the-last-snapshot-that-reaches-its-tree.md) | A folder's access time goes with the last snapshot that reaches its tree: forgetting snapshots lets go of every access time none of the rest reaches, in the transaction that lets go of their folders, and every writer records a snapshot's times after its folders | **Built** | `Repository.Catalogue/Catalogue` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/EndToEnd/FolderAccessTimeTests` · [notes](#0153--a-folders-access-time-goes-with-the-last-snapshot-reaching-it) |
 | [0154](adr/0154-the-single-file-restore-knows-who-captured-the-snapshot-it-names.md) | The single-file restore knows who captured the snapshot it names: `restore-file` given a snapshot compares the device it names with this installation's own, and gives back an ACL that names accounts by number where they agree | **Built** | `Cli/CliApplication` · `Cli.Tests/InspectionCommandTests` · `Cli.Tests/CliHarness` · [notes](#0154--the-single-file-restore-knows-who-captured-the-snapshot) |
+| [0155](adr/0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md) | The recovery tool makes a link a link, and fails only the entry the output refuses: a symlink is made pointing where it pointed, with its own metadata onto the link, and a write the output refuses at an entry's name fails that entry alone | **Built** | `Recovery/RecoverySession` · `Recovery/RecoveryNote` · `Repository.Tests/EndToEnd/RecoveryLinkTests` · [notes](#0155--the-recovery-tool-makes-a-link-a-link) |
 
 ---
 
@@ -4104,7 +4105,8 @@ checks that each tree name is a plain component, but not, as the executor
 does, that a path stays inside the output through links, so a file lands
 through a link planted in the output, and its metadata goes with it.
 It has since placed every path by the executor's rule
-([0152](#0152--the-recovery-tool-keeps-every-path-inside-its-output)).
+([0152](#0152--the-recovery-tool-keeps-every-path-inside-its-output)),
+and made links ([0155](#0155--the-recovery-tool-makes-a-link-a-link)).
 
 ### 0151 — the catalogue keeps a folder's entries once
 
@@ -4185,3 +4187,22 @@ What remains is recorded rather than done. Given a manifest alone,
 `restore-file` still claims nothing, since a file version names no
 device, and the recovery tool, which runs where there is no
 installation, withholds such an ACL wherever it runs.
+
+### 0155 — the recovery tool makes a link a link
+
+The recovery tool skipped every symlink with a note, so a tree recovered
+from the passphrase alone came back without its links. Since it places
+every path by the executor's rule, a link it makes cannot carry a later
+write out of the output, so it now makes each link where links can be
+made without a privilege, pointing where it pointed. A file or a link
+at its name is replaced, and the link gets its own metadata onto it,
+never through it. Windows still skips links, as the executor does. The
+tool also let any write the output refused end the whole recovery: a
+folder at a file's name failed the rename into place, and nothing after
+it was restored. The output's own calls are now contained to their
+entry, which fails with a note in the platform's words while the rest
+continues. A store's fault, an I/O error too, still ends the run.
+
+What remains is recorded rather than done. A fault while a file's
+content is written still ends the run, and a hard-link group and a
+special file are as before.

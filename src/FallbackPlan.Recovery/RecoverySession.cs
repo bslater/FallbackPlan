@@ -426,8 +426,10 @@ public sealed class RecoverySession : IDisposable
     /// Every file spools privately, verifies each segment's implied content
     /// identifier and the whole-file hash — sparse zeroes included — and
     /// reaches its destination only when everything verified (FR-RST-005).
-    /// Symlinks and specials are counted as skipped with a note, never
-    /// silently dropped.
+    /// A symlink is made a link where links can be made without a privilege
+    /// (ADR-0155); elsewhere it, and every special, is counted as skipped
+    /// with a note, never silently dropped. A write the output refuses at
+    /// an entry's name fails that entry alone, with a note.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -497,6 +499,23 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
+        // A write the output refuses at an entry's name fails that entry
+        // alone (ADR-0155). Only the output's own calls go through here: a
+        // store's fault is an IOException too, and still ends the run.
+        bool Placed(string path, Action write)
+        {
+            try
+            {
+                write();
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                notes.Add(new RecoveryNote(RecoveryNoteKind.WriteFailed, path, Detail: exception.Message));
+                return false;
+            }
+        }
+
         // folder: where the tool made the folder this tree is, and whether
         // one already stood there; null for the snapshot's root.
         async ValueTask WalkAsync(ObjectId treeId, string prefix, (string Destination, bool Found)? folder)
@@ -548,7 +567,12 @@ public sealed class RecoverySession : IDisposable
                     {
                         var directory = destination;
                         var found = Directory.Exists(directory);
-                        Directory.CreateDirectory(directory);
+                        if (!Placed(path, () => Directory.CreateDirectory(directory)))
+                        {
+                            failed++;
+                            continue;
+                        }
+
                         await WalkAsync(entry.ObjectId, path, (directory, found)).ConfigureAwait(false);
                         continue;
                     }
@@ -562,6 +586,23 @@ public sealed class RecoverySession : IDisposable
                     }
 
                     var manifest = FileVersionManifestCodec.Decode(manifestBytes);
+
+                    // A link is made where links can be made without a
+                    // privilege, as the executor makes one (ADR-0155).
+                    if (manifest.EntryKind == EntryKind.Symlink && !OperatingSystem.IsWindows()
+                        && manifest.LinkTarget is { } linkTarget)
+                    {
+                        if (MakeLink(manifest, path, destination, Encoding.UTF8.GetString(linkTarget.Span)))
+                        {
+                            restored++;
+                        }
+                        else
+                        {
+                            failed++;
+                        }
+
+                        continue;
+                    }
 
                     if (manifest.EntryKind != EntryKind.File)
                     {
@@ -584,9 +625,33 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
+        // Whatever stands at the link's name, a link or a file, is replaced
+        // as a file's rename replaces it; a folder there is not. The link's
+        // metadata goes onto the link, never through it.
+        bool MakeLink(FileVersionManifest manifest, string path, string destination, string target)
+        {
+            if (!Placed(path, () =>
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    if (new FileInfo(destination).LinkTarget is not null || File.Exists(destination))
+                    {
+                        File.Delete(destination);
+                    }
+
+                    File.CreateSymbolicLink(destination, target);
+                }))
+            {
+                return false;
+            }
+
+            Count(
+                MetadataRules.Captured(manifest.Metadata),
+                writer.Write(destination, manifest.Metadata, EntryKind.Symlink).Applied);
+            return true;
+        }
+
         async ValueTask<bool> RestoreFileAsync(FileVersionManifest manifest, string path, string destination)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             var spool = destination + ".fbp-recover-tmp";
 
             try
@@ -603,8 +668,18 @@ public sealed class RecoverySession : IDisposable
                 // Whatever stands at the spool's name, a link included, is
                 // removed rather than opened, and the spool is then made new,
                 // which refuses a name that is there again (ADR-0152).
-                File.Delete(spool);
-                var output = SparseFile.Create(spool, FileMode.CreateNew, holes: manifest.SparseExtents.Count > 0);
+                FileStream? made = null;
+                if (!Placed(path, () =>
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                        File.Delete(spool);
+                        made = SparseFile.Create(spool, FileMode.CreateNew, holes: manifest.SparseExtents.Count > 0);
+                    }))
+                {
+                    return false;
+                }
+
+                var output = made!;
                 await using (output.ConfigureAwait(false))
                 {
                     foreach (var (_, reference, extent) in pieces)
@@ -663,7 +738,11 @@ public sealed class RecoverySession : IDisposable
                     return false;
                 }
 
-                File.Move(spool, destination, overwrite: true);
+                if (!Placed(path, () => File.Move(spool, destination, overwrite: true)))
+                {
+                    return false;
+                }
+
                 Count(
                     MetadataRules.Captured(manifest.Metadata),
                     writer.Write(destination, manifest.Metadata, EntryKind.File).Applied);

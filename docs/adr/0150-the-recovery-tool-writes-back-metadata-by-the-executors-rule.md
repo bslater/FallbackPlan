@@ -73,6 +73,8 @@ The exit code is unchanged. Metadata does not fail a recovery.
 
   > **2026-10 ([ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md)).** The tool now places every path by the executor's rule, so a file under a link out of the output is refused by name, and nothing, its metadata included, goes through the link.
 - **Restore a symlink, a special file or a hard-link group as one file.** These are skipped or restored as separate files, as before. So no link's own metadata is written.
+
+  > **2026-10 ([ADR-0155](0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md)).** The tool now makes a symlink a link where links can be made without a privilege, and gives the link its own metadata onto the link. A special file and a hard-link group are as before.
 - **Restore Windows attribute bits, security descriptors or alternate streams.** These are counted as not applied, as the executor lists them.
 
 ## Alternatives considered
@@ -86,3 +88,4 @@ The exit code is unchanged. Metadata does not fail a recovery.
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The recovery tool writes each restored file's metadata through the executor's writer, and each folder it made last and deepest first, never through a link, a run stopped part way included. A folder already in the output and the output itself keep their own, and the report, the terminal and the bundle count each attribute not applied. |
 | 2026-10 | Accepted | [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md): the tool places every path by the executor's rule, so the gap this record named for a link planted in the output is closed. |
+| 2026-10 | Accepted | [ADR-0155](0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md): the tool makes a symlink a link and writes the link's own metadata onto it, and a write the output refuses at an entry's name fails that entry alone. |
