@@ -303,7 +303,7 @@ public static class RestoreBlobSet
             facts[item.ObjectId] = new RestoreItemFacts(
                 manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), MetadataRules.Captured(manifest.Metadata),
                 manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode,
-                MetadataRules.KindsOf(manifest.Metadata), RestoreHardLinks.KeyOf(manifest),
+                MetadataRules.KindsOf(manifest.Metadata), HardLinkGroups.KeyOf(manifest),
                 RestoreSpace.HeldBytes(manifest, heldSegments));
 
             // A lost segment makes the path missing whatever else of it is

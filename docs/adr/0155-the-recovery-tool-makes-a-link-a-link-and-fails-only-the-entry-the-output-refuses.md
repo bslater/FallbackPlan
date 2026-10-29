@@ -53,6 +53,8 @@ A store's fault is not contained. It is an I/O error too, but it says the archiv
 
 - **Contain a fault while a file's content is written.** A full output fails the file being written and ends the run, as every file after it would fail the same way.
 - **Restore a hard-link group as one file, or a special file.** These are still restored as separate files or skipped with a note.
+
+  > **2026-10 ([ADR-0156](0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md)).** A hard-link group now comes back as one file, by the executor's rule.
 - **Make a link on Windows.** That needs a privilege the executor does not ask for either.
 
 ## Alternatives considered
@@ -65,3 +67,4 @@ A store's fault is not contained. It is an I/O error too, but it says the archiv
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The recovery tool makes a symlink a link where links can be made, replacing a file or link at its name and giving it its own metadata onto the link. A write the output refuses at an entry's name fails that entry alone, with a note, where it ended the run. |
+| 2026-10 | Accepted | Noted by [ADR-0156](0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md): the tool now gives a hard-link group back as one file. |

@@ -1,12 +1,13 @@
 using System.Globalization;
 using FallbackPlan.Domain;
-using FallbackPlan.Repository.Format.Manifests;
 
-namespace FallbackPlan.Restore;
+namespace FallbackPlan.Repository.Format.Manifests;
 
 /// <summary>
 /// What the names of a hard-link group must agree on before a restore makes
-/// them one file again (FR-RST-004; ADR-0102).
+/// them one file again (FR-RST-004; ADR-0102): one rule, here because the
+/// executor and the recovery tool both give a group back, and the tool may
+/// not reference the restore project (ADR-0156).
 /// </summary>
 /// <remarks>
 /// A group is named by manifest key 12, which keys on the device's identity
@@ -17,7 +18,7 @@ namespace FallbackPlan.Restore;
 /// moves and which the metadata digest already holds back. A name that does
 /// not agree is a file of its own.
 /// </remarks>
-internal static class RestoreHardLinks
+public static class HardLinkGroups
 {
     /// <summary>The group <paramref name="manifest"/> names, as text, or null for a file that is one of no group.</summary>
     public static string? GroupOf(FileVersionManifest manifest) =>

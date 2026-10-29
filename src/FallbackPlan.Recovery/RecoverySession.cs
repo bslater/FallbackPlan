@@ -449,8 +449,26 @@ public sealed class RecoverySession : IDisposable
     /// counts each attribute not applied.
     /// </para>
     /// </remarks>
+    public ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
+        ObjectId rootTree, string outputDirectory, CancellationToken cancellationToken) =>
+        RestoreTreeAsync(rootTree, outputDirectory, makeLink: null, cancellationToken);
+
+    /// <summary>
+    /// Restores a snapshot's tree under <paramref name="outputDirectory"/>,
+    /// as <see cref="RestoreTreeAsync(ObjectId, string, CancellationToken)"/>
+    /// does, giving a hard-link group's later names through
+    /// <paramref name="makeLink"/>.
+    /// </summary>
+    /// <param name="rootTree">The snapshot's root tree.</param>
+    /// <param name="outputDirectory">Where the tree is restored.</param>
+    /// <param name="makeLink">
+    /// Gives an existing file a further name, and says whether it did:
+    /// <see cref="HardLinks.TryCreate"/> where null. A test stands in for an
+    /// output that keeps no links.
+    /// </param>
+    /// <param name="cancellationToken">Stops the run.</param>
     public async ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
-        ObjectId rootTree, string outputDirectory, CancellationToken cancellationToken)
+        ObjectId rootTree, string outputDirectory, Func<string, string, bool>? makeLink, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(outputDirectory);
         var root = Path.GetFullPath(outputDirectory);
@@ -463,6 +481,11 @@ public sealed class RecoverySession : IDisposable
         var writer = new MetadataWriter(MetadataTarget.ForLocalPlatform());
         var folders = new List<Folder>();
         var notApplied = new Dictionary<string, int>(StringComparer.Ordinal);
+        var link = makeLink ?? HardLinks.TryCreate;
+
+        // Each hard-link group's first name landed: what a later name must
+        // agree on, where it landed, and what it got (ADR-0156).
+        var groups = new Dictionary<string, (string Key, string Landing, CapturedMetadata Applied)>(StringComparer.Ordinal);
 
         try
         {
@@ -611,9 +634,43 @@ public sealed class RecoverySession : IDisposable
                         continue;
                     }
 
-                    if (await RestoreFileAsync(manifest, path, destination).ConfigureAwait(false))
+                    // A later name of a group whose first name landed is that
+                    // file again, where it agrees with it and the output makes
+                    // a link; otherwise it is a file of its own, and says why
+                    // (ADR-0156).
+                    var (group, key) = GroupOf(manifest);
+                    if (group is not null && groups.TryGetValue(group, out var first))
+                    {
+                        if (!string.Equals(first.Key, key, StringComparison.Ordinal))
+                        {
+                            notes.Add(new RecoveryNote(
+                                RecoveryNoteKind.NotLinked, path, Reason: "its content or attributes differ from its group's first name"));
+                        }
+                        else if (!Placed(path, () => Clear(destination)))
+                        {
+                            failed++;
+                            continue;
+                        }
+                        else if (link(first.Landing, destination))
+                        {
+                            restored++;
+                            Count(MetadataRules.Captured(manifest.Metadata), first.Applied);
+                            continue;
+                        }
+                        else
+                        {
+                            notes.Add(new RecoveryNote(
+                                RecoveryNoteKind.NotLinked, path, Reason: "the output would not make a hard link here"));
+                        }
+                    }
+
+                    if (await RestoreFileAsync(manifest, path, destination).ConfigureAwait(false) is { } applied)
                     {
                         restored++;
+                        if (group is not null)
+                        {
+                            groups.TryAdd(group, (key!, destination, applied));
+                        }
                     }
                     else
                     {
@@ -625,19 +682,23 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
-        // Whatever stands at the link's name, a link or a file, is replaced
-        // as a file's rename replaces it; a folder there is not. The link's
-        // metadata goes onto the link, never through it.
+        // Whatever stands at a name a link takes, a link or a file, is
+        // replaced as a file's rename replaces it; a folder there is not.
+        static void Clear(string destination)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            if (new FileInfo(destination).LinkTarget is not null || File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+        }
+
+        // The link's metadata goes onto the link, never through it.
         bool MakeLink(FileVersionManifest manifest, string path, string destination, string target)
         {
             if (!Placed(path, () =>
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                    if (new FileInfo(destination).LinkTarget is not null || File.Exists(destination))
-                    {
-                        File.Delete(destination);
-                    }
-
+                    Clear(destination);
                     File.CreateSymbolicLink(destination, target);
                 }))
             {
@@ -650,7 +711,9 @@ public sealed class RecoverySession : IDisposable
             return true;
         }
 
-        async ValueTask<bool> RestoreFileAsync(FileVersionManifest manifest, string path, string destination)
+        // What the landed file got of its captured metadata, or null where
+        // it did not land.
+        async ValueTask<CapturedMetadata?> RestoreFileAsync(FileVersionManifest manifest, string path, string destination)
         {
             var spool = destination + ".fbp-recover-tmp";
 
@@ -676,7 +739,7 @@ public sealed class RecoverySession : IDisposable
                         made = SparseFile.Create(spool, FileMode.CreateNew, holes: manifest.SparseExtents.Count > 0);
                     }))
                 {
-                    return false;
+                    return null;
                 }
 
                 var output = made!;
@@ -689,7 +752,7 @@ public sealed class RecoverySession : IDisposable
                             if (!_records.TryGetValue(segment.ObjectId, out var located))
                             {
                                 notes.Add(new RecoveryNote(RecoveryNoteKind.SegmentMissing, path, Record: segment.ObjectId));
-                                return false;
+                                return null;
                             }
 
                             var read = await located.Reader.ReadRecordAsync(located.Entry, cancellationToken)
@@ -698,7 +761,7 @@ public sealed class RecoverySession : IDisposable
                             {
                                 notes.Add(new RecoveryNote(
                                     RecoveryNoteKind.SegmentUnreadable, path, Outcome: read.Outcome, Detail: read.Detail));
-                                return false;
+                                return null;
                             }
 
                             await output.WriteAsync(read.Plaintext!, cancellationToken).ConfigureAwait(false);
@@ -735,18 +798,17 @@ public sealed class RecoverySession : IDisposable
                 if (!hash.SequenceEqual(manifest.WholeFileHash.Span))
                 {
                     notes.Add(new RecoveryNote(RecoveryNoteKind.HashMismatch, path));
-                    return false;
+                    return null;
                 }
 
                 if (!Placed(path, () => File.Move(spool, destination, overwrite: true)))
                 {
-                    return false;
+                    return null;
                 }
 
-                Count(
-                    MetadataRules.Captured(manifest.Metadata),
-                    writer.Write(destination, manifest.Metadata, EntryKind.File).Applied);
-                return true;
+                var applied = writer.Write(destination, manifest.Metadata, EntryKind.File).Applied;
+                Count(MetadataRules.Captured(manifest.Metadata), applied);
+                return applied;
             }
             finally
             {
@@ -757,6 +819,14 @@ public sealed class RecoverySession : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// The hard-link group a file's name is one of, and what it must agree
+    /// on with that group's first name to be the same file again, by the
+    /// rule the executor holds to (ADR-0156); nulls for a file of no group.
+    /// </summary>
+    private static (string? Group, string? Key) GroupOf(FileVersionManifest manifest) =>
+        (HardLinkGroups.GroupOf(manifest), HardLinkGroups.KeyOf(manifest));
 
     /// <summary>
     /// Where a tree entry named <paramref name="name"/> at

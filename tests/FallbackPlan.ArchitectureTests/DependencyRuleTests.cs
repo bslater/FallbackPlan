@@ -1006,6 +1006,29 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// What the names of a hard-link group must agree on before a restore
+    /// makes them one file again is one rule (ADR-0156, ADR-0102). The
+    /// executor and the recovery tool both give a group back, and this
+    /// canary fails if either groups names by a copy of the rule.
+    /// </summary>
+    [TestMethod]
+    public void TheExecutorAndTheRecoveryTool_GroupHardLinksByTheSharedKey()
+    {
+        foreach (var assembly in new[] { Restore, Recovery })
+        {
+            var grouping = Types.InAssembly(assembly)
+                .That()
+                .HaveDependencyOn("FallbackPlan.Repository.Format.Manifests.HardLinkGroups")
+                .GetTypes()
+                .ToList();
+
+            Assert.IsNotEmpty(
+                grouping,
+                $"{assembly.GetName().Name} must group hard links by the format's HardLinkGroups, not a copy of it.");
+        }
+    }
+
+    /// <summary>
     /// The recovery tool gives what it restores its metadata back by the
     /// same rule (ADR-0150). Its closure stops short of the executor, so it
     /// reaches the rule in Domain; this canary fails if it ever writes

@@ -276,7 +276,7 @@ public static class RestoreSpace
                 return null;
             }
 
-            if (RestoreHardLinks.KeyOf(manifest) is { } key && !linked.Add(key))
+            if (HardLinkGroups.KeyOf(manifest) is { } key && !linked.Add(key))
             {
                 return new RestoreFileBytes(0);
             }
