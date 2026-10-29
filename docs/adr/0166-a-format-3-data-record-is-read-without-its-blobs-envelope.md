@@ -36,6 +36,8 @@ Nothing is taken on trust that an envelope would have proved. A framing open aut
 
 A metadata record's key derives from the class key at the envelope's key generation, so a metadata blob is still framed from its envelope. A reader with no grant to open a record's share, a write-only holder, has nothing to read a record as format 3 with, and is answered as before.
 
+> **2026-10 ([ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md)).** A metadata record is now read the same way, at the key generation the catalogue recorded for its blob, by a write-only holder as well, since the metadata class key needs no grant. A metadata blob whose generation the catalogue did not record is still framed from its envelope. The grant this section asks for is still asked of a data record.
+
 ## Consequences
 
 - A sparse restore out of format-3 data blobs costs one read a blob, within NFR-PERF-009's budget, with no change to the catalogue or the format.
@@ -45,6 +47,8 @@ A metadata record's key derives from the class key at the envelope's key generat
 ## What this does not do
 
 - **Metadata blobs.** Their records need the key generation the envelope gives; a sparse read of a metadata blob still costs two reads.
+
+  > **2026-10 ([ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md)).** Done for a metadata blob the catalogue recorded: it carries the key generation the envelope gives, so a sparse read of such a blob costs one read. One the catalogue knows only by a placeholder row still costs two.
 - **Other copies.** A record read from another copy of the repository (FR-RST-007) frames its blob from that copy's envelope as before.
 - **The coalesced fold.** A prefetch whose first record is within the bridge still reaches down to offset 0, so the envelope is in hand and used. That costs bytes, not reads.
 
@@ -54,8 +58,11 @@ A metadata record's key derives from the class key at the envelope's key generat
 - **Take the repository's format as every blob's.** Rejected. A repository upgraded to format 3 still holds its format-2 blobs, and the format-upgrade record states no cutover a blob could be judged by.
 - **Read every record as format 3, metadata included, and fall back on failure.** Rejected for now. A metadata record's key needs the envelope's key generation, which the catalogue holds only for blobs it knows a row of.
 
+  > **2026-10 ([ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md)).** Taken for the blobs it named: a metadata record is read as format 3 at the generation the catalogue holds for its blob, and falls back on failure as a data record does.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A data record is read by its location as format 3 frames it when its blob's envelope is not in hand, and the envelope is read, and the record re-framed from the bytes already fetched, only when it does not read so. No format or catalogue change. |
+| 2026-10 | Accepted (amended) | Noted by [ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md): a metadata record is read the same way at the key generation the catalogue recorded for its blob, so the metadata blobs this record left framed from their envelopes are, where the catalogue recorded them, read in one read too. |
