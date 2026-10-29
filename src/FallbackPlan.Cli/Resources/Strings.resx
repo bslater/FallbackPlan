@@ -271,6 +271,12 @@
   <data name="CliApplication_ForgetAllNamesNoRun" xml:space="preserve">
     <value>--forget-all lets every run's receipt go: it names no run, and takes no --forget. Nothing was let go.</value>
   </data>
+  <data name="CliApplication_OlderThanDaysGoesWithForgetAll" xml:space="preserve">
+    <value>--older-than-days says which receipts --forget-all lets go: it goes beside --forget-all. Nothing was let go.</value>
+  </data>
+  <data name="CliApplication_OlderThanDaysTakesAtLeastOne" xml:space="preserve">
+    <value>--older-than-days takes at least one day. Nothing was let go.</value>
+  </data>
   <data name="RestoreReceiptReport_NotAllLetGo" xml:space="preserve">
     <value>The receipts of {0} run(s) were not let go: {1}</value>
   </data>

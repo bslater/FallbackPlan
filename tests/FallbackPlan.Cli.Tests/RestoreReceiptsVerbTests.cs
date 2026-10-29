@@ -26,16 +26,39 @@ namespace FallbackPlan.Cli.Tests;
 /// once, each said, and nothing else the folder holds; through a paired
 /// service, each it lists is let go by its name, and one it no longer keeps is
 /// named while the rest go. A run named beside it is refused, before the
-/// service is dialled (FR-RST-004, ADR-0161).
+/// service is dialled (FR-RST-004, ADR-0161). With --older-than-days beside
+/// it, only the receipts of runs that ended longer ago than that go, from the
+/// folder and through a paired service alike, and how many stay is said; a
+/// receipt that does not say when its run ended stays, and is named. Without
+/// --forget-all, or below one day, it is refused before anything is removed
+/// or the service dialled (ADR-0164).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptsVerbTests : IDisposable
 {
+    private const ulong LongAgo = 1_700_000_000_000;
+
     private readonly CliHarness _cli = new();
+
+    private static ulong Now => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     public void Dispose() => _cli.Dispose();
 
     /// <summary>Keeps a receipt of one run's items under the state directory, as a run keeps its own.</summary>
+    /// <summary>Keeps a receipt of a run that ended at <paramref name="completedAt"/>.</summary>
+    private void KeptEnded(string run, ulong completedAt) =>
+        new RestoreReceipt
+        {
+            SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
+            SnapshotId = new string('e', 32),
+            StartedAt = completedAt - 10_000,
+            CompletedAt = completedAt,
+            Items = [new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1 }],
+            Displaced = [],
+            WrittenTo = "/srv/restored",
+            Outcome = RestoreOutcome.Complete,
+        }.Keep(Receipts, run);
+
     private void Kept(string run, params ReceiptItem[] items) =>
         new RestoreReceipt
         {
@@ -99,6 +122,9 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
 
         public List<FallbackPlan.Api.ServiceCommand> Asked { get; } = [];
 
+        /// <summary>When each run listed ended, where not long ago; null for one whose receipt does not read.</summary>
+        public Dictionary<string, ulong?> EndedAt { get; } = new(StringComparer.Ordinal);
+
         public FallbackPlan.Api.ContractVersion ServiceContractVersion => FallbackPlan.Api.ContractVersion.Current;
 
         public ValueTask<FallbackPlan.Api.ServiceResult> ExecuteAsync(FallbackPlan.Api.ServiceCommand command, CancellationToken cancellationToken)
@@ -107,14 +133,19 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
             FallbackPlan.Api.ServiceResult answer = command switch
             {
                 FallbackPlan.Api.ListRestoreReceiptsCommand { Limit: null } => new FallbackPlan.Api.RestoreReceiptsResult(
-                    [.. _kept.Concat(listedButGone).Select(run =>
-                        new FallbackPlan.Api.RestoreReceiptDescriptor(run, "complete", 1_700_000_000_000, new string('e', 32), "/srv/restored", 1, 0, 0, 0, 0))],
+                    [.. _kept.Concat(listedButGone).Select(Describe)],
                     _kept.Count + listedButGone.Length),
                 FallbackPlan.Api.ForgetRestoreReceiptCommand forget when _kept.Remove(forget.Run) => new FallbackPlan.Api.AcknowledgedResult(),
                 _ => new FallbackPlan.Api.ServiceError(FallbackPlan.Api.ServiceErrorReason.NotFound, "the service keeps no such receipt"),
             };
             return ValueTask.FromResult(answer);
         }
+
+        private FallbackPlan.Api.RestoreReceiptDescriptor Describe(string run) =>
+            EndedAt.TryGetValue(run, out var endedAt) && endedAt is null
+                ? new FallbackPlan.Api.RestoreReceiptDescriptor(run, null, null, null, null, 0, 0, 0, 0, 0, Problem: "not a receipt")
+                : new FallbackPlan.Api.RestoreReceiptDescriptor(
+                    run, "complete", endedAt ?? LongAgo, new string('e', 32), "/srv/restored", 1, 0, 0, 0, 0);
 
         public IAsyncEnumerable<FallbackPlan.Api.JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
             AsyncEnumerable.Empty<FallbackPlan.Api.JobProgressEvent>();
@@ -498,7 +529,7 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
         await using var client = new KeepingClient(["0123456789abcdef", "fedcba9876543210"]);
         using var output = new StringWriter();
 
-        Assert.AreEqual(0, await RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, CancellationToken.None));
+        Assert.AreEqual(0, await RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, olderThanDays: null, CancellationToken.None));
 
         Assert.IsInstanceOfType<FallbackPlan.Api.ListRestoreReceiptsCommand>(client.Asked[0], out var listed);
         Assert.IsNull(listed.Limit, "every receipt it keeps is listed");
@@ -516,11 +547,106 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
         using var output = new StringWriter();
 
         var failed = await Assert.ThrowsExactlyAsync<CliFailureException>(
-            () => RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, CancellationToken.None));
+            () => RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, olderThanDays: null, CancellationToken.None));
 
         Assert.Contains("fedcba9876543210", failed.Message, StringComparison.Ordinal);
         Assert.Contains("the service keeps no such receipt", failed.Message, StringComparison.Ordinal);
         Assert.Contains("let go the receipt of run 0123456789abcdef the service kept", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_OlderThanDays_LetsGoOnlyTheReceiptsOfRunsThatEndedLongerAgo()
+    {
+        KeptEnded("0123456789abcdef", LongAgo);
+        KeptEnded("fedcba9876543210", Now - (2 * 86_400_000));
+
+        var forgot = await CliHarness.RunRawAsync(
+            "restore-receipts", "--state", _cli.StatePath, "--forget-all", "--older-than-days", "30");
+
+        Assert.AreEqual(0, forgot.ExitCode, forgot.All);
+        Assert.IsFalse(File.Exists(Path.Combine(Receipts, "0123456789abcdef.json")), "a run that ended longer ago goes");
+        Assert.IsTrue(File.Exists(Path.Combine(Receipts, "fedcba9876543210.json")), "one that ended within the days stays");
+        Assert.Contains($"let go the receipt of run 0123456789abcdef kept under '{Receipts}'", forgot.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("let go the receipt of run fedcba9876543210", forgot.Output, StringComparison.Ordinal);
+        Assert.Contains($"let go 1 restore receipt kept under '{Receipts}'", forgot.Output, StringComparison.Ordinal);
+        Assert.Contains("1 restore receipt whose run ended within 30 days stays", forgot.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_OlderThanDays_KeepsAReceiptThatDoesNotSayWhenItsRunEnded_AndNamesIt()
+    {
+        Directory.CreateDirectory(Receipts);
+        var unreadable = Path.Combine(Receipts, "fedcba9876543210.json");
+        await File.WriteAllTextAsync(unreadable, "{ not a receipt");
+        // Written long ago, which says nothing of when its run ended.
+        File.SetLastWriteTimeUtc(unreadable, DateTime.UnixEpoch.AddDays(1));
+
+        var forgot = await CliHarness.RunRawAsync(
+            "restore-receipts", "--state", _cli.StatePath, "--forget-all", "--older-than-days", "30");
+
+        Assert.AreEqual(0, forgot.ExitCode, forgot.All);
+        Assert.IsTrue(File.Exists(unreadable));
+        Assert.Contains(
+            "the receipt of run fedcba9876543210 does not say when its run ended, so it stays", forgot.Output, StringComparison.Ordinal);
+        Assert.Contains($"let go 0 restore receipts kept under '{Receipts}'", forgot.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task OlderThanDays_WithoutForgetAll_IsRefused_AndRemovesNothing()
+    {
+        KeptEnded("0123456789abcdef", LongAgo);
+
+        var refused = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--older-than-days", "30");
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains("--older-than-days says which receipts --forget-all lets go", refused.Error, StringComparison.Ordinal);
+        Assert.IsTrue(File.Exists(Path.Combine(Receipts, "0123456789abcdef.json")));
+    }
+
+    [TestMethod]
+    public async Task OlderThanDays_BelowOne_IsRefused_AndRemovesNothing()
+    {
+        KeptEnded("0123456789abcdef", LongAgo);
+
+        var refused = await CliHarness.RunRawAsync(
+            "restore-receipts", "--state", _cli.StatePath, "--forget-all", "--older-than-days", "0");
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains("--older-than-days takes at least one day", refused.Error, StringComparison.Ordinal);
+        Assert.IsTrue(File.Exists(Path.Combine(Receipts, "0123456789abcdef.json")));
+    }
+
+    [TestMethod]
+    public async Task ForgetAll_OlderThanDays_ThroughAPairedService_LetsGoOnlyThoseOfRunsThatEndedLongerAgo()
+    {
+        await using var client = new KeepingClient(["0123456789abcdef", "fedcba9876543210", "00112233445566ff"])
+        {
+            EndedAt = { ["fedcba9876543210"] = Now - 3_600_000, ["00112233445566ff"] = null },
+        };
+        using var output = new StringWriter();
+
+        Assert.AreEqual(
+            0, await RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, olderThanDays: 1, CancellationToken.None));
+
+        Assert.AreEqual(
+            "0123456789abcdef", Assert.ContainsSingle(client.Asked.OfType<FallbackPlan.Api.ForgetRestoreReceiptCommand>()).Run);
+        Assert.Contains("let go the receipt of run 0123456789abcdef the service kept", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("let go 1 restore receipt the service kept", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("1 restore receipt whose run ended within 1 day stays", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(
+            "the receipt of run 00112233445566ff does not say when its run ended, so it stays", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task OlderThanDays_ThroughAPairedService_WithoutForgetAll_IsRefusedBeforeItIsDialled()
+    {
+        // Nothing listens on the port: a refusal that dialled first would say that instead.
+        var refused = await CliHarness.RunRawAsync(
+            "restore-receipts", "--older-than-days", "30",
+            "--connect", "127.0.0.1:1", "--state", _cli.StatePath, "--fingerprint", new string('f', 64));
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains("--older-than-days says which receipts --forget-all lets go", refused.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]

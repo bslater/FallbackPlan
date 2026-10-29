@@ -146,12 +146,20 @@ internal static class RestoreReceiptReport
 
     /// <summary>
     /// Lets every run's receipt kept under <paramref name="stateDirectory"/>
-    /// go at once (ADR-0161), and says each and how many.
+    /// go at once (ADR-0161), or only those of runs that ended more than
+    /// <paramref name="olderThanDays"/> days ago (ADR-0164), and says each and
+    /// how many.
     /// </summary>
     /// <exception cref="CliFailureException">When one was not removed.</exception>
-    public static void LetGoAll(TextWriter output, string stateDirectory)
+    public static void LetGoAll(TextWriter output, string stateDirectory, int? olderThanDays)
     {
         var directory = Path.Combine(stateDirectory, "receipts");
+        if (olderThanDays is { } days)
+        {
+            LetGoOlder(output, directory, days);
+            return;
+        }
+
         var outcomes = RestoreReceipt.LetGoAll(directory);
         if (outcomes.Count == 0)
         {
@@ -168,15 +176,64 @@ internal static class RestoreReceiptReport
         RefuseUnlessAllLetGo([.. outcomes.Where(outcome => outcome.Problem is not null).Select(outcome => $"{outcome.Run}: {outcome.Problem}")]);
     }
 
+    // A receipt that does not read says nothing of when its run ended, and
+    // when its file was written is not that, so it stays.
+    private static void LetGoOlder(TextWriter output, string directory, int days)
+    {
+        var kept = RestoreReceipt.ReadKept(directory);
+        if (kept.Count == 0)
+        {
+            output.WriteLine($"No restore receipt is kept under '{directory}'.");
+            return;
+        }
+
+        var before = EndedBefore(days);
+        var letGo = 0;
+        var younger = 0;
+        var notLetGo = new List<string>();
+        foreach (var entry in kept)
+        {
+            if (entry.Receipt is not { } receipt)
+            {
+                output.WriteLine(Undated(entry.Run));
+                continue;
+            }
+
+            if (receipt.CompletedAt >= before)
+            {
+                younger++;
+                continue;
+            }
+
+            try
+            {
+                if (RestoreReceipt.LetGo(directory, entry.Run))
+                {
+                    output.WriteLine($"let go the receipt of run {entry.Run} kept under '{directory}'");
+                    letGo++;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                notLetGo.Add($"{entry.Run}: {exception.Message}");
+            }
+        }
+
+        output.WriteLine(LetGoCount(letGo, $"kept under '{directory}'"));
+        SayYounger(output, younger, days);
+        RefuseUnlessAllLetGo(notLetGo);
+    }
+
     /// <summary>
-    /// Asks a paired service to let every receipt it keeps go (ADR-0161): each
-    /// it lists is let go by its run's name (contract 1.79, ADR-0140), and says
-    /// each and how many.
+    /// Asks a paired service to let every receipt it keeps go (ADR-0161), or
+    /// only those of runs that ended more than <paramref name="olderThanDays"/>
+    /// days ago (ADR-0164): each is let go by its run's name (contract 1.79,
+    /// ADR-0140), and says each and how many.
     /// </summary>
     /// <returns>The exit code.</returns>
     /// <exception cref="CliFailureException">When the service let one it listed not go.</exception>
     public static async Task<int> LetGoAllThroughServiceAsync(
-        TextWriter output, IFallbackPlanClient client, CancellationToken cancellationToken)
+        TextWriter output, IFallbackPlanClient client, int? olderThanDays, CancellationToken cancellationToken)
     {
         var listed = await AskAsync<RestoreReceiptsResult>(client, new ListRestoreReceiptsCommand(), cancellationToken)
             .ConfigureAwait(false);
@@ -186,10 +243,27 @@ internal static class RestoreReceiptReport
             return 0;
         }
 
+        var before = olderThanDays is { } days ? EndedBefore(days) : (ulong?)null;
         var letGo = 0;
+        var younger = 0;
         var refused = new List<string>();
         foreach (var receipt in listed.Receipts)
         {
+            if (before is { } cutoff)
+            {
+                if (receipt.EndedAt is not { } endedAt)
+                {
+                    output.WriteLine(Undated(receipt.Run));
+                    continue;
+                }
+
+                if (endedAt >= cutoff)
+                {
+                    younger++;
+                    continue;
+                }
+            }
+
             try
             {
                 _ = await AskAsync<AcknowledgedResult>(client, new ForgetRestoreReceiptCommand(receipt.Run), cancellationToken)
@@ -204,12 +278,33 @@ internal static class RestoreReceiptReport
         }
 
         output.WriteLine(LetGoCount(letGo, "the service kept"));
+        if (olderThanDays is { } asked)
+        {
+            SayYounger(output, younger, asked);
+        }
+
         RefuseUnlessAllLetGo(refused);
         return 0;
     }
 
     private static string LetGoCount(int letGo, string where) =>
         string.Create(CultureInfo.InvariantCulture, $"let go {letGo} restore {(letGo == 1 ? "receipt" : "receipts")} {where}");
+
+    /// <summary>When a run must have ended before, in Unix milliseconds, to be more than <paramref name="days"/> days old.</summary>
+    private static ulong EndedBefore(int days) =>
+        (ulong)Math.Max(0L, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - (days * 86_400_000L));
+
+    private static string Undated(string run) => $"the receipt of run {run} does not say when its run ended, so it stays";
+
+    private static void SayYounger(TextWriter output, int younger, int days)
+    {
+        if (younger > 0)
+        {
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{younger} restore {(younger == 1 ? "receipt" : "receipts")} whose run ended within {days} {(days == 1 ? "day" : "days")} {(younger == 1 ? "stays" : "stay")}"));
+        }
+    }
 
     private static void RefuseUnlessAllLetGo(List<string> notLetGo)
     {
