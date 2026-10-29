@@ -982,6 +982,26 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// The recovery tool gives what it restores its metadata back by the
+    /// same rule (ADR-0150). Its closure stops short of the executor, so it
+    /// reaches the rule in Domain; this canary fails if it ever writes
+    /// metadata through a copy of it.
+    /// </summary>
+    [TestMethod]
+    public void TheRecoveryTool_WritesMetadataThroughTheSharedWriter()
+    {
+        var writing = Types.InAssembly(Recovery)
+            .That()
+            .HaveDependencyOn("FallbackPlan.Domain.MetadataWriter")
+            .GetTypes()
+            .ToList();
+
+        Assert.IsNotEmpty(
+            writing,
+            "The recovery tool must write metadata back through Domain's MetadataWriter, not a copy of it.");
+    }
+
+    /// <summary>
     /// 11 §2: <c>Recovery</c> speaks to no service in any topology
     /// (NFR-OPS-005). A recovery tool that needed a running service would not
     /// be a recovery tool.

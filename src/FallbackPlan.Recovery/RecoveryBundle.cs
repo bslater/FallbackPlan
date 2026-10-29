@@ -144,7 +144,7 @@ internal static class RecoveryBundle
             snapshot.Manifest.ObservedClockSkewMs))]);
 
     private static RestoreEntry RestoreOf(RecoveryRun run, RenderMode mode) => run.Restore is not { } report
-        ? new RestoreEntry(false, null, null, null, null, [], 0)
+        ? new RestoreEntry(false, null, null, null, null, [], 0, [])
         : new RestoreEntry(
             true,
             run.Snapshot is null ? null : Render(LogId.Snapshot(run.Snapshot), mode),
@@ -152,7 +152,8 @@ internal static class RecoveryBundle
             report.Failed,
             report.Skipped,
             [.. report.Notes.Take(MaximumNotes).Select(note => NoteOf(note, mode))],
-            Math.Max(0, report.Notes.Count - MaximumNotes));
+            Math.Max(0, report.Notes.Count - MaximumNotes),
+            [.. report.NotApplied.Select(entry => new NotAppliedEntry(Label(entry.Attribute), entry.Items))]);
 
     private static NoteEntry NoteOf(RecoveryNote note, RenderMode mode) => new(
         Name(note.Kind),
@@ -175,7 +176,8 @@ internal static class RecoveryBundle
         text.AppendLine("  archive.json    what the archive's descriptor said, whether the passphrase reproduced its");
         text.AppendLine("                  keys, and which blobs did not open");
         text.AppendLine("  snapshots.json  the snapshots the archive lists, when the run listed them");
-        text.AppendLine("  restore.json    what a restore did and every file it could not restore, when one ran");
+        text.AppendLine("  restore.json    what a restore did, every file it could not restore, and how many");
+        text.AppendLine("                  files and folders did not get each captured attribute back, when one ran");
         text.AppendLine("  environment.json  the tool's version, the runtime and the operating system");
         text.AppendLine();
         text.AppendLine("It never holds the passphrase or the name of the variable holding it, any key, the");
@@ -293,7 +295,10 @@ internal static class RecoveryBundle
         int? Failed,
         int? Skipped,
         IReadOnlyList<NoteEntry> Notes,
-        int NotesLeftOut);
+        int NotesLeftOut,
+        IReadOnlyList<NotAppliedEntry> NotApplied);
+
+    private sealed record NotAppliedEntry(string Attribute, int Items);
 
     private sealed record NoteEntry(
         string Kind, string? Path, string? Subject, string? Outcome, string? Reason, string? Detail);

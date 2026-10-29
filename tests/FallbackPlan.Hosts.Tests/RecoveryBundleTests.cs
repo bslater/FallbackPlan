@@ -198,6 +198,7 @@ public sealed class RecoveryBundleTests : IDisposable
         using var restore = JsonDocument.Parse(entries["restore.json"]);
         Assert.IsTrue(restore.RootElement.GetProperty("ran").GetBoolean());
         Assert.AreEqual(2, restore.RootElement.GetProperty("failed").GetInt32());
+        Assert.AreEqual(JsonValueKind.Array, restore.RootElement.GetProperty("not_applied").ValueKind);
         var failures = restore.RootElement.GetProperty("notes").EnumerateArray().ToList();
         Assert.HasCount(2, failures);
         foreach (var note in failures)
@@ -212,6 +213,29 @@ public sealed class RecoveryBundleTests : IDisposable
         CollectionAssert.AreEquivalent(
             ExpectedEntries,
             manifest.RootElement.GetProperty("entries").EnumerateArray().Select(entry => entry.GetString()).ToArray());
+    }
+
+    [TestMethod]
+    public async Task Restore_WithABundle_CountsEachAttributeNotApplied()
+    {
+        var snapshot = await BackUpTellingFolderAsync();
+        var bundle = Work("recovery.zip");
+
+        // A folder already in the output keeps its own, so its captured
+        // modification time is not applied on any platform (ADR-0150).
+        var output = Work("recovered");
+        Directory.CreateDirectory(Path.Combine(output, TellingFolder));
+        var result = await RunAsync(
+        [
+            .. Arguments("restore"), "--snapshot", snapshot, "--output", output, "--diagnostic-bundle", bundle,
+        ]);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        using var restore = JsonDocument.Parse((await ReadBundleAsync(bundle))["restore.json"]);
+        var modified = Assert.ContainsSingle(restore.RootElement.GetProperty("not_applied").EnumerateArray()
+            .Where(entry => entry.GetProperty("attribute").GetString() == "modified_at")
+            .ToList());
+        Assert.AreEqual(1, modified.GetProperty("items").GetInt32());
     }
 
     [TestMethod]
