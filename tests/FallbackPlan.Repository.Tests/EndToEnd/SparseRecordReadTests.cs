@@ -28,6 +28,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// footer path, as it was, never a throw.
 /// </summary>
 /// <remarks>
+/// <para>
 /// A format-3 metadata record is read the same way, in one ranged read, under
 /// the key generation the catalogue recorded for its blob (NFR-PERF-009,
 /// ADR-0167). A blob the catalogue holds no row of, or one whose recorded
@@ -36,6 +37,16 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// more reads than before. A write-only holder reads one too, since the
 /// structure plane needs no grant, and a metadata record that does not
 /// verify is still a damage finding.
+/// </para>
+/// <para>
+/// A prefetch reaches down to a blob's envelope only where the read may want
+/// it (NFR-PERF-009, ADR-0168). Once an envelope the reader framed has shown
+/// format 3, a run over records it can read before their envelope starts at
+/// the first of them, while one over a metadata blob whose generation the
+/// catalogue did not record still takes the envelope in the same read. In a
+/// repository whose framed envelopes show an older format, every prefetch
+/// takes its blob's envelope, at one read a blob as before.
+/// </para>
 /// </remarks>
 [TestClass]
 public sealed class SparseRecordReadTests : ArchiveTestHarness
@@ -337,6 +348,201 @@ public sealed class SparseRecordReadTests : ArchiveTestHarness
         Assert.AreEqual(1, reader.LocationFallbacks, "the footer path is the one that says what is wrong");
     }
 
+    [TestMethod]
+    public async Task OnceAFramedEnvelopeShowsFormat3_APrefetchOfDataRecords_DoesNotReachDownToTheirBlobsEnvelope()
+    {
+        var (catalogue, inner, keys, first, second) = await PublishInTwoDataBlobsAsync(FormatVersions.RelocatableRecords, 0xC1);
+        using var _ = keys;
+        using var _c = catalogue;
+        var wanted = catalogue.ResolveLocation(second)!;
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        // Nothing has shown this repository's format yet, so the first
+        // blob's run takes its envelope, and framing it shows format 3.
+        await reader.PrefetchAsync([first], CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(first, CancellationToken.None)).Outcome);
+        var before = reader.PrefetchedBytes;
+
+        await reader.PrefetchAsync([second], CancellationToken.None);
+        var read = await reader.ReadSegmentAsync(second, CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        Assert.AreEqual(
+            RecordFraming.MaxRecordLength(wanted.StoredLength),
+            reader.PrefetchedBytes - before,
+            $"the run starts at the record, {wanted.PhysicalOffset} bytes in, not at the blob's start");
+        Assert.AreEqual(2L, counting.Reads, "one read a blob");
+        Assert.AreEqual(1, reader.FramedBlobs, "only the first blob's envelope was opened");
+    }
+
+    [TestMethod]
+    public async Task OnceAFramedEnvelopeShowsFormat3_APrefetchOfMetadataRecords_DoesNotReachDownToTheirBlobsEnvelope()
+    {
+        var (catalogue, inner, keys, first, _) = await PublishInTwoDataBlobsAsync(FormatVersions.RelocatableRecords, 0xC2);
+        using var _k = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xC2);
+        var wanted = catalogue.ResolveLocation(manifests[^1])!;
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        await reader.PrefetchAsync([first], CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(first, CancellationToken.None)).Outcome);
+        var before = reader.PrefetchedBytes;
+
+        await reader.PrefetchAsync([manifests[^1]], CancellationToken.None);
+        var read = await reader.ReadSegmentAsync(manifests[^1], CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        Assert.AreEqual(
+            RecordFraming.MaxRecordLength(wanted.StoredLength),
+            reader.PrefetchedBytes - before,
+            $"the run starts at the record, {wanted.PhysicalOffset} bytes in, not at the blob's start");
+        Assert.AreEqual(2L, counting.Reads);
+        Assert.AreEqual(1, reader.FramedBlobs);
+    }
+
+    [TestMethod]
+    public async Task APrefetchOfAMetadataBlobWhoseGenerationIsNotRecorded_StillTakesItsEnvelopeInTheSameRead()
+    {
+        // The read will need this blob's envelope whatever the repository's
+        // format, so the run that is happening anyway collects it.
+        var (catalogue, inner, keys, first, _) = await PublishInTwoDataBlobsAsync(FormatVersions.RelocatableRecords, 0xC3);
+        using var _k = keys;
+        using var _c = catalogue;
+        var manifests = ManifestsSharingABlob(catalogue, 0xC3);
+        var wanted = catalogue.ResolveLocation(manifests[^1])!;
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(objectId => catalogue.ResolveLocation(objectId) is { } location
+            ? location with { BlobKeyGeneration = null }
+            : null);
+
+        await reader.PrefetchAsync([first], CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(first, CancellationToken.None)).Outcome);
+        var before = reader.PrefetchedBytes;
+
+        await reader.PrefetchAsync([manifests[^1]], CancellationToken.None);
+        var read = await reader.ReadSegmentAsync(manifests[^1], CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        Assert.AreEqual(
+            (long)wanted.PhysicalOffset + RecordFraming.MaxRecordLength(wanted.StoredLength),
+            reader.PrefetchedBytes - before,
+            "the run reaches down to offset 0");
+        Assert.AreEqual(2L, counting.Reads, "the envelope rode the record's read");
+        Assert.AreEqual(2, reader.FramedBlobs);
+    }
+
+    [TestMethod]
+    public async Task InARepositoryOfAnOlderFormat_EveryPrefetchStillTakesItsBlobsEnvelope_AtOneReadABlob()
+    {
+        // The first envelope framed shows format 2, which is the evidence
+        // the reader goes by: every prefetch after it folds the envelope in,
+        // so such a repository costs what it did.
+        var (catalogue, inner, keys, first, second) = await PublishInTwoDataBlobsAsync(FormatVersions.SealedDataPlane, 0xC4);
+        using var _ = keys;
+        using var _c = catalogue;
+        var wanted = catalogue.ResolveLocation(second)!;
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        await reader.PrefetchAsync([first], CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(first, CancellationToken.None)).Outcome);
+        var before = reader.PrefetchedBytes;
+
+        await reader.PrefetchAsync([second], CancellationToken.None);
+        var read = await reader.ReadSegmentAsync(second, CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        Assert.AreEqual(
+            (long)wanted.PhysicalOffset + RecordFraming.MaxRecordLength(wanted.StoredLength),
+            reader.PrefetchedBytes - before,
+            "the second blob's run reaches down to offset 0");
+        Assert.AreEqual(2L, counting.Reads, "one read a blob, as before");
+        Assert.AreEqual(2, reader.FramedBlobs);
+        Assert.AreEqual(0, reader.LocationFallbacks);
+    }
+
+    [TestMethod]
+    public async Task InARepositoryHoldingBothFormats_TheFirstOlderBlobCostsItsEnvelopeARead_AndEveryPrefetchAfterItTakesItsBlobsEnvelope()
+    {
+        // A repository upgraded from format 2 holds blobs of both. Its
+        // format-3 blob is framed first, which says nothing of the format-2
+        // blobs beside it: the first of those pays its envelope a read of its
+        // own, and from then on the reader folds every envelope in again.
+        // Older first: a writer publishes at the format the repository has
+        // reached, so the format-2 blobs are the ones written before it was
+        // upgraded.
+        var (older, store, olderKeys, first, second) = await PublishInTwoDataBlobsAsync(FormatVersions.SealedDataPlane, 0xD0);
+        using var _k = olderKeys;
+        using var _o = older;
+        var (newer, _, keys, relocatable, _) = await PublishInTwoDataBlobsAsync(
+            FormatVersions.RelocatableRecords, 0xD8, WriterId.FromBytes(Enumerable.Repeat((byte)0x5E, 16).ToArray()));
+        using var _ = keys;
+        using var _n = newer;
+
+        var counting = new CountingObjectStore(store);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(objectId => newer.ResolveLocation(objectId) ?? older.ResolveLocation(objectId));
+
+        foreach (var (objectId, readsAfter) in new[] { (relocatable, 1L), (first, 3L), (second, 4L) })
+        {
+            await reader.PrefetchAsync([objectId], CancellationToken.None);
+            var read = await reader.ReadSegmentAsync(objectId, CancellationToken.None);
+            Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+            Assert.AreEqual(readsAfter, counting.Reads);
+        }
+
+        Assert.AreEqual(3, reader.FramedBlobs);
+        Assert.AreEqual(0, reader.LocationFallbacks);
+    }
+
+    /// <summary>
+    /// Publishes as <see cref="PublishAsync"/> does and answers, beside it, a
+    /// data record past the first of two different data blobs, so each sits
+    /// within the bridge of its blob's start without being its first record.
+    /// </summary>
+    private async Task<(CatalogueDb Catalogue, Storage.Local.LocalFileSystemObjectStore Store, RepositoryKeySet Keys, ObjectId First, ObjectId Second)>
+        PublishInTwoDataBlobsAsync(ushort formatVersion, byte seed, WriterId? writer = null)
+    {
+        var (_, catalogue, store, keys) = await PublishAsync(formatVersion, seed, writer);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        var byBlob = new Dictionary<BlobId, List<ObjectId>>();
+        foreach (var manifestId in RestorePlanner.Plan(
+                catalogue, Enumerable.Repeat(seed, 16).ToArray(), string.Empty, RestoreTargetProfile.ForLocalPlatform())
+            .Items.Where(entry => entry.Kind == EntryKind.File)
+            .Select(entry => entry.ObjectId))
+        {
+            var manifest = await reader.ReadSegmentAsync(manifestId, CancellationToken.None);
+            foreach (var reference in FileVersionManifestCodec.Decode(manifest.Plaintext!).SegmentReferences)
+            {
+                var blob = catalogue.ResolveLocation(reference.ObjectId)!.BlobId;
+                if (!byBlob.TryGetValue(blob, out var held))
+                {
+                    held = [];
+                    byBlob[blob] = held;
+                }
+
+                held.Add(reference.ObjectId);
+            }
+        }
+
+        var pairs = byBlob.Values.Where(held => held.Count >= 2).Take(2).ToList();
+        Assert.HasCount(2, pairs, "the fixture must spread its segments over two data blobs");
+        return (catalogue, store, keys, pairs[0][1], pairs[1][1]);
+    }
+
     /// <summary>
     /// The file-version manifests of the snapshot <paramref name="seed"/>
     /// names that share a metadata blob with the first of them, in order.
@@ -359,7 +565,7 @@ public sealed class SparseRecordReadTests : ArchiveTestHarness
     /// answers the segments of one of them that share a data blob, in order.
     /// </summary>
     private async Task<(IReadOnlyList<ObjectId> Segments, CatalogueDb Catalogue, Storage.Local.LocalFileSystemObjectStore Store, RepositoryKeySet Keys)>
-        PublishAsync(ushort formatVersion, byte seed)
+        PublishAsync(ushort formatVersion, byte seed, WriterId? writer = null)
     {
         var source = new FakeFileSystemSource();
         for (var index = 0; index < 3; index++)
@@ -376,7 +582,7 @@ public sealed class SparseRecordReadTests : ArchiveTestHarness
         var spool = Path.Combine(SpoolDirectory, $"spool-{seed:x2}");
         Directory.CreateDirectory(spool);
         await new PublicationOrchestrator(
-                SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
+                SmallBlobPolicy, Repo, writer ?? Writer, KeyGeneration.Zero, keys, credential, store,
                 new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
                 spool, formatVersion, observer: null, catalogue)
             .PublishAsync(

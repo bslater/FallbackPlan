@@ -87,14 +87,23 @@ public sealed class RepositoryReader : IDisposable
     // and the blob's framing is one 88-byte envelope read held for the run.
     private readonly Dictionary<ObjectKey, BlobReader> _framing = [];
 
-    // A data blob read before its envelope is (ADR-0166): at format 3 its
-    // records need nothing the envelope holds, so the envelope is fetched
-    // only when a record will not read as format 3.
+    // A blob read before its envelope is (ADR-0166, ADR-0167): at format 3
+    // its records need nothing the envelope holds that the reader does not
+    // already have, so the envelope is fetched only when a record will not
+    // read as format 3.
     private readonly Dictionary<ObjectKey, BlobReader> _assumed = [];
     private readonly Dictionary<BlobId, (ObjectKey Key, long Length)> _located = [];
     private readonly Dictionary<ObjectKey, List<BlobRun>> _prefetched = [];
     private readonly Queue<(ObjectKey Key, BlobRun Run)> _prefetchOrder = new();
     private long _held;
+
+    // What the envelopes this reader has framed say of the repository
+    // (ADR-0168). Nothing before a blob's envelope tells a format-2 blob
+    // from a format-3 one, so a prefetch takes an unframed blob's envelope
+    // with it until a framed one has shown format 3, and again for good once
+    // any has shown an older format.
+    private bool _framedRelocatable;
+    private bool _framedOlder;
     private Func<ObjectId, ResolvedLocation?>? _locations;
     private StoreBlobKeyDeriver? _storeKeyDeriver;
 
@@ -873,25 +882,34 @@ public sealed class RepositoryReader : IDisposable
             return assumed;
         }
 
-        switch (BlobStoreKeys.ClassOf(blob.Key))
+        if (!ReadsBeforeItsEnvelope(blob.Key, location))
         {
-            case BlobClass.Data when _sealedContentKeyOpener is not null:
-                assumed = BlobReader.AssumingRelocatableData(
-                    _store, blob.Key, blob.Length, _repositoryId, _objectIdDeriver, location.BlobId,
-                    _sealedContentKeyOpener);
-                break;
-            case BlobClass.Metadata when location.BlobKeyGeneration is { } generation:
-                assumed = BlobReader.AssumingRelocatableMetadata(
-                    _store, blob.Key, blob.Length, _repositoryId, _keys.DeriveClassKey, _objectIdDeriver,
-                    location.BlobId, generation);
-                break;
-            default:
-                return null;
+            return null;
         }
 
+        assumed = BlobStoreKeys.ClassOf(blob.Key) == BlobClass.Data
+            ? BlobReader.AssumingRelocatableData(
+                _store, blob.Key, blob.Length, _repositoryId, _objectIdDeriver, location.BlobId,
+                _sealedContentKeyOpener!)
+            : BlobReader.AssumingRelocatableMetadata(
+                _store, blob.Key, blob.Length, _repositoryId, _keys.DeriveClassKey, _objectIdDeriver,
+                location.BlobId, location.BlobKeyGeneration!.Value);
         _assumed[blob.Key] = assumed;
         return assumed;
     }
+
+    /// <summary>
+    /// Whether this reader has what a record of the blob needs to be read as
+    /// format 3 frames it: a grant to open a data record's share, or the key
+    /// generation a metadata record's key derives at (ADR-0166, ADR-0167).
+    /// </summary>
+    private bool ReadsBeforeItsEnvelope(ObjectKey storeKey, ResolvedLocation location) =>
+        BlobStoreKeys.ClassOf(storeKey) switch
+        {
+            BlobClass.Data => _sealedContentKeyOpener is not null,
+            BlobClass.Metadata => location.BlobKeyGeneration is not null,
+            _ => false,
+        };
 
     /// <summary>
     /// A record read as format 3 frames it. Anything short of a record that
@@ -957,6 +975,15 @@ public sealed class RepositoryReader : IDisposable
         }
 
         _framing[storeKey] = framing;
+        if (FormatVersions.HasRelocatableRecords(framing.Envelope.FormatVersion))
+        {
+            _framedRelocatable = true;
+        }
+        else
+        {
+            _framedOlder = true;
+        }
+
         return framing;
     }
 
@@ -990,10 +1017,13 @@ public sealed class RepositoryReader : IDisposable
     /// <paramref name="objectIds"/> names — the coalescing term of
     /// NFR-PERF-009. Records in one blob are grouped, sorted by offset and
     /// merged into runs under <see cref="PrefetchPolicy.CoalesceWindowBytes"/>
-    /// and <see cref="PrefetchPolicy.MaximumBridgeBytes"/>; a run whose first
-    /// record is close enough to the start reaches down to offset 0 and takes
-    /// the envelope with it, which is the difference between paying two reads
-    /// per blob and one.
+    /// and <see cref="PrefetchPolicy.MaximumBridgeBytes"/>. Where the blob's
+    /// records may want its envelope, a run whose first record is close
+    /// enough to the start reaches down to offset 0 and takes the envelope
+    /// with it, which is the difference between paying two reads per blob
+    /// and one. Where they will not — the reader can read them before their
+    /// envelope, and the envelopes it has framed show format 3 and nothing
+    /// older — the run starts at its first record (ADR-0168).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -1031,7 +1061,7 @@ public sealed class RepositoryReader : IDisposable
         // than the budget the runs taken are the ones wanted first, and the
         // rest read one at a time — which is only the right half to keep if
         // the order is the caller's.
-        var wanted = new Dictionary<ObjectKey, (long BlobLength, List<(long Start, long End)> Spans)>();
+        var wanted = new Dictionary<ObjectKey, (long BlobLength, bool ReadsBeforeItsEnvelope, List<(long Start, long End)> Spans)>();
         var order = new List<ObjectKey>();
         foreach (var objectId in objectIds.Distinct())
         {
@@ -1061,7 +1091,7 @@ public sealed class RepositoryReader : IDisposable
 
             if (!wanted.TryGetValue(blob.Key, out var entry))
             {
-                entry = (blob.Length, []);
+                entry = (blob.Length, ReadsBeforeItsEnvelope(blob.Key, location), []);
                 wanted[blob.Key] = entry;
                 order.Add(blob.Key);
             }
@@ -1071,8 +1101,10 @@ public sealed class RepositoryReader : IDisposable
 
         foreach (var storeKey in order)
         {
-            var (blobLength, spans) = wanted[storeKey];
-            foreach (var run in PlanRuns(spans, blobLength, _framing.ContainsKey(storeKey), _prefetch))
+            var (blobLength, readsBeforeItsEnvelope, spans) = wanted[storeKey];
+            var wantsEnvelope = !_framing.ContainsKey(storeKey)
+                && (!readsBeforeItsEnvelope || !_framedRelocatable || _framedOlder);
+            foreach (var run in PlanRuns(spans, blobLength, wantsEnvelope, _prefetch))
             {
                 // One call never fetches more than the budget, so a caller
                 // that asks for more than can be held gets the front of what
@@ -1138,12 +1170,12 @@ public sealed class RepositoryReader : IDisposable
     /// <summary>
     /// The runs one blob's wanted spans become: sorted, merged while the gap
     /// is bridgeable and the result fits the window, and — when the blob's
-    /// framing is not yet open — the first run extended down to offset 0 on
-    /// the same two tests, so the envelope rides a read that was happening
-    /// anyway.
+    /// records may want its envelope — the first run extended down to
+    /// offset 0 on the same two tests, so the envelope rides a read that was
+    /// happening anyway.
     /// </summary>
     private static List<(long Start, long End)> PlanRuns(
-        List<(long Start, long End)> spans, long blobLength, bool framed, PrefetchPolicy policy)
+        List<(long Start, long End)> spans, long blobLength, bool wantsEnvelope, PrefetchPolicy policy)
     {
         spans.Sort((left, right) => left.Start.CompareTo(right.Start));
 
@@ -1175,7 +1207,7 @@ public sealed class RepositoryReader : IDisposable
             runs.Add(span);
         }
 
-        if (!framed && runs.Count > 0)
+        if (wantsEnvelope && runs.Count > 0)
         {
             var first = runs[0];
             var envelope = BlobReader.EnvelopeReadLength(blobLength);

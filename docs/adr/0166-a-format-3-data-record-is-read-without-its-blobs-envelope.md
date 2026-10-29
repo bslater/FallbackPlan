@@ -52,6 +52,8 @@ A metadata record's key derives from the class key at the envelope's key generat
 - **Other copies.** A record read from another copy of the repository (FR-RST-007) frames its blob from that copy's envelope as before.
 - **The coalesced fold.** A prefetch whose first record is within the bridge still reaches down to offset 0, so the envelope is in hand and used. That costs bytes, not reads.
 
+  > **2026-10 ([ADR-0168](0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md)).** Done: once an envelope the reader framed shows format 3, and none shows an older one, a run over records it can read before their envelope starts at the first of them.
+
 ## Alternatives considered
 
 - **Persist each blob's format in the catalogue.** Rejected, as ADR-0068 left it. It is a schema change, a row a blob that was compacted or adopted would have to keep true, and the record itself already says whether it is format 3 by whether it opens.
@@ -66,3 +68,4 @@ A metadata record's key derives from the class key at the envelope's key generat
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A data record is read by its location as format 3 frames it when its blob's envelope is not in hand, and the envelope is read, and the record re-framed from the bytes already fetched, only when it does not read so. No format or catalogue change. |
 | 2026-10 | Accepted (amended) | Noted by [ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md): a metadata record is read the same way at the key generation the catalogue recorded for its blob, so the metadata blobs this record left framed from their envelopes are, where the catalogue recorded them, read in one read too. |
+| 2026-10 | Accepted (amended) | Noted by [ADR-0168](0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md): the coalesced fold this record left is taken only where the read may want the envelope. |

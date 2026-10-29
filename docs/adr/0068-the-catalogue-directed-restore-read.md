@@ -54,6 +54,14 @@ so no amount of coalescing reaches `1.2B` while the read opens the blob**; and
 the first run of a blob reaches down to offset 0 and takes the envelope with
 it instead of only merging neighbours.
 
+> **2026-10 ([ADR-0168](0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md)).** Required where the
+> read wants the envelope, which is no longer every blob: a format-3 record is
+> read without it ([ADR-0166](0166-a-format-3-data-record-is-read-without-its-blobs-envelope.md),
+> [ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md)).
+> Once an envelope the reader framed shows format 3, and none shows an older
+> one, a run over records it can read before their envelope starts at the
+> first of them. A format-2 repository folds as this section says.
+
 ### 2. The catalogue is the location source, and it fails closed
 
 `Repository.Catalogue/Catalogue.ResolveLocation` already answers every field a
@@ -251,3 +259,4 @@ than a line.
 | 2026-09 | Accepted (related) | [ADR-0075](0075-a-restore-reads-around-damage.md) reads a record the own store will not serve from the set's other copies, at the location the catalogue gives it, and asks each copy's own footer before calling a failed location read damage there, as §2 does at the own store. `Repository/RepositoryReader`; `Repository.Tests/ReadAroundTests` |
 | 2026-10 | Accepted | Noted by [ADR-0166](0166-a-format-3-data-record-is-read-without-its-blobs-envelope.md): the sparse case this record left over the budget is closed for format-3 data blobs, without the catalogue change named among the alternatives. |
 | 2026-10 | Accepted | Noted by [ADR-0167](0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md): the sparse case is closed for format-3 metadata blobs the catalogue recorded too, at the key generation it holds for each, still without the schema change named among the alternatives. |
+| 2026-10 | Accepted | Noted by [ADR-0168](0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md): the envelope fold §1 calls required is taken only where the read may want the envelope, judged by what the envelopes a reader has framed show. |
