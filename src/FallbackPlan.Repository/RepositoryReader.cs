@@ -86,6 +86,11 @@ public sealed class RepositoryReader : IDisposable
     // the catalogue — answers the offset, the stored length and the profiles,
     // and the blob's framing is one 88-byte envelope read held for the run.
     private readonly Dictionary<ObjectKey, BlobReader> _framing = [];
+
+    // A data blob read before its envelope is (ADR-0166): at format 3 its
+    // records need nothing the envelope holds, so the envelope is fetched
+    // only when a record will not read as format 3.
+    private readonly Dictionary<ObjectKey, BlobReader> _assumed = [];
     private readonly Dictionary<BlobId, (ObjectKey Key, long Length)> _located = [];
     private readonly Dictionary<ObjectKey, List<BlobRun>> _prefetched = [];
     private readonly Queue<(ObjectKey Key, BlobRun Run)> _prefetchOrder = new();
@@ -797,9 +802,10 @@ public sealed class RepositoryReader : IDisposable
     /// <summary>
     /// Reads a record straight from where a location source says it is: from
     /// a prefetched run when one covers it, otherwise one ranged read, plus
-    /// one envelope read the first time the blob is touched. Answers null
-    /// when the blob's framing cannot be opened at all, which the caller
-    /// treats as a miss rather than as damage — the footer path decides that.
+    /// one envelope read the first time a blob is touched that the record
+    /// will not read without (ADR-0166). Answers null when the blob's framing
+    /// cannot be opened at all, which the caller treats as a miss rather than
+    /// as damage — the footer path decides that.
     /// </summary>
     private async ValueTask<RecordReadResult?> ReadFromLocationAsync(
         ResolvedLocation location, ObjectId objectId, CancellationToken cancellationToken)
@@ -809,29 +815,100 @@ public sealed class RepositoryReader : IDisposable
             return null;
         }
 
+        var span = new RecordSpan(
+            objectId,
+            location.PhysicalOffset,
+            location.StoredLength,
+            location.CompressionProfileValue,
+            location.EncryptionProfileValue);
+        var offset = (long)location.PhysicalOffset;
+
+        // Clamped exactly as the prefetch clamped it, so the last record in
+        // a blob is not asked for bytes past its end and then declared
+        // uncovered.
+        var length = Math.Min(blob.Length - offset, RecordFraming.MaxRecordLength(location.StoredLength));
+        var held = RunCovering(blob.Key, offset, length);
+
+        if (AssumedFraming(blob, location.BlobId) is { } assumed)
+        {
+            // Fetched at the longest framing any container uses, so a blob
+            // that turns out older is framed again from these same bytes
+            // rather than fetched a second time.
+            held ??= await FetchAsync(blob.Key, offset, length, cancellationToken).ConfigureAwait(false);
+            if (held is { } fetched
+                && await ReadAssumedAsync(assumed, span, fetched, cancellationToken).ConfigureAwait(false) is
+                    { Outcome: RecordReadOutcome.Ok } read)
+            {
+                return read;
+            }
+        }
+
         var framing = await EnsureFramingAsync(blob.Key, blob.Length, cancellationToken).ConfigureAwait(false);
         if (framing is null)
         {
             return null;
         }
 
-        return await framing.ReadRecordAsync(
-            new RecordSpan(
-                objectId,
-                location.PhysicalOffset,
-                location.StoredLength,
-                location.CompressionProfileValue,
-                location.EncryptionProfileValue),
-            RunCovering(
-                blob.Key,
-                (long)location.PhysicalOffset,
-                // Clamped exactly as the prefetch clamped it, so the last
-                // record in a blob is not asked for bytes past its end and
-                // then declared uncovered.
-                Math.Min(
-                    blob.Length - (long)location.PhysicalOffset,
-                    RecordFraming.MaxRecordLength(location.StoredLength))),
-            cancellationToken).ConfigureAwait(false);
+        return await framing.ReadRecordAsync(span, held, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The framing a blob's record is first read under when its envelope is
+    /// not in hand (ADR-0166), or null where the envelope's own is wanted: a
+    /// blob already framed, one whose envelope a held run covers, a metadata
+    /// blob, whose record keys come from the envelope's key generation, and
+    /// a reader that holds no grant to open a record's share with.
+    /// </summary>
+    private BlobReader? AssumedFraming((ObjectKey Key, long Length) blob, BlobId blobId)
+    {
+        if (_sealedContentKeyOpener is null
+            || _framing.ContainsKey(blob.Key)
+            || BlobStoreKeys.ClassOf(blob.Key) != BlobClass.Data
+            || RunCovering(blob.Key, 0, BlobReader.EnvelopeReadLength(blob.Length)) is not null)
+        {
+            return null;
+        }
+
+        if (!_assumed.TryGetValue(blob.Key, out var assumed))
+        {
+            assumed = BlobReader.AssumingRelocatableData(
+                _store, blob.Key, blob.Length, _repositoryId, _objectIdDeriver, blobId, _sealedContentKeyOpener);
+            _assumed[blob.Key] = assumed;
+        }
+
+        return assumed;
+    }
+
+    /// <summary>
+    /// A record read as format 3 frames it. Anything short of a record that
+    /// verified is not an answer here, only a reason to read the envelope —
+    /// including a length the guess ran past the blob's end with.
+    /// </summary>
+    private static async ValueTask<RecordReadResult?> ReadAssumedAsync(
+        BlobReader assumed, RecordSpan span, BlobRun held, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await assumed.ReadRecordAsync(span, held, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is BlobFormatException or IOException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>One ranged read of a record's bytes, or null where the store would not serve them.</summary>
+    private async ValueTask<BlobRun?> FetchAsync(ObjectKey storeKey, long offset, long length, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return new BlobRun(
+                offset, await BlobReader.ReadRangeAsync(_store, storeKey, offset, length, cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception exception) when (exception is BlobFormatException or IOException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -1268,6 +1345,11 @@ public sealed class RepositoryReader : IDisposable
         }
 
         foreach (var reader in _framing.Values)
+        {
+            reader.Dispose();
+        }
+
+        foreach (var reader in _assumed.Values)
         {
             reader.Dispose();
         }
