@@ -312,6 +312,46 @@ public sealed class BlobReader : IDisposable
             recordOpener, []);
     }
 
+    /// <summary>
+    /// A data blob framed as format 3 frames it, from nothing read
+    /// (NFR-PERF-009, ADR-0166): a format-3 data record carries its own nonce
+    /// and its own sealed key, so its version, its class and its blob's id
+    /// are all an envelope would add to a read by its span. A record of an
+    /// older format read this way fails closed, at its share or its tag, and
+    /// its caller frames the blob from its envelope instead.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is taken on trust that an envelope would have proved: a
+    /// framing open authenticates nothing of the envelope, and a record's
+    /// additional data binds the repository, the version, the type and the
+    /// object id however its blob was framed.
+    /// </remarks>
+    public static BlobReader AssumingRelocatableData(
+        IObjectStore store,
+        ObjectKey key,
+        long blobLength,
+        RepositoryId repositoryId,
+        ObjectIdDeriver objectIdDeriver,
+        BlobId blobId,
+        SealedContentKeyOpener sealedContentKeyOpener)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(objectIdDeriver);
+        ThrowHelper.ThrowIfNull(sealedContentKeyOpener);
+
+        var assumed = new BlobEnvelope(
+            FormatVersions.RelocatableRecords,
+            BlobClass.Data,
+            KeyGeneration.Zero,
+            blobId,
+            new byte[32],
+            blobCounter: 0,
+            WriterId.FromBytes(new byte[16]));
+        return new BlobReader(
+            store, key, blobLength, repositoryId, objectIdDeriver, assumed, new byte[BlobKeyDeriver.BlobKeyLength],
+            recordKey: null, classKey: null, sealedContentKeyOpener, []);
+    }
+
     /// <summary>The longest leading stretch this blob's envelope can occupy.</summary>
     public static long EnvelopeReadLength(long blobLength) =>
         Math.Min(BlobEnvelope.MaxLength, blobLength - FooterLocator.Length);
