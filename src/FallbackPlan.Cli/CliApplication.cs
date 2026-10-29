@@ -1679,6 +1679,11 @@ public static class CliApplication
                 Description = "Let the run go rather than resume it: the service names it no more, and what it landed "
                     + "stays where it landed.",
             };
+            var forgetAllOption = new Option<bool>("--forget-all")
+            {
+                Description = "Let every run left unfinished go at once (ADR-0162), each by its name as --forget lets one "
+                    + "go: the service names them no more, and what each landed stays where it landed.",
+            };
             var ignoreFreeSpaceOption = new Option<bool>("--ignore-free-space")
             {
                 Description = "Resume even when the destination looks too small, as restore takes it.",
@@ -1694,6 +1699,7 @@ public static class CliApplication
                 + "was asked, leaving what it landed. With no run, list the runs left unfinished. Through the service only."));
             command.Arguments.Add(runArgument);
             command.Options.Add(forgetOption);
+            command.Options.Add(forgetAllOption);
             command.Options.Add(ignoreFreeSpaceOption);
             command.Options.Add(planOption);
             command.Options.Add(directOption);
@@ -1703,6 +1709,12 @@ public static class CliApplication
                 var run = parse.GetValue(runArgument);
                 var forget = parse.GetValue(forgetOption);
                 var plan = parse.GetValue(planOption);
+                var forgetAll = parse.GetValue(forgetAllOption);
+                if (forgetAll && (run is not null || forget || plan))
+                {
+                    throw new CliFailureException(Strings.CliApplication_ForgetAllNamesNoRestoreRun);
+                }
+
                 if (run is null && forget)
                 {
                     throw new CliFailureException(Strings.CliApplication_ForgetNamesTheRun);
@@ -1720,7 +1732,9 @@ public static class CliApplication
 
                 return ReadThroughGatewayAsync(
                     parse,
-                    (gateway, token) => run is null
+                    (gateway, token) => forgetAll
+                        ? gateway.ForgetRestoreRunsAsync(token)
+                        : run is null
                         ? gateway.RestoreRunsAsync(token)
                         : forget
                             ? gateway.ForgetRestoreRunAsync(run, token)

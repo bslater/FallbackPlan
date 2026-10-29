@@ -49,6 +49,8 @@ The listing's last line names `--forget-all` beside `--forget`.
 - **Let folders go by age.** Every one is let go, or one by its name.
 - **Let the service's parts go.** The service keeps its runs' parts apart, under its own state directory, and lets them go one run at a time by its name.
 
+  > **2026-10 ([ADR-0162](0162-every-restore-run-the-service-left-unfinished-is-let-go-at-once.md)).** `restore-resume --forget-all` lets every run the service left unfinished go at once, each by its name, and its parts with it.
+
 ## Alternatives considered
 
 - **Fail where a run is under way.** Rejected. A run under way is the one destination the person did not mean, and passing over it is what `--forget` already does by refusing it.
@@ -59,3 +61,4 @@ The listing's last line names `--forget-all` beside `--forget`.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. restore-parts with --forget-all lets every destination's parts go under one claim, passing over one with a run under way and anything else beside them, and says what each held. --forget judges under the same claim. No contract change. |
+| 2026-10 | Accepted | Noted by [ADR-0162](0162-every-restore-run-the-service-left-unfinished-is-let-go-at-once.md): every run the service left unfinished is let go at once, which this record left one run at a time. |

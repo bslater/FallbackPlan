@@ -227,6 +227,14 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="cancellationToken">Cancels the ask.</param>
     /// <returns>A line saying so.</returns>
     ValueTask<OperationReport> ForgetRestoreRunAsync(string run, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lets every restore run left unfinished go at once (ADR-0162): each the
+    /// service lists is let go by its name, as one is.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the ask.</param>
+    /// <returns>A line per run and how many; not ok where the service let one not go.</returns>
+    ValueTask<OperationReport> ForgetRestoreRunsAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>What a restore was asked to write, and where.</summary>
@@ -772,6 +780,41 @@ internal sealed class ServiceGateway(
         await SendAsync<AcknowledgedResult>(
             new ForgetRestoreRunCommand(run), "letting a restore run go", cancellationToken).ConfigureAwait(false);
         return new OperationReport(true, [Strings.FormatServiceGateway_RestoreRunLetGo(run)]);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> ForgetRestoreRunsAsync(CancellationToken cancellationToken)
+    {
+        var listed = await SendAsync<RestoreRunsResult>(
+            new ListRestoreRunsCommand(), "the restore runs left unfinished", cancellationToken).ConfigureAwait(false);
+        if (listed.Runs.Count == 0)
+        {
+            return new OperationReport(true, [Strings.ServiceGateway_NoRestoreRunUnfinished]);
+        }
+
+        // One the service will not let go, say because it is under way again,
+        // is said in its words and every other is still asked.
+        var lines = new List<string>();
+        var letGo = 0;
+        foreach (var run in listed.Runs)
+        {
+            try
+            {
+                await SendAsync<AcknowledgedResult>(
+                    new ForgetRestoreRunCommand(run.Run), "letting a restore run go", cancellationToken).ConfigureAwait(false);
+                lines.Add(Strings.FormatServiceGateway_RestoreRunLetGo(run.Run));
+                letGo++;
+            }
+            catch (CliFailureException refused)
+            {
+                lines.Add($"{run.Run}  not let go: {refused.Message}");
+            }
+        }
+
+        lines.Add(string.Create(
+            CultureInfo.InvariantCulture,
+            $"let go {letGo} restore {(letGo == 1 ? "run" : "runs")} the service left unfinished"));
+        return new OperationReport(letGo == listed.Runs.Count, lines);
     }
 
     /// <summary>A run left unfinished, as a person chooses whether to resume it.</summary>
@@ -1883,6 +1926,10 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> ForgetRestoreRunAsync(string run, CancellationToken cancellationToken) =>
+        throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> ForgetRestoreRunsAsync(CancellationToken cancellationToken) =>
         throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
 
     /// <inheritdoc/>

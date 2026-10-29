@@ -17,6 +17,10 @@ namespace FallbackPlan.Cli.Tests;
 /// With <c>--plan</c> it plans the run's resume and resumes nothing
 /// (ADR-0120), naming the run as a resume or a letting go does, and not
 /// beside one. A run listed says what the parts it kept hold (ADR-0133).
+/// With <c>--forget-all</c> every run listed is let go by its name, each said,
+/// and one the service will not let go is named with its words while the rest
+/// go; beside a run, <c>--forget</c> or <c>--plan</c> it is refused, and in
+/// direct mode no run is let go (FR-RST-008, ADR-0162).
 /// </summary>
 [TestClass]
 public sealed class RestoreResumeVerbTests : IDisposable
@@ -141,6 +145,86 @@ public sealed class RestoreResumeVerbTests : IDisposable
     }
 
     [TestMethod]
+    public async Task EveryRunLeftUnfinished_IsLetGoAtOnce_AndNoPassphraseIsAsked()
+    {
+        const string Other = "fedcba9876543210";
+        await using var client = new ScriptedClient(
+        [
+            new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000),
+            new RestoreRunDescriptor(Other, SnapshotId, "docs", "/srv/elsewhere", 2_000),
+        ]);
+
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(token));
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        CollectionAssert.AreEquivalent(
+            new[] { Run, Other }, client.Received.OfType<ForgetRestoreRunCommand>().Select(forget => forget.Run).ToArray());
+        Assert.IsTrue(report.Lines.Any(line => line.Contains($"Restore run {Run} is let go", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+        Assert.IsTrue(report.Lines.Any(line => line.Contains($"Restore run {Other} is let go", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+        Assert.Contains("let go 2 restore runs the service left unfinished", report.Lines[^1], StringComparison.Ordinal);
+        Assert.IsEmpty(client.Received.OfType<OpenRestoreSourceCommand>(), "letting a run go names none of the backup's files");
+    }
+
+    [TestMethod]
+    public async Task LettingEveryRunGo_WithNoneLeft_SaysSo()
+    {
+        await using var client = new ScriptedClient([]);
+
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(token));
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        Assert.AreEqual("No restore run is left unfinished.", Assert.ContainsSingle(report.Lines));
+        Assert.IsEmpty(client.Received.OfType<ForgetRestoreRunCommand>());
+    }
+
+    [TestMethod]
+    public async Task ARunTheServiceWillNotLetGo_IsNamedWithItsWords_AndTheRestGo()
+    {
+        const string Other = "fedcba9876543210";
+        await using var client = new ScriptedClient(
+        [
+            new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000),
+            new RestoreRunDescriptor(Other, SnapshotId, "docs", "/srv/elsewhere", 2_000),
+        ],
+        kept: [Other]);
+
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ForgetRestoreRunsAsync(token));
+
+        Assert.IsFalse(report.Ok, "a run not let go fails the ask");
+        Assert.IsTrue(report.Lines.Any(line => line.Contains($"Restore run {Run} is let go", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+        var refused = Assert.ContainsSingle(line => line.Contains(Other, StringComparison.Ordinal), report.Lines);
+        Assert.Contains("the run is under way again", refused, StringComparison.Ordinal);
+        Assert.Contains("let go 1 restore run the service left unfinished", report.Lines[^1], StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow(Run)]
+    [DataRow("--forget")]
+    [DataRow("--plan")]
+    public async Task LettingEveryRunGo_BesideARunAForgetOrAPlan_IsRefused(string beside)
+    {
+        using var cli = new CliHarness();
+        await cli.InitAsync();
+
+        var refused = await cli.RunAsync("restore-resume", "--forget-all", beside);
+
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains("--forget-all lets every run go: it names none", refused.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task InDirectMode_NoRunIsLetGo_AndNothingIsAsked()
+    {
+        using var cli = new CliHarness();
+        await cli.InitAsync();
+
+        var refused = await cli.RunAsync("restore-resume", "--forget-all");
+
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains("restore --resume", refused.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     [DataRow("")]
     [DataRow("--forget")]
     [DataRow("--plan")]
@@ -206,8 +290,10 @@ public sealed class RestoreResumeVerbTests : IDisposable
     /// <paramref name="runs"/> as left unfinished, opens a source holding
     /// <see cref="SnapshotId"/> only for a grant that proves the passphrase,
     /// and answers a resume through that source with <paramref name="resumed"/>.
+    /// It lets each listed run go but those <paramref name="kept"/> names.
     /// </summary>
-    private sealed class ScriptedClient(IReadOnlyList<RestoreRunDescriptor> runs, RestoreResult? resumed = null)
+    private sealed class ScriptedClient(
+        IReadOnlyList<RestoreRunDescriptor> runs, RestoreResult? resumed = null, IReadOnlyCollection<string>? kept = null)
         : IFallbackPlanClient
     {
         public const string SourceId = "scripted-source";
@@ -251,6 +337,8 @@ public sealed class RestoreResumeVerbTests : IDisposable
                 ListRestoreRunsCommand => new RestoreRunsResult(runs),
                 ResumeRestoreCommand { Source: SourceId } when resumed is not null => resumed,
                 ResumeRestoreCommand => new ServiceError(ServiceErrorReason.Refused, "a resume needs an unlocked source"),
+                ForgetRestoreRunCommand forget when kept?.Contains(forget.Run) == true =>
+                    new ServiceError(ServiceErrorReason.Refused, "the run is under way again"),
                 ForgetRestoreRunCommand forget when runs.Any(run => run.Run == forget.Run) => new AcknowledgedResult(),
                 ForgetRestoreRunCommand => new ServiceError(ServiceErrorReason.NotFound, "no such run"),
                 _ => new AcknowledgedResult(),

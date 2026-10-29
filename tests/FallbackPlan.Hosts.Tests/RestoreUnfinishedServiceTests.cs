@@ -35,6 +35,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// its parts prove (ADR-0132). What its parts prove is room already taken,
 /// so neither the plan of a resume nor the resume needs it again, and a
 /// resume runs where whole files would not fit (FR-RST-003, ADR-0136).
+/// The command line lets every run left unfinished go at once, and the
+/// parts of each with it (ADR-0162).
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -350,6 +352,23 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         Assert.IsInstanceOfType<AcknowledgedResult>(
             await handler.ExecuteAsync(new ForgetRestoreRunCommand(run), _timeout.Token));
 
+        Assert.IsFalse(Directory.Exists(PartsOf(run)));
+    }
+
+    [TestMethod]
+    public async Task RestoreResume_LettingEveryRunGo_LetsEachTheServiceLeftUnfinishedGo_AndItsPartsWithIt()
+    {
+        await using var runtime = await BackUpAndStartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var run = (await CutShortAsync(handler)).Run!;
+        KeepPart(run, "hello", "hello");
+
+        var letGo = await CliAsync("restore-resume", "--forget-all");
+
+        Assert.AreEqual(0, letGo.ExitCode, letGo.Output + letGo.Error);
+        Assert.Contains("let go 1 restore run the service left unfinished", letGo.Output, StringComparison.Ordinal);
+        Assert.IsEmpty(await RunsAsync(handler));
         Assert.IsFalse(Directory.Exists(PartsOf(run)));
     }
 
