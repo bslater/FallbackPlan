@@ -173,6 +173,11 @@ What is missing is the *index-side* version of that test: an index delta that is
 | `IndexDelta_ClaimsASegmentThatNoBlobHolds_SurfacesAMissingSegmentFindingNamingIt` | The #6688 shape at our layer. |
 | `IndexDelta_ListsTheSameSegmentTwiceAtDifferentLocations_ResolvesDeterministicallyOrRefuses` | #5066/#5845; either answer is fine, silence is not. |
 
+> **Resolved (2026-10).** All three exist verbatim-named and pass in `Repository.Tests/Index/WellFormedIndexLieTests`. Each lie goes in through a member's signed delta, survives the load and the catalogue's rebuild intact, and is met where the bytes are read. No index-delta forger was needed, because the publisher signs whatever entries it is given.
+> - **Another valid record.** The record's own header names another object, and the reader refuses it there: the cross-check of header against entry in `Packing/BlobReader`. The footer then serves the record asked for, once, and the file restores byte for byte. Turning that cross-check off is killed by this test and by `SparseRecordReadTests`.
+> - **A segment no blob holds.** A rebuild told which blobs the store holds records a missing-blob finding. It names the object and the blob, serves no location for the object, and leaves the true entries untouched. A rebuild that does not believe a complete inventory is killed by this test.
+> - **The same segment twice.** One delta lists an object at its true record and at another, tied on every rule of 07 §3. Both resolvers answer the same one, in either order, and the restore is the file whichever that is. "Either serves" holds because the reader checks what it reads. A loader that lets the last of the two win, where the catalogue keeps the first, is killed by this test alone; no other test met a tie within one delta.
+
 ---
 
 ### T-6 — Two names for one thing, in one snapshot
@@ -406,6 +411,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 > **2026-10.** T-7 is resolved, by the refactor it named first.
 >
 > **2026-10.** T-13 is resolved; its test found the redaction of a job's detail unguarded, not broken.
+>
+> **2026-10.** T-5 is resolved, without the forger it was waiting on.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 
