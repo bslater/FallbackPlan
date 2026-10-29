@@ -192,6 +192,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0165](adr/0165-restores-left-unfinished-are-let-go-by-age.md) | Restores left unfinished are let go by age: `restore-resume` and `restore-parts` with `--forget-all --older-than-days` let go only the runs, and the destinations, that began longer ago, and keep and name a destination whose run said nothing of when it began | **Built** | `Cli/OlderThanDays` · `Cli/OperationGateway` · `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli.Tests/RestoreResumeVerbTests` · `Hosts.Tests/RestoreUnfinishedServiceTests` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0165--restores-left-unfinished-are-let-go-by-age) |
 | [0166](adr/0166-a-format-3-data-record-is-read-without-its-blobs-envelope.md) | A format-3 data record is read without its blob's envelope: a record read by its location is framed as format 3 frames it, and the envelope is read, and the record re-framed from the bytes already fetched, only when it does not read so | **Built** | `Repository.Packing/BlobReader` · `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · [notes](#0166--a-format-3-data-record-is-read-without-its-blobs-envelope) |
 | [0167](adr/0167-a-format-3-metadata-record-is-read-without-its-blobs-envelope.md) | A format-3 metadata record is read without its blob's envelope: the catalogue answers each location with the key generation it recorded for the blob, and a metadata record is read at it as format 3 frames it, the envelope read only when the record does not read so | **Built** | `Repository.Catalogue/Catalogue` · `Repository.Packing/BlobReader` · `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/CatalogueTests` · [notes](#0167--a-format-3-metadata-record-is-read-without-its-blobs-envelope) |
+| [0168](adr/0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md) | A prefetch takes a blob's envelope only where the read may want it: once an envelope the reader framed shows format 3, and none shows an older one, a run over records it can read before their envelope starts at the first of them | **Built** | `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/RestoreBreadthTests` · [notes](#0168--a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it) |
 
 ---
 
@@ -4440,3 +4441,21 @@ What remains is recorded rather than done. A catalogue rebuilt from the index
 plane knows each metadata blob by a placeholder row, so its reads still frame
 each from its envelope; another copy's blob still is; and format-2 blobs cost
 what they did. Compaction is not among them: it writes only data blobs.
+
+### 0168 — a prefetch takes a blob's envelope only where the read may want it
+
+A prefetch's first run reached down to offset 0 for every unframed blob whose
+first wanted record lay within the bridge, so a format-3 blob, whose records
+need no envelope since 0166 and 0167, still fetched everything below the
+first record wanted — up to 1 MiB a blob. The run now reaches down only where
+the read may want the envelope. Nothing before an envelope tells a format-2
+blob from a format-3 one, so the reader goes by what the envelopes it has
+framed show: it folds as before until one shows format 3, and again for good
+once one shows something older. A format-2 repository reads exactly what it
+did, which `Repository.Tests/RestoreBreadthTests` still measures; one holding
+both formats pays one read more, once, for its first format-2 blob met
+unfolded.
+
+What remains is recorded rather than done. The repository's descriptor would
+settle the question before any envelope is framed, but a restoring reader is
+not handed it, so the first prefetch of a format-3 repository still folds.
