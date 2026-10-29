@@ -18,7 +18,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// tree naming <c>..</c> must fail that entry with a stated refusal, not
 /// write beside the chosen output. Nor may a link the output already holds
 /// carry a write out of it, at a folder or at a file's spool, by the rule
-/// the executor holds to (ADR-0152).
+/// the executor holds to (ADR-0152). An output that is itself a link is
+/// where the person chose, and takes everything below it (ADR-0159).
 /// </summary>
 [TestClass]
 public sealed class RecoveryContainmentTests : IDisposable
@@ -165,6 +166,33 @@ public sealed class RecoveryContainmentTests : IDisposable
         CollectionAssert.AreEqual(new byte[] { 9, 9, 9 }, File.ReadAllBytes(target), "the spool was written through a link");
         SequenceAssert.AreEqual(new byte[] { 4, 5, 6 }, File.ReadAllBytes(Path.Combine(output, "good.txt")));
         Assert.AreEqual(0, report.Failed);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link needs no privilege to create only on a POSIX host")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task RecoveryRestore_IntoAnOutputThatIsItselfALink_RestoresWhatLiesBelowItsTopLevel()
+    {
+        // The output is the person's choice, wherever its link leads; only a
+        // link inside it that leads out of where it really is is refused
+        // (ADR-0159).
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/a.bin", [1, 2, 3]);
+        source.AddFile("good.txt", [4, 5, 6]);
+        var store = await PublishAsync(source);
+
+        var real = Directory.CreateDirectory(Path.Combine(_root, "other-disk")).FullName;
+        var output = Path.Combine(_root, "linked-output");
+        Directory.CreateSymbolicLink(output, real);
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var session = await RecoverySession.OpenAsync(passphrase, store, CancellationToken.None);
+        await session.LoadBlobsAsync(CancellationToken.None);
+        var snapshot = Assert.ContainsSingle(await session.ListSnapshotsAsync(CancellationToken.None));
+        var report = await session.RestoreTreeAsync(snapshot.Manifest.RootTree, output, CancellationToken.None);
+
+        Assert.AreEqual(0, report.Failed, string.Join("; ", report.Notes.Select(note => note.ToString())));
+        SequenceAssert.AreEqual(new byte[] { 1, 2, 3 }, File.ReadAllBytes(Path.Combine(real, "docs", "a.bin")));
     }
 
     /// <summary>Publishes <paramref name="source"/> into a repository made from the passphrase.</summary>

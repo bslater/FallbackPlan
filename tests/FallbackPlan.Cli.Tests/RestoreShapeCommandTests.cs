@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FallbackPlan.Api;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
 
@@ -11,6 +12,8 @@ namespace FallbackPlan.Cli.Tests;
 /// original location it restores from the set's configured roots, which
 /// <see cref="RestoreOriginalDirectTests"/> holds (ADR-0119). A plan, and a
 /// plan kept, is of the run asked, so the file keeps what the console's does.
+/// A folder that is itself a link takes every file below it (FR-RST-005,
+/// ADR-0159).
 /// </summary>
 [TestClass]
 public sealed class RestoreShapeCommandTests : IDisposable
@@ -29,6 +32,23 @@ public sealed class RestoreShapeCommandTests : IDisposable
         Assert.AreEqual("first", File.ReadAllText(Path.Combine(destination, "one.txt")));
         Assert.AreEqual("second", File.ReadAllText(Path.Combine(destination, "nested", "two.txt")));
         Assert.IsFalse(Directory.Exists(Path.Combine(destination, "other")), "a path not asked is not restored");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link is made there without a privilege")]
+    public async Task IntoAFolderThatIsALink_EveryFileLands_BelowItsTopLevelToo()
+    {
+        // A folder kept as a link to another disk is where a person restores
+        // to; only a link inside it that leads out is refused (ADR-0159).
+        var snapshot = await BackUpAsync();
+        var real = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "other-disk")).FullName;
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+        Directory.CreateSymbolicLink(destination, real);
+
+        var run = await _cli.RunAsync("restore", snapshot, "--output", destination);
+
+        Assert.AreEqual(0, run.ExitCode, run.All);
+        Assert.AreEqual("second", File.ReadAllText(Path.Combine(real, "nested", "two.txt")));
     }
 
     [TestMethod]

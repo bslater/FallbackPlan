@@ -183,6 +183,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0156](adr/0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md) | The recovery tool gives a hard-link group back as one file, by the executor's rule: the rule moves into the format library unchanged, and the tool makes each agreeing later name a link to the file its first name landed as | **Built** | `Repository.Format/Manifests/HardLinkGroups` · `Recovery/RecoverySession` · `Repository.Tests/EndToEnd/RecoveryHardLinkTests` · `ArchitectureTests/DependencyRuleTests` · [notes](#0156--the-recovery-tool-gives-a-hard-link-group-back-as-one-file) |
 | [0157](adr/0157-a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way.md) | A restore in direct mode is refused a destination that nests with one under way: under one claim of every destination's folder, a run whose destination holds or lies inside one a run under way lands in is refused, and its record names every folder it lands in | **Built** | `Cli/DirectRestoreParts` · `Cli/OperationGateway` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0157--a-restore-in-direct-mode-is-refused-a-destination-that-nests-with-one-under-way) |
 | [0158](adr/0158-every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once.md) | Every destination a restore in direct mode left unfinished is let go at once: `restore-parts --forget-all` lets every destination's folder go under the claim a run takes its folder under, passing over one a run holds, and `--forget` judges under the same claim | **Built** | `Cli/DirectRestoreParts` · `Cli/DirectRestorePartsReport` · `Cli/CliApplication` · `Cli.Tests/RestoreWithinAFileDirectTests` · [notes](#0158--every-destination-a-restore-in-direct-mode-left-unfinished-is-let-go-at-once) |
+| [0159](adr/0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md) | A restore into a folder that is itself a link restores what lies below it: the rule every way of restoring holds a path to follows the root and each folder below it through their links, refusing a path at the first folder that leads out | **Built** | `Domain/RestorePaths` · `Domain.Tests/RestorePathsTests` · `Cli.Tests/RestoreShapeCommandTests` · `Repository.Tests/EndToEnd/RecoveryContainmentTests` · [notes](#0159--a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it) |
 
 ---
 
@@ -4156,7 +4157,8 @@ makes the spool new. A canary holds both to the shared rule.
 What remains is recorded rather than done. The path is checked before it
 is written and not in one step with it, so an account that can write in
 the output while the tool runs can still swap a folder for a link between
-the two.
+the two. A root that is itself a link
+has since had what lies below it restored ([0159](#0159--a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it)).
 
 ### 0153 — a folder's access time goes with the last snapshot reaching it
 
@@ -4268,3 +4270,19 @@ afresh. No contract change.
 
 What remains is recorded rather than done. Folders are not let go by
 age, and the service's parts go one run at a time, by its name.
+
+### 0159 — a restore into a folder that is itself a link restores what lies below it
+
+The rule a restore holds each path to followed the root through its link
+to fence it, but followed a folder below it only where that folder was
+itself a link, and read it otherwise by its spelling through the root's
+link. That spelling never lies inside where the link leads, so a restore
+into a folder that is a link refused every file below its top level, for
+the executor and the recovery tool alike. The rule now follows the root,
+and then each folder below it in turn from where the one above really is,
+a link's target in the same way, and refuses a path at the first folder
+that leads out. The same following is offered for any path.
+
+What remains is recorded rather than done. A folder is held to the root
+by its spelling, so a link whose target spells the root in another case
+is refused, as before.

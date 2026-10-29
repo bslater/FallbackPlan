@@ -54,6 +54,8 @@ There are three restore paths and only one was the designed one. `RestoreExecuto
 
 > **Resolved (2026-08).** `TryResolve` now resolves every existing component between the root and the destination through its links (`Directory.ResolveLinkTarget` / `File.ResolveLinkTarget`) and refuses when a real path leaves the root — before any byte is written, recorded as a failed item. The root itself is the executor's own directory and is not suspect; the walk is bounded there, so a normal restore into not-yet-created directories is unaffected.
 
+> **2026-10 ([ADR-0159](../adr/0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md)).** Each component was followed only where it was itself a link, and read otherwise by its spelling, while the root was followed to fence it. So a root that is a link refused every path below its top level. The root and each folder below it are now followed in turn, from where the one above really is.
+
 ### RR-3 — The service dropped the restore outcome
 
 **Under test:** [FR-RST-005](../requirements/functional.md) — "never reports success when any required file failed"; [architecture 08 §3](../architecture/08-restore-and-recovery.md#3-restore-verification) — the receipt reports an *outcome*, not a boolean.
