@@ -631,6 +631,22 @@ internal static class Strings
     internal static string CliApplication_ForgetNamesTheReceipt => Get(nameof(CliApplication_ForgetNamesTheReceipt));
 
     /// <summary>
+    /// --forget-all lets every run's receipt go: it names no run, and takes no --forget. Nothing was let go.
+    /// </summary>
+    internal static string CliApplication_ForgetAllNamesNoRun => Get(nameof(CliApplication_ForgetAllNamesNoRun));
+
+    /// <summary>
+    /// The receipts of {0} run(s) were not let go: {1}
+    /// </summary>
+    private static string RestoreReceiptReport_NotAllLetGo => Get(nameof(RestoreReceiptReport_NotAllLetGo));
+
+    /// <summary>
+    /// The receipts of {0} run(s) were not let go: {1}
+    /// </summary>
+    internal static string FormatRestoreReceiptReport_NotAllLetGo(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, RestoreReceiptReport_NotAllLetGo, arg0, arg1);
+
+    /// <summary>
     /// no state directory at '{0}' — nothing has been kept there.
     /// </summary>
     private static string CliApplication_NoStateDirectoryKeepsReceipts => Get(nameof(CliApplication_NoStateDirectoryKeepsReceipts));

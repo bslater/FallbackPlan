@@ -265,6 +265,12 @@
   <data name="CliApplication_ForgetNamesTheReceipt" xml:space="preserve">
     <value>--forget lets one run's receipt go: name it with --run.</value>
   </data>
+  <data name="CliApplication_ForgetAllNamesNoRun" xml:space="preserve">
+    <value>--forget-all lets every run's receipt go: it names no run, and takes no --forget. Nothing was let go.</value>
+  </data>
+  <data name="RestoreReceiptReport_NotAllLetGo" xml:space="preserve">
+    <value>The receipts of {0} run(s) were not let go: {1}</value>
+  </data>
   <data name="CliApplication_NoStateDirectoryKeepsReceipts" xml:space="preserve">
     <value>no state directory at '{0}' — nothing has been kept there.</value>
   </data>

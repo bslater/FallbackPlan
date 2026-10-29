@@ -2839,17 +2839,24 @@ public static class CliApplication
                 Description = "Let the receipt of the run --run names go: its file is removed from the state directory, "
                     + "and every other run's stays (ADR-0139). With --connect, the paired service lets its own go (ADR-0140).",
             };
+            var receiptsForgetAllOption = new Option<bool>("--forget-all")
+            {
+                Description = "Let every run's receipt go at once (ADR-0161): each run's file is removed from the state "
+                    + "directory, and nothing else kept there. With --connect, the paired service lets each it lists go.",
+            };
             var command = new Command(
                 "restore-receipts",
                 "Read back the restore receipts kept under a state directory, by the service or in direct mode "
                 + "(ADR-0124): each run, newest first, with when it ended, what became of its files and where it "
                 + "wrote them, or one run's receipt whole. With --connect, those a paired service keeps (ADR-0128), "
                 + "and one run's files it did not restore, through the passphrase. With --run and --forget, let that "
-                + "run's receipt go, from the state directory or the paired service (ADR-0139, ADR-0140).");
+                + "run's receipt go, from the state directory or the paired service (ADR-0139, ADR-0140), and with "
+                + "--forget-all every run's (ADR-0161).");
             command.Options.Add(receiptsStateOption);
             command.Options.Add(receiptsRunOption);
             command.Options.Add(receiptsLimitOption);
             command.Options.Add(receiptsForgetOption);
+            command.Options.Add(receiptsForgetAllOption);
             command.Options.Add(receiptsListJsonOption);
             command.Options.Add(connectOption);
             command.Options.Add(fingerprintOption);
@@ -2861,6 +2868,12 @@ public static class CliApplication
                 var run = parse.GetValue(receiptsRunOption);
                 var limit = parse.GetValue(receiptsLimitOption);
                 var forget = parse.GetValue(receiptsForgetOption);
+                var forgetAll = parse.GetValue(receiptsForgetAllOption);
+                if (forgetAll && (run is not null || forget))
+                {
+                    throw new CliFailureException(Strings.CliApplication_ForgetAllNamesNoRun);
+                }
+
                 if (forget && run is null)
                 {
                     throw new CliFailureException(Strings.CliApplication_ForgetNamesTheReceipt);
@@ -2882,7 +2895,9 @@ public static class CliApplication
 
                     return WithServiceAsync(
                         parse,
-                        client => run is null
+                        client => forgetAll
+                            ? RestoreReceiptReport.LetGoAllThroughServiceAsync(output, client, cancellationToken)
+                            : run is null
                             ? parse.GetValue(receiptsListJsonOption)
                                 ? RestoreReceiptReport.WriteServiceKeptJsonAsync(output, client, limit, cancellationToken)
                                 : RestoreReceiptReport.WriteServiceKeptAsync(output, client, limit, cancellationToken)
@@ -2898,6 +2913,12 @@ public static class CliApplication
                 if (!Directory.Exists(state))
                 {
                     throw new CliFailureException(Strings.FormatCliApplication_NoStateDirectoryKeepsReceipts(state));
+                }
+
+                if (forgetAll)
+                {
+                    RestoreReceiptReport.LetGoAll(output, state);
+                    return Task.FromResult(0);
                 }
 
                 if (run is not null)

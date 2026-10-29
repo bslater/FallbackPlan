@@ -421,6 +421,45 @@ public sealed record RestoreReceipt
         return true;
     }
 
+    /// <summary>
+    /// Lets every run's receipt kept under <paramref name="receiptsDirectory"/>
+    /// go at once (ADR-0161): each run's own file is removed, and nothing else
+    /// kept there is touched. A file not removed is answered with why, and the
+    /// rest are removed regardless.
+    /// </summary>
+    /// <param name="receiptsDirectory">Where a state directory keeps restore receipts.</param>
+    /// <returns>Each run whose receipt was kept there, by name, with why it was not removed where it was not.</returns>
+    public static IReadOnlyList<LetGoRestoreReceipt> LetGoAll(string receiptsDirectory)
+    {
+        ThrowHelper.ThrowIfNull(receiptsDirectory);
+        if (!Directory.Exists(receiptsDirectory))
+        {
+            return [];
+        }
+
+        var outcomes = new List<LetGoRestoreReceipt>();
+        foreach (var path in Directory.EnumerateFiles(receiptsDirectory).Order(StringComparer.Ordinal))
+        {
+            var run = Path.GetFileNameWithoutExtension(path);
+            if (!string.Equals(Path.GetExtension(path), ".json", StringComparison.Ordinal) || !IsRunName(run))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(path);
+                outcomes.Add(new LetGoRestoreReceipt(run, Problem: null));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                outcomes.Add(new LetGoRestoreReceipt(run, exception.Message));
+            }
+        }
+
+        return outcomes;
+    }
+
     private static KeptRestoreReceipt Read(string path, string run)
     {
         RestoreReceipt? receipt = null;
@@ -438,6 +477,11 @@ public sealed record RestoreReceipt
         return new KeptRestoreReceipt(run, path, receipt, problem);
     }
 }
+
+/// <summary>A run's receipt as every one was let go (ADR-0161).</summary>
+/// <param name="Run">The run.</param>
+/// <param name="Problem">Why its file was not removed, where it was not.</param>
+public sealed record LetGoRestoreReceipt(string Run, string? Problem);
 
 /// <summary>
 /// A restore receipt as a state directory keeps it (FR-RST-004, ADR-0124):
