@@ -304,13 +304,20 @@ internal static class DirectRestoreParts
 
     /// <summary>
     /// Lets the parts the folder <paramref name="name"/> keeps go (ADR-0142),
-    /// and every other destination's stay.
+    /// and every other destination's stay. A folder a run holds is let go by
+    /// nothing (ADR-0143).
     /// </summary>
+    /// <remarks>
+    /// Judged under the claim a run takes its folder under (ADR-0157), so no
+    /// run takes the folder between the judgement and its removal (ADR-0158).
+    /// </remarks>
     /// <param name="stateDirectory">The command line's state directory.</param>
     /// <param name="name">The folder's name, as the listing gives it.</param>
-    /// <returns>What its parts held, or null where no folder of that name is kept.</returns>
+    /// <param name="underWay">Whether a run holds it, so nothing of it was let go.</param>
+    /// <returns>What its parts held, or null where no folder of that name is kept or a run holds it.</returns>
     /// <exception cref="ArgumentException">When the name is not a folder's.</exception>
-    public static long? Forget(string stateDirectory, string name)
+    /// <exception cref="IOException">When the claim is not had, or the folder is not all removed.</exception>
+    public static long? Forget(string stateDirectory, string name, out bool underWay)
     {
         // Checked before it is joined to a path: what is not a folder's name
         // could name anything the state directory holds, or outside it.
@@ -319,15 +326,74 @@ internal static class DirectRestoreParts
             throw new ArgumentException(null, nameof(name));
         }
 
-        var parts = Path.Combine(RootUnder(stateDirectory), name);
+        underWay = false;
+        var root = RootUnder(stateDirectory);
+        var parts = Path.Combine(root, name);
         if (!Directory.Exists(parts))
         {
+            return null;
+        }
+
+        using var claim = Claim(root, out var problem) ?? throw new IOException(problem);
+        if (!Directory.Exists(parts))
+        {
+            return null;
+        }
+
+        if (IsUnderWay(parts))
+        {
+            underWay = true;
             return null;
         }
 
         var held = Held(parts);
         Directory.Delete(parts, recursive: true);
         return held;
+    }
+
+    /// <summary>
+    /// Lets the parts of every destination left unfinished under
+    /// <paramref name="stateDirectory"/> go at once (ADR-0158), but a folder a
+    /// run holds. Nothing else kept beside them is let go.
+    /// </summary>
+    /// <remarks>
+    /// Judged under one claim, as <see cref="Forget"/> is, so no run takes a
+    /// folder while the rest are let go. A folder not all removed is said and
+    /// the rest are let go regardless.
+    /// </remarks>
+    /// <param name="stateDirectory">The command line's state directory.</param>
+    /// <returns>Each destination's folder, newest first, and what became of it.</returns>
+    /// <exception cref="IOException">When the claim is not had.</exception>
+    public static IReadOnlyList<DirectRestoreLetGo> ForgetAll(string stateDirectory)
+    {
+        var root = RootUnder(stateDirectory);
+        if (!Directory.Exists(root))
+        {
+            return [];
+        }
+
+        using var claim = Claim(root, out var problem) ?? throw new IOException(problem);
+        var outcomes = new List<DirectRestoreLetGo>();
+        foreach (var kept in ReadKept(stateDirectory))
+        {
+            if (kept.UnderWay)
+            {
+                outcomes.Add(new DirectRestoreLetGo(kept.Name, kept.Held, UnderWay: true, Problem: null));
+                continue;
+            }
+
+            try
+            {
+                Directory.Delete(Path.Combine(root, kept.Name), recursive: true);
+                outcomes.Add(new DirectRestoreLetGo(kept.Name, kept.Held, UnderWay: false, Problem: null));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                outcomes.Add(new DirectRestoreLetGo(kept.Name, kept.Held, UnderWay: false, exception.Message));
+            }
+        }
+
+        return outcomes;
     }
 
     /// <summary>What a folder's run said of itself, or null where it said nothing that reads.</summary>
@@ -375,6 +441,16 @@ internal sealed record DirectRestoreRun(
 /// <param name="UnderWay">The folder the run under way lands in.</param>
 /// <param name="Asked">The folder the refused run would land in, which holds or lies inside it.</param>
 internal sealed record DirectRestoreOverlap(string UnderWay, string Asked);
+
+/// <summary>
+/// What became of one destination's folder of parts when every one was let
+/// go (ADR-0158).
+/// </summary>
+/// <param name="Name">The folder's name.</param>
+/// <param name="Held">The bytes its parts held.</param>
+/// <param name="UnderWay">Whether a run holds it, so nothing of it was let go.</param>
+/// <param name="Problem">Why it was not all removed, where it was not.</param>
+internal sealed record DirectRestoreLetGo(string Name, long Held, bool UnderWay, string? Problem);
 
 /// <summary>A destination's folder of parts, as <c>restore-parts</c> lists it (ADR-0142).</summary>
 /// <param name="Name">The folder's name.</param>
