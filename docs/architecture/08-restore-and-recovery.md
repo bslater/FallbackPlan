@@ -31,6 +31,8 @@ A plan is constructed **before** any transfer, and it is the mechanism by which 
 - **path and case collisions** ([`06-filesystem-capture.md` §2](06-filesystem-capture.md#2-path-handling));
 
   > **Built 2026-10 ([ADR-0170](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md)).** Names too: a name no target restores, and, for a target that names by Windows' rules, a name Windows would refuse or alter (a device's name, a refused character, a trailing space or period, a component over 255 UTF-16 units). The rules are the target's, stated in its profile rather than taken from the host, so a plan for Windows is made the same anywhere. A restore that runs on Windows refuses such a name rather than letting Windows write it under another.
+
+  > **Built 2026-10 ([ADR-0170 Amendment 1](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds)).** A target that counts a name in bytes states how many it holds, 255 for the local profile on Linux, and a name longer than that is a conflict too. Windows' 255 UTF-16 units can be 765 bytes, so a Windows name can be one Linux does not hold. macOS's limit is not stated, and is not judged.
 - metadata that cannot be preserved on this target, per the matrix in [`06-filesystem-capture.md` §3](06-filesystem-capture.md#3-metadata-matrix);
 - free-space assessment against the physical requirement;
 - privileges required — restoring ACLs or ownership may need elevation the current user lacks;
