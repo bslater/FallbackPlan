@@ -18,11 +18,11 @@ public sealed record RestoreTargetProfile
     public required bool SupportsSymlinks { get; init; }
 
     /// <summary>
-    /// Whether the executor can write NTFS alternate data streams back on
-    /// this target. <see langword="false"/> everywhere — including Windows —
-    /// until the RR-6 write-back half lands: the polarity is "what the
-    /// executor can do", not "what the filesystem could hold", and an
-    /// executor that drops streams must say so on every target.
+    /// Whether the executor writes a file's alternate data streams back on
+    /// this target: Windows keeps them, and nothing else does
+    /// (<see cref="AlternateStreams"/>; ADR-0174). It is what the plan
+    /// predicts by. A volume that keeps none, as a FAT one, refuses each
+    /// stream, and the receipt says so of the file.
     /// </summary>
     public bool SupportsAlternateStreams { get; init; }
 
@@ -114,6 +114,7 @@ public sealed record RestoreTargetProfile
         MaxNameBytes = OperatingSystem.IsLinux() ? 255u : null,
         SupportsCreationTimes = FileTimes.CanSetCreationTime,
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
+        SupportsAlternateStreams = AlternateStreams.CanWrite,
         Account = RestoreAccount.OfThisProcess(),
     };
 

@@ -578,7 +578,11 @@ public sealed record RestoreExecutionOptions
 /// receipt that accounts for everything (FR-RST-004/005).
 /// </summary>
 public sealed class RestoreExecutor(
-    RepositoryReader reader, RestoreTargetProfile target, ILogger? logger = null, Func<string, string, bool>? makeLink = null)
+    RepositoryReader reader,
+    RestoreTargetProfile target,
+    ILogger? logger = null,
+    Func<string, string, bool>? makeLink = null,
+    IAlternateStreams? streams = null)
 {
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
 
@@ -588,6 +592,13 @@ public sealed class RestoreExecutor(
     /// as a test of a target that refuses one does.
     /// </summary>
     private readonly Func<string, string, bool> _makeLink = makeLink ?? HardLinks.TryCreate;
+
+    /// <summary>
+    /// What writes a file's alternate streams back where the target keeps
+    /// them: the platform's calls unless the caller says what, as a case
+    /// judged on a platform that keeps none does.
+    /// </summary>
+    private readonly IAlternateStreams _streams = streams ?? AlternateStreams.OfThisPlatform;
 
     /// <summary>
     /// What writes each item's captured metadata back, by the rule every
@@ -625,12 +636,18 @@ public sealed class RestoreExecutor(
     /// content, so the wave asks <c>landed</c> where it stands and prefetches
     /// none of it when it stands somewhere.
     /// </para>
+    /// <para>
+    /// A file's alternate streams are read with its segments where the target
+    /// writes them back (<paramref name="streams"/>), and not at all where it
+    /// does not.
+    /// </para>
     /// </remarks>
     private sealed class PrefetchWave(
         RepositoryReader reader,
         RestorePlan plan,
         Func<int, FileVersionManifest, CancellationToken, ValueTask<string?>> landed,
-        Func<FileVersionManifest, bool> takesUpAPart)
+        Func<FileVersionManifest, bool> takesUpAPart,
+        bool streams)
     {
         private const int MaximumItems = 1024;
         private const int MaximumSegments = 512;
@@ -737,7 +754,9 @@ public sealed class RestoreExecutor(
                     continue;
                 }
 
-                pending.AddRange(manifest.SegmentReferences.Select(reference => reference.ObjectId));
+                pending.AddRange(streams
+                    ? manifest.ContentObjects()
+                    : manifest.SegmentReferences.Select(reference => reference.ObjectId));
 
                 // Flushed by count, because the bytes are only known once
                 // they are fetched and a wave must not ask for more than the
@@ -850,7 +869,7 @@ public sealed class RestoreExecutor(
             Directory.CreateDirectory(parts);
         }
 
-        var wave = new PrefetchWave(reader, plan, LandedAsync, TakesUpAPart);
+        var wave = new PrefetchWave(reader, plan, LandedAsync, TakesUpAPart, target.SupportsAlternateStreams);
 
         bool TakesUpAPart(FileVersionManifest manifest) =>
             options.Resume && PartOf(manifest) is { } part && File.Exists(part);
@@ -1053,10 +1072,11 @@ public sealed class RestoreExecutor(
 
                     if (inPlace is { } standing)
                     {
+                        var keptStreams = await WriteStreamsAsync(standing, manifest, cancellationToken).ConfigureAwait(false);
                         var (kept, keptNotApplied, keptDegraded) = Settle(
                             item, manifest, standing, manifest.LogicalLength,
                             writtenAs: string.Equals(standing, destination, StringComparison.Ordinal) ? null : BesidePath(item.Path, standing),
-                            notLinked, foundInPlace: true);
+                            notLinked, foundInPlace: true, keptStreams);
                         if (!keptDegraded && group is not null && notLinked is null)
                         {
                             groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, standing, keptNotApplied));
@@ -1225,9 +1245,10 @@ public sealed class RestoreExecutor(
                         continue;
                     }
 
+                    var streamsLeft = await WriteStreamsAsync(landing, manifest, cancellationToken).ConfigureAwait(false);
                     var (settled, notApplied, degraded) = Settle(
                         item, manifest, landing, (ulong)result.Length, writtenAs, notLinked, foundInPlace: false,
-                        resumedAt: (ulong)result.Resumed);
+                        streamsLeft, resumedAt: (ulong)result.Resumed);
                     if (!degraded && group is not null && notLinked is null)
                     {
                         groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, landing, notApplied));
@@ -1401,7 +1422,8 @@ public sealed class RestoreExecutor(
     /// The receipt's item for a file whose verified content stands at
     /// <paramref name="landing"/>, its captured metadata written back first,
     /// and whether it is degraded, in which case it is no hard-link group's
-    /// first name.
+    /// first name. <paramref name="streamsLeft"/> is what
+    /// <see cref="WriteStreamsAsync"/> said of the file's alternate streams.
     /// </summary>
     private (ReceiptItem Item, IReadOnlyList<string>? NotApplied, bool Degraded) Settle(
         RestorePlanItem item,
@@ -1411,6 +1433,7 @@ public sealed class RestoreExecutor(
         string? writtenAs,
         string? notLinked,
         bool foundInPlace,
+        string? streamsLeft,
         ulong resumedAt = 0)
     {
         // Metadata strictly AFTER content (architecture 08 §3): a crash
@@ -1420,13 +1443,26 @@ public sealed class RestoreExecutor(
         // not applied; it does not undo content that landed and verified
         // (ADR-0084).
         var written = _metadata.Write(landing, manifest.Metadata);
-        var notApplied = MetadataRules.NotApplied(MetadataRules.Captured(manifest.Metadata), written.Applied);
+        var streamsWritten = target.SupportsAlternateStreams && streamsLeft is null;
+        var notApplied = MetadataRules.NotApplied(
+            MetadataRules.Captured(manifest.Metadata),
+            written.Applied | (streamsWritten ? CapturedMetadata.AlternateStreams : CapturedMetadata.None));
 
-        // The main stream restored and verified; alternate data streams the
-        // manifest carries did not (RR-6's honesty half — write-back is not
-        // implemented on any target). "degraded", not "restored": the file on
-        // disk is not the file that was captured, and the receipt says so per
-        // item, exactly where the shortfall is.
+        // "degraded", not "restored", wherever a stream did not land: the file
+        // on disk is not the file that was captured, and the receipt says so
+        // per item, exactly where the shortfall is (RR-6).
+        if (streamsLeft is not null)
+        {
+            return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
+            {
+                Path = item.Path, Outcome = "degraded", Bytes = length, WrittenAs = writtenAs,
+                Detail = Joined(notLinked, streamsLeft, written.Detail),
+                NotApplied = notApplied,
+                FoundInPlace = foundInPlace,
+                ResumedAt = resumedAt,
+            }), notApplied, true);
+        }
+
         if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
         {
             return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
@@ -1489,7 +1525,80 @@ public sealed class RestoreExecutor(
     /// store, and what was wrong with those it was read around (FR-RST-007).
     /// </summary>
     private ReceiptItem ReadAroundOf(ObjectId manifestId, FileVersionManifest manifest, ReceiptItem landed) =>
-        ReadAroundOf(manifest.SegmentReferences.Select(reference => reference.ObjectId).Prepend(manifestId), landed);
+        ReadAroundOf(manifest.ContentObjects().Prepend(manifestId), landed);
+
+    /// <summary>
+    /// Writes each alternate stream <paramref name="manifest"/> carries onto
+    /// the file at <paramref name="landing"/> where the target keeps them,
+    /// read and proved like a segment; one that already stands there as
+    /// captured is left, and read from nowhere. Null when every one stands as
+    /// captured, or the target keeps none; otherwise which do not, and why.
+    /// </summary>
+    /// <remarks>
+    /// Before the file's times, which writing a stream moves, and after its
+    /// content landed, so a run cut short between the two leaves a whole file
+    /// a resume finds in place and gives its streams.
+    /// </remarks>
+    private async ValueTask<string?> WriteStreamsAsync(
+        string landing, FileVersionManifest manifest, CancellationToken cancellationToken)
+    {
+        if (!target.SupportsAlternateStreams)
+        {
+            return null;
+        }
+
+        List<string>? left = null;
+        foreach (var stream in manifest.Metadata.AlternateStreams)
+        {
+            if (await WriteStreamAsync(landing, stream, cancellationToken).ConfigureAwait(false) is { } why)
+            {
+                (left ??= []).Add(why);
+            }
+        }
+
+        return left is null ? null : string.Join("; ", left);
+    }
+
+    /// <summary>Writes <paramref name="stream"/> onto the file at <paramref name="landing"/>; null when it stands as captured, or why it does not.</summary>
+    private async ValueTask<string?> WriteStreamAsync(
+        string landing, AlternateStreamEntry stream, CancellationToken cancellationToken)
+    {
+        if (!AlternateStreams.TryName(stream.Name.Span, out var name, out var refused))
+        {
+            return $"alternate stream '{System.Text.Encoding.UTF8.GetString(stream.Name.Span)}' was not written back: {refused}";
+        }
+
+        if (_streams.Read(landing, name, stream.Length) is { } standing
+            && reader.Proves(new SegmentReference(0, (long)stream.Length, stream.ObjectId), standing))
+        {
+            return null;
+        }
+
+        RecordReadResult read;
+        try
+        {
+            read = await reader.ReadSegmentAsync(stream.ObjectId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException exception)
+        {
+            return $"alternate stream '{name}' was not written back: {exception.Message}";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The file has landed, so it is still accounted for; the loop's
+            // own check ends the run.
+            return $"alternate stream '{name}' was not written back: the restore was cancelled";
+        }
+
+        if (read.Outcome != RecordReadOutcome.Ok)
+        {
+            return $"alternate stream '{name}' was not written back: its record read {read.Outcome}";
+        }
+
+        return _streams.Write(landing, name, read.Plaintext!) is { } why
+            ? $"alternate stream '{name}' was not written back: {why}"
+            : null;
+    }
 
     /// <summary>
     /// <paramref name="landed"/>, saying which copies the records

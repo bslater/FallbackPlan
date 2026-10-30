@@ -252,6 +252,10 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     /// <summary>A case-sensitive target that keeps POSIX metadata and links, stated rather than taken from the running platform.</summary>
+    /// <summary>This machine's target, as one that writes no alternate stream back, as only Windows does (ADR-0174).</summary>
+    private static RestoreTargetProfile WritesNoStreams() =>
+        RestoreTargetProfile.ForLocalPlatform() with { SupportsAlternateStreams = false };
+
     private static RestoreTargetProfile PosixTarget() => new()
     {
         CaseSensitive = true,
@@ -264,10 +268,10 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     public async Task RestorePlan_AFileCarryingAlternateStreams_DeclaresTheDegradation()
     {
         // RR-6's honesty half: the format captures alternate data streams
-        // end to end, and no target can write them back yet — so a plan
-        // over a tree that carries them must SAY so, exactly as it says so
-        // for symlinks and POSIX metadata, instead of the receipt later
-        // reporting complete while the streams are dropped.
+        // end to end, and a target that writes none back gets only the main
+        // stream — so a plan over a tree that carries them must SAY so,
+        // exactly as it says so for symlinks and POSIX metadata, instead of
+        // the receipt later reporting complete while the streams are dropped.
         var source = new FakeFileSystemSource();
         var carrier = source.AddFile("data/streams.bin", Deterministic(4_096, 3));
         carrier.AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]\nZoneId=3"u8.ToArray();
@@ -280,8 +284,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA7), CancellationToken.None);
 
         var plan = RestorePlanner.Plan(
-            catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), string.Empty,
-            RestoreTargetProfile.ForLocalPlatform());
+            catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), string.Empty, WritesNoStreams());
 
         var degradation = Assert.ContainsSingle(
             plan.Degradations.Where(candidate => candidate.Capability == "alternate-streams"));
@@ -290,8 +293,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         // A tree with no stream-carrying file declares nothing — the
         // degradation is presence-gated like the symlink one, not blanket.
         var plainPlan = RestorePlanner.Plan(
-            catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), "data/plain.bin",
-            RestoreTargetProfile.ForLocalPlatform());
+            catalogue, Enumerable.Repeat((byte)0xA7, 16).ToArray(), "data/plain.bin", WritesNoStreams());
         Assert.DoesNotContain(candidate => candidate.Capability == "alternate-streams", plainPlan.Degradations);
     }
 
@@ -313,7 +315,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         using var catalogue = OpenCatalogue("ads-receipt.db");
         await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA8), CancellationToken.None);
 
-        var target = RestoreTargetProfile.ForLocalPlatform();
+        var target = WritesNoStreams();
         var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xA8, 16).ToArray(), string.Empty, target);
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
