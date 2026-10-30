@@ -52,6 +52,35 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
     }
 
     [TestMethod]
+    public void AnOwner_IsOneTheAccountMayGive_NeitherWhereItIsAStranger_NorWhereItIsNoAccount()
+    {
+        Assert.IsFalse(WindowsAccounts.MayOwn(Stranger));
+        Assert.IsFalse(WindowsAccounts.MayOwn("not an account"));
+
+        // Local Service is an account every Windows machine names, and one no
+        // test runs as.
+        Assert.IsFalse(WindowsAccounts.MayOwn("S-1-5-19"));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows names an account by SID")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void AnOwner_OnWindows_MayBeTheAccountItself()
+    {
+        using var self = WindowsIdentity.GetCurrent();
+
+        Assert.IsTrue(WindowsAccounts.MayOwn(self.User!.Value));
+    }
+
+    [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process may own by the administrators' group")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void AnOwner_InAnElevatedProcess_MayBeTheAdministratorsGroup() =>
+        Assert.IsTrue(WindowsAccounts.MayOwn(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value));
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's security descriptor")]
     [PlatformTrait(TestPlatforms.Windows)]
     [SupportedOSPlatform("windows")]

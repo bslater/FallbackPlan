@@ -76,6 +76,15 @@ public sealed record RestoreTargetProfile
     public bool HoldsRestorePrivilege { get; init; }
 
     /// <summary>
+    /// Whether the account the restore runs as may make a SID a file's owner
+    /// without SeRestorePrivilege: its own account, or a group its token
+    /// marks as one it may own by. Where it holds no such privilege, the plan
+    /// predicts by this which descriptors' owners will be refused
+    /// (<see cref="WindowsAccounts.MayOwn"/>; ADR-0176 Amendment 2).
+    /// </summary>
+    public Func<string, bool> MayOwnBy { get; init; } = WindowsAccounts.MayOwn;
+
+    /// <summary>
     /// Whether this installation captured the snapshot being restored: its
     /// device is the one the snapshot names. A Linux ACL names accounts by
     /// number, and a number names the account it meant only on the machine

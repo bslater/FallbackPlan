@@ -36,7 +36,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// rule, onto the link itself (ADR-0101). On Windows a file's attribute
 /// bits are written back (ADR-0175), and its security descriptor where the
 /// target knows every account it names (ADR-0176), which the plan predicts
-/// per file.
+/// per file, as it predicts an owner the restoring account may not give
+/// without SeRestorePrivilege (ADR-0176 Amendment 2).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -389,6 +390,51 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
 
         static byte[] Granting(string account) => SecurityDescriptors.Build(
             Ana, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, account)));
+    }
+
+    [TestMethod]
+    public async Task Plan_ASecurityDescriptorWhoseOwnerTheAccountMayNotGive_IsDeclaredOnItsOwnLine_WhereItHoldsNoRestorePrivilege()
+    {
+        const string Ana = "S-1-5-21-1-2-3-1001";
+        const string Ben = "S-1-5-21-1-2-3-1002";
+        var source = new FakeFileSystemSource();
+        void Add(string name, byte[] descriptor, byte seed) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata =
+                new EntryMetadata { ModifiedAt = Modified, WindowsSecurityDescriptor = descriptor };
+        Add("anas.bin", Owned(Ana), 50);
+        Add("bens.bin", Owned(Ben), 51);
+        Add("unowned.bin", SecurityDescriptors.Build(
+            null, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Ana))), 52);
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xD9);
+        var keeps = Posix with { SupportsSecurityDescriptors = true, KnowsAccount = _ => true, MayOwnBy = account => account == Ana };
+        var declared = RestoreMetadata.Declare(plan, facts, keeps);
+
+        var owners = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "security-descriptor-owners"));
+        Assert.Contains("1 file(s)", owners.Detail, StringComparison.Ordinal);
+        Assert.Contains("SeRestorePrivilege", owners.Detail, StringComparison.Ordinal);
+        Assert.Contains("access control lists will be applied", owners.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptors", declared);
+
+        // Where the account holds the privilege, it gives every owner.
+        Assert.DoesNotContain(
+            degradation => degradation.Capability.StartsWith("security-descriptor", StringComparison.Ordinal),
+            RestoreMetadata.Declare(plan, facts, keeps with { HoldsRestorePrivilege = true }));
+
+        // A descriptor naming an account the target does not know is not
+        // written at all, so it is declared on that line alone.
+        var unknown = RestoreMetadata.Declare(plan, facts, keeps with { KnowsAccount = account => account != Ben });
+        Assert.Contains("1 file(s)", Assert.ContainsSingle(
+            unknown.Where(degradation => degradation.Capability == "security-descriptor-accounts")).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptor-owners", unknown);
+
+        // Where the target keeps none, every descriptor is declared as before.
+        var none = RestoreMetadata.Declare(plan, facts, Posix with { MayOwnBy = account => account == Ana });
+        Assert.Contains("3 file(s)", Assert.ContainsSingle(none.Where(degradation => degradation.Capability == "security-descriptors")).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptor-owners", none);
+
+        static byte[] Owned(string owner) => SecurityDescriptors.Build(
+            owner, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, owner)));
     }
 
     [TestMethod]

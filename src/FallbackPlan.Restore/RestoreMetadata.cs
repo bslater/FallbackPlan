@@ -39,6 +39,11 @@ namespace FallbackPlan.Restore;
 /// written under (<see cref="AlternateStreams.TryName"/>), which the plan
 /// declares (ADR-0174 Amendment 3).
 /// </param>
+/// <param name="DescriptorOwner">
+/// The SID its captured Windows security descriptor names as owner, which
+/// the plan asks the target whether its account may give without
+/// SeRestorePrivilege (ADR-0176 Amendment 2), or null where it names none.
+/// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -51,7 +56,8 @@ public sealed record RestoreItemFacts(
     ulong HeldBytes = 0,
     IReadOnlyList<string>? Accounts = null,
     uint? FileAttributes = null,
-    int RefusedStreams = 0);
+    int RefusedStreams = 0,
+    string? DescriptorOwner = null);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
@@ -278,6 +284,7 @@ public static class RestoreMetadata
         var linkPermissions = new Tally();
         var linkAttributes = new Tally();
         var strangers = new Tally();
+        var refusedOwners = new Tally();
         var unsetBits = new Tally();
         var unsetMask = 0u;
         var refusedStreams = new Tally();
@@ -359,6 +366,16 @@ public static class RestoreMetadata
                     apart |= CapturedMetadata.SecurityDescriptor;
                     strangers.Add(item.Kind);
                 }
+                else if (!target.HoldsRestorePrivilege
+                    && known.DescriptorOwner is { } owner
+                    && !names.MayOwn(owner, target.MayOwnBy))
+                {
+                    // The writer still lands the DACL alone, as its receipt
+                    // says, but the descriptor is not applied.
+                    applied &= ~CapturedMetadata.SecurityDescriptor;
+                    apart |= CapturedMetadata.SecurityDescriptor;
+                    refusedOwners.Add(item.Kind);
+                }
             }
 
             if ((applied & known.Captured & CapturedMetadata.FileAttributes) != 0
@@ -438,6 +455,10 @@ public static class RestoreMetadata
         Add("security-descriptor-accounts", strangers, string.Create(CultureInfo.InvariantCulture,
             $"Security descriptors captured on {strangers} name accounts this machine does not know, so they will "
             + $"not be applied; they will take the permissions of the folder they land in."));
+        Add("security-descriptor-owners", refusedOwners, string.Create(CultureInfo.InvariantCulture,
+            $"Security descriptors captured on {refusedOwners} name an owner the account running the restore may "
+            + $"not give: giving it needs SeRestorePrivilege, which the account does not hold. Their access control "
+            + $"lists will be applied; their owner and group will not, so they will belong to that account."));
 
         var extended = attributes.GetValueOrDefault(CapturedMetadata.ExtendedAttributes);
         Add("extended-attributes", extended, string.Create(CultureInfo.InvariantCulture,
@@ -610,6 +631,7 @@ public static class RestoreMetadata
         private readonly Dictionary<string, uint?> _users = new(StringComparer.Ordinal);
         private readonly Dictionary<string, uint?> _groups = new(StringComparer.Ordinal);
         private readonly Dictionary<string, bool> _accounts = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, bool> _owners = new(StringComparer.Ordinal);
 
         public uint? User(string name, RestoreAccount account) => Resolved(_users, name, account.ResolveUser);
 
@@ -623,6 +645,16 @@ public static class RestoreMetadata
             }
 
             return known;
+        }
+
+        public bool MayOwn(string owner, Func<string, bool> mayOwn)
+        {
+            if (!_owners.TryGetValue(owner, out var may))
+            {
+                _owners[owner] = may = mayOwn(owner);
+            }
+
+            return may;
         }
 
         private static uint? Resolved(Dictionary<string, uint?> known, string name, Func<string, uint?> resolve)

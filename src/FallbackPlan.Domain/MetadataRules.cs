@@ -196,6 +196,20 @@ public static class MetadataRules
             : null;
     }
 
+    /// <summary>
+    /// The SID the Windows security descriptor captured with
+    /// <paramref name="metadata"/> names as its owner, or null where it names
+    /// none, carries none, or carries one that does not read.
+    /// </summary>
+    public static string? DescriptorOwnerOf(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        return metadata.WindowsSecurityDescriptor is { IsEmpty: false } descriptor
+            ? WindowsSecurityDescriptor.Read(descriptor.Span)?.Owner
+            : null;
+    }
+
     /// <summary>The kinds of extended attribute <paramref name="metadata"/> carries that are not written back everywhere.</summary>
     public static ExtendedAttributeKinds KindsOf(EntryMetadata metadata)
     {
