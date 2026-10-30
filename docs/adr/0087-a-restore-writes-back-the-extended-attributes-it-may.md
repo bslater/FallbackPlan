@@ -88,6 +88,8 @@ Each ACL line says the group keeps no more than the lists gave it. A target that
 - **Extended attributes on Windows.** Architecture 06 §3 would keep them as alternate streams, which are not yet written back either.
 
   > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's own alternate streams are now written back on Windows. Extended attributes captured elsewhere are still not kept as streams there, and are listed.
+
+  > **2026-10 ([ADR-0177](0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md)).** A file's extended attributes are now kept on Windows as streams of their names. One only Linux's kernel reads, a security or trusted attribute or a POSIX ACL, is not kept and is named, and so is one whose name no stream may have. A folder's are still listed.
 - **A symlink's own attributes.** A link is created with none of its own metadata, as before.
 
   > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** Built: a link's attributes are written back by this record's rule, through `lsetxattr` and macOS's no-follow flag. On Linux a user-namespace attribute and an ACL on a link are withheld and named, because Linux keeps neither on one.
@@ -116,3 +118,4 @@ Each ACL line says the group keeps no more than the lists gave it. A target that
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's extended attributes back by this record's rule, through the writer the executor uses. |
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows; extended attributes are still not kept as streams there. |
 | 2026-10 | Accepted | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): a file's and a folder's Windows security descriptor is written back on Windows where the machine knows every account it names. |
+| 2026-10 | Accepted | [ADR-0177](0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md): on Windows a file's extended attributes are kept as streams of their names, except those only Linux's kernel reads; a folder's are still listed. |

@@ -201,6 +201,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) | A restore writes a file's alternate streams back where the target keeps them: on Windows, each read and proved like a segment, written after the content and before the times, and judged by name before it is joined to the path; a stream standing as captured is left, and one that does not land degrades the file, named; the recovery tool writes them by the same rule, noting one that does not land (Amendment 1), and so does `restore-file`, through one helper the two share (Amendment 2); since [Amendment 3](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md#amendment-3-2026-10--the-plan-names-a-file-whose-stream-has-a-name-no-stream-may-be-written-under) the plan names a file whose stream has a name no stream may be written under | **Built** | `Domain/AlternateStreams` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Domain.Tests/AlternateStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · `Repository.Tests/RecoveryAlternateStreamsTests` · [notes](#0174--a-files-alternate-streams) |
 | [0175](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) | A restore writes back the Windows attribute bits it may: a file's and a folder's read-only, hidden, system, archive and not-content-indexed bits, as captured and as the last write, by the writer every way of restoring shares; a bit no restore sets, as compressed or encrypted, is named; a read-only file a restore replaces is replaced; since [Amendment 1](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md#amendment-1-2026-10--the-plan-names-a-bit-no-restore-sets) the plan names a bit no restore sets, on a line of its own | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Domain/RestorePaths` · `Restore/RestoreMetadata` · `Domain.Tests/FileAttributesWriteBackTests` · `Repository.Tests/RestoreFileAttributesTests` · `Restore/RestoreBlobSet` · [notes](#0175--windows-attribute-bits) |
 | [0176](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) | A restore writes back a Windows security descriptor whose accounts the machine knows: a file's and a folder's owner, group and DACL, as captured, protected as they were, after the times and before the attribute bits, by the writer every way of restoring shares; one that names an account the machine does not know, or does not read, is not written and is named, and the plan predicts it per item; where the owner is refused the DACL lands alone; since [Amendment 1](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not) an account that holds SeRestorePrivilege gives an owner it is not, with the privilege enabled on its own thread for that write alone; since [Amendment 2](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give) the plan names a descriptor whose owner the account may not give where it does not hold the privilege | **Built** | `Domain/WindowsSecurityDescriptor` · `Domain/WindowsSecurity` · `Domain/MetadataWriter` · `Domain/MetadataTarget` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Domain/WindowsPrivileges` · `Domain.Tests/WindowsSecurityDescriptorTests` · `Domain.Tests/SecurityDescriptorWriteBackTests` · `Repository.Tests/RestoreSecurityDescriptorTests` · `Domain.Tests/WindowsPrivilegesTests` · [notes](#0176--windows-security-descriptors) |
+| [0177](adr/0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md) | A restore on Windows keeps a file's extended attributes as alternate streams: where the target keeps streams and writes no attributes of its own, each of a file's attributes is written as the stream of its name, before the times, by the writer every way of restoring shares; one in Linux's security or trusted namespace, or a POSIX ACL, is not kept and is named, as is a name no stream may have, one the file's own captured stream has, one an attribute before it has but for case and a stream the target refuses; a folder's are not kept; and the plan declares on a line of its own the files whose attributes only Linux's kernel reads | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Restore/RestoreExecutor` · `Domain.Tests/ExtendedAttributeStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0177--extended-attributes-as-streams) |
 
 ---
 
@@ -2545,7 +2546,8 @@ silent drop architecture 06 §3 rules out; writing it had to wait until the
 directory's children had landed, and has since landed too
 ([0086](#0086--a-folders-own)). Windows attribute bits, security
 descriptors and alternate streams are still listed; extended attributes have
-since landed ([0087](#0087--extended-attributes)), and so has a symlink's own
+since landed ([0087](#0087--extended-attributes)), on Windows as a file's
+streams ([0177](#0177--extended-attributes-as-streams)), and so has a symlink's own
 metadata ([0101](#0101--a-links-own)), the attribute bits ([0175](#0175--windows-attribute-bits)) and the
 security descriptors ([0176](#0176--windows-security-descriptors)). The recovery tool and the CLI's
 `restore-file` write no metadata at all; the CLI's `restore-file` has since
@@ -2691,8 +2693,9 @@ test fail.
 What remains is recorded rather than done. An ACL's entries are captured as
 numbers; capturing their names would let one come back on any machine where
 the names resolve, and is owed. macOS's own access lists are not captured,
-Windows security descriptors were not applied until [0176](#0176--windows-security-descriptors), and Windows keeps no extended
-attributes a restore writes. A symlink's own metadata has since landed
+Windows security descriptors were not applied until [0176](#0176--windows-security-descriptors), and Windows kept no extended
+attributes a restore writes until a file's were kept there as its streams
+([0177](#0177--extended-attributes-as-streams)). A symlink's own metadata has since landed
 ([0101](#0101--a-links-own)), and the recovery tool and the CLI's
 `restore-file` still write no metadata; the CLI's `restore-file` has since
 ([0149](#0149--the-single-file-restore-writes-back-a-files-metadata)), and
@@ -4747,7 +4750,8 @@ What remains is recorded rather than done:
   `restore-file` by Amendment 2);
 - a stream's name is judged at execution, not in the plan, whose items
   carry no stream names (taken up by Amendment 3);
-- extended attributes on Windows are still not kept as streams.
+- extended attributes on Windows are still not kept as streams (taken up
+  by [0177](#0177--extended-attributes-as-streams)).
 
 Amendment 1 brings the recovery tool to the same rule. Once a file's
 content has landed and verified, it writes each stream onto the file
@@ -4838,3 +4842,42 @@ account may give without the privilege: its own SID, and each group its
 token marks as one it may own by. Where the account does not hold the
 privilege, the plan declares on a line of its own the items whose owner
 it may not give; their access control lists still land.
+
+### 0177 — extended attributes as streams
+
+Capture records a file's extended attributes on Linux and macOS, and a
+restore writes them back where the target writes attributes of its own,
+which Windows does not. So every file captured with one came back on
+Windows listing its attributes as not applied, and the plan declared each:
+a macOS file's Finder information and where it came from, and a Linux
+file's user tags, were lost there. Architecture 06 §3 has them kept as
+streams on Windows, and since [0174](#0174--a-files-alternate-streams) a
+restore writes a file's own streams.
+
+The writer every way of restoring shares now writes each of a file's
+attributes as the stream of its name, holding its value, where the target
+keeps streams and writes no attributes of its own. They go on before the
+times, since a stream write moves a file's modification time. Each name
+is judged by the rule a captured stream's is before it is joined to the
+path, so one holding a colon is named, not written. One the file was also
+captured with a stream of is not written over that stream, and is named,
+as is the second of two whose names differ only in case, since Windows
+matches a stream's name without regard to case. So is a stream the target
+refuses.
+
+Linux's security and trusted namespaces and its POSIX ACLs are read by
+its kernel alone, and as bytes beside a file on Windows they would do
+nothing and read as the file's data. They are not kept and are named,
+while the file's other attributes land. The plan counts a file's
+attributes applied on such a target, and declares the files that carry
+one of these on a line of their own, `kernel-attributes`, judged by what
+the target states so a plan for Windows can be made on any host.
+
+What remains is recorded rather than done:
+
+- a name no stream may have is found at the write, not in the plan,
+  whose facts carry each item's attribute kinds and not their names;
+- a stream captured from Windows is not turned back into an attribute on
+  Linux or macOS;
+- a folder's attributes are not kept, as a restore writes no folder's
+  streams.
