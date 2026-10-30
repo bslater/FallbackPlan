@@ -80,6 +80,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
   > **2026-10 ([ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md)).** A folder the restore makes now gets its own metadata back by this record's rule, once everything in it has landed, deepest folder first. A folder already at the destination keeps its own, and its receipt item says so.
 - **A symlink's own metadata, extended attributes, Windows attribute bits, security descriptors and alternate streams.** These are still captured, declared and listed as before ([ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).
 
+  > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's alternate streams are now written back on Windows, where the volume keeps them, each read and proved like a segment and written before the file's times. One that does not land is named, and the file is degraded.
+
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back on Linux and macOS, after ownership and before the permissions in §1's order. The rest of this item remains owed.
 
   > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** A symlink's own metadata is now written back, onto the link itself: its times on Linux and macOS through a call that does not follow it, by §1's rule. Windows attribute bits, security descriptors and alternate streams remain owed.
@@ -105,3 +107,4 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes extended attributes back after ownership and before the permissions in §1's order, each on its own as §3 has it. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's times back by this record's rule, through the writer the executor uses; the recovery tool still writes none. |
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's times back by this record's rule, through the writer the executor uses. |
+| 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows, before the times this record writes, since writing a stream moves the modification time. |

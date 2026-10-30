@@ -64,9 +64,9 @@ public sealed record RestoreItemFacts(
 /// can carry, and a folder already at the destination keeps its own.
 /// </para>
 /// <para>
-/// Alternate streams are never applied, whatever a profile claims, because
-/// the executor writes none. The profile's flag decides whether the file
-/// counts as degraded; this records what is true.
+/// A file's alternate streams are written where the target keeps them
+/// (ADR-0174), each read and proved like a segment. A folder is captured with
+/// none.
 /// </para>
 /// </remarks>
 public static class RestoreMetadata
@@ -74,7 +74,8 @@ public static class RestoreMetadata
     /// <summary>
     /// The attributes the executor writes back for an entry of
     /// <paramref name="kind"/> on <paramref name="target"/>: the same for a
-    /// folder it makes as for a file it lands, what the platform's calls that
+    /// folder it makes as for a file it lands, save the alternate streams only
+    /// a file carries, what the platform's calls that
     /// never follow a link can write for a symlink it makes, and nothing for
     /// anything else. Extended attributes are counted written back where the
     /// target writes them, though <c>MetadataRules.Withheld</c> keeps some of them
@@ -109,6 +110,11 @@ public static class RestoreMetadata
         if (target.SupportsExtendedAttributes && ExtendedAttributes.CanSet)
         {
             applied |= CapturedMetadata.ExtendedAttributes;
+        }
+
+        if (kind == EntryKind.File && target.SupportsAlternateStreams)
+        {
+            applied |= CapturedMetadata.AlternateStreams;
         }
 
         return applied;

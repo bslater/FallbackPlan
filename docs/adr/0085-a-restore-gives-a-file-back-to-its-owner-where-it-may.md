@@ -76,6 +76,8 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
 - **A Windows file's owner.** It lives in the security descriptor, which is captured and not applied.
 - **Extended attributes**, POSIX ACLs among them, Windows attribute bits and alternate streams, which are still listed.
 
+  > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's alternate streams are now written back on Windows, where the volume keeps them, each read and proved like a segment and written before the file's times. One that does not land is named, and the file is degraded.
+
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes, POSIX ACLs among them, are now written back on Linux and macOS where the account and the volume allow them. An ACL naming accounts by number comes back only where this installation captured the snapshot, for the reason §1 resolves a name: a number names an account only on the machine that captured it.
 - **Whether a quarantine restore should keep set-id bits at all.** A restore running as root into the default quarantine folder recreates a root-owned set-user-id program faithfully, such as an old one from a historical snapshot, in a folder other accounts may reach. That predates this record, which neither makes it worse nor decides it.
 
@@ -117,3 +119,4 @@ Two alternatives were weighed and not taken. Stripping set-id bits from a quaran
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes extended attributes back between §3's ownership and the permissions. A restore as root recreates file capabilities, which Amendment 1's advice covers. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's owner and group back by this record's rule, through the writer the executor uses; the recovery tool still writes none. The restore's account moves with the writer to Domain/RestoreAccount, and this record's citation follows it. |
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's owner and group back by this record's rule, through the writer the executor uses. |
+| 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows. |

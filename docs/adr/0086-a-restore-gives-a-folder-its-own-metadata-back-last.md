@@ -68,6 +68,8 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 
 - **A symlink's own metadata, extended attributes, Windows attribute bits, security descriptors and alternate streams.** These are still captured, declared and listed, for folders as for files.
 
+  > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's alternate streams are now written back on Windows, where the volume keeps them. A folder is captured with none.
+
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back, for folders as for files. The rest of this item remains owed.
 
   > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** A symlink's own metadata is now written back, onto the link itself, and the plan counts links apart from files and folders as it counts folders apart from files. Windows attribute bits, security descriptors and alternate streams remain owed.
@@ -96,3 +98,4 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 | 2026-10 | Accepted | [ADR-0099](0099-a-folder-that-was-only-read-keeps-its-tree.md) keeps a folder's tree when only its access time moved, so the access time this restores is the folder's when a tree with its contents was first captured, as a reused file version's already was. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's metadata back through the writer the executor uses, and makes no folder; the recovery tool still writes none. |
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool gives each folder it made its own metadata by this record's rule, last and deepest first, never through a link; a folder already in the output and the output itself keep their own. |
+| 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows; a folder carries none. |

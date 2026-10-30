@@ -441,6 +441,9 @@ reports rotted citations). What both reviews deliberately left is below.
     Windows-only — done when a file carrying ADS round-trips on a target
     that can take them, at which point `SupportsAlternateStreams` stops
     being unconditionally false.
+
+    > **2026-10.** Done: a file's streams round-trip on Windows, and the
+    > local profile writes them there ([ADR-0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).
 11. ✅ **Restore breadth** — done (`Repository.Tests/RestoreBreadthTests`):
     `Replace` and `Fail` pinned, the receipt JSON pinned byte-for-byte by a
     golden fixture (schema v3), and NFR-PERF-009 measured honestly — which

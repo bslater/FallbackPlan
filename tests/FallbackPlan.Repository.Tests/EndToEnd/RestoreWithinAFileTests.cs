@@ -80,7 +80,7 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
     [TestMethod]
     public async Task AFileResumedWithin_ThatLandsDegraded_StillSaysWhereItWasResumed()
     {
-        // No target writes an alternate stream back, so the file lands
+        // On a target that writes no alternate stream back the file lands
         // degraded; it was still written from its part.
         using var published = await PublishAsync("degraded", 0xE9, withStream: true);
         var parts = Path.Combine(SpoolDirectory, "degraded-parts");
@@ -506,7 +506,7 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        var target = RestoreTargetProfile.ForLocalPlatform();
+        var target = RestoreTargetProfile.ForLocalPlatform() with { SupportsAlternateStreams = false };
         var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat(seed, 16).ToArray(), string.Empty, target);
         return new Published(plan, target, store, keys, catalogue);
     }
