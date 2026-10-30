@@ -147,6 +147,9 @@ names each copy tried.
 > A copy whose blob goes while the run reads around to it is passed over
 > there as not held as well, by its
 > [Amendment 1](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-1-2026-10--at-another-copy-too).
+> With no copy to read it from, such a record now fails as not held too,
+> not as a format violation, by
+> [Amendment 2](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-2-2026-10--a-record-no-store-holds-fails-as-not-held).
 
 ### 6. What is said
 
@@ -273,3 +276,4 @@ reason: it would condemn a drive for being unplugged.
 | 2026-10 | Amended | [ADR-0095](0095-the-staging-archive-heals.md) amends §7: damage a restore reads around in the staging archive is recorded for the staging archive's sweep, which repairs it from the set's destinations on the next pass. `Agent/ServiceCommandHandler`, `Application/StagingSweepStore`; `Hosts.Tests/RestoreReadAroundTests` |
 | 2026-10 | Amended (§5) | A blob that goes from the own store while the run reads it is passed over as not held, not damaged, and no longer ends the run ([ADR-0172](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md)). `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |
 | 2026-10 | Amended (§5) | "Not held" covers a blob that goes from another copy while the run reads around to it, too ([ADR-0172 Amendment 1](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-1-2026-10--at-another-copy-too)). `Repository/RepositoryReader` |
+| 2026-10 | Amended (§5) | With no copy to read it from, a record whose blob the own store does not hold fails as not held, not as a format violation ([ADR-0172 Amendment 2](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-2-2026-10--a-record-no-store-holds-fails-as-not-held)). `Repository.Packing/RecordReadResult`, `Repository/RepositoryReader` |
