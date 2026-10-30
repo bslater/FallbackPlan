@@ -30,6 +30,10 @@ namespace FallbackPlan.Web.DomTests;
 /// (FR-RST-003, ADR-0113), and a refused one offers nothing to keep. Its file tree
 /// shows what will not be restored a shade lighter rather than struck
 /// through, with toggles large enough to hit, as the backup wizard's does.
+/// A plan counting files a folder would open wider says how many, and its
+/// run, and the resume a result offers, are armed only once the person
+/// acknowledges it, beside the choice to go on for room where the plan is
+/// short of that too (FR-RST-003, ADR-0178 Amendment 2).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -337,6 +341,72 @@ public sealed class RestoreWizardDomTests
         await page.Locator("#rst-run-go").ClickAsync();
         var restored = await harness.ReceivedAsync<RunRestoreCommand>();
         Assert.IsFalse(restored.IgnoreFreeSpace);
+        Assert.IsFalse(restored.AcknowledgeWiderAccess, "nor for the one a folder that opens files wider needs");
+    }
+
+    [TestMethod]
+    public async Task Wizard_APlanThatWouldOpenFilesWider_SaysSo_AndOnlyAcknowledgingItArmsTheRestore()
+    {
+        // ADR-0178 Amendment 2: the service refuses the run unless it is
+        // acknowledged (Amendment 1), so the wizard asks before it runs.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(1, 42, [], Degradations: ["Security descriptors captured on 2 file(s) will not be applied, and the folder they land in (/restore/out) gives them access their own did not, to S-1-5-32-545."], WriteBytes: 42, OpenedWider: 2)
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+
+        await Expect(page.Locator("#rst-wider")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-wider")).ToContainTextAsync("2 file(s)");
+
+        var run = page.Locator("#rst-run-go");
+        await page.FillAsync("#confirm-word", "restore");
+        await Expect(run).ToBeDisabledAsync();
+
+        await page.CheckAsync("#rst-ack-wider");
+        await Expect(run).ToBeEnabledAsync();
+        await run.ClickAsync();
+
+        var restored = await harness.ReceivedAsync<RunRestoreCommand>();
+        Assert.IsTrue(restored.AcknowledgeWiderAccess);
+        Assert.IsFalse(restored.IgnoreFreeSpace, "one choice is not taken for the other");
+    }
+
+    [TestMethod]
+    public async Task Wizard_APlanThatWillNotFit_AndWouldOpenFilesWider_IsArmedOnlyWhenThePersonChoosesBoth()
+    {
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(
+                1, 42, [], WriteBytes: 42, Space: [new RestoreSpaceDescriptor("/restore/out", 1_000_000, 1_000)], OpenedWider: 1)
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+
+        var run = page.Locator("#rst-run-go");
+        await page.FillAsync("#confirm-word", "restore");
+        await page.CheckAsync("#rst-ignore-space");
+        await Expect(run).ToBeDisabledAsync();
+        await page.UncheckAsync("#rst-ignore-space");
+        await page.CheckAsync("#rst-ack-wider");
+        await Expect(run).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ignore-space");
+        await Expect(run).ToBeEnabledAsync();
+        await run.ClickAsync();
+
+        var restored = await harness.ReceivedAsync<RunRestoreCommand>();
+        Assert.IsTrue(restored.IgnoreFreeSpace);
+        Assert.IsTrue(restored.AcknowledgeWiderAccess);
     }
 
     [TestMethod]
@@ -492,6 +562,42 @@ public sealed class RestoreWizardDomTests
 
         var resumed = await harness.ReceivedAsync<RunRestoreCommand>(command => command.Resume is not null);
         Assert.IsTrue(resumed.IgnoreFreeSpace, "the choice to go on is the run's");
+    }
+
+    [TestMethod]
+    public async Task Wizard_AResumeWhosePlanWouldOpenFilesWider_IsArmedOnlyWhenThePersonAcknowledgesIt()
+    {
+        // The run's acknowledgement is not kept with it (ADR-0178 Amendment
+        // 1), so the resume it offers asks again.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            RunRestoreCommand { Resume: null } => new ApiRestoreResult(
+                0, 1, "/restore/out", "failed", ReceiptPath: "/state/receipts/0123456789abcdef.json", Run: "0123456789abcdef"),
+            RunRestoreCommand => new ApiRestoreResult(1, 0, "/restore/out", "complete", Run: "0123456789abcdef"),
+            PlanResumeRestoreCommand => new RestorePlanResult(1, 5, [], WriteBytes: 5, Landed: 0, OpenedWider: 1),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+        await page.Locator("#rst-resume").ClickAsync();
+
+        await Expect(page.Locator("#rst-wider")).ToBeVisibleAsync();
+        var go = page.Locator("#rst-resume-confirm");
+        await Expect(go).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ack-wider");
+        await Expect(go).ToBeEnabledAsync();
+        await go.ClickAsync();
+
+        var resumed = await harness.ReceivedAsync<RunRestoreCommand>(command => command.Resume is not null);
+        Assert.IsTrue(resumed.AcknowledgeWiderAccess);
     }
 
     [TestMethod]

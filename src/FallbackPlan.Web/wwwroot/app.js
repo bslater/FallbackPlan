@@ -6372,7 +6372,7 @@ function rstStep6() {
       <div class="dlg-actions">
         ${resumable && !offer ? `<button type="button" class="btn" id="rst-resume" data-action="rst-resume">Restore what is left</button>` : ""}
         ${offer ? `<button type="button" class="btn" id="rst-resume-confirm" data-action="rst-resume-confirm"${
-          (offer.plan || offer.failed) && !rstShort(offer.plan) ? "" : " disabled"}>Restore what is left</button>` : ""}
+          (offer.plan || offer.failed) && !rstShort(offer.plan) && !rstWider(offer.plan) ? "" : " disabled"}>Restore what is left</button>` : ""}
         <button type="button" class="btn primary" data-action="close-dialog">Close</button>
       </div>`;
   }
@@ -6411,9 +6411,11 @@ function rstStep6() {
       <p class="dlg-sub">It restores ${describeKeptRun(W.kept)}.</p>
       <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
         small — a volume that compresses what it stores can hold more than the estimate</label>
+      ${rstWiderChoice(now, 'data-arms="confirm-word"')}
       <label class="field" for="confirm-word">Type <b>restore</b> to confirm</label>
       <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
-             data-action-input="confirm-word" data-word="restore" data-enables="rst-kept-go">
+             data-action-input="confirm-word" data-word="restore" data-enables="rst-kept-go"${
+               rstWider(now) ? ` data-needs="rst-ack-wider"` : ""}>
       ${actions(`<button type="button" class="btn primary" id="rst-kept-go" data-action="rst-kept-go" disabled>Restore as planned</button>`)}`;
   }
 
@@ -6427,7 +6429,8 @@ function rstStep6() {
       : W.resumePlanFailed
         ? `<p class="subtle">The resume was not planned; it is still measured before it writes anything.</p>
           <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
-            small — a volume that compresses what it stores can hold more than the estimate</label>`
+            small — a volume that compresses what it stores can hold more than the estimate</label>
+          ${RST_ACK_WIDER_UNPLANNED}`
         : `<p class="subtle">Planning the resume…</p>`;
     return `
       <p class="dlg-sub" id="rst-resume-summary">Restore what is left of ${describeRun(W.resume)}.</p>
@@ -6438,7 +6441,7 @@ function rstStep6() {
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
         <button type="button" class="btn" data-action="rst-back">‹ Back</button>
         <button type="button" class="btn primary" id="rst-resume-go" data-action="rst-resume-go"${
-          (plan || W.resumePlanFailed) && !short ? "" : " disabled"}>Restore what is left</button>
+          (plan || W.resumePlanFailed) && !short && !rstWider(plan) ? "" : " disabled"}>Restore what is left</button>
       </div>`;
   }
 
@@ -6446,7 +6449,6 @@ function rstStep6() {
   // until there is one (FR-RST-003) — and the plan's arrival re-renders this
   // step, which would throw away a word typed while it was on its way.
   const plan = W.plan;
-  const short = rstShort(plan);
   const figures = plan ? rstPlanDetails(plan, 'data-arms="confirm-word"')
     : W.planFailed
       ? `<p class="subtle">No plan could be made, so there is nothing to confirm. Go back and continue to plan again.</p>`
@@ -6460,7 +6462,7 @@ function rstStep6() {
     ${figures}
     <label class="field" for="confirm-word">Type <b>restore</b> to confirm</label>
     <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
-           data-action-input="confirm-word" data-word="restore" data-enables="rst-run-go"${short ? ` data-needs="rst-ignore-space"` : ""}${plan ? "" : " disabled"}>
+           data-action-input="confirm-word" data-word="restore" data-enables="rst-run-go"${rstNeeds(plan)}${plan ? "" : " disabled"}>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn" data-action="rst-back">‹ Back</button>
@@ -6470,13 +6472,18 @@ function rstStep6() {
     </div>`;
 }
 
+/* What a resume whose plan could not be made offers, since its run may still be refused for a folder. */
+const RST_ACK_WIDER_UNPLANNED = `<label class="check"><input type="checkbox" id="rst-ack-wider"> Restore even where a
+  folder would open a file to more accounts than it was — its own permissions name accounts this machine does not know</label>`;
+
 /* The plan of the resume a result offers, as a resume's plan is shown (ADR-0123). */
 function rstResumeOffer(offer) {
   if (offer.plan) return rstPlanDetails(offer.plan, 'data-action-change="rst-resume-arm" data-arms-button="rst-resume-confirm"');
   if (offer.failed) {
     return `<p class="subtle">The resume was not planned; it is still measured before it writes anything.</p>
       <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
-        small — a volume that compresses what it stores can hold more than the estimate</label>`;
+        small — a volume that compresses what it stores can hold more than the estimate</label>
+      ${RST_ACK_WIDER_UNPLANNED}`;
   }
   return `<p class="subtle">Planning the resume…</p>`;
 }
@@ -6484,6 +6491,37 @@ function rstResumeOffer(offer) {
 /* Whether a volume the run writes to has less free than it needs (FR-RST-003). */
 function rstShort(plan) {
   return (plan?.space ?? []).some(need => need.availableBytes != null && need.availableBytes < need.neededBytes);
+}
+
+/*
+ * Whether a folder the run writes to would open a file wider than it was,
+ * which the service refuses unless the run acknowledges it (ADR-0178
+ * Amendment 1).
+ */
+function rstWider(plan) {
+  return (plan?.openedWider ?? 0) > 0;
+}
+
+/* The choices a plan's run is armed only once a person has made: each its own checkbox. */
+function rstNeeds(plan) {
+  const needs = [rstShort(plan) ? "rst-ignore-space" : "", rstWider(plan) ? "rst-ack-wider" : ""].filter(Boolean);
+  return needs.length ? ` data-needs="${needs.join(" ")}"` : "";
+}
+
+/* The files a folder would open wider, and the acknowledgement that goes past them; `arming` as rstPlanDetails takes it. */
+function rstWiderChoice(plan, arming) {
+  if (!rstWider(plan)) return "";
+  return `<div id="rst-wider">
+      <ul class="warnings"><li>${fmtCount(plan.openedWider)} file(s) would be open to more accounts than they were: their
+        own permissions name accounts this machine does not know, so they take the folder's, which give more. Nothing will
+        be written unless you choose to restore anyway. Go back and choose another folder, or restore anyway.</li></ul>
+      <label class="check-row"><input type="checkbox" id="rst-ack-wider" ${arming}>
+        Restore anyway — I accept that these files will be open to more accounts than they were</label></div>`;
+}
+
+/* Whether the person chose to go past the files a folder would open wider. */
+function rstAcknowledged() {
+  return document.getElementById("rst-ack-wider")?.checked ?? false;
 }
 
 /*
@@ -6512,6 +6550,7 @@ function rstPlanDetails(plan, arming) {
         to restore anyway. Free some space or go back and choose another folder.</li></ul>
       <label class="check-row"><input type="checkbox" id="rst-ignore-space" ${arming}>
         Restore anyway — a disk that compresses what it stores can hold more than this estimate</label></div>` : ""}
+    ${rstWiderChoice(plan, arming)}
     ${plan.missingObjects?.length ? `<ul class="warnings"><li>${fmtCount(plan.missingObjects.length)} object(s) the plan
       needs cannot be found — those files will fail.</li></ul>` : ""}
     ${plan.archivedObjects?.length ? `<div id="rst-archived"><ul class="warnings"><li>${fmtCount(plan.archivedObjects.length)} file(s)
@@ -6740,7 +6779,11 @@ Object.assign(actions, {
   async "rst-run"(el) {
     await withBusy(el, async () => {
       await rstRunRestore(
-        { ignoreFreeSpace: document.getElementById("rst-ignore-space")?.checked ?? false }, "Restore refused");
+        {
+          ignoreFreeSpace: document.getElementById("rst-ignore-space")?.checked ?? false,
+          acknowledgeWiderAccess: rstAcknowledged(),
+        },
+        "Restore refused");
     });
   },
 
@@ -6804,22 +6847,29 @@ Object.assign(actions, {
     await withBusy(el, async () => {
       const name = W.resumeOffer.run;
       const ignoreFreeSpace = document.getElementById("rst-ignore-space")?.checked ?? false;
+      const acknowledgeWiderAccess = rstAcknowledged();
       W.resumeOffer = null;
-      if (W.resume) await rstResumeRun(name, ignoreFreeSpace);
-      else if (W.kept) await rstRunKept({ resume: name, ignoreFreeSpace }, "Resume refused");
-      else await rstRunRestore({ resume: name, ignoreFreeSpace }, "Resume refused");
+      if (W.resume) await rstResumeRun(name, ignoreFreeSpace, acknowledgeWiderAccess);
+      else if (W.kept) await rstRunKept({ resume: name, ignoreFreeSpace, acknowledgeWiderAccess }, "Resume refused");
+      else await rstRunRestore({ resume: name, ignoreFreeSpace, acknowledgeWiderAccess }, "Resume refused");
     });
   },
 
   async "rst-kept-go"(el) {
     await withBusy(el, async () => {
-      await rstRunKept({ ignoreFreeSpace: document.getElementById("rst-ignore-space")?.checked ?? false }, "Restore refused");
+      await rstRunKept(
+        {
+          ignoreFreeSpace: document.getElementById("rst-ignore-space")?.checked ?? false,
+          acknowledgeWiderAccess: rstAcknowledged(),
+        },
+        "Restore refused");
     });
   },
 
   async "rst-resume-go"(el) {
     await withBusy(el, async () => {
-      await rstResumeRun(W.resume.run, document.getElementById("rst-ignore-space")?.checked ?? false);
+      await rstResumeRun(
+        W.resume.run, document.getElementById("rst-ignore-space")?.checked ?? false, rstAcknowledged());
     });
   },
 });
@@ -6848,9 +6898,10 @@ async function rstRunKept(extra, refused) {
 }
 
 /* A run left unfinished, asked again by the service by its name alone (ADR-0116). */
-async function rstResumeRun(name, ignoreFreeSpace) {
+async function rstResumeRun(name, ignoreFreeSpace, acknowledgeWiderAccess) {
   const result = await run(
-    { command: "resume_restore", run: name, source: W.source.sourceId, ignoreFreeSpace }, { errToast: "Resume refused" });
+    { command: "resume_restore", run: name, source: W.source.sourceId, ignoreFreeSpace, acknowledgeWiderAccess },
+    { errToast: "Resume refused" });
   if (result?.result === "restore") {
     W.result = result;
     rstRender();
@@ -6968,8 +7019,10 @@ function boot() {
       : event.target.closest("[data-action-input='confirm-word']");
     if (!el) return;
     const go = document.getElementById(el.dataset.enables);
-    const needed = el.dataset.needs ? document.getElementById(el.dataset.needs) : null;
-    const given = needed === null || (needed.type === "checkbox" ? needed.checked : Boolean(needed.value));
+    const given = (el.dataset.needs ?? "").split(" ").filter(Boolean).every(id => {
+      const needed = document.getElementById(id);
+      return needed === null || (needed.type === "checkbox" ? needed.checked : Boolean(needed.value));
+    });
     if (go) go.disabled = el.value.trim().toLowerCase() !== el.dataset.word || !given;
   });
 
@@ -6990,10 +7043,15 @@ function boot() {
       return;
     }
 
-    // A resume that will not fit is asked only when the person says to go on.
+    // A resume that will not fit, or that a folder would open files wider
+    // in, is asked only once the person has made every choice it needs.
     if (W && event.target.matches("[data-action-change='rst-resume-arm']")) {
-      const go = document.getElementById(event.target.dataset.armsButton ?? "rst-resume-go");
-      if (go) go.disabled = !event.target.checked;
+      const button = event.target.dataset.armsButton ?? "rst-resume-go";
+      const go = document.getElementById(button);
+      if (go) {
+        go.disabled = [...document.querySelectorAll("[data-action-change='rst-resume-arm']")]
+          .some(box => (box.dataset.armsButton ?? "rst-resume-go") === button && !box.checked);
+      }
       return;
     }
 

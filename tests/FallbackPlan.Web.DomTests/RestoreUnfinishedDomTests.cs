@@ -26,7 +26,9 @@ namespace FallbackPlan.Web.DomTests;
 /// service will not let go is named with its words while the rest go
 /// (ADR-0163). Given days, only the runs begun longer ago than that go, and
 /// how many begun within stay is said; days below one, or not whole, are
-/// refused before anything is asked to go (ADR-0169).
+/// refused before anything is asked to go (ADR-0169). A resume whose plan
+/// counts files a folder would open wider is asked only once the person
+/// acknowledges it (FR-RST-003, ADR-0178 Amendment 2).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -128,6 +130,7 @@ public sealed class RestoreUnfinishedDomTests
         Assert.AreEqual(Run, resumed.Run);
         Assert.AreEqual("src-1", resumed.Source);
         Assert.IsFalse(resumed.IgnoreFreeSpace);
+        Assert.IsFalse(resumed.AcknowledgeWiderAccess);
         await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-found-in-place")).ToBeVisibleAsync();
         Assert.IsEmpty(harness.Clients.Client.Received.OfType<RunRestoreCommand>(), "the service asks the run again, not the page");
@@ -155,6 +158,30 @@ public sealed class RestoreUnfinishedDomTests
         await go.ClickAsync();
 
         Assert.IsTrue((await harness.ReceivedAsync<ResumeRestoreCommand>()).IgnoreFreeSpace);
+    }
+
+    [TestMethod]
+    public async Task AResumeThatWouldOpenFilesWider_IsAskedToGoOn_OnlyWhenThePersonAcknowledgesIt()
+    {
+        // ADR-0178 Amendment 2: the run's acknowledgement is not kept with
+        // it, so its resume asks again.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Fakes(plan: _ => Fits with { OpenedWider = 1 });
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToTheResumeAsync(page, harness);
+
+        await Expect(page.Locator("#rst-wider")).ToBeVisibleAsync();
+        var go = page.Locator("#rst-resume-go");
+        await Expect(go).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ack-wider");
+        await Expect(go).ToBeEnabledAsync();
+        await go.ClickAsync();
+
+        var resumed = await harness.ReceivedAsync<ResumeRestoreCommand>();
+        Assert.IsTrue(resumed.AcknowledgeWiderAccess);
+        Assert.IsFalse(resumed.IgnoreFreeSpace);
     }
 
     [TestMethod]
@@ -186,7 +213,56 @@ public sealed class RestoreUnfinishedDomTests
         await Expect(page.Locator("#rst-landed")).ToHaveCountAsync(0);
         await page.ClickAsync("#rst-resume-go");
 
-        Assert.AreEqual(Run, (await harness.ReceivedAsync<ResumeRestoreCommand>()).Run);
+        var resumed = await harness.ReceivedAsync<ResumeRestoreCommand>();
+        Assert.AreEqual(Run, resumed.Run);
+        Assert.IsFalse(resumed.AcknowledgeWiderAccess, "nothing the person did not choose is sent");
+    }
+
+    [TestMethod]
+    public async Task AResumeTheServiceCannotPlan_OffersToGoPastAFolderThatWouldOpenFilesWider()
+    {
+        // Its run may still be refused for one (ADR-0178 Amendment 1), and
+        // with no plan nothing says so before it runs.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Fakes(plan: _ => new ServiceError(ServiceErrorReason.InvalidArgument, "Unknown command."));
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToTheResumeAsync(page, harness);
+
+        await page.CheckAsync("#rst-ack-wider");
+        await page.ClickAsync("#rst-resume-go");
+
+        Assert.IsTrue((await harness.ReceivedAsync<ResumeRestoreCommand>()).AcknowledgeWiderAccess);
+    }
+
+    [TestMethod]
+    public async Task AResumeThatWillNotFit_AndWouldOpenFilesWider_IsAskedOnlyWithBothChosen()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Fakes(plan: _ => Fits with
+        {
+            Space = [new RestoreSpaceDescriptor("/restore/out", 8_192, 100, false)],
+            OpenedWider = 1,
+        });
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToTheResumeAsync(page, harness);
+
+        var go = page.Locator("#rst-resume-go");
+        await page.CheckAsync("#rst-ignore-space");
+        await Expect(go).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ack-wider");
+        await Expect(go).ToBeEnabledAsync();
+        await page.UncheckAsync("#rst-ignore-space");
+        await Expect(go).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ignore-space");
+        await go.ClickAsync();
+
+        var resumed = await harness.ReceivedAsync<ResumeRestoreCommand>();
+        Assert.IsTrue(resumed.IgnoreFreeSpace);
+        Assert.IsTrue(resumed.AcknowledgeWiderAccess);
     }
 
     [TestMethod]
