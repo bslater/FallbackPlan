@@ -49,6 +49,8 @@ The tool spools each file beside its destination, under the destination's name w
 
 The tool now removes whatever stands at the spool's name, a link included, and then makes the spool new. Making it new refuses a name that has appeared again in between, which fails the run rather than writing through it.
 
+> **2026-10 ([Amendment 1](#amendment-1-2026-10--the-executors-spool-is-made-new-too)).** The executor opened its spool the same way, and a repository could put a link there. It now makes its spool new too.
+
 ## Consequences
 
 - A recovery into a folder that holds a link out of it writes nothing through the link. Each file under the link is refused by name, so the note says where the tree tried to go. A link at a spool's name is replaced, so a file still lands where it should.
@@ -65,9 +67,27 @@ The tool now removes whatever stands at the spool's name, a link included, and t
 - **Keep the tool's own copy and add the link check to it.** Rejected. Two copies of a containment rule drift apart, which is how this gap arose.
 - **Refuse to recover into a folder that is not empty.** Rejected. A person recovering into a folder that already holds part of an earlier attempt is the common case, and the rule already makes that safe.
 
+## Amendment 1 (2026-10) — the executor's spool is made new too
+
+§3 closed this hole for the recovery tool alone. The executor also writes each file whole into a spool beside its destination and renames it into place, and it made that spool with a create that opens whatever stands at the name, following a link. A repository is untrusted, the spool's name follows from the file's ([ADR-0173](0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md), and before it the file's own name with a suffix), and the executor restores links. So a repository that restored a link at the name a later file spools under, leading out of the restore, had that file's content written wherever the link led, as the account the restore runs as. A folder at that name was a second fault: the create was refused as unauthorised, which the item's containment did not catch, so the run ended with no receipt.
+
+**Decision.** The executor makes its spool as the recovery tool does:
+
+- whatever stands at the spool's name is removed, a link itself and never its target;
+- the spool is made new, which refuses a name that has appeared again in between and fails that file rather than writing through what stands there;
+- the item's containment catches a refusal as unauthorised beside an I/O fault, so a folder at the spool's name fails that file alone, named, and the run goes on.
+
+**Built:** `Restore/RestoreExecutor`; `Repository.Tests/RestoreSpoolContainmentTests`:
+
+- on POSIX, a link a repository restores at a file's spool name, leading to a file outside the restore, is replaced: the file outside reads as it did, and the restored file lands as a file with its content;
+- a folder a repository restores at a file's spool name fails that file alone, and a file after it restores.
+
+**Not done.** A link a repository restores at a later file's spool name is removed when that file spools, and the receipt still counts the link as restored. Only a repository that means harm names a link so, and nothing it names is written through.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The executor's path resolution moves into Domain unchanged, and the recovery tool places every folder and file by it, so a link the output holds is written through by nothing. A file's spool is made new after whatever stood at its name is removed. |
 | 2026-10 | Accepted | [ADR-0159](0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md): the rule follows the root and each folder below it through their links, so a restore into a folder that is a link, by the executor or the recovery tool, restores what lies below its top level. |
+| 2026-10 | Amended | Amendment 1: the executor makes its spool new after removing whatever stands at its name, as §3 has the recovery tool do, so a link a repository restores there carries no file's content out of the restore, and a folder there fails that file alone rather than ending the run. `Restore/RestoreExecutor`; `Repository.Tests/RestoreSpoolContainmentTests` |
