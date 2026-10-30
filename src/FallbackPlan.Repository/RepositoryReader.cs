@@ -640,7 +640,7 @@ public sealed class RepositoryReader : IDisposable
             blob = await LocateAtCopyAsync(index, store, where, cancellationToken).ConfigureAwait(false);
             if (blob is not { } held)
             {
-                return (null, new CopyRefusal(name, null, CopyFault.NotHeld, "it does not hold the blob the record is in"));
+                return (null, NotHeldAt(name));
             }
 
             RecordReadResult atLocation;
@@ -676,6 +676,13 @@ public sealed class RepositoryReader : IDisposable
                 }
                 catch (BlobFormatException exception)
                 {
+                    // Not kept: a footer that will not read because its blob
+                    // has gone says nothing about the blob if it comes back.
+                    if (await GoneFromCopyAsync(store, held.Key, cancellationToken).ConfigureAwait(false))
+                    {
+                        return (null, NotHeldAt(name));
+                    }
+
                     footer = (null, exception.Message);
                 }
 
@@ -694,7 +701,21 @@ public sealed class RepositoryReader : IDisposable
                 return (null, new CopyRefusal(name, held.Key.Value, CopyFault.NotHeld, "its blob does not list the record"));
             }
 
-            var fromFooter = await footer.Reader.ReadRecordAsync(listed[0], cancellationToken).ConfigureAwait(false);
+            RecordReadResult fromFooter;
+            try
+            {
+                fromFooter = await footer.Reader.ReadRecordAsync(listed[0], cancellationToken).ConfigureAwait(false);
+            }
+            catch (BlobFormatException)
+            {
+                if (!await GoneFromCopyAsync(store, held.Key, cancellationToken).ConfigureAwait(false))
+                {
+                    throw;
+                }
+
+                return (null, NotHeldAt(name));
+            }
+
             return IsAnswer(fromFooter.Outcome)
                 ? (fromFooter, null)
                 : (null, new CopyRefusal(
@@ -705,6 +726,20 @@ public sealed class RepositoryReader : IDisposable
             return (null, new CopyRefusal(name, blob?.Key.Value, CopyFault.Unreadable, exception.Message));
         }
     }
+
+    /// <summary>
+    /// Whether another copy has stopped holding a blob it held when this run
+    /// located it there: its own retention converging while a restore reads
+    /// around to it (ADR-0172 Amendment 1). Asked only where a read of the
+    /// blob there failed as damage fails, which is the one thing the copy's
+    /// store can tell apart.
+    /// </summary>
+    private static async ValueTask<bool> GoneFromCopyAsync(
+        IObjectStore store, ObjectKey key, CancellationToken cancellationToken) =>
+        !(await store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false)).Found;
+
+    private static CopyRefusal NotHeldAt(string name) =>
+        new(name, null, CopyFault.NotHeld, "it does not hold the blob the record is in");
 
     /// <summary>
     /// Where the record's blob is at one other copy, and how long — the own
