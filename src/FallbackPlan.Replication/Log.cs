@@ -60,6 +60,15 @@ internal static partial class Log
     internal static partial void ConvergeStoppedShort(
         ILogger logger, LogLabel destination, LogLabel phase, long refused);
 
+    // Information, not warning: the store releases what it keeps by itself,
+    // and nothing a person does brings it back sooner (ADR-0171 Amendment 4).
+    [LoggerMessage(
+        EventId = 3008, Level = LogLevel.Information,
+        Message = "Converging {Destination} deleted {Count} object(s) the store keeps under soft delete, "
+            + "{Bytes} byte(s), until its own retention period ends")]
+    internal static partial void ConvergeSoftDeleted(
+        ILogger logger, LogLabel destination, long count, long bytes);
+
     [LoggerMessage(
         EventId = 3003, Level = LogLevel.Information,
         Message = "Replication to {Destination} finished ({Pass}): {Copied} copied, "

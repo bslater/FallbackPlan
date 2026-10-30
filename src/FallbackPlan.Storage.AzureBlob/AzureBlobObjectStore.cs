@@ -367,7 +367,7 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
         {
             case HttpStatusCode.Accepted or HttpStatusCode.OK or HttpStatusCode.NoContent:
                 Log.ObjectDeleted(_logger, key);
-                return new DeleteResult(DeleteOutcome.Deleted);
+                return new DeleteResult(DeleteOutcome.Deleted, SoftDeleted: WasSoftDeleted(response));
 
             case HttpStatusCode.NotFound when ErrorCodeHeader(response) != "ContainerNotFound":
                 return new DeleteResult(DeleteOutcome.NotFound);
@@ -378,6 +378,16 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
     }
 
     private string FullKey(ObjectKey key) => _root + key.Value;
+
+    /// <summary>
+    /// Whether the account kept what it deleted under soft delete. The API
+    /// says on every delete whether it was permanent; an account with
+    /// versioning on says nothing of the version it kept, so that is not told
+    /// apart here.
+    /// </summary>
+    private static bool WasSoftDeleted(HttpResponseMessage response) =>
+        response.Headers.TryGetValues("x-ms-delete-type-permanent", out var values)
+        && string.Equals(values.FirstOrDefault(), "false", StringComparison.OrdinalIgnoreCase);
 
     private async ValueTask<ListPage> ListPageAsync(
         string prefix, string? delimiter, string? marker, int pageSize, CancellationToken cancellationToken,
