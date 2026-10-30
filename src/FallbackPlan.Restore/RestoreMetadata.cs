@@ -133,7 +133,8 @@ public static class RestoreMetadata
             applied |= CapturedMetadata.PosixMode;
         }
 
-        if (target.SupportsExtendedAttributes && ExtendedAttributes.CanSet)
+        var writesAttributes = target.SupportsExtendedAttributes && ExtendedAttributes.CanSet;
+        if (writesAttributes || MetadataRules.KeepsAttributesAsStreams(kind, target.SupportsAlternateStreams, writesAttributes))
         {
             applied |= CapturedMetadata.ExtendedAttributes;
         }
@@ -285,6 +286,7 @@ public static class RestoreMetadata
         var linkAttributes = new Tally();
         var strangers = new Tally();
         var refusedOwners = new Tally();
+        var kernelAttributes = new Tally();
         var unsetBits = new Tally();
         var unsetMask = 0u;
         var refusedStreams = new Tally();
@@ -327,7 +329,15 @@ public static class RestoreMetadata
             if ((applied & CapturedMetadata.ExtendedAttributes) != 0)
             {
                 const ExtendedAttributeKinds Acls = ExtendedAttributeKinds.NumberedAcl | ExtendedAttributeKinds.AnonymousAcl;
-                if (!OperatingSystem.IsLinux())
+                if (MetadataRules.KeepsAttributesAsStreams(
+                    item.Kind, target.SupportsAlternateStreams, target.SupportsExtendedAttributes && ExtendedAttributes.CanSet))
+                {
+                    if ((known.Attributes & (Acls | ExtendedAttributeKinds.Privileged)) != 0)
+                    {
+                        kernelAttributes.Add(item.Kind);
+                    }
+                }
+                else if (!OperatingSystem.IsLinux())
                 {
                     if ((known.Attributes & Acls) != 0)
                     {
@@ -473,6 +483,10 @@ public static class RestoreMetadata
         Add("privileged-attributes", privileged, string.Create(CultureInfo.InvariantCulture,
             $"Extended attributes in the security and trusted namespaces, captured on {privileged}, will not be "
             + $"applied; writing them needs root."));
+        Add("kernel-attributes", kernelAttributes, string.Create(CultureInfo.InvariantCulture,
+            $"Extended attributes in Linux's security and trusted namespaces, and POSIX access control lists, captured "
+            + $"on {kernelAttributes}, will not be kept as streams: only Linux's kernel reads them. Their files' other "
+            + $"attributes will be."));
         Add("symlink-attributes", linkAttributes, string.Create(CultureInfo.InvariantCulture,
             $"Extended attributes captured on {linkAttributes} will not all be applied; Linux keeps no "
             + $"user-namespace attribute and no access control list on a symlink."));

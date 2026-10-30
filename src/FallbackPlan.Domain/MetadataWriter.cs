@@ -105,20 +105,35 @@ public sealed class MetadataWriter(MetadataTarget target)
 
         // Each alone, so a refusal leaves the rest. The access ACL is
         // remembered, because the permissions depend on whether it landed.
-        var writes = target.SupportsExtendedAttributes && ExtendedAttributes.CanSet;
+        // Where the target keeps streams and no attributes, a file's go on
+        // as streams of the same names, before the times a stream moves.
+        var native = target.SupportsExtendedAttributes && ExtendedAttributes.CanSet;
+        var asStreams = MetadataRules.KeepsAttributesAsStreams(kind, target.SupportsAlternateStreams, native);
+        var writes = native || asStreams;
         var left = new List<(string Name, string Why)>();
         ExtendedAttributeEntry? acl = null;
         var aclLanded = false;
+
+        // Windows matches a stream's name without regard to case, so a name
+        // is held against the file's own streams and the attributes written
+        // before it in that way, and never lands over either.
+        var own = asStreams
+            ? new HashSet<string>(metadata.AlternateStreams.Select(stream => System.Text.Encoding.UTF8.GetString(stream.Name.Span)), StringComparer.OrdinalIgnoreCase)
+            : null;
+        var taken = asStreams ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
+
         foreach (var attribute in metadata.ExtendedAttributes)
         {
             var isAcl = MetadataRules.IsAccessAcl(attribute.Name.Span);
-            var why = !writes ? null : MetadataRules.Withheld(attribute, target, link);
-            var landedHere = writes
-                && why is null
-                && ExtendedAttributes.TrySet(destination, attribute.Name.Span, attribute.Value.Span);
+            var why = asStreams
+                ? AsStream(destination, attribute, own!, taken!)
+                : !native ? null : MetadataRules.Withheld(attribute, target, link) is { } withheld
+                    ? withheld
+                    : ExtendedAttributes.TrySet(destination, attribute.Name.Span, attribute.Value.Span) ? null : "refused by the target";
+            var landedHere = writes && why is null;
             if (writes && !landedHere)
             {
-                left.Add((System.Text.Encoding.UTF8.GetString(attribute.Name.Span), why ?? "refused by the target"));
+                left.Add((System.Text.Encoding.UTF8.GetString(attribute.Name.Span), why!));
             }
 
             if (isAcl)
@@ -284,6 +299,35 @@ public sealed class MetadataWriter(MetadataTarget target)
 
             return id;
         }
+    }
+
+    /// <summary>
+    /// Writes <paramref name="attribute"/> onto <paramref name="file"/> as the
+    /// stream of its name, or says why not: it means something to Linux's
+    /// kernel alone, its name is one no stream may have, the file was
+    /// captured with a stream of that name, an attribute written before it
+    /// has that name, or the target refuses it.
+    /// </summary>
+    private string? AsStream(string file, ExtendedAttributeEntry attribute, HashSet<string> own, HashSet<string> taken)
+    {
+        if (MetadataRules.WithheldAsStream(attribute) is { } withheld)
+        {
+            return withheld;
+        }
+
+        if (!AlternateStreams.TryName(attribute.Name.Span, out var name, out var why))
+        {
+            return why;
+        }
+
+        if (own.Contains(name))
+        {
+            return "the file was captured with a stream of that name";
+        }
+
+        return taken.Add(name)
+            ? target.Streams.Write(file, name, attribute.Value.Span)
+            : "another of the file's attributes has that name, as Windows compares names";
     }
 }
 

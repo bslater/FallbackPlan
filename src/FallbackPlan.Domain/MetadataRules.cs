@@ -307,6 +307,27 @@ public static class MetadataRules
             : null;
     }
 
+    /// <summary>
+    /// Whether a target keeps an entry's extended attributes as alternate
+    /// streams of the same names: a file's, where the target keeps streams
+    /// and writes no attributes of its own (ADR-0177).
+    /// </summary>
+    /// <param name="kind">The entry's kind; only a file carries streams.</param>
+    /// <param name="supportsAlternateStreams">Whether the target keeps a file's alternate streams.</param>
+    /// <param name="writesAttributes">Whether it writes extended attributes of its own.</param>
+    public static bool KeepsAttributesAsStreams(EntryKind kind, bool supportsAlternateStreams, bool writesAttributes) =>
+        kind == EntryKind.File && supportsAlternateStreams && !writesAttributes;
+
+    /// <summary>
+    /// Why <paramref name="attribute"/> is not kept as a stream, or null where
+    /// it is: one in Linux's security or trusted namespace, or a POSIX ACL,
+    /// means something to Linux's kernel alone (ADR-0177).
+    /// </summary>
+    internal static string? WithheldAsStream(ExtendedAttributeEntry attribute) =>
+        IsPrivileged(attribute.Name.Span) || IsPosixAcl(attribute.Name.Span)
+            ? "only Linux's kernel reads it, so it is not kept as a stream"
+            : null;
+
     /// <summary>Whether <paramref name="name"/> is a Linux POSIX ACL that governs who may reach the file itself.</summary>
     internal static bool IsAccessAcl(ReadOnlySpan<byte> name) => name.SequenceEqual("system.posix_acl_access"u8);
 

@@ -21,7 +21,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a name no stream can have, a read that fails or a volume that refuses it,
 /// leaves the file degraded, saying which and why (FR-RST-005). A stream
 /// that already stands as captured, as one a run cut short wrote, is left as
-/// it stands and read from nowhere.
+/// it stands and read from nowhere. Where the target keeps streams and
+/// writes no extended attributes of its own, as Windows does, a file's
+/// attributes are kept as streams of the same names (ADR-0177).
 /// </summary>
 /// <remarks>
 /// Only Windows keeps alternate streams. Most cases run everywhere, against a
@@ -67,6 +69,43 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
         Assert.AreEqual("restored", item.Outcome);
         Assert.IsFalse(item.NotApplied?.Contains("alternate_streams") ?? false, "the streams it carried were applied");
         Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+    }
+
+    [TestMethod]
+    public async Task AFilesExtendedAttributes_AreWrittenAsItsStreams_WhereTheTargetKeepsStreamsAndNoAttributes()
+    {
+        var content = Deterministic(4_096, 5);
+        var source = new FakeFileSystemSource();
+        source.AddFile(CarrierPath, content, fileId: 9_101).Metadata = new EntryMetadata
+        {
+            ModifiedAt = CapturedModifiedAt,
+            ExtendedAttributes = [new ExtendedAttributeEntry("user.comment"u8.ToArray(), Notes)],
+        };
+        using var published = await PublishAsync(source, 0xCA);
+        var keepsAsStreams = WritesStreams with { SupportsExtendedAttributes = false };
+        var held = new HeldStreams();
+
+        var plan = published.Plan(keepsAsStreams);
+        Assert.DoesNotContain(degradation => degradation.Capability == "extended-attributes", plan.Degradations);
+        var (receipt, output) = await RestoreAsync(published, plan, keepsAsStreams, held, "attributes");
+
+        var landed = Path.Combine(output, "data", "streams.bin");
+        SequenceAssert.AreEqual(Notes, held.Streams[(landed, "user.comment")]);
+        Assert.IsFalse(Item(receipt).NotApplied?.Contains("extended_attributes") ?? false, "the attribute it carried was kept");
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+    }
+
+    [TestMethod]
+    public void Profile_PassesWhetherItKeepsStreams_ToTheWriter_AndTheRuleCountsAFilesAttributesKeptAsThem()
+    {
+        var keepsAsStreams = RestoreTargetProfile.ForLocalPlatform() with { SupportsAlternateStreams = true, SupportsExtendedAttributes = false };
+
+        Assert.IsTrue(keepsAsStreams.Metadata.SupportsAlternateStreams);
+        Assert.IsFalse((keepsAsStreams with { SupportsAlternateStreams = false }).Metadata.SupportsAlternateStreams);
+        Assert.IsTrue(RestoreMetadata.Applied(EntryKind.File, keepsAsStreams).HasFlag(CapturedMetadata.ExtendedAttributes));
+        Assert.IsFalse(RestoreMetadata.Applied(EntryKind.DirectoryPlaceholder, keepsAsStreams).HasFlag(CapturedMetadata.ExtendedAttributes));
+        Assert.IsFalse(RestoreMetadata.Applied(EntryKind.File, keepsAsStreams with { SupportsAlternateStreams = false })
+            .HasFlag(CapturedMetadata.ExtendedAttributes));
     }
 
     [TestMethod]
