@@ -35,6 +35,9 @@ public enum RecoveryNoteKind
 
     /// <summary>A later name of a hard-link group restored as a file of its own, and why (ADR-0156).</summary>
     NotLinked = 9,
+
+    /// <summary>A file's alternate stream not written back, and why; the file still restored (ADR-0174 Amendment 1).</summary>
+    StreamNotWritten = 10,
 }
 
 /// <summary>
@@ -78,6 +81,7 @@ public sealed record RecoveryNote(
         RecoveryNoteKind.RecordUnreadable => $"FAILED {Path ?? RootTree}: record read {Outcome} — {Detail}",
         RecoveryNoteKind.WriteFailed => $"FAILED {Path}: the output would not take it — {Detail}",
         RecoveryNoteKind.NotLinked => $"{Path}: restored as a file of its own, not linked to its group — {Reason}",
+        RecoveryNoteKind.StreamNotWritten => $"{Path}: alternate stream {Reason}",
         _ => Kind.ToString(),
     };
 }

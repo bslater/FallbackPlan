@@ -451,7 +451,7 @@ public sealed class RecoverySession : IDisposable
     /// </remarks>
     public ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
         ObjectId rootTree, string outputDirectory, CancellationToken cancellationToken) =>
-        RestoreTreeAsync(rootTree, outputDirectory, makeLink: null, cancellationToken);
+        RestoreTreeAsync(rootTree, outputDirectory, makeLink: null, streams: null, cancellationToken);
 
     /// <summary>
     /// Restores a snapshot's tree under <paramref name="outputDirectory"/>,
@@ -467,8 +467,31 @@ public sealed class RecoverySession : IDisposable
     /// output that keeps no links.
     /// </param>
     /// <param name="cancellationToken">Stops the run.</param>
+    public ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
+        ObjectId rootTree, string outputDirectory, Func<string, string, bool>? makeLink, CancellationToken cancellationToken) =>
+        RestoreTreeAsync(rootTree, outputDirectory, makeLink, streams: null, cancellationToken);
+
+    /// <summary>
+    /// Restores a snapshot's tree under <paramref name="outputDirectory"/>,
+    /// as <see cref="RestoreTreeAsync(ObjectId, string, Func{string, string, bool}?, CancellationToken)"/>
+    /// does, writing each file's alternate streams back through
+    /// <paramref name="streams"/>.
+    /// </summary>
+    /// <param name="rootTree">The snapshot's root tree.</param>
+    /// <param name="outputDirectory">Where the tree is restored.</param>
+    /// <param name="makeLink">Gives an existing file a further name: <see cref="HardLinks.TryCreate"/> where null.</param>
+    /// <param name="streams">
+    /// Writes a file's alternate streams: where null, the platform's calls
+    /// where it keeps streams, and none elsewhere, so each is counted not
+    /// applied. A test stands in for a platform that keeps them.
+    /// </param>
+    /// <param name="cancellationToken">Stops the run.</param>
     public async ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
-        ObjectId rootTree, string outputDirectory, Func<string, string, bool>? makeLink, CancellationToken cancellationToken)
+        ObjectId rootTree,
+        string outputDirectory,
+        Func<string, string, bool>? makeLink,
+        IAlternateStreams? streams,
+        CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(outputDirectory);
         var root = Path.GetFullPath(outputDirectory);
@@ -482,6 +505,7 @@ public sealed class RecoverySession : IDisposable
         var folders = new List<Folder>();
         var notApplied = new Dictionary<string, int>(StringComparer.Ordinal);
         var link = makeLink ?? HardLinks.TryCreate;
+        var streamCalls = streams ?? (AlternateStreams.CanWrite ? AlternateStreams.OfThisPlatform : null);
 
         // Each hard-link group's first name landed: what a later name must
         // agree on, where it landed, and what it got (ADR-0156).
@@ -732,6 +756,56 @@ public sealed class RecoverySession : IDisposable
             return true;
         }
 
+        // Each stream a landed file carries, written onto it where the
+        // platform keeps streams, by the executor's rule (ADR-0174 Amendment
+        // 1); whether every one landed. One that did not is noted, and the
+        // file still restores.
+        async ValueTask<bool> WriteStreamsAsync(FileVersionManifest manifest, string path, string destination)
+        {
+            if (streamCalls is null || manifest.Metadata.AlternateStreams.Count == 0)
+            {
+                return false;
+            }
+
+            var all = true;
+            foreach (var stream in manifest.Metadata.AlternateStreams)
+            {
+                if (await WriteStreamAsync(stream, destination).ConfigureAwait(false) is { } why)
+                {
+                    all = false;
+                    notes.Add(new RecoveryNote(RecoveryNoteKind.StreamNotWritten, path, Reason: why));
+                }
+            }
+
+            return all;
+        }
+
+        // Null where the stream landed; otherwise why it did not. A stream's
+        // name is judged before it is joined to the file's path, since a name
+        // that is not a stream's can name another file.
+        async ValueTask<string?> WriteStreamAsync(AlternateStreamEntry stream, string destination)
+        {
+            if (!AlternateStreams.TryName(stream.Name.Span, out var name, out var refused))
+            {
+                return $"'{Encoding.UTF8.GetString(stream.Name.Span)}' was not written back: {refused}";
+            }
+
+            if (!_records.TryGetValue(stream.ObjectId, out var located))
+            {
+                return $"'{name}' was not written back: its record is in no readable blob";
+            }
+
+            var read = await located.Reader.ReadRecordAsync(located.Entry, cancellationToken).ConfigureAwait(false);
+            if (read.Outcome != RecordReadOutcome.Ok)
+            {
+                return $"'{name}' was not written back: its record read {read.Outcome}";
+            }
+
+            return streamCalls!.Write(destination, name, read.Plaintext!) is { } why
+                ? $"'{name}' was not written back: {why}"
+                : null;
+        }
+
         // What the landed file got of its captured metadata, or null where
         // it did not land.
         async ValueTask<CapturedMetadata?> RestoreFileAsync(FileVersionManifest manifest, string path, string destination)
@@ -827,7 +901,10 @@ public sealed class RecoverySession : IDisposable
                     return null;
                 }
 
-                var applied = writer.Write(destination, manifest.Metadata, EntryKind.File).Applied;
+                // Streams before the times, which writing one moves (ADR-0174).
+                var streamsWritten = await WriteStreamsAsync(manifest, path, destination).ConfigureAwait(false);
+                var applied = writer.Write(destination, manifest.Metadata, EntryKind.File).Applied
+                    | (streamsWritten ? CapturedMetadata.AlternateStreams : CapturedMetadata.None);
                 Count(MetadataRules.Captured(manifest.Metadata), applied);
                 return applied;
             }

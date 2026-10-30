@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: a file's captured alternate streams come back where the target keeps them, and one that does not is named), FR-RST-005
+**Requirements:** FR-RST-004 (amended: a file's captured alternate streams come back where the target keeps them, and one that does not is named), FR-RST-005, FR-RST-004 (amended by Amendment 1: the recovery tool gives them back by the same rule)
 **Related:** [ADR-0026](0026-phase-1-capture-shapes.md) §5 (a stream is captured whole as one segment record), [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (what a restore says it does not write back), [ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md) (each attribute on its own, and a receipt that records what each write did), [ADR-0109](0109-a-restore-cut-short-is-resumed.md) (a resumed run leaves what an earlier one landed as it stands), [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) (the recovery tool, which still writes none), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (alternate data streams are preserved on Windows), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 9, each stream's name, object identifier and length), [restore review RR-6](../review/2026-08-restore-pipeline-review.md#rr-6--alternate-data-streams-are-captured-and-never-restored)
 
 **Built:**
@@ -65,6 +65,8 @@ The executor takes the calls that write and read a stream as an argument, as it 
 ## What this does not do
 
 - **The recovery tool.** It still writes no streams back, and lists them as not applied ([ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md)).
+
+  > **2026-10 ([Amendment 1](#amendment-1-2026-10--the-recovery-tool-writes-a-files-streams-back-by-the-same-rule)).** Taken up: the tool writes a file's streams back by this record's rule, and notes one that does not land.
 - **Judge a stream's name in the plan.** The plan's items carry whether a file has streams, not their names, so a name no stream can have is found at execution and named in the receipt.
 - **Extended attributes on Windows.** Architecture 06 §3 would keep them as streams there. They are still listed as not applied.
 - **A handle-relative write.** A stream is written by path, as the times and attributes are, so the window [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) records covers it too.
@@ -76,8 +78,30 @@ The executor takes the calls that write and read a stream as an argument, as it 
 - **Fail the file when a stream does not land.** Rejected. Its content landed and verified, and a failed item would say the content did not. A stream is held as metadata is: what did not land is named, and the content stands.
 - **Write streams after the times and set the times again.** Rejected. It writes the times twice for every file with a stream, to undo an order that can simply be kept.
 
+## Amendment 1 (2026-10) — the recovery tool writes a file's streams back by the same rule
+
+The record left the standalone recovery tool writing no streams. It counted each file's streams as not applied, as [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) had it, so a person recovering from the worst case got the files the executor would give back, less their streams.
+
+**Decision.** The tool writes them by §§2–4:
+
+- **once a file's content has landed and its whole-file hash verified,** each stream is read from its record, which the blob reader authenticates and checks against its content identifier, and written onto the file before its times;
+- **a captured name is judged before it is joined to the file's path,** by the rule the executor uses;
+- **a stream that does not land is noted, saying which and why,** and counted not applied, and the file still restores. A name no stream can have, a record in no readable blob or one that will not read, and a write the output refuses each do so;
+- **off Windows the tool asks the platform for no stream,** and counts them not applied, as before.
+
+The tool has no resume, so it does not look for a stream already standing as captured.
+
+**Built:** `Recovery/RecoverySession`; `Recovery/RecoveryNote`:
+
+- `Repository.Tests/RecoveryAlternateStreamsTests`: a file's streams are written back onto it and not counted; with calls that move a file's time as NTFS does, it keeps its captured modification time; a stream whose name no stream can have reaches no call and is noted, and so is one the output refuses or whose record is damaged, while the file restores; off Windows the platform is asked for none and the streams are counted not applied; on Windows a real file's streams round-trip through capture and the tool.
+
+The in-memory calls the executor's suite used move to a helper both suites share, `Repository.Tests/HeldStreams`.
+
+**Not done.** The CLI's `restore-file` still writes no streams.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The executor writes a file's alternate streams back on Windows, each proved like a segment, judged by name before it is joined to the path, and written after the content and before the times; one that does not land degrades the file, named. A stream standing as captured is left. `Domain/AlternateStreams`; `Restore/RestoreExecutor`; `Domain.Tests/AlternateStreamsTests`; `Repository.Tests/RestoreAlternateStreamsTests` |
+| 2026-10 | Amended | Amendment 1: the recovery tool writes a file's streams back by the same rule, after its content and before its times, and notes one that does not land. `Recovery/RecoverySession`; `Repository.Tests/RecoveryAlternateStreamsTests` |

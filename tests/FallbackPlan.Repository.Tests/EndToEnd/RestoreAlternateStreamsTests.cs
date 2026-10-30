@@ -444,35 +444,4 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
             Catalogue.Dispose();
         }
     }
-
-    /// <summary>
-    /// Calls that hold each file's streams in memory, by the path the
-    /// executor names: what was written, and how often, is what a case reads.
-    /// </summary>
-    private sealed class HeldStreams : IAlternateStreams
-    {
-        public Dictionary<(string File, string Name), byte[]> Streams { get; } = [];
-
-        public string? Refusal { get; init; }
-
-        public Action<string>? OnWrite { get; init; }
-
-        public int Writes { get; private set; }
-
-        public byte[]? Read(string file, string name, ulong length) =>
-            Streams.TryGetValue((file, name), out var stream) && (ulong)stream.Length == length ? stream.ToArray() : null;
-
-        public string? Write(string file, string name, ReadOnlySpan<byte> content)
-        {
-            if (Refusal is { } refusal)
-            {
-                return refusal;
-            }
-
-            Writes++;
-            Streams[(file, name)] = content.ToArray();
-            OnWrite?.Invoke(file);
-            return null;
-        }
-    }
 }

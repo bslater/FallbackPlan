@@ -198,7 +198,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0171](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) | A destination that refuses a delete keeps what it reaches, and the sync goes on: a delete the store refuses, or answers "not found" for an object still listed, is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync | **Built** | `Replication/StoreToStoreCopier` · `Agent/FanOut` · `Storage.Abstractions/StoreResults` · `Storage.S3/S3ObjectStore` · `Storage.AzureBlob/AzureBlobObjectStore` · `Replication.Tests/ConvergeRefusalTests` · `Hosts.Tests/ObjectStoreDestinationTests` · `Hosts.Tests/S3DestinationTests` · `Hosts.Tests/AzureBlobDestinationTests` · [notes](#0171--a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on) |
 | [0172](adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) | A blob that goes while a restore reads it is one the store no longer holds: a read that fails as damage fails asks the store, and a blob it no longer holds is forgotten, read around as not held or failed, and never ends the run; a copy that stops holding a blob while the run reads around to it is passed over as not held (Amendment 1); with no copy, a record whose blob the store does not hold fails as not held, not as a format violation (Amendment 2) | **Built** | `Repository/RepositoryReader` · `Repository.Packing/RecordReadResult` · `Repository.Tests/RestoreBesideCollectionTests` · [notes](#0172--a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds) |
 | [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: both writers spool beside a file under 33 characters made from its name, so a file whose name is as long as its target holds restores; `restore-file` lands its file the same way, so one that fails leaves its output as it was (Amendment 1); under rename, a copy written beside keeps as much of its stem as fits (Amendment 2); `restore-file` assembles its file where it lands, needing no room in the temporary folder (Amendment 3) | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Repository/RestoreEngine` · `Domain.Tests/RestoreSpoolTests` · `Repository.Tests/RestoreLongNameTests` · `Repository.Tests/RecoveryContainmentTests` · `Repository.Tests/SparseRestoreTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets) |
-| [0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) | A restore writes a file's alternate streams back where the target keeps them: on Windows, each read and proved like a segment, written after the content and before the times, and judged by name before it is joined to the path; a stream standing as captured is left, and one that does not land degrades the file, named | **Built** | `Domain/AlternateStreams` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/AlternateStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · [notes](#0174--a-files-alternate-streams) |
+| [0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) | A restore writes a file's alternate streams back where the target keeps them: on Windows, each read and proved like a segment, written after the content and before the times, and judged by name before it is joined to the path; a stream standing as captured is left, and one that does not land degrades the file, named; the recovery tool writes them by the same rule, noting one that does not land (Amendment 1) | **Built** | `Domain/AlternateStreams` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Recovery/RecoverySession` · `Domain.Tests/AlternateStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · `Repository.Tests/RecoveryAlternateStreamsTests` · [notes](#0174--a-files-alternate-streams) |
 
 ---
 
@@ -4145,6 +4145,8 @@ through a link planted in the output, and its metadata goes with it.
 It has since placed every path by the executor's rule
 ([0152](#0152--the-recovery-tool-keeps-every-path-inside-its-output)),
 and made links ([0155](#0155--the-recovery-tool-makes-a-link-a-link)).
+It has since written a file's alternate streams back on Windows
+([0174](#0174--a-files-alternate-streams)'s Amendment 1).
 
 ### 0151 — the catalogue keeps a folder's entries once
 
@@ -4734,7 +4736,13 @@ degraded.
 What remains is recorded rather than done:
 
 - the recovery tool and the CLI's `restore-file` write no streams, and
-  list them as not applied;
+  list them as not applied (the recovery tool taken up by Amendment 1);
 - a stream's name is judged at execution, not in the plan, whose items
   carry no stream names;
 - extended attributes on Windows are still not kept as streams.
+
+Amendment 1 brings the recovery tool to the same rule. Once a file's
+content has landed and verified, it writes each stream onto the file
+before the times, judging the name first. One that does not land gets a
+note naming it and why, and is counted not applied, and the file still
+restores. Off Windows the tool asks for no stream, as before.
