@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt)
+**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held)
 **Related:** [ADR-0075](0075-a-restore-reads-around-damage.md) §5 (what a copy passed over is called), [ADR-0068](0068-the-catalogue-directed-restore-read.md) (the catalogue-directed read), [ADR-0009](0009-garbage-collection-safety.md) (the collector), [ADR-0034](0034-hub-and-spoke-destinations.md) §6 (the staging trim), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-4
 
 **Built:**
@@ -70,6 +70,8 @@ Damage stays damage. The blob reader is unchanged. Its other callers, the loader
 
 - **Hold the collector off a restore.** A snapshot that expires and is swept while it is being restored loses the files whose blobs went, with no copy to read them from: destinations converge to the same policy. They fail, named, and the receipt says so. The sweep's grace spans two retention applies and a publication between them, and a person runs an apply, so the window is a restore that outlives all three.
 - **Say "not held" in the failure.** A record no loaded blob carries is reported as a format violation, as it was for a blob missing before the run began.
+
+  > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-record-no-store-holds-fails-as-not-held)).** A record whose blob the store does not hold fails as not held, whether the blob went during the run or before it, and the receipt says so. A record nothing places at all is still a format violation.
 - **Tell a blob that went from damage at another copy.** A blob that goes from a destination while the run reads around to it is still passed over there as damaged, so it lands on that destination's ledger as a finding.
 
   > **Built 2026-10 ([Amendment 1](#amendment-1-2026-10--at-another-copy-too)).** A copy is now asked as the own store is, and a blob that went from it is passed over there as not held.
@@ -99,9 +101,43 @@ A restore of a set's own archive reads around to the set's destinations, and a d
 - one that goes after its footer was read is not held there, and nothing throws;
 - through the executor, with the copy's blob swept after its first, second or third read, the run keeps its receipt, fails only what no copy could still read, and holds no damage against the copy.
 
+## Amendment 2 (2026-10) — a record no store holds fails as not held
+
+§2 left a record whose blob had gone, with no copy to read it from, failing as one no loaded blob carries. The reader reported that under the record read's format violation, the outcome a torn or forged record earns, so:
+
+- the restore's receipt named each such file as failed for "FormatViolation", the words it gives a blob that will not frame;
+- a blob gone before the run began, at a location the catalogue still named, failed in the same words.
+
+The receipt then read as though the archive were damaged, when the blob had only gone, swept or trimmed.
+
+**Decision.**
+
+- **The record read gains "not held":** the store does not hold the blob the record is in. Nothing is damaged, and nothing was read.
+- **The own store's read answers it wherever the reader knows the blob is gone:**
+  - a location whose blob the store does not hold, which the metadata call the fallback already makes tells it, so the store is asked nothing more;
+  - a blob forgotten once a read of it failed and the store no longer held it (§2).
+
+  Its detail names the blob and the object.
+- **Reading around.** The own store's "not held" is passed over as not holding the blob, as a forgotten blob already was (ADR-0075 §5). With no copy that holds the blob, the record fails as not held, and the receipt names the file as failed for "NotHeld".
+- **A reader that loaded every footer.** Such a reader keeps a blob's record table after the blob goes, so the own store still had a place for the record. Reading around, it filed the own store as damaged, against §2. No caller in the product reads around with such a reader, since the service's restore asks a location source. The outcome now decides it, so the reader does not depend on that.
+- **What stays a format violation:**
+  - an object no location and no loaded blob places, which is not a blob that went;
+  - a blob the store still holds that will not frame, which is damage and is still skipped as damage (§3).
+
+Every other reader of the outcome compares it against success, or leaves what it does not name unread. The replica verifier neither proves nor fails a blob that is not held, as it did a format violation. No contract, format or schema change: a receipt's detail is text.
+
+**Built:** `Repository.Packing/RecordReadResult`, `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests`, at formats 2 and 5:
+
+- a record whose blob went, with no copy, fails as not held, under a reader that asks a location source and under one that loaded every footer, and its detail says the store does not hold the blob;
+- so does one whose blob went before the restore began;
+- a reader that loaded every footer reads such a record from a copy, and passes the own store over as not held, where it filed it as damaged;
+- the control: a blob the store still holds, cut short inside the record, fails as damage, not as not held, and is skipped as damage;
+- through the executor, with a blob swept partway and no copy, every failed item's detail names "NotHeld".
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The review's compaction case held as it stood. A blob that goes while a restore reads it no longer ends the run or reads as damage. No contract, format or schema change. |
 | 2026-10 | Amended | Amendment 1: a blob that goes from another copy while the run reads around to it is passed over there as not held, and a read through that copy's footer no longer ends the run. `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |
+| 2026-10 | Amended | Amendment 2: with no copy to read it from, a record whose blob the store does not hold fails as not held, not as a format violation, whether the blob went during the run or before it. `Repository.Packing/RecordReadResult`, `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |
