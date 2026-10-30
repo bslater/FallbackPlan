@@ -802,9 +802,24 @@ public sealed class RestoreExecutor(
         // chosen output, not inside the quarantine — they are the user's
         // current files and were never in question. A resumed quarantined
         // run lands in the folder of the run it continues (ADR-0109).
+        var quarantineRun = options.ResumedRunId ?? options.RunId;
         var root = options.DestinationMode == RestoreDestinationMode.Quarantine
-            ? Path.Combine(chosen, options.QuarantineDirectory, options.ResumedRunId ?? options.RunId)
+            ? Path.Combine(chosen, options.QuarantineDirectory, quarantineRun)
             : chosen;
+
+        // The quarantine folder's name is fixed, so an earlier run in place
+        // into this output can have restored a repository's link there. Taken
+        // as a root, it would be followed through that link as a root the
+        // person chose is (ADR-0159); resolved under the output's own root as
+        // a restored path is, a link leading out refuses the run before
+        // anything is written (ADR-0152 Amendment 3).
+        if (options.DestinationMode == RestoreDestinationMode.Quarantine
+            && !TryResolve(chosen, $"{options.QuarantineDirectory}/{quarantineRun}", out _, out var quarantineRefusal))
+        {
+            return Refused(
+                plan, root, options,
+                $"{quarantineRefusal}, at the run's quarantine folder {options.QuarantineDirectory}/{quarantineRun}");
+        }
 
         Directory.CreateDirectory(root);
         var engine = new RestoreEngine(reader);
@@ -1763,6 +1778,34 @@ public sealed class RestoreExecutor(
 
         refusal = $"refused: {reason}";
         return false;
+    }
+
+    /// <summary>
+    /// The receipt of a run refused before it wrote anything: every item the
+    /// plan names failed, each saying why, so the receipt answers for the
+    /// whole plan as a run's always does.
+    /// </summary>
+    private static RestoreReceipt Refused(
+        RestorePlan plan, string root, RestoreExecutionOptions options, string refusal)
+    {
+        List<ReceiptItem> items =
+        [
+            .. plan.Items.Select(item => new ReceiptItem
+            {
+                Path = item.Path, Outcome = "failed", Bytes = 0, Detail = refusal,
+            }),
+        ];
+        return new RestoreReceipt
+        {
+            SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
+            SnapshotId = Convert.ToHexString(plan.SnapshotId.Span).ToLowerInvariant(),
+            StartedAt = options.NowUnixMilliseconds,
+            CompletedAt = options.NowUnixMilliseconds,
+            Items = items,
+            Displaced = [],
+            WrittenTo = root,
+            Outcome = Aggregate(items, plan.Items.Count),
+        };
     }
 
     /// <summary>

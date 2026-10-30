@@ -98,6 +98,26 @@ A restore in place under the Preserve policy moves a file it would replace aside
 
 **Not done.** The quarantine folder, `.fbp-quarantine/<run>`, is still the run's root and still followed through a link standing at its name. A repository cannot put one there in the run that quarantines, since everything it names lands below that folder. An earlier run in place into the same output, or an account that can write in the output, can. Refusing that needs a refusal of the whole run, which the executor does not have.
 
+> **2026-10 ([Amendment 3](#amendment-3-2026-10--a-quarantined-runs-folder-is-resolved-under-the-outputs-root)).** Taken up: the run's folder is resolved under the output's root before anything is written, and a link there leading out refuses the run, failing every item it planned.
+
+## Amendment 3 (2026-10) — a quarantined run's folder is resolved under the output's root
+
+Amendment 2 left the quarantine folder as it found it. A quarantined run lands in `.fbp-quarantine/<run>` under the output, and the executor took that folder as the run's root. The rule follows a root through its own links ([ADR-0159](0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md)), as it should for a folder the person chose, but this one's name is fixed. A run in place into the same output restores whatever a repository names there, a link named `.fbp-quarantine` included. A later quarantined run into that output then wrote its whole restore wherever the link led.
+
+**Decision.** The run's folder is resolved as `.fbp-quarantine/<run>` under the output's own root, by the rule every restored path is resolved by, before anything is written:
+
+- **a link there that leads out of the output refuses the run.** Nothing is written, not even the run's folder. The executor has no refusal of its own for a whole run, and none is added. The receipt fails every item the plan names, each saying the run's quarantine folder was refused and why. So the run is reported failed as any run with a failed item is, and its receipt is kept;
+- **a link there that leads elsewhere inside the output is followed,** as ADR-0159 has it;
+- **a resumed run's folder is the run it continues,** resolved the same way.
+
+**Built:** `Restore/RestoreExecutor`; `Repository.Tests/RestoreQuarantineContainmentTests`:
+
+- on POSIX, a run in place restores a repository's link named `.fbp-quarantine`, leading to a folder elsewhere. A quarantined run of the same snapshot into the same output then writes nothing there, and fails every item it planned, naming the link;
+- on POSIX, a link at `.fbp-quarantine` leading to a folder inside the output is followed, and the run lands below it;
+- the control: with nothing at the name, the run lands in its own folder below `.fbp-quarantine`, as it always did.
+
+**Not done.** A link that an account able to write in the output puts at the quarantine folder's name between the check and the write is still followed. The threat model already records that such an account can redirect a write between a check and the write.
+
 ## Status history
 
 | Date | Status | Note |
@@ -106,3 +126,4 @@ A restore in place under the Preserve policy moves a file it would replace aside
 | 2026-10 | Accepted | [ADR-0159](0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md): the rule follows the root and each folder below it through their links, so a restore into a folder that is a link, by the executor or the recovery tool, restores what lies below its top level. |
 | 2026-10 | Amended | Amendment 1: the executor makes its spool new after removing whatever stands at its name, as §3 has the recovery tool do, so a link a repository restores there carries no file's content out of the restore, and a folder there fails that file alone rather than ending the run. `Restore/RestoreExecutor`; `Repository.Tests/RestoreSpoolContainmentTests` |
 | 2026-10 | Amended | Amendment 2: a displaced path is resolved under the output's root, so a link a repository restores at the displaced folder's name, leading out, is refused, and the person's file stays where it was. `Restore/RestoreExecutor`; `Repository.Tests/RestoreDisplacedContainmentTests` |
+| 2026-10 | Amended | Amendment 3: a quarantined run's folder is resolved under the output's root, so a link an earlier run in place restored at the quarantine folder's name, leading out, refuses the run before anything is written. `Restore/RestoreExecutor`; `Repository.Tests/RestoreQuarantineContainmentTests` |
