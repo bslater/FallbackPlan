@@ -910,7 +910,8 @@ public sealed partial class ServiceCommandHandler(
             // the probe has already read.
             var writeBytes = RestorePlanFigures.WriteBytes(plan, probed);
             var conflicts = RestorePlanFigures.Conflicts(plan);
-            var degradations = RestorePlanFigures.Degradations(plan, probed, target);
+            var degradations = RestorePlanFigures.Degradations(
+                plan, probed, target, measured is null ? null : RestoreMetadata.DestinationsOf(measured));
 
             IReadOnlyList<RestoreSpaceDescriptor>? space = null;
             long? landed = null;

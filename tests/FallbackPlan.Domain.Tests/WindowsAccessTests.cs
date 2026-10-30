@@ -1,0 +1,178 @@
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using FallbackPlan.TestSupport;
+using static FallbackPlan.TestSupport.SecurityDescriptors;
+
+namespace FallbackPlan.Domain.Tests;
+
+/// <summary>
+/// A file whose captured security descriptor a restore does not write takes
+/// the access its new folder gives it, and the plan names the files that
+/// gives more than their own did (FR-RST-003; ADR-0178; architecture 06 §3).
+/// The access an account has to an entry is what its DACL's allowing entries
+/// grant less what its denying ones take, inherit-only entries apart and
+/// generic rights read as a file's; a null DACL grants everyone everything.
+/// A file made in a folder takes the folder's object-inheriting entries, the
+/// creator's own apart. An account is given wider access where it gets a
+/// right the entry did not give it, synchronising apart.
+/// </summary>
+[TestClass]
+public sealed class WindowsAccessTests : IDisposable
+{
+    private const string Ana = "S-1-5-21-1-2-3-1001";
+    private const string Users = "S-1-5-32-545";
+    private const string Everyone = "S-1-1-0";
+    private const string LocalSystem = "S-1-5-18";
+    private const string Administrators = "S-1-5-32-544";
+    private const string CreatorOwner = "S-1-3-0";
+
+    private const uint FullControl = 0x1F01FF;
+    private const uint Read = 0x120089;
+    private const uint ReadAndExecute = 0x1200A9;
+    private const uint WriteData = 0x2;
+    private const uint Synchronize = 0x100000;
+    private const uint GenericRead = 0x8000_0000;
+    private const uint GenericAll = 0x1000_0000;
+
+    private readonly string _root =
+        Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "fbp-windows-access-tests", Guid.NewGuid().ToString("n"))).FullName;
+
+    [TestMethod]
+    public void Read_EachAllowingAndDenyingEntry_WithItsMaskAndFlags_InOrder()
+    {
+        var read = WindowsSecurityDescriptor.Read(Build(Ana, Users, Acl(
+            Ace(Denied, 0, Everyone, WriteData),
+            Ace(Allowed, 0, Ana, FullControl),
+            Ace(AllowedCallback, 0, Sid(Users)),
+            Ace(Allowed, (byte)(Inherited | ObjectInherit), LocalSystem, GenericAll))));
+
+        Assert.IsNotNull(read);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                new AccessEntry(Everyone, Allows: false, WriteData, 0),
+                new AccessEntry(Ana, Allows: true, FullControl, 0),
+                new AccessEntry(LocalSystem, Allows: true, GenericAll, (byte)(Inherited | ObjectInherit)),
+            },
+            read.Entries.ToArray());
+        Assert.IsFalse(read.NullDacl);
+    }
+
+    [TestMethod]
+    public void Of_GrantsWhatAllowingEntriesGive_LessWhatDenyingOnesTake_InheritOnlyEntriesApart()
+    {
+        var access = WindowsAccess.Of(
+        [
+            new AccessEntry(Users, Allows: false, WriteData, 0),
+            new AccessEntry(Users, Allows: true, Read | WriteData, 0),
+            new AccessEntry(Ana, Allows: true, FullControl, 0),
+            new AccessEntry(Everyone, Allows: true, FullControl, InheritOnly | ObjectInherit),
+        ]);
+
+        Assert.HasCount(2, access);
+        Assert.AreEqual(Read, access[Users]);
+        Assert.AreEqual(FullControl, access[Ana]);
+    }
+
+    [TestMethod]
+    public void Of_ReadsGenericRightsAsAFiles()
+    {
+        var access = WindowsAccess.Of([new AccessEntry(Users, Allows: true, GenericRead, 0), new AccessEntry(Ana, Allows: true, GenericAll, 0)]);
+
+        Assert.AreEqual(Read, access[Users]);
+        Assert.AreEqual(FullControl, access[Ana]);
+    }
+
+    [TestMethod]
+    public void Of_ADescriptor_IsItsDaclsAccess_ANullDaclGrantsEveryoneEverything_AndNoDaclIsNotKnown()
+    {
+        var granted = WindowsAccess.Of(WindowsSecurityDescriptor.Read(Build(Ana, Users, Acl(Ace(Allowed, 0, Ana, FullControl))))!);
+        var open = WindowsAccess.Of(WindowsSecurityDescriptor.Read(Build(Ana, Users, dacl: null))!);
+        var unknown = WindowsAccess.Of(WindowsSecurityDescriptor.Read(Build(Ana, Users, dacl: null, daclPresent: false))!);
+
+        Assert.AreEqual(FullControl, Assert.ContainsSingle(granted!).Value);
+        Assert.AreEqual(Everyone, Assert.ContainsSingle(open!).Key);
+        Assert.AreEqual(FullControl, open![Everyone]);
+        Assert.IsNull(unknown);
+    }
+
+    [TestMethod]
+    public void InheritedByAFile_TakesTheFoldersObjectInheritingEntries_TheCreatorsApart()
+    {
+        var inherited = WindowsAccess.InheritedByAFile(
+        [
+            new AccessEntry(Users, Allows: true, ReadAndExecute, ObjectInherit | ContainerInherit),
+            new AccessEntry(Everyone, Allows: true, Read, ContainerInherit),
+            new AccessEntry(CreatorOwner, Allows: true, GenericAll, ObjectInherit | ContainerInherit | InheritOnly),
+            new AccessEntry(Administrators, Allows: true, FullControl, 0),
+            new AccessEntry(LocalSystem, Allows: true, GenericAll, ObjectInherit | InheritOnly),
+        ]);
+
+        Assert.HasCount(2, inherited);
+        Assert.AreEqual(ReadAndExecute, inherited[Users]);
+        Assert.AreEqual(FullControl, inherited[LocalSystem]);
+    }
+
+    [TestMethod]
+    public void Wider_NamesEachAccountGivenARightTheEntryDidNotHave_InOrder_SynchronisingApart()
+    {
+        var own = new Dictionary<string, uint> { [Ana] = FullControl, [LocalSystem] = FullControl, [Users] = Read };
+
+        CollectionAssert.AreEqual(
+            new[] { Users, Administrators },
+            WindowsAccess.Wider(own, new Dictionary<string, uint>
+            {
+                [Users] = ReadAndExecute,
+                [LocalSystem] = FullControl,
+                [Administrators] = FullControl,
+                [Everyone] = Synchronize,
+            }).ToArray());
+        Assert.IsEmpty(WindowsAccess.Wider(own, new Dictionary<string, uint> { [LocalSystem] = FullControl, [Users] = Read }));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "only Windows keeps a folder's DACL")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public void InheritedByAFileAt_IsNotKnownOffWindows() => Assert.IsNull(WindowsAccess.InheritedByAFileAt(_root));
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a folder's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void InheritedByAFileAt_OnWindows_ReadsTheNearestFolderThatStands()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(_root, "shared")).FullName;
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(LocalSystem), FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(Users), FileSystemRights.ReadAndExecute,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(Everyone), FileSystemRights.Read,
+            InheritanceFlags.ContainerInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(folder).SetAccessControl(security);
+
+        var inherited = WindowsAccess.InheritedByAFileAt(Path.Combine(folder, "not", "made", "yet"));
+
+        Assert.IsNotNull(inherited);
+        Assert.AreEqual(FullControl, inherited[LocalSystem]);
+        Assert.AreEqual(ReadAndExecute, inherited[Users]);
+        Assert.IsFalse(inherited.ContainsKey(Everyone));
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_root, recursive: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A test directory that will not delete is not a test failure.
+        }
+    }
+}

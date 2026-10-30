@@ -44,6 +44,12 @@ namespace FallbackPlan.Restore;
 /// the plan asks the target whether its account may give without
 /// SeRestorePrivilege (ADR-0176 Amendment 2), or null where it names none.
 /// </param>
+/// <param name="Access">
+/// The access its captured Windows security descriptor's DACL gives each
+/// account (<see cref="WindowsAccess"/>), which the plan holds against what
+/// its folder would give it where the descriptor is not written (ADR-0178),
+/// or null where it carries none that says.
+/// </param>
 /// <param name="RefusedAttributeNames">
 /// How many of its captured extended attributes are not kept as streams for
 /// their names (<see cref="MetadataRules.RefusedAttributeNames"/>), which the
@@ -64,7 +70,8 @@ public sealed record RestoreItemFacts(
     uint? FileAttributes = null,
     int RefusedStreams = 0,
     string? DescriptorOwner = null,
-    int RefusedAttributeNames = 0);
+    int RefusedAttributeNames = 0,
+    IReadOnlyDictionary<string, uint>? Access = null);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
@@ -219,6 +226,11 @@ public static class RestoreMetadata
     /// <param name="plan">The plan.</param>
     /// <param name="facts">What the plan probe read of each item's manifest.</param>
     /// <param name="target">The target.</param>
+    /// <param name="destinationOf">
+    /// The folder each item is restored into, where the caller knows it, so
+    /// a file whose descriptor is not written can be held against what that
+    /// folder gives (ADR-0178); null where it does not.
+    /// </param>
     /// <remarks>
     /// <para>
     /// Ownership is declared for two reasons, apart, because they have
@@ -276,7 +288,10 @@ public static class RestoreMetadata
     /// </para>
     /// </remarks>
     public static IReadOnlyList<MetadataDegradation> Declare(
-        RestorePlan plan, IReadOnlyDictionary<ObjectId, RestoreItemFacts> facts, RestoreTargetProfile target)
+        RestorePlan plan,
+        IReadOnlyDictionary<ObjectId, RestoreItemFacts> facts,
+        RestoreTargetProfile target,
+        Func<RestorePlanItem, string?>? destinationOf = null)
     {
         ThrowHelper.ThrowIfNull(plan);
         ThrowHelper.ThrowIfNull(facts);
@@ -292,6 +307,10 @@ public static class RestoreMetadata
         var linkPermissions = new Tally();
         var linkAttributes = new Tally();
         var strangers = new Tally();
+        var widened = new Tally();
+        var gainers = new List<string>();
+        var widenedIn = new List<string>();
+        var inheritedAt = new Dictionary<string, IReadOnlyDictionary<string, uint>?>(StringComparer.Ordinal);
         var refusedOwners = new Tally();
         var kernelAttributes = new Tally();
         var attributeNames = new Tally();
@@ -388,6 +407,22 @@ public static class RestoreMetadata
                     applied &= ~CapturedMetadata.SecurityDescriptor;
                     apart |= CapturedMetadata.SecurityDescriptor;
                     strangers.Add(item.Kind);
+
+                    // The file takes its folder's access instead of its own,
+                    // which architecture 06 §3 has the plan say where it is more.
+                    if (item.Kind == EntryKind.File
+                        && known.Access is { } own
+                        && destinationOf?.Invoke(item) is { } folder
+                        && Inherited(folder) is { } inherited
+                        && WindowsAccess.Wider(own, inherited) is { Count: > 0 } gaining)
+                    {
+                        widened.Add(item.Kind);
+                        gainers.AddRange(gaining.Where(account => !gainers.Contains(account, StringComparer.Ordinal)));
+                        if (!widenedIn.Contains(folder, StringComparer.Ordinal))
+                        {
+                            widenedIn.Add(folder);
+                        }
+                    }
                 }
                 else if (!target.HoldsRestorePrivilege
                     && known.DescriptorOwner is { } owner
@@ -447,6 +482,17 @@ public static class RestoreMetadata
         }
 
         var declared = new List<MetadataDegradation>();
+        // Each folder's access is read once, however many files land in it.
+        IReadOnlyDictionary<string, uint>? Inherited(string folder)
+        {
+            if (!inheritedAt.TryGetValue(folder, out var access))
+            {
+                inheritedAt[folder] = access = target.InheritedAccessAt(folder);
+            }
+
+            return access;
+        }
+
         void Add(string capability, Tally? count, string detail)
         {
             if (count is { Any: true })
@@ -478,6 +524,9 @@ public static class RestoreMetadata
         Add("security-descriptor-accounts", strangers, string.Create(CultureInfo.InvariantCulture,
             $"Security descriptors captured on {strangers} name accounts this machine does not know, so they will "
             + $"not be applied; they will take the permissions of the folder they land in."));
+        Add("wider-access", widened, string.Create(CultureInfo.InvariantCulture,
+            $"Security descriptors captured on {widened} will not be applied, and the folder they land in "
+            + $"({string.Join(", ", widenedIn)}) gives them access their own did not, to {string.Join(", ", gainers)}."));
         Add("security-descriptor-owners", refusedOwners, string.Create(CultureInfo.InvariantCulture,
             $"Security descriptors captured on {refusedOwners} name an owner the account running the restore may "
             + $"not give: giving it needs SeRestorePrivilege, which the account does not hold. Their access control "
@@ -608,6 +657,27 @@ public static class RestoreMetadata
     /// a person reads it: "2 file(s)", "1 symlink(s)", or those it covers
     /// joined, as in "2 file(s), 1 folder(s) and 1 symlink(s)".
     /// </summary>
+    /// <summary>
+    /// The folder each item of <paramref name="slices"/> is restored into,
+    /// its slice's own (ADR-0178), or null for an item none of them holds.
+    /// </summary>
+    /// <param name="slices">The restore's slices, each with its plan and where it writes.</param>
+    public static Func<RestorePlanItem, string?> DestinationsOf(IReadOnlyList<RestoreSlice> slices)
+    {
+        ThrowHelper.ThrowIfNull(slices);
+
+        var into = new Dictionary<ObjectId, string>();
+        foreach (var slice in slices)
+        {
+            foreach (var item in slice.Plan.Items)
+            {
+                into.TryAdd(item.ObjectId, slice.OutputDirectory);
+            }
+        }
+
+        return item => into.GetValueOrDefault(item.ObjectId);
+    }
+
     private sealed class Tally
     {
         private int _files;

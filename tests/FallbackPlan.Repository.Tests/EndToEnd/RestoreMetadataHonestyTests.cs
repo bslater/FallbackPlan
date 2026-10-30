@@ -402,6 +402,92 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Plan_AFileWhoseDescriptorIsNotWritten_AndWhoseFolderGivesMore_IsDeclared_NamingWhoGainsAccess()
+    {
+        const string Ana = "S-1-5-21-1-2-3-1001";
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        const string LocalSystem = "S-1-5-18";
+        const string Users = "S-1-5-32-545";
+        const string Administrators = "S-1-5-32-544";
+        const uint FullControl = 0x1F01FF;
+        const uint ReadAndExecute = 0x1200A9;
+        var source = new FakeFileSystemSource();
+        void Add(string name, byte seed, params byte[][] aces) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata = new EntryMetadata
+            {
+                ModifiedAt = Modified,
+                WindowsSecurityDescriptor = SecurityDescriptors.Build(Stranger, null, SecurityDescriptors.Acl(aces), SecurityDescriptors.Protected),
+            };
+        var strangers = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Stranger, FullControl);
+        var system = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, LocalSystem, FullControl);
+        Add("private.bin", 60, strangers, system);
+        Add("shared.bin", 61, strangers, system,
+            SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Users, ReadAndExecute),
+            SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Administrators, FullControl));
+        source.AddFile("docs/known.bin", Deterministic(700, 62)).Metadata = new EntryMetadata
+        {
+            ModifiedAt = Modified,
+            WindowsSecurityDescriptor = SecurityDescriptors.Build(
+                Ana, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Ana, FullControl))),
+        };
+
+        // A folder the restore makes takes what passes to folders, not to
+        // files, so its own is not judged.
+        source.Folders["docs"] = new EntryMetadata
+        {
+            ModifiedAt = Modified,
+            WindowsSecurityDescriptor = SecurityDescriptors.Build(Stranger, null, SecurityDescriptors.Acl(strangers, system), SecurityDescriptors.Protected),
+        };
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xDD);
+        var here = Path.Combine(SpoolDirectory, "restored-here");
+        var keeps = Posix with
+        {
+            SupportsSecurityDescriptors = true,
+            KnowsAccount = account => account != Stranger,
+            InheritedAccessAt = folder => folder == here
+                ? new Dictionary<string, uint> { [LocalSystem] = FullControl, [Users] = ReadAndExecute, [Administrators] = FullControl }
+                : null,
+        };
+        var declared = RestoreMetadata.Declare(plan, facts, keeps, _ => here);
+
+        var wider = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "wider-access"));
+        Assert.Contains("1 file(s)", wider.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("folder(s)", wider.Detail, StringComparison.Ordinal);
+        Assert.Contains(Users, wider.Detail, StringComparison.Ordinal);
+        Assert.Contains(Administrators, wider.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(LocalSystem, wider.Detail, StringComparison.Ordinal);
+        Assert.Contains(here, wider.Detail, StringComparison.Ordinal);
+
+        // Where the plan is not told where its files land, or the folder's
+        // access does not read, nothing is said of it.
+        Assert.DoesNotContain(degradation => degradation.Capability == "wider-access", RestoreMetadata.Declare(plan, facts, keeps));
+        Assert.DoesNotContain(degradation => degradation.Capability == "wider-access", RestoreMetadata.Declare(plan, facts, keeps, _ => SpoolDirectory));
+    }
+
+    [TestMethod]
+    public async Task DestinationsOf_SaysWhichFolderEachSlicesItemsAreRestoredInto()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("one/a.bin", Deterministic(700, 70));
+        source.AddFile("two/b.bin", Deterministic(700, 71));
+        var (plan, _) = await PublishAndProbeAsync(source, 0xDE);
+        var a = plan.Items.Single(item => item.Path.EndsWith("a.bin", StringComparison.Ordinal));
+        var b = plan.Items.Single(item => item.Path.EndsWith("b.bin", StringComparison.Ordinal));
+        var first = Path.Combine(SpoolDirectory, "first");
+        var second = Path.Combine(SpoolDirectory, "second");
+
+        var destinationOf = RestoreMetadata.DestinationsOf(
+        [
+            new RestoreSlice(plan with { Items = [a] }, first),
+            new RestoreSlice(plan with { Items = [b] }, second),
+        ]);
+
+        Assert.AreEqual(first, destinationOf(a));
+        Assert.AreEqual(second, destinationOf(b));
+    }
+
+    [TestMethod]
     public async Task Plan_ASecurityDescriptorWhoseOwnerTheAccountMayNotGive_IsDeclaredOnItsOwnLine_WhereItHoldsNoRestorePrivilege()
     {
         const string Ana = "S-1-5-21-1-2-3-1001";

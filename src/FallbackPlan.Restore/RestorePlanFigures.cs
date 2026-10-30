@@ -41,13 +41,15 @@ public static class RestorePlanFigures
     /// <param name="plan">The plan.</param>
     /// <param name="probed">What the probe read of the plan's manifests.</param>
     /// <param name="target">The target the run would write to.</param>
-    public static List<string> Degradations(RestorePlan plan, RestoreBlobSetResult probed, RestoreTargetProfile target)
+    /// <param name="destinationOf">The folder each item is restored into, where the caller knows it (ADR-0178).</param>
+    public static List<string> Degradations(
+        RestorePlan plan, RestoreBlobSetResult probed, RestoreTargetProfile target, Func<RestorePlanItem, string?>? destinationOf = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(probed);
         return
         [
-            .. plan.Degradations.Concat(RestoreMetadata.Declare(plan, probed.Facts, target))
+            .. plan.Degradations.Concat(RestoreMetadata.Declare(plan, probed.Facts, target, destinationOf))
                 .Select(degradation => degradation.Detail),
         ];
     }

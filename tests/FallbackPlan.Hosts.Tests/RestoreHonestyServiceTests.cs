@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text.Json;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
@@ -341,6 +342,37 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         // plan answers as it always did, plus what its files will write.
         Assert.IsNull(plan.Space);
         Assert.AreEqual(plan.Bytes, plan.WriteBytes);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Plan_OnWindows_NamesAFileItsFolderWouldOpenWider_WhereItsDescriptorNamesAnAccountTheMachineDoesNotKnow()
+    {
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        const string Users = "S-1-5-32-545";
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("private.txt", "kept to two accounts");
+        WindowsAcls.KeepTo(Path.Combine(_harness.SourceRoot, "private.txt"), Stranger);
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        var destination = WindowsAcls.Sharing(Path.Combine(_harness.WorkPath, "shared"), Users);
+        await using var runtime = await StartAsync(availableBytes: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            await handler.ExecuteAsync(
+                new PlanRestoreCommand(
+                    snapshotId, null, OutputDirectory: destination,
+                    Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId),
+                _timeout.Token),
+            out var plan);
+
+        var wider = Assert.ContainsSingle((plan.Degradations ?? []).Where(line => line.Contains("access their own did not", StringComparison.Ordinal)));
+        Assert.Contains("1 file(s)", wider, StringComparison.Ordinal);
+        Assert.Contains(Users, wider, StringComparison.Ordinal);
     }
 
     [TestMethod]

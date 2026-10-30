@@ -22,6 +22,15 @@ public static class SecurityDescriptors
     /// <summary>An ACE that allows on an object type.</summary>
     public const byte AllowedObject = 0x05;
 
+    /// <summary>The flag of an ACE a file made in its folder takes.</summary>
+    public const byte ObjectInherit = 0x01;
+
+    /// <summary>The flag of an ACE a folder made in its folder takes.</summary>
+    public const byte ContainerInherit = 0x02;
+
+    /// <summary>The flag of an ACE that governs only what is made in its folder.</summary>
+    public const byte InheritOnly = 0x08;
+
     /// <summary>The flag an ACE carries when its folder gave it.</summary>
     public const byte Inherited = 0x10;
 
@@ -85,6 +94,9 @@ public static class SecurityDescriptors
 
     /// <summary>An ACE of <paramref name="type"/> naming the SID <paramref name="sid"/> names.</summary>
     public static byte[] Ace(byte type, byte flags, string sid) => Ace(type, flags, Sid(sid));
+
+    /// <summary>An ACE of <paramref name="type"/> giving <paramref name="sid"/> <paramref name="mask"/>.</summary>
+    public static byte[] Ace(byte type, byte flags, string sid, uint mask) => Ace(type, flags, Sid(sid), mask: mask);
 
     /// <summary>An ACL holding <paramref name="aces"/>, in order.</summary>
     public static byte[] Acl(params byte[][] aces)

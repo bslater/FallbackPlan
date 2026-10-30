@@ -22,6 +22,8 @@ public sealed record WindowsSecurityDescriptor
     private const ushort DaclPresentBit = 0x0004;
     private const ushort DaclProtectedBit = 0x1000;
     private const ushort SelfRelativeBit = 0x8000;
+    private const byte AccessAllowed = 0x00;
+    private const byte AccessDenied = 0x01;
 
     /// <summary>The owner's SID, as <c>S-1-5-21-…</c>, or null where none was captured.</summary>
     public string? Owner { get; init; }
@@ -45,6 +47,19 @@ public sealed record WindowsSecurityDescriptor
     public IReadOnlyList<string> Accounts { get; init; } = [];
 
     /// <summary>
+    /// Whether the DACL is carried with no ACL at all, which grants everyone
+    /// everything.
+    /// </summary>
+    public bool NullDacl { get; init; }
+
+    /// <summary>
+    /// The DACL's entries that allow or deny one account, in the DACL's order,
+    /// with their masks and flags as captured (ADR-0178). An entry that
+    /// allows only on an object type or where a condition holds is not one.
+    /// </summary>
+    public IReadOnlyList<AccessEntry> Entries { get; init; } = [];
+
+    /// <summary>
     /// What <paramref name="selfRelative"/> names, or null where it does not
     /// read as a self-relative descriptor.
     /// </summary>
@@ -63,6 +78,7 @@ public sealed record WindowsSecurityDescriptor
         }
 
         var accounts = new List<string>();
+        var entries = new List<AccessEntry>();
         if (!TrySidAt(selfRelative, BinaryPrimitives.ReadUInt32LittleEndian(selfRelative[4..]), out var owner)
             || !TrySidAt(selfRelative, BinaryPrimitives.ReadUInt32LittleEndian(selfRelative[8..]), out var group))
         {
@@ -73,7 +89,7 @@ public sealed record WindowsSecurityDescriptor
         Add(group);
         var present = (control & DaclPresentBit) != 0;
         var daclOffset = BinaryPrimitives.ReadUInt32LittleEndian(selfRelative[16..]);
-        if (present && daclOffset != 0 && !TryDaclAt(selfRelative, daclOffset, accounts))
+        if (present && daclOffset != 0 && !TryDaclAt(selfRelative, daclOffset, accounts, entries))
         {
             return null;
         }
@@ -85,6 +101,8 @@ public sealed record WindowsSecurityDescriptor
             DaclPresent = present,
             DaclProtected = (control & DaclProtectedBit) != 0,
             Accounts = accounts,
+            NullDacl = present && daclOffset == 0,
+            Entries = entries,
         };
 
         void Add(string? account)
@@ -104,8 +122,12 @@ public sealed record WindowsSecurityDescriptor
             || (offset >= HeaderLength && offset < descriptor.Length && TrySid(descriptor[(int)offset..], out sid));
     }
 
-    /// <summary>Each account the ACL at <paramref name="offset"/> names, added to <paramref name="accounts"/> once.</summary>
-    private static bool TryDaclAt(ReadOnlySpan<byte> descriptor, uint offset, List<string> accounts)
+    /// <summary>
+    /// Each account the ACL at <paramref name="offset"/> names, added to
+    /// <paramref name="accounts"/> once, and each of its entries that allows or
+    /// denies one account, added to <paramref name="entries"/>.
+    /// </summary>
+    private static bool TryDaclAt(ReadOnlySpan<byte> descriptor, uint offset, List<string> accounts, List<AccessEntry> entries)
     {
         if (offset < HeaderLength || offset > descriptor.Length - 8)
         {
@@ -141,6 +163,12 @@ public sealed record WindowsSecurityDescriptor
             if (!accounts.Contains(sid!, StringComparer.Ordinal))
             {
                 accounts.Add(sid!);
+            }
+
+            if (acl[at] is AccessAllowed or AccessDenied)
+            {
+                entries.Add(new AccessEntry(
+                    sid!, acl[at] == AccessAllowed, BinaryPrimitives.ReadUInt32LittleEndian(acl[(at + 4)..]), acl[at + 1]));
             }
 
             at += aceSize;
