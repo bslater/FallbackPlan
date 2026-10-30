@@ -37,7 +37,16 @@ public enum DeleteOutcome
 }
 
 /// <summary>The result of <see cref="IObjectStore.DeleteAsync"/>.</summary>
-public sealed record DeleteResult(DeleteOutcome Outcome);
+/// <param name="Outcome">What became of the delete.</param>
+/// <param name="RetainedBytes">
+/// How many bytes the store kept although it answered the delete, or null
+/// where it kept none or does not say. A bucket that keeps versions, as one
+/// under object lock does, hides a deleted object behind a delete marker and
+/// keeps its bytes as an earlier version (ADR-0171 Amendment 2). Nothing lists
+/// or reads the object after, so it is deleted as far as a repository can
+/// tell; its space is not released.
+/// </param>
+public sealed record DeleteResult(DeleteOutcome Outcome, long? RetainedBytes = null);
 
 /// <summary>Metadata for one stored object.</summary>
 /// <param name="Length">Its length in bytes.</param>

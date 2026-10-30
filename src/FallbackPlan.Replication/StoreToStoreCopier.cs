@@ -75,8 +75,22 @@ public enum CopyScope
 /// once it had refused (ADR-0171 Amendment 1): the space its policy released
 /// that is not reclaimed. What they reach is held too and is not in it.
 /// </param>
+/// <param name="Retained">
+/// How many of <paramref name="Deleted"/> the destination answered and kept
+/// all the same, as a bucket that keeps versions does (ADR-0171 Amendment 2).
+/// They no longer list or read, so they are deleted as far as the replica
+/// goes, and nothing beneath them is held back for them.
+/// </param>
+/// <param name="RetainedBytes">How many bytes the destination said it kept of <paramref name="Retained"/>.</param>
 public sealed record ConvergeOutcome(
-    long Copied, long AlreadyHeld, long Deleted, long Spared = 0, long Refused = 0, long RefusedBytes = 0);
+    long Copied,
+    long AlreadyHeld,
+    long Deleted,
+    long Spared = 0,
+    long Refused = 0,
+    long RefusedBytes = 0,
+    long Retained = 0,
+    long RetainedBytes = 0);
 
 /// <summary>
 /// Copies one repository archive's missing objects from any object store to
@@ -403,6 +417,8 @@ public static class StoreToStoreCopier
         var spared = 0L;
         var refused = 0L;
         var refusedBytes = 0L;
+        var retained = 0L;
+        var retainedBytes = 0L;
         foreach (var phase in PhasePrefixes.Reverse())
         {
             if (Skip(phase, scope))
@@ -462,6 +478,11 @@ public static class StoreToStoreCopier
                 if (outcome.Outcome == DeleteOutcome.Deleted)
                 {
                     deleted++;
+                    if (outcome.RetainedBytes is { } kept)
+                    {
+                        retained++;
+                        retainedBytes += kept;
+                    }
                 }
                 else
                 {
@@ -482,7 +503,7 @@ public static class StoreToStoreCopier
 
         Log.ReplicationComplete(log, new LogLabel(name), new LogLabel("converge"), copied, alreadyHeld, deleted);
 
-        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared, refused, refusedBytes);
+        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared, refused, refusedBytes, retained, retainedBytes);
     }
 
     /// <summary>

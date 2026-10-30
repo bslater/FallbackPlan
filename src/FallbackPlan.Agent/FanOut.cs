@@ -1435,6 +1435,7 @@ public static class FanOut
                     copied = converged.Copied;
                     alreadyHeld = converged.AlreadyHeld;
                     ReportRefusedDeletes(runtime, set, destination.Name, converged.Refused, converged.RefusedBytes, nowMs);
+                    ReportRetainedDeletes(runtime, set, destination.Name, converged, nowMs);
                 }
                 else
                 {
@@ -1800,6 +1801,38 @@ public static class FanOut
             + "restores, and what they reach is held on top of that figure. A store under a write-once or "
             + "object-lock policy, or a credential without the right to delete, answers this way; each sync "
             + "tries again.",
+            nowMs);
+    }
+
+    /// <summary>
+    /// Says that a destination keeps what its retention deletes, as earlier
+    /// versions of the objects (ADR-0171 Amendment 2), and stops saying so after
+    /// a pass whose deletes it kept none of. A pass that deleted nothing says
+    /// nothing either way.
+    /// </summary>
+    private static void ReportRetainedDeletes(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, ConvergeOutcome converged,
+        ulong nowMs)
+    {
+        var key = $"destination-deletes-retained:{set.Id}:{destinationName}";
+        if (converged.Retained == 0)
+        {
+            if (converged.Deleted > 0)
+            {
+                runtime.Notices.Resolve(key, nowMs);
+            }
+
+            return;
+        }
+
+        runtime.Notices.Raise(
+            key,
+            $"destination '{destinationName}' of set '{set.Name}' kept {converged.Retained} object(s) its retention "
+            + $"deleted, {converged.RetainedBytes.ToString("N0", CultureInfo.InvariantCulture)} byte(s), as earlier "
+            + "versions. The store keeps versions, so a delete hides an object rather than removing it. Every "
+            + "snapshot it lists still restores and nothing hidden is read again, but the space comes back only by "
+            + "the store's own rule for earlier versions, such as a lifecycle rule that expires them. A bucket under "
+            + "object lock keeps versions this way.",
             nowMs);
     }
 
