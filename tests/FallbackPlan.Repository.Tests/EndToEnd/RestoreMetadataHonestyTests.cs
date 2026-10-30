@@ -420,6 +420,27 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         Assert.DoesNotContain(degradation => degradation.Capability == "unset-file-attributes", none);
     }
 
+    [TestMethod]
+    public async Task Plan_AStreamWhoseNameNoStreamMayHave_IsDeclaredOnItsOwnLine_WhereTheTargetWritesStreams()
+    {
+        var source = new FakeFileSystemSource();
+        void Add(string name, string stream, byte seed) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).AlternateStreams[stream] = "[ZoneTransfer]"u8.ToArray();
+        Add("downloaded.bin", "Zone.Identifier", 50);
+        Add("escaping.bin", @"..\..\escape", 51);
+        Add("itself.bin", "..", 52);
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xD8);
+        var declared = RestoreMetadata.Declare(plan, facts, Posix with { SupportsAlternateStreams = true });
+
+        var refused = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "alternate-stream-names"));
+        Assert.Contains("2 file(s)", refused.Detail, StringComparison.Ordinal);
+
+        // Where the target writes no streams, the planner's own line speaks
+        // for every stream, and no name is judged.
+        Assert.DoesNotContain(degradation => degradation.Capability == "alternate-stream-names", RestoreMetadata.Declare(plan, facts, Posix));
+    }
+
     private static FakeFileSystemSource EmptyDescriptor()
     {
         var source = new FakeFileSystemSource();
