@@ -767,43 +767,27 @@ public sealed class RecoverySession : IDisposable
                 return false;
             }
 
-            var all = true;
-            foreach (var stream in manifest.Metadata.AlternateStreams)
+            var left = await AlternateStreams.WriteBackAsync(
+                destination, manifest.Metadata.AlternateStreams, ReadStreamAsync, streamCalls, cancellationToken).ConfigureAwait(false);
+            foreach (var why in left)
             {
-                if (await WriteStreamAsync(stream, destination).ConfigureAwait(false) is { } why)
-                {
-                    all = false;
-                    notes.Add(new RecoveryNote(RecoveryNoteKind.StreamNotWritten, path, Reason: why));
-                }
+                notes.Add(new RecoveryNote(RecoveryNoteKind.StreamNotWritten, path, Reason: why));
             }
 
-            return all;
+            return left.Count == 0;
         }
 
-        // Null where the stream landed; otherwise why it did not. A stream's
-        // name is judged before it is joined to the file's path, since a name
-        // that is not a stream's can name another file.
-        async ValueTask<string?> WriteStreamAsync(AlternateStreamEntry stream, string destination)
+        // A stream's content, from a record the blob reader authenticates and
+        // checks against its content identifier, or why it will not read.
+        async ValueTask<(byte[]? Content, string? Unread)> ReadStreamAsync(ObjectId objectId, CancellationToken token)
         {
-            if (!AlternateStreams.TryName(stream.Name.Span, out var name, out var refused))
+            if (!_records.TryGetValue(objectId, out var located))
             {
-                return $"'{Encoding.UTF8.GetString(stream.Name.Span)}' was not written back: {refused}";
+                return (null, "its record is in no readable blob");
             }
 
-            if (!_records.TryGetValue(stream.ObjectId, out var located))
-            {
-                return $"'{name}' was not written back: its record is in no readable blob";
-            }
-
-            var read = await located.Reader.ReadRecordAsync(located.Entry, cancellationToken).ConfigureAwait(false);
-            if (read.Outcome != RecordReadOutcome.Ok)
-            {
-                return $"'{name}' was not written back: its record read {read.Outcome}";
-            }
-
-            return streamCalls!.Write(destination, name, read.Plaintext!) is { } why
-                ? $"'{name}' was not written back: {why}"
-                : null;
+            var read = await located.Reader.ReadRecordAsync(located.Entry, token).ConfigureAwait(false);
+            return read.Outcome == RecordReadOutcome.Ok ? (read.Plaintext, null) : (null, $"its record read {read.Outcome}");
         }
 
         // What the landed file got of its captured metadata, or null where

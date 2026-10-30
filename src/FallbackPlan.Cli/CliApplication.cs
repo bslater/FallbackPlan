@@ -1000,7 +1000,9 @@ public static class CliApplication
 
                 output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                     $"restored {result.Length} bytes to {outputPath} (whole-file hash verified)"));
-                WriteBackMetadata(outputPath, manifest.Metadata, capturedHere);
+                var streamsWritten = await WriteBackStreamsAsync(reader, outputPath, manifest.Metadata, cancellationToken)
+                    .ConfigureAwait(false);
+                WriteBackMetadata(outputPath, manifest.Metadata, capturedHere, streamsWritten);
                 return 0;
             }));
 
@@ -1008,14 +1010,47 @@ public static class CliApplication
             // executor holds every item to (architecture 08 §3; ADR-0149),
             // and what did not land said in the receipt's words. The output
             // is a file whatever the manifest's kind.
-            void WriteBackMetadata(string outputPath, EntryMetadata metadata, bool capturedHere)
+            void WriteBackMetadata(string outputPath, EntryMetadata metadata, bool capturedHere, bool streamsWritten)
             {
                 var written = new MetadataWriter(MetadataTarget.ForLocalPlatform() with { CapturedHere = capturedHere })
                     .Write(outputPath, metadata, EntryKind.File);
-                if (MetadataRules.NotApplied(MetadataRules.Captured(metadata), written.Applied) is { } left)
+                var applied = written.Applied | (streamsWritten ? CapturedMetadata.AlternateStreams : CapturedMetadata.None);
+                if (MetadataRules.NotApplied(MetadataRules.Captured(metadata), applied) is { } left)
                 {
                     output.WriteLine($"not applied: {string.Join(", ", left)}" + (written.Detail is { } detail ? $" ({detail})" : string.Empty));
                 }
+            }
+
+            // A file's alternate streams, by the rule the recovery tool writes
+            // them by, and before the times, which writing one moves
+            // (ADR-0174 Amendment 2). Where the platform keeps none, none is
+            // asked for, and they are listed not applied.
+            async ValueTask<bool> WriteBackStreamsAsync(
+                RepositoryReader reader, string outputPath, EntryMetadata metadata, CancellationToken cancellationToken)
+            {
+                if (!AlternateStreams.CanWrite || metadata.AlternateStreams.Count == 0)
+                {
+                    return false;
+                }
+
+                var left = await AlternateStreams.WriteBackAsync(
+                    outputPath,
+                    metadata.AlternateStreams,
+                    async (objectId, token) =>
+                    {
+                        var read = await reader.ReadSegmentAsync(objectId, token).ConfigureAwait(false);
+                        return read.Outcome == RecordReadOutcome.Ok
+                            ? (read.Plaintext, null)
+                            : ((byte[]?)null, $"its record read {read.Outcome}");
+                    },
+                    AlternateStreams.OfThisPlatform,
+                    cancellationToken).ConfigureAwait(false);
+                foreach (var why in left)
+                {
+                    output.WriteLine($"alternate stream {why}");
+                }
+
+                return left.Count == 0;
             }
 
             async ValueTask<(ObjectId File, bool CapturedHere)> LocateSnapshotFileAsync(

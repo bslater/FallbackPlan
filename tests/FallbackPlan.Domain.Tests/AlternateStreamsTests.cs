@@ -1,4 +1,5 @@
 using System.Text;
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Domain.Tests;
@@ -119,6 +120,80 @@ public sealed class AlternateStreamsTests : IDisposable
         Assert.IsNull(AlternateStreams.OfThisPlatform.Read(file, "Zone.Identifier", 14));
     }
 
+    [TestMethod]
+    public async Task WriteBackAsync_WritesEachStreamOntoTheFile_AsItReads_AndLeavesNothingToSay()
+    {
+        var calls = new Held();
+        var read = new List<ObjectId>();
+
+        var left = await AlternateStreams.WriteBackAsync(
+            "carrier.bin", [Stream("Zone.Identifier", 1), Stream("notes", 2)], Reads(read), calls, CancellationToken.None);
+
+        Assert.IsEmpty(left);
+        CollectionAssert.AreEqual(new[] { IdOf(1), IdOf(2) }, read);
+        SequenceAssert.AreEqual(ContentOf(1), calls.Streams[("carrier.bin", "Zone.Identifier")]);
+        SequenceAssert.AreEqual(ContentOf(2), calls.Streams[("carrier.bin", "notes")]);
+    }
+
+    [TestMethod]
+    [DataRow(@"..\..\escape")]
+    [DataRow("..")]
+    [DataRow("other:$DATA")]
+    public async Task WriteBackAsync_AStreamWhoseNameNoStreamCanHave_IsNeitherReadNorWritten_AndIsNamed(string name)
+    {
+        var calls = new Held();
+        var read = new List<ObjectId>();
+
+        var left = await AlternateStreams.WriteBackAsync(
+            "carrier.bin", [Stream(name, 1), Stream("notes", 2)], Reads(read), calls, CancellationToken.None);
+
+        Assert.Contains(name, Assert.ContainsSingle(left), StringComparison.Ordinal);
+        CollectionAssert.AreEqual(new[] { IdOf(2) }, read);
+        Assert.AreEqual(("carrier.bin", "notes"), Assert.ContainsSingle(calls.Streams.Keys));
+    }
+
+    [TestMethod]
+    public async Task WriteBackAsync_AStreamWhoseContentWillNotRead_IsNotWritten_AndSaysWhy()
+    {
+        var calls = new Held();
+
+        var left = await AlternateStreams.WriteBackAsync(
+            "carrier.bin",
+            [Stream("Zone.Identifier", 1), Stream("notes", 2)],
+            (objectId, _) => ValueTask.FromResult<(byte[]?, string?)>(
+                objectId == IdOf(1) ? (null, "its record read AuthenticationFailed") : (ContentOf(2), null)),
+            calls,
+            CancellationToken.None);
+
+        var why = Assert.ContainsSingle(left);
+        Assert.Contains("Zone.Identifier", why, StringComparison.Ordinal);
+        Assert.Contains("its record read AuthenticationFailed", why, StringComparison.Ordinal);
+        Assert.AreEqual(("carrier.bin", "notes"), Assert.ContainsSingle(calls.Streams.Keys));
+    }
+
+    [TestMethod]
+    public async Task WriteBackAsync_AStreamTheCallsRefuse_SaysWhy()
+    {
+        var left = await AlternateStreams.WriteBackAsync(
+            "carrier.bin", [Stream("Zone.Identifier", 1)], Reads([]), new Held { Refusal = "the volume keeps no streams" },
+            CancellationToken.None);
+
+        var why = Assert.ContainsSingle(left);
+        Assert.Contains("Zone.Identifier", why, StringComparison.Ordinal);
+        Assert.Contains("the volume keeps no streams", why, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task WriteBackAsync_NoStreams_ReadsAndWritesNothing()
+    {
+        var calls = new Held();
+        var read = new List<ObjectId>();
+
+        Assert.IsEmpty(await AlternateStreams.WriteBackAsync("carrier.bin", [], Reads(read), calls, CancellationToken.None));
+        Assert.IsEmpty(read);
+        Assert.IsEmpty(calls.Streams);
+    }
+
     public void Dispose()
     {
         try
@@ -128,6 +203,42 @@ public sealed class AlternateStreamsTests : IDisposable
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // A test directory that will not delete is not a test failure.
+        }
+    }
+
+    private static ObjectId IdOf(byte seed) => ObjectId.FromBytes(Enumerable.Repeat(seed, 32).ToArray());
+
+    private static byte[] ContentOf(byte seed) => Enumerable.Repeat((byte)(seed + 0x40), 17).ToArray();
+
+    private static AlternateStreamEntry Stream(string name, byte seed) =>
+        new(Encoding.UTF8.GetBytes(name), IdOf(seed), (ulong)ContentOf(seed).Length);
+
+    /// <summary>Reads each stream's content as <see cref="ContentOf"/> gives it, noting what was asked for.</summary>
+    private static Func<ObjectId, CancellationToken, ValueTask<(byte[]? Content, string? Unread)>> Reads(List<ObjectId> asked) =>
+        (objectId, _) =>
+        {
+            asked.Add(objectId);
+            return ValueTask.FromResult<(byte[]?, string?)>((ContentOf(objectId.ToArray()[0]), null));
+        };
+
+    /// <summary>Calls that hold each stream in memory, or refuse every write.</summary>
+    private sealed class Held : IAlternateStreams
+    {
+        public Dictionary<(string File, string Name), byte[]> Streams { get; } = [];
+
+        public string? Refusal { get; init; }
+
+        public byte[]? Read(string file, string name, ulong length) => null;
+
+        public string? Write(string file, string name, ReadOnlySpan<byte> content)
+        {
+            if (Refusal is { } refusal)
+            {
+                return refusal;
+            }
+
+            Streams[(file, name)] = content.ToArray();
+            return null;
         }
     }
 }
