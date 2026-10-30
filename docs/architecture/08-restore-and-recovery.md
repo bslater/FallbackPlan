@@ -128,6 +128,8 @@ The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a f
 
 > **2026-10 ([ADR-0152 Amendment 1](../adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md#amendment-1-2026-10--the-executors-spool-is-made-new-too)).** The executor removes whatever stands at a file's spool name and makes the spool new, as the recovery tool does. It had opened the name, so a link a repository restored there carried the file's content wherever it led, out of the restore. A folder there now fails that file alone rather than ending the run.
 
+> **2026-10 ([ADR-0152 Amendment 2](../adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md#amendment-2-2026-10--a-displaced-file-is-placed-under-the-outputs-root)).** A file moved aside is placed under the output's root, by the same rule, rather than under the displaced folder taken as a root of its own. A link a repository restored at `.fbp-displaced`, leading out, had carried the person's own files out of the output.
+
 ### 3.1 Quarantine by default
 
 Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006
