@@ -403,7 +403,7 @@ public static class RestoreMetadata
 
             if ((applied & known.Captured & CapturedMetadata.FileAttributes) != 0
                 && known.FileAttributes is { } bits
-                && MetadataRules.UnsetFileAttributes(bits).Count > 0)
+                && MetadataRules.UnsetFileAttributes(bits, target.SupportsCompression).Count > 0)
             {
                 applied &= ~CapturedMetadata.FileAttributes;
                 apart |= CapturedMetadata.FileAttributes;
@@ -521,8 +521,9 @@ public static class RestoreMetadata
             + $"not be written, and the file will be restored degraded."));
         Add("unset-file-attributes", unsetBits, string.Create(CultureInfo.InvariantCulture,
             $"File attributes captured on {unsetBits} include bits no restore sets: "
-            + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask))}. Those will not be applied; "
-            + $"the read-only, hidden, system, archive and not-content-indexed bits will."));
+            + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask, target.SupportsCompression))}. Those will not be "
+            + $"applied; the read-only, hidden, system, archive and not-content-indexed bits will"
+            + $"{(target.SupportsCompression ? ", and so will compression" : string.Empty)}."));
 
         return declared;
     }

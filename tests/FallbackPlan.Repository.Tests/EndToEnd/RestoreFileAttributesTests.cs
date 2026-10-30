@@ -15,7 +15,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// where the target keeps them (FR-RST-004; ADR-0175): read-only, hidden,
 /// system, archive and not-content-indexed, after every other write, and the
 /// plan and the receipt no longer list them there. A read-only file a later
-/// restore replaces is replaced.
+/// restore replaces is replaced. A file and a folder captured compressed come
+/// back compressed where the target keeps compression, and one captured
+/// uncompressed comes back uncompressed (ADR-0175 Amendment 2).
 /// </summary>
 [TestClass]
 public sealed class RestoreFileAttributesTests : ArchiveTestHarness
@@ -36,6 +38,43 @@ public sealed class RestoreFileAttributesTests : ArchiveTestHarness
             Assert.IsTrue(RestoreMetadata.Applied(kind, target with { SupportsFileAttributes = true }).HasFlag(CapturedMetadata.FileAttributes));
             Assert.IsFalse(RestoreMetadata.Applied(kind, target with { SupportsFileAttributes = false }).HasFlag(CapturedMetadata.FileAttributes));
         }
+    }
+
+    [TestMethod]
+    public void Profile_ForThisPlatform_KeepsCompressionOnlyOnWindows_AndPassesItToTheWriter()
+    {
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        Assert.AreEqual(OperatingSystem.IsWindows(), target.SupportsCompression);
+        Assert.IsTrue((target with { SupportsCompression = true }).Metadata.SupportsCompression);
+        Assert.IsFalse((target with { SupportsCompression = false }).Metadata.SupportsCompression);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's compression")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task OnWindows_AFileAndAFolderCapturedCompressed_ComeBackCompressed_AndOneCapturedUncompressedDoesNot()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(_sourceRoot, "packed")).FullName;
+        Assert.IsNull(FileCompression.OfThisPlatform.Apply(folder, compressed: true));
+        File.WriteAllText(Path.Combine(folder, "inside.bin"), new string('a', 64 * 1024));
+        File.WriteAllText(Path.Combine(_sourceRoot, "loose.bin"), new string('b', 64 * 1024));
+
+        var (store, keys, catalogue) = await PublishAsync(0xD2);
+        using var _ = keys;
+        using var db = catalogue;
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(db, Enumerable.Repeat((byte)0xD2, 16).ToArray(), string.Empty, target);
+        Assert.DoesNotContain(degradation => degradation.Capability is "file-attributes" or "unset-file-attributes", plan.Degradations);
+
+        var output = Path.Combine(SpoolDirectory, "compressed-out");
+        var receipt = await RestoreAsync(store, keys, plan, target, output, ExistingDestinationPolicy.Preserve);
+
+        Assert.IsTrue(File.GetAttributes(Path.Combine(output, "packed")).HasFlag(FileAttributes.Compressed));
+        Assert.IsTrue(File.GetAttributes(Path.Combine(output, "packed", "inside.bin")).HasFlag(FileAttributes.Compressed));
+        Assert.IsFalse(File.GetAttributes(Path.Combine(output, "loose.bin")).HasFlag(FileAttributes.Compressed));
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.IsTrue(receipt.Items.All(item => !(item.NotApplied?.Contains("file_attributes") ?? false)));
     }
 
     [TestMethod]

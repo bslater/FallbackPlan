@@ -68,6 +68,13 @@ public static class MetadataRules
     public const uint WrittenFileAttributes = 0x1 | 0x2 | 0x4 | 0x20 | 0x2000;
 
     /// <summary>
+    /// The compressed bit, which a target that keeps compression gives an
+    /// entry by a call of its own rather than with the bits it writes
+    /// (ADR-0175 Amendment 2).
+    /// </summary>
+    public const uint CompressedFileAttribute = 0x800;
+
+    /// <summary>
     /// The bits that say what an entry is rather than how it is kept: a
     /// directory, a file with nothing else set, a sparse file and a reparse
     /// point. A restore gives an entry these by what it makes, or not at all.
@@ -76,15 +83,17 @@ public static class MetadataRules
 
     /// <summary>
     /// Each bit of <paramref name="captured"/> a restore neither writes back
-    /// nor gives an entry by making it, as compressed and encrypted, named in
-    /// the code's words, in the bits' order. Any such bit leaves the
-    /// attributes not applied.
+    /// nor gives an entry by making it, as encrypted, and compressed where the
+    /// target keeps no compression, named in the code's words, in the bits'
+    /// order. Any such bit leaves the attributes not applied.
     /// </summary>
     /// <param name="captured">An entry's captured attribute bits.</param>
-    public static IReadOnlyList<string> UnsetFileAttributes(uint captured)
+    /// <param name="compresses">Whether the target gives an entry its compression (ADR-0175 Amendment 2).</param>
+    public static IReadOnlyList<string> UnsetFileAttributes(uint captured, bool compresses = false)
     {
         List<string> unset = [];
-        for (var left = captured & ~(WrittenFileAttributes | EntryFileAttributes); left != 0; left &= left - 1)
+        var given = WrittenFileAttributes | EntryFileAttributes | (compresses ? CompressedFileAttribute : 0);
+        for (var left = captured & ~given; left != 0; left &= left - 1)
         {
             var bit = left & (~left + 1);
             unset.Add(Enum.IsDefined(typeof(FileAttributes), (int)bit)
