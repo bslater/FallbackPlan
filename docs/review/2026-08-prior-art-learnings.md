@@ -124,6 +124,10 @@ Two gaps, both taught by #6205 and #6688 rather than by #4041:
 > - **An interrupted rebuild** is held verbatim-named in `Repository.Tests/CatalogueRebuildTests`. A rebuild cut short leaves a catalogue that still needs rebuilding, and the retry over it finishes whole and restores. It passed on the code as it stood.
 > - **An empty store** is held as `RebuildIndex_TheStoreIsEmpty_SaysItHoldsNoRepositoryAndLeavesNoCatalogue` in `Cli.Tests/CommandTests`. The name differs because the behaviour does: an empty store holds no repository to rebuild from, and the command refuses before it opens any catalogue.
 > - **Still open: an incomplete rebuild reported as complete.** The rebuild at open clears its mark when the manifest projection saw every record, whatever findings the index load reported. A delta that is listed and then cannot be fetched is logged as a finding, and is not tried again.
+>
+> **Resolved (2026-10).** The last gap was two cases ([ADR-0010 Amendment 7](../adr/0010-local-store-separation.md#amendment-7-2026-10--a-rebuild-at-open-that-falls-short-says-so)).
+> - **A rebuild that could not read every record**, or the repository at all, left the set listing a snapshot with none of its files, or none, and said why only in the log. It now raises a notice naming the set, and the rebuild that reads everything resolves it. Three cases in `Hosts.Tests/CatalogueRebuildAtOpenTests` hold it, and failed before.
+> - **A delta that will not open** costs the catalogue locations, not a listing, so the rebuild is not tried again for it. Its finding was never only in the log: it is recorded as the catalogue's damage, which a set's status counts and a check names. `CatalogueRebuild_AnIndexDeltaIsUnreachable_ReportsAnIncompleteRebuildRatherThanSuccess` holds it, verbatim-named in the same suite, and passed as the code stood.
 
 ---
 
@@ -445,6 +449,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 > **2026-10.** T-4 is resolved: the double interruption stands too, and passed as the code stood.
 >
 > **2026-10.** T-11 is resolved: two rules that disagree keep, and the dry run names the rule that bound.
+>
+> **2026-10.** T-3 is resolved: a rebuild at open that falls short says so in a notice, and a delta it cannot open is damage a check names.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 

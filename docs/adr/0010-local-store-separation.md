@@ -400,6 +400,12 @@ What it does not do:
   reported. So a delta that is listed and then cannot be fetched is a
   finding in the log, and the catalogue is not tried again for it.
 
+  > **Built 2026-10 ([Amendment 7](#amendment-7-2026-10--a-rebuild-at-open-that-falls-short-says-so)).** A rebuild at open that
+  > could not read every record, or could not read the repository, now says
+  > so in a notice until one reads everything. A delta that will not open was
+  > never only in the log: the rebuild records it as the catalogue's damage,
+  > which a set's status counts and a check names.
+
 How it is held:
 
 - **`Repository.Tests/CatalogueTests`:** two cases, each opening as a new
@@ -419,6 +425,55 @@ How it is held:
   - in `Cli.Tests/CommandTests`, a rebuild over an empty store refuses and
     leaves no catalogue.
 
+## Amendment 7 (2026-10) — a rebuild at open that falls short says so
+
+The prior-art review's T-3 asks that a rebuild never report success on an
+incomplete result. Amendment 6 left that open. Read against the code, a
+rebuild at open falls short in two ways, and they are not alike:
+
+- **It could not read every record it needed, or could not read the
+  repository at all.** Amendment 4 leaves the catalogue marked, and the next
+  open tries again. Until then the set lists what the catalogue holds: a
+  snapshot with none of its files, or no snapshot at all. A backup stores
+  again what it cannot find. Only the log said why, and the next open is
+  usually the service's next start.
+- **The index load reported findings.** A delta that will not open, or one
+  listed and then gone, costs the catalogue the locations it carried, not a
+  snapshot or a file. The rebuild is complete as a listing, clears its mark
+  and is not tried again. Its findings were already recorded as the
+  catalogue's damage: a set's status counts them, and a check names them.
+
+**Decision.** The first is said where a person looks:
+
+- A rebuild at open that could not see every record it needed, or could not
+  read the repository, raises a notice keyed
+  `catalogue-rebuild-incomplete:{set}`. It names the set and what was not
+  read: how many records, or that the repository could not be read. It says
+  what follows from that, that the repository itself is unchanged, and that
+  the next open tries again.
+- The rebuild at open that reads everything it needed resolves it.
+
+The second stays as it was. A notice for it would stand for good, since
+nothing tries that rebuild again, and would say what a check already says.
+
+**Built:** `Agent/ServiceRuntime`. `Hosts.Tests/CatalogueRebuildAtOpenTests`
+holds it:
+
+- **A direct-ship set rebuilt while its destination was away** raises the
+  notice, naming the set and the count the rebuild logged. The next open,
+  with the destination back, lists every file and resolves it.
+- **A staging set whose metadata blobs are damaged** raises it.
+- **A direct-ship set whose every metadata read fails** lists no snapshot
+  and raises it, saying the repository could not be read. The next open,
+  which reads, resolves it.
+- **`CatalogueRebuild_AnIndexDeltaIsUnreachable_ReportsAnIncompleteRebuildRatherThanSuccess`**,
+  the name T-3 gave, in this suite rather than the repository's because the
+  open is the service's: a staging set whose index delta will not open lists
+  whole and raises no notice, and a check names the catalogue's finding.
+
+The three notice cases failed before this amendment for want of a notice.
+The T-3 case passed as the code stood.
+
 ## Status history
 
 | Date | Status | Note |
@@ -431,3 +486,4 @@ How it is held:
 | 2026-09 | Accepted (amended) | Amendment 4: a catalogue the service finds discarded or lost is rebuilt from the repository when it opens the set, before anything reads it, and a rebuild that could not see every record it needed is tried again at the next open. Marked by `Repository.Catalogue/Catalogue`, rebuilt by `Agent/ServiceRuntime` through `Agent/CatalogueRebuild`, held by `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
 | 2026-10 | Accepted (amended) | Amendment 5: a set's backup has the archive's catalogue connection to itself. A sync's verification, retention, a snapshot deletion and the heal each open one of their own (`Agent/ArchiveHandle`), and SQLite keeps the connections apart. Held by `ArchitectureTests/CatalogueConnectionTests`, by three tests run with the backup's connection closed, and by `Repository.Tests/Catalogue/CatalogueConnectionsTests`. |
 | 2026-10 | Accepted (amended) | Amendment 6: a catalogue file SQLite cannot read as a database is discarded and rebuilt like one another schema wrote, rather than failing every open of its set. A file that is busy, locked or cannot be written still fails the open. Set in `Repository.Catalogue/Catalogue`, held by `Repository.Tests/CatalogueTests` and `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
+| 2026-10 | Accepted (amended) | Amendment 7: a catalogue rebuilt at open short of the records it needed, or unable to read the repository, raises a notice naming the set, and the rebuild that reads everything resolves it. A rebuild whose index load reported findings is complete as a listing, and its findings are the catalogue's damage, which a check names. Set in `Agent/ServiceRuntime`, held by `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
