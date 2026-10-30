@@ -328,6 +328,50 @@ public static class MetadataRules
             ? "only Linux's kernel reads it, so it is not kept as a stream"
             : null;
 
+    /// <summary>
+    /// The stream each of a file's captured extended attributes is kept as
+    /// where a target keeps them as streams, in the order they were captured,
+    /// or why one is not (ADR-0177): only Linux's kernel reads it, its name is
+    /// one no stream may have (<see cref="AlternateStreams.TryName"/>), the
+    /// file was captured with a stream of that name, or an attribute before it
+    /// has that name. Windows matches a stream's name without regard to case,
+    /// and so do the last two.
+    /// </summary>
+    /// <param name="metadata">The file's captured metadata, its own streams among it.</param>
+    public static IReadOnlyList<AttributeKeptAs> AsStreams(EntryMetadata metadata)
+    {
+        if (metadata.ExtendedAttributes.Count == 0)
+        {
+            return [];
+        }
+
+        var own = new HashSet<string>(
+            metadata.AlternateStreams.Select(stream => System.Text.Encoding.UTF8.GetString(stream.Name.Span)), StringComparer.OrdinalIgnoreCase);
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var judged = new AttributeKeptAs[metadata.ExtendedAttributes.Count];
+        for (var at = 0; at < judged.Length; at++)
+        {
+            var attribute = metadata.ExtendedAttributes[at];
+            judged[at] = WithheldAsStream(attribute) is { } withheld ? new AttributeKeptAs(null, withheld)
+                : !AlternateStreams.TryName(attribute.Name.Span, out var name, out var why) ? new AttributeKeptAs(null, why)
+                : own.Contains(name) ? new AttributeKeptAs(null, "the file was captured with a stream of that name")
+                : taken.Add(name) ? new AttributeKeptAs(name, null)
+                : new AttributeKeptAs(null, "another of the file's attributes has that name, as Windows compares names");
+        }
+
+        return judged;
+    }
+
+    /// <summary>
+    /// How many of a file's captured extended attributes are not kept as
+    /// streams for their names, those only Linux's kernel reads apart, which
+    /// the plan declares (ADR-0177 Amendment 1).
+    /// </summary>
+    /// <param name="metadata">The file's captured metadata, its own streams among it.</param>
+    public static int RefusedAttributeNames(EntryMetadata metadata) =>
+        metadata.ExtendedAttributes.Zip(AsStreams(metadata))
+            .Count(judged => judged.Second.Why is not null && WithheldAsStream(judged.First) is null);
+
     /// <summary>Whether <paramref name="name"/> is a Linux POSIX ACL that governs who may reach the file itself.</summary>
     internal static bool IsAccessAcl(ReadOnlySpan<byte> name) => name.SequenceEqual("system.posix_acl_access"u8);
 
@@ -450,3 +494,11 @@ public static class MetadataRules
     /// <param name="Mask">Its mask, which bounds every entry but the owner's and everyone else's.</param>
     private readonly record struct AclRead(bool NamesAccounts, uint? GroupObject, uint? Mask);
 }
+
+/// <summary>
+/// The stream a file's extended attribute is kept as where a target keeps
+/// attributes as streams, or why it is not (ADR-0177).
+/// </summary>
+/// <param name="Stream">The stream's name, or null where it is not kept.</param>
+/// <param name="Why">Why it is not kept, or null where it is.</param>
+public readonly record struct AttributeKeptAs(string? Stream, string? Why);

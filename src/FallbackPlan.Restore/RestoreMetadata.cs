@@ -44,6 +44,12 @@ namespace FallbackPlan.Restore;
 /// the plan asks the target whether its account may give without
 /// SeRestorePrivilege (ADR-0176 Amendment 2), or null where it names none.
 /// </param>
+/// <param name="RefusedAttributeNames">
+/// How many of its captured extended attributes are not kept as streams for
+/// their names (<see cref="MetadataRules.RefusedAttributeNames"/>), which the
+/// plan declares where a target keeps attributes as streams (ADR-0177
+/// Amendment 1).
+/// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -57,7 +63,8 @@ public sealed record RestoreItemFacts(
     IReadOnlyList<string>? Accounts = null,
     uint? FileAttributes = null,
     int RefusedStreams = 0,
-    string? DescriptorOwner = null);
+    string? DescriptorOwner = null,
+    int RefusedAttributeNames = 0);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
@@ -287,6 +294,7 @@ public static class RestoreMetadata
         var strangers = new Tally();
         var refusedOwners = new Tally();
         var kernelAttributes = new Tally();
+        var attributeNames = new Tally();
         var unsetBits = new Tally();
         var unsetMask = 0u;
         var refusedStreams = new Tally();
@@ -335,6 +343,11 @@ public static class RestoreMetadata
                     if ((known.Attributes & (Acls | ExtendedAttributeKinds.Privileged)) != 0)
                     {
                         kernelAttributes.Add(item.Kind);
+                    }
+
+                    if (known.RefusedAttributeNames > 0)
+                    {
+                        attributeNames.Add(item.Kind);
                     }
                 }
                 else if (!OperatingSystem.IsLinux())
@@ -487,6 +500,10 @@ public static class RestoreMetadata
             $"Extended attributes in Linux's security and trusted namespaces, and POSIX access control lists, captured "
             + $"on {kernelAttributes}, will not be kept as streams: only Linux's kernel reads them. Their files' other "
             + $"attributes will be."));
+        Add("attribute-stream-names", attributeNames, string.Create(CultureInfo.InvariantCulture,
+            $"Extended attributes captured on {attributeNames} include one whose name no stream may have, or whose "
+            + $"name the file's own stream or another of its attributes already has as Windows compares names; it will "
+            + $"not be kept as a stream. Their files' other attributes will be."));
         Add("symlink-attributes", linkAttributes, string.Create(CultureInfo.InvariantCulture,
             $"Extended attributes captured on {linkAttributes} will not all be applied; Linux keeps no "
             + $"user-namespace attribute and no access control list on a symlink."));

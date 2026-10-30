@@ -8,6 +8,7 @@
 **Built:**
 - The rule: `Domain/MetadataRules` says when a target keeps an entry's attributes as streams, and which attribute it does not keep as one. `Restore/RestoreMetadata` counts a file's attributes applied on such a target, and declares on a line of its own the files whose attributes only Linux's kernel reads.
 - The write: `Domain/MetadataWriter` writes each of a file's attributes as the stream of its name, judged by `Domain/AlternateStreams`, through the calls `Domain/MetadataTarget` names. `Domain/MetadataTarget` and `Restore/RestorePlan` say a local target keeps streams on Windows, and `Restore/RestoreExecutor` hands the writer the calls it was given.
+- The plan's names ([Amendment 1](#amendment-1-2026-10--the-plan-names-a-file-whose-attribute-no-stream-is-kept-under)): `Domain/MetadataRules` judges the stream each attribute is kept as, or why not, for the writer and the plan alike, and `Restore/RestoreBlobSet` counts the attributes it refuses for their names into each item's facts.
 - The tests:
   - `Domain.Tests/ExtendedAttributeStreamsTests` — on every platform, against calls that hold streams in memory, a file's attributes land as streams of their names and count applied; one in the security or trusted namespace, or a POSIX ACL, is not kept and is named while the rest land; a name no stream may have, one the file's own captured stream has in any case, the second of two that differ only in case and a stream the target refuses are each named; a folder's are not kept as streams; on Linux and macOS a target that writes attributes of its own writes none as streams; on Windows a real file gets its attribute as a stream, with its time kept
   - `Repository.Tests/RestoreAlternateStreamsTests` — the profile passes whether it keeps streams to the writer, and the rule counts a file's attributes applied on a target that keeps them as streams and not a folder's; through the executor, a file's attribute lands as its stream and nothing is declared or listed
@@ -54,6 +55,9 @@ On such a target the plan counts a file's attributes applied. A file that carrie
 ## What this does not do
 
 - **Judge an attribute's name in the plan.** The plan's facts carry each item's attribute kinds, not their names, so a name no stream may have is found at the write and named in the receipt, not in the plan.
+
+  > **Built 2026-10 ([Amendment 1](#amendment-1-2026-10--the-plan-names-a-file-whose-attribute-no-stream-is-kept-under)).** The writer's judgement of each name moved to `Domain/MetadataRules`, each item's facts count the attributes it refuses for their names, and the plan names those files.
+
 - **Give the attributes back as attributes.** A stream captured from Windows is a stream: restored to Linux or macOS, it is not turned back into the attribute it came from.
 - **Keep a folder's attributes,** for the reason in §4.
 - **Keep a symlink's.** No restore on Windows makes a symlink.
@@ -64,8 +68,26 @@ On such a target the plan counts a file's attributes applied. A file that carrie
 - **Keep them as NTFS extended attributes.** Rejected. Windows' own extended attributes are written through `NtSetEaFile`, are limited to 64 KiB for a file in all, and are read by no tool a person uses. Streams are what the architecture names, and the restore already writes them.
 - **One stream holding every attribute, in a format of our own.** Rejected. It would be readable only by this product, and one attribute that would not write would lose them all.
 
+## Amendment 1 (2026-10) — the plan names a file whose attribute no stream is kept under
+
+**Gap.** §3 judges each attribute's name at the write. A name no stream may have, a name the file's own stream has, and the second of two names that differ only in case are each named in the receipt and not written. The plan's facts carried each item's attribute kinds, not their names, so the plan counted such a file's attributes applied, and the receipt then listed them as not applied.
+
+**Decision.** The judgement of each name moves from the writer into `Domain/MetadataRules`: for each of a file's attributes, in the order captured, the stream it is kept as or why it is not. The writer writes what that says and nothing else, so the plan and the write judge every name by one rule. Each item's facts count the attributes it refuses for their names, leaving out those only Linux's kernel reads, which §5's line already names. The plan's probe counts them from the manifest it already reads (`Restore/RestoreBlobSet`). On a target that keeps attributes as streams, the plan declares the files carrying one on a line of their own, `attribute-stream-names`. That line says the attribute will not be kept as a stream and that the file's other attributes will be. On a target that keeps no streams, the attributes line already speaks for every file, and no name is judged. As with [ADR-0174 Amendment 3](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md#amendment-3-2026-10--the-plan-names-a-file-whose-stream-has-a-name-no-stream-may-be-written-under), the plan gives the count, not the names, which the receipt gives.
+
+**Tests.**
+- `Domain.Tests/ExtendedAttributeStreamsTests` holds the judgement of five attributes, one of each outcome, and its count, which leaves out the kernel's.
+- `Repository.Tests/RestoreMetadataHonestyTests` holds the plan to it on every platform. Of five files:
+  - one keeps every name;
+  - one has an attribute named with a colon;
+  - one has two names that differ only in case;
+  - one has a name its own stream has, but for case;
+  - one has only a security label.
+
+  The new line declares three. The kernel's file stays on its own line. A target that keeps no streams declares no such line.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. On a target that keeps a file's alternate streams and writes no attributes of its own, the writer every way of restoring shares keeps a file's extended attributes as streams of their names, before the times; one only Linux's kernel reads, a name no stream may have, one the file's own stream has, one an attribute before it has but for case, and a stream the target refuses are each named; a folder's are not kept; and the plan declares the kernel's on a line of its own. `Domain/MetadataWriter`; `Domain/MetadataRules`; `Domain/MetadataTarget`; `Restore/RestoreMetadata`; `Domain.Tests/ExtendedAttributeStreamsTests`; `Repository.Tests/RestoreAlternateStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
+| 2026-10 | Amended | Amendment 1: the plan names a file whose attribute no stream is kept under, by the writer's own judgement of each name, which moved to one rule the two share. `Domain/MetadataRules`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Domain.Tests/ExtendedAttributeStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
