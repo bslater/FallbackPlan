@@ -4,6 +4,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using CompactionStep = FallbackPlan.Repository.CompactionStep;
@@ -176,6 +177,76 @@ public sealed class CompactionRetentionTests : IDisposable
             + string.Join(Environment.NewLine, lines));
 
         await AssertRestoresAsync(handler, "steady.bin", seed: 1);
+    }
+
+    /// <summary>
+    /// A compaction beside a backup of the same set (ADR-0025 exit criterion
+    /// 11, against the product): a person's apply parks the set's scheduled
+    /// backup mid-capture and compacts while it waits. The two are one writer,
+    /// drawing on one sequence, publishing into one index. The pass compacts,
+    /// the backup resumes and commits, and every later pass, the sweep of
+    /// what the rewrite drained among them, leaves the newest snapshot
+    /// restoring whole.
+    /// </summary>
+    [TestMethod]
+    public async Task ACompactionBesideTheSetsParkedBackup_LeavesBothWhole()
+    {
+        Directory.CreateDirectory(VaultA);
+        WriteConfiguration(directShip: true);
+        WriteIncompressible("docs/steady.bin", seed: 1);
+        WriteIncompressible("docs/churn.bin", seed: 2);
+
+        // One writer worker, so the apply runs only once the backup parks.
+        await using var runtime = await StartAsync(maxConcurrentBackups: 1);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
+
+        await BackUpAsync(runtime);
+        WriteIncompressible("docs/churn.bin", seed: 3);
+        await BackUpAsync(runtime);
+        WriteIncompressible("docs/churn.bin", seed: 4);
+        await BackUpAsync(runtime);
+        Assert.Contains(
+            line => line.Contains("compaction would rewrite: 1 blob(s)", StringComparison.Ordinal),
+            await DryRunAsync(handler),
+            "the premise: the next apply compacts");
+
+        // Enough files that the capture is still scanning when the apply
+        // arrives: the pause gate is checked between scan events.
+        for (var i = 0; i < 1500; i++)
+        {
+            _harness.WriteSourceFile($"many/file-{i:d5}.txt", $"contents of file {i}");
+        }
+
+        WriteIncompressible("docs/churn.bin", seed: 20);
+        var set = runtime.Configuration.BackupSets.Single();
+        var backup = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now.AddMinutes(5 * ++_runs), userInitiated: false);
+        while (!runtime.Jobs.Jobs.Any(job =>
+            job.BackupSetId == set.Id && job.State is JobState.Scanning or JobState.Publishing))
+        {
+            Assert.IsFalse(backup.IsCompleted, "the backup finished before the apply could arrive beside it");
+            await Task.Delay(10, Timeout);
+        }
+
+        var beside = await RetainAsync(handler, grant);
+        var report = string.Join(Environment.NewLine, beside);
+        Assert.Contains(line => line.Contains("compacted:", StringComparison.Ordinal), beside, report);
+        Assert.Contains(line => line.Contains("held beside a backup:", StringComparison.Ordinal), beside, report);
+
+        var outcome = await backup.WaitAsync(Timeout);
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+
+        // The rhythm after a rewrite: a pass condemns what it drained, the
+        // grace runs, and a later pass sweeps it.
+        for (var pass = 0; pass < 3; pass++)
+        {
+            await RetainAsync(handler, grant);
+            _harness.WriteSourceFile("docs/note.txt", $"pass {pass}");
+            await BackUpAsync(runtime);
+        }
+
+        await AssertRestoresAsync(handler, "steady.bin", seed: 1);
+        await AssertRestoresAsync(handler, "churn.bin", seed: 20);
     }
 
     /// <summary>
@@ -603,7 +674,7 @@ public sealed class CompactionRetentionTests : IDisposable
         ],
     }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
 
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(int? maxConcurrentBackups = null)
     {
         await _harness.SetupAsync();
 
@@ -612,6 +683,7 @@ public sealed class CompactionRetentionTests : IDisposable
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                MaxConcurrentBackupsOverride = maxConcurrentBackups,
             },
             Timeout);
     }
