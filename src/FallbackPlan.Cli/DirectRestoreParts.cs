@@ -435,7 +435,7 @@ internal static class DirectRestoreParts
         try
         {
             var path = Path.Combine(parts, RecordName);
-            return File.Exists(path) ? JsonSerializer.Deserialize<DirectRestoreRun>(File.ReadAllText(path), SerializerOptions) : null;
+            return File.Exists(path) ? JsonSerializer.Deserialize<DirectRestoreRun>(AtomicFile.ReadAllText(path), SerializerOptions) : null;
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
         {

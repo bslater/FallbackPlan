@@ -68,7 +68,7 @@ public sealed class SessionCache
             try
             {
                 return File.Exists(_path)
-                    ? JsonSerializer.Deserialize<Model>(File.ReadAllText(_path), SerializerOptions)?.Token
+                    ? JsonSerializer.Deserialize<Model>(AtomicFile.ReadAllText(_path), SerializerOptions)?.Token
                     : null;
             }
             catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
@@ -86,7 +86,7 @@ public sealed class SessionCache
             try
             {
                 return File.Exists(_path)
-                    ? JsonSerializer.Deserialize<Model>(File.ReadAllText(_path), SerializerOptions)?.User
+                    ? JsonSerializer.Deserialize<Model>(AtomicFile.ReadAllText(_path), SerializerOptions)?.User
                     : null;
             }
             catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)

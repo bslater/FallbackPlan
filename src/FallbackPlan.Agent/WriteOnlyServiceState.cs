@@ -51,7 +51,7 @@ public sealed class GrantRecipient : IDisposable
             // longer open, which re-provisioning repairs).
             try
             {
-                scalar = Convert.FromHexString(File.ReadAllText(path).Trim());
+                scalar = Convert.FromHexString(AtomicFile.ReadAllText(path).Trim());
             }
             catch (FormatException)
             {

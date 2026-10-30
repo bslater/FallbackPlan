@@ -99,7 +99,7 @@ public sealed class ReplicaOwnerStore
             return new ReplicaOwnerStore(path, new Dictionary<string, ReplicaOwner>(StringComparer.Ordinal));
         }
 
-        var text = File.ReadAllText(path);
+        var text = AtomicFile.ReadAllText(path);
         try
         {
             var owners = JsonSerializer.Deserialize<Dictionary<string, ReplicaOwner>>(text, SerializerOptions) ?? [];

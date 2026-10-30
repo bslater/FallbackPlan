@@ -119,7 +119,7 @@ public sealed class PeerGrantStore
         {
             try
             {
-                _revoked = JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(revokedPath), SerializerOptions)
+                _revoked = JsonSerializer.Deserialize<HashSet<string>>(AtomicFile.ReadAllText(revokedPath), SerializerOptions)
                     ?? new HashSet<string>(StringComparer.Ordinal);
             }
             catch (JsonException)
@@ -165,7 +165,7 @@ public sealed class PeerGrantStore
 
         try
         {
-            var stored = JsonSerializer.Deserialize<List<StoredGrant>>(File.ReadAllText(path), SerializerOptions) ?? [];
+            var stored = JsonSerializer.Deserialize<List<StoredGrant>>(AtomicFile.ReadAllText(path), SerializerOptions) ?? [];
             var grants = new Dictionary<string, PeerGrant>(StringComparer.Ordinal);
 
             foreach (var entry in stored)

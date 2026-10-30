@@ -99,7 +99,7 @@ public sealed class LocalState
         {
             try
             {
-                var model = JsonSerializer.Deserialize<Model>(File.ReadAllText(path), SerializerOptions)
+                var model = JsonSerializer.Deserialize<Model>(AtomicFile.ReadAllText(path), SerializerOptions)
                     ?? throw new ClientStateException(Strings.FormatModel_HoldsNoStateObject(path));
                 return new LocalState(path, model);
             }
@@ -159,7 +159,7 @@ public sealed class LocalState
     {
         var legacy = Path.Combine(stateDirectory, legacyName);
         return File.Exists(legacy)
-            ? Convert.FromHexString(File.ReadAllText(legacy).Trim()) is { Length: 16 } bytes
+            ? Convert.FromHexString(AtomicFile.ReadAllText(legacy).Trim()) is { Length: 16 } bytes
                 ? Convert.ToHexString(bytes).ToLowerInvariant()
                 : throw new ClientStateException(Strings.FormatModel_LegacyIdentityFileNotBytes(legacy))
             : Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();

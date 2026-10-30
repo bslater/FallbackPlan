@@ -67,7 +67,7 @@ public static class PeerKeypairStore
         byte[] seed;
         try
         {
-            seed = Convert.FromHexString(File.ReadAllText(path).Trim());
+            seed = Convert.FromHexString(AtomicFile.ReadAllText(path).Trim());
         }
         catch (FormatException exception)
         {

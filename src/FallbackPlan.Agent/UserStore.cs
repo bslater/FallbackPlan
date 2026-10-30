@@ -218,7 +218,7 @@ public sealed class UserStore
             Model? model;
             try
             {
-                model = JsonSerializer.Deserialize<Model>(File.ReadAllText(path), SerializerOptions);
+                model = JsonSerializer.Deserialize<Model>(AtomicFile.ReadAllText(path), SerializerOptions);
             }
             catch (JsonException exception)
             {

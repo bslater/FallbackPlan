@@ -225,7 +225,7 @@ public sealed class StateDirectoryLock : IDisposable
         try
         {
             return File.Exists(ownerPath)
-                ? JsonSerializer.Deserialize<WriterLockOwner>(File.ReadAllText(ownerPath), SerializerOptions)
+                ? JsonSerializer.Deserialize<WriterLockOwner>(AtomicFile.ReadAllText(ownerPath), SerializerOptions)
                 : null;
         }
         catch (JsonException)

@@ -137,7 +137,7 @@ public sealed class NoticeStore
 
         try
         {
-            var notices = JsonSerializer.Deserialize<List<Notice>>(File.ReadAllText(path), SerializerOptions) ?? [];
+            var notices = JsonSerializer.Deserialize<List<Notice>>(AtomicFile.ReadAllText(path), SerializerOptions) ?? [];
             return new NoticeStore(path, notices) { _log = logger ?? NullLogger.Instance };
         }
         catch (JsonException)
