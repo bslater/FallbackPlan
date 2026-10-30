@@ -1,3 +1,4 @@
+using System.Globalization;
 using FallbackPlan.Agent;
 using ApiRestoreResult = FallbackPlan.Api.RestoreResult;
 using FallbackPlan.Api;
@@ -289,6 +290,53 @@ public sealed class SweepFailureTests : IDisposable
             line => line.Contains("could not be deleted", StringComparison.Ordinal),
             report.Lines,
             "the sweep found something and the report did not carry it");
+    }
+
+    /// <summary>
+    /// What a deferral leaves unreclaimed is counted, in objects and in
+    /// bytes, on the pass's own line of the report (the prior-art review's
+    /// T-12): a store under a write-once policy refuses every delete, and
+    /// a report that says only that something could not be deleted does not
+    /// say how much space the policy is holding.
+    /// </summary>
+    [TestMethod]
+    public async Task ADeferredDelete_IsCountedInTheReport_InObjectsAndBytes()
+    {
+        var faulting = await ArmedAtSweepAsync();
+        var refused = new HashSet<string>(StringComparer.Ordinal);
+        faulting.Store.ArmThrow(key =>
+        {
+            if (!key.StartsWith("snapshots/", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            lock (refused)
+            {
+                refused.Add(key);
+            }
+
+            return true;
+        });
+
+        var report = await RunAsync(faulting.Store, apply: true, now: Day1.AddDays(3).AddHours(1));
+
+        Assert.IsNotEmpty(refused, "the premise: the pass tried to delete a snapshot and was refused");
+        var bytes = 0L;
+        foreach (var key in refused)
+        {
+            bytes += (await faulting.Inner.GetMetadataAsync(ObjectKey.Parse(key), CancellationToken.None)).Metadata!.Length;
+        }
+
+        Assert.AreEqual(refused.Count, report.Swept!.Deferred);
+        Assert.AreEqual(bytes, report.Swept.DeferredBytes);
+        Assert.Contains(
+            line => line.StartsWith("swept: ", StringComparison.Ordinal)
+                && line.Contains(
+                    string.Create(CultureInfo.InvariantCulture, $"{refused.Count} deferred ({bytes:N0} byte(s) not reclaimed)"),
+                    StringComparison.Ordinal),
+            report.Lines,
+            string.Join(" | ", report.Lines));
     }
 
     /// <summary>
