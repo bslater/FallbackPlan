@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Bodu;
 
 namespace FallbackPlan.Domain;
@@ -90,6 +92,36 @@ public static class RestorePaths
 
         destination = resolved;
         return true;
+    }
+
+    /// <summary>
+    /// Where a file that lands at <paramref name="destination"/> is written
+    /// whole before it is moved there (ADR-0173): beside it, so the move is one
+    /// rename, under a name of 33 characters whatever the destination's. The
+    /// destination's own name may be as long as its target holds, so no name
+    /// made by adding to it can be relied on to fit.
+    /// </summary>
+    /// <remarks>
+    /// The name is made from the destination's own, so a destination has the
+    /// same spool every time: one a run cut short left behind is the one the
+    /// next run there writes over.
+    /// </remarks>
+    /// <param name="destination">The resolved path the file lands at.</param>
+    /// <param name="owner">
+    /// The writer, <c>restore</c> for the executor or <c>recover</c> for the
+    /// recovery tool, so the two never share a spool.
+    /// </param>
+    /// <returns>The spool's path.</returns>
+    public static string SpoolBeside(string destination, string owner)
+    {
+        ThrowHelper.ThrowIfNull(destination);
+        ThrowHelper.ThrowIfNull(owner);
+
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFileName(destination)), digest);
+        return Path.Combine(
+            Path.GetDirectoryName(destination)!,
+            $".fbp-{owner}-{Convert.ToHexStringLower(digest[..8])}.tmp");
     }
 
     /// <summary>
