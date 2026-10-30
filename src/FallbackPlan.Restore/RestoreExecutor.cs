@@ -1041,7 +1041,14 @@ public sealed class RestoreExecutor(
                     RestoreResult result;
                     try
                     {
-                        var output = File.Create(spool);
+                        // Whatever stands at the spool's name, a link a
+                        // repository restored there included, is removed
+                        // rather than opened, and the spool is made new, as
+                        // the recovery tool's is (ADR-0152 Amendment 1):
+                        // opening the name followed the link, and the file's
+                        // content went wherever it led.
+                        File.Delete(spool);
+                        var output = new FileStream(spool, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
                         await using (output.ConfigureAwait(false))
                         {
                             result = PartOf(manifest) is { } part
@@ -1049,11 +1056,13 @@ public sealed class RestoreExecutor(
                                 : await engine.RestoreFileAsync(manifest, output, cancellationToken).ConfigureAwait(false);
                         }
                     }
-                    catch (IOException exception)
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
                         // Same containment as the manifest read above: the
                         // fault fails this item, the spool never becomes the
-                        // destination, and the run carries on.
+                        // destination, and the run carries on. A folder at
+                        // the spool's name is refused as unauthorised, not
+                        // as an I/O fault.
                         if (File.Exists(spool))
                         {
                             File.Delete(spool);
