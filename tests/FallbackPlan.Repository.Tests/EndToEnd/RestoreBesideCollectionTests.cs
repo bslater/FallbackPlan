@@ -23,8 +23,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// either still reads. The reader learns where a blob is and how it is
 /// framed once, so a record it reads after the blob has gone is one the
 /// store no longer holds. It is read from another copy that holds it, or it
-/// fails and the run goes on; it is never taken for damage, and it never
-/// ends the run. A compaction under the same restore moves the records
+/// fails as not held and the run goes on, its receipt saying so (ADR-0172
+/// Amendment 2); it is never taken for damage, and it never ends the run. A compaction under the same restore moves the records
 /// before their blob goes, and they are read from where they went.
 /// </summary>
 /// <remarks>
@@ -93,7 +93,8 @@ public sealed class RestoreBesideCollectionTests : ArchiveTestHarness
         await world.Store.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
         var read = await reader.ReadSegmentAsync(second, CancellationToken.None);
 
-        Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreEqual(RecordReadOutcome.NotHeld, read.Outcome, read.Detail);
+        Assert.Contains("does not hold", read.Detail!, StringComparison.Ordinal);
         Assert.IsEmpty(reader.SkippedBlobs, "a blob the store no longer holds is not a damaged one");
     }
 
@@ -116,8 +117,84 @@ public sealed class RestoreBesideCollectionTests : ArchiveTestHarness
         await world.Store.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
         var read = await reader.ReadSegmentAsync(second, CancellationToken.None);
 
-        Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreEqual(RecordReadOutcome.NotHeld, read.Outcome, read.Detail);
         Assert.IsEmpty(reader.SkippedBlobs);
+    }
+
+    [TestMethod]
+    [DataRow(FormatVersions.SealedDataPlane, DisplayName = "format 2")]
+    [DataRow(FormatVersions.DeltaCheckpoints, DisplayName = "format 5")]
+    public async Task AReaderThatLoadedEveryFooter_ABlobThatGoesAfterIt_IsReadFromACopy_AndIsNotHeldAtTheOwnStore(ushort format)
+    {
+        // Such a reader keeps the blob's record table after the blob goes,
+        // so the record still has a place at the own store: only the read's
+        // outcome says the store no longer holds it.
+        var world = await PublishAsync(format);
+        using var held = world.Keys;
+        using var _ = world.Catalogue;
+        var spare = await MirrorAsync(world.Store, SpareRoot);
+        var (first, second, blob) = await TwoSegmentsInOneBlobAsync(world);
+
+        using var reader = new RepositoryReader(Repo, world.Keys, world.Store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        reader.UseOtherCopies(Own, [Serve(Sibling, spare)]);
+        Assert.AreEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(first, CancellationToken.None)).Outcome);
+
+        await world.Store.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
+        var read = await reader.ReadSegmentAsync(second, CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        var passed = Assert.ContainsSingle(Assert.ContainsSingle(reader.ReadAround).PassedOver);
+        Assert.AreEqual(CopyFault.NotHeld, passed.Fault, passed.Detail);
+        Assert.IsEmpty(reader.Refusals.Where(refusal => refusal.Fault == CopyFault.Damaged).ToList());
+    }
+
+    [TestMethod]
+    [DataRow(FormatVersions.SealedDataPlane, DisplayName = "format 2")]
+    [DataRow(FormatVersions.DeltaCheckpoints, DisplayName = "format 5")]
+    public async Task ABlobGoneBeforeTheRestoreBegan_WithNoOtherCopy_FailsItsRecordsAsNotHeld(ushort format)
+    {
+        // The other way a location can name a blob the store does not hold:
+        // it went before this reader asked about it at all.
+        var world = await PublishAsync(format);
+        using var held = world.Keys;
+        using var _ = world.Catalogue;
+        var (first, _, blob) = await TwoSegmentsInOneBlobAsync(world);
+        await world.Store.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, world.Keys, world.Store, Authority);
+        reader.UseLocationSource(world.Catalogue.ResolveLocation);
+        var read = await reader.ReadSegmentAsync(first, CancellationToken.None);
+
+        Assert.AreEqual(RecordReadOutcome.NotHeld, read.Outcome, read.Detail);
+        Assert.IsEmpty(reader.SkippedBlobs);
+    }
+
+    [TestMethod]
+    [DataRow(FormatVersions.SealedDataPlane, DisplayName = "format 2")]
+    [DataRow(FormatVersions.DeltaCheckpoints, DisplayName = "format 5")]
+    public async Task ABlobTheStoreStillHoldsButThatWillNotFrame_IsDamage_NotNotHeld(ushort format)
+    {
+        // The control: only a blob the store no longer holds is not held. One
+        // it holds, cut short inside the record read so that neither the
+        // record nor the footer frames, is damage, as it always was.
+        var world = await PublishAsync(format);
+        using var held = world.Keys;
+        using var _ = world.Catalogue;
+        var (first, _, blob) = await TwoSegmentsInOneBlobAsync(world);
+        var path = Path.Combine(StoreRoot, blob.Value.Replace('/', Path.DirectorySeparatorChar));
+        using (var file = File.Open(path, FileMode.Open, FileAccess.ReadWrite))
+        {
+            file.SetLength((long)world.Catalogue.ResolveLocation(first)!.PhysicalOffset + 1);
+        }
+
+        using var reader = new RepositoryReader(Repo, world.Keys, world.Store, Authority);
+        reader.UseLocationSource(world.Catalogue.ResolveLocation);
+        var read = await reader.ReadSegmentAsync(first, CancellationToken.None);
+
+        Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreNotEqual(RecordReadOutcome.NotHeld, read.Outcome, read.Detail);
+        Assert.IsNotEmpty(reader.SkippedBlobs, "a held blob that will not frame is skipped as damage");
     }
 
     [TestMethod]
@@ -171,7 +248,11 @@ public sealed class RestoreBesideCollectionTests : ArchiveTestHarness
 
         Assert.IsTrue(collected.Swept, $"the blob went partway through the run ({collected.Reads} reads)");
         Assert.AreEqual(RestoreOutcome.Failed, receipt.Outcome, "a file the run could no longer read fails the run");
-        Assert.IsNotEmpty(receipt.Items.Where(item => item.Outcome == "failed").ToList(), "and is named in it");
+        var failed = receipt.Items.Where(item => item.Outcome == "failed").ToList();
+        Assert.IsNotEmpty(failed, "and is named in it");
+        Assert.IsTrue(
+            failed.All(item => item.Detail!.Contains(nameof(RecordReadOutcome.NotHeld), StringComparison.Ordinal)),
+            "as one whose blob is not held, not as damage: " + string.Join("; ", failed.Select(item => item.Detail)));
         Assert.IsNotEmpty(receipt.Items.Where(item => item.Outcome == "restored" && item.Bytes > 0).ToList(), "and the rest restored");
         AssertRestoredByteForByte(
             world, output, receipt.Items.Where(item => item.Outcome == "restored").Select(item => item.Path));
