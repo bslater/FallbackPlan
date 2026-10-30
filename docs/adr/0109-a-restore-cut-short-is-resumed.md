@@ -112,6 +112,9 @@ A hard-link group's first name found in place is the file its later names are ma
 **Decision.**
 - **Under rename, with a file in the way,** a resume looks beside it as well as at it. That file differs from the snapshot's, or it would be found itself.
   - The copies it looks at are those named as the restore names one: the file's stem, ` (restored `, a date of any day, optionally a counter from 2 to 100 as the restore writes one, `)`, and the file's extension.
+
+    > **2026-10 ([ADR-0173 Amendment 2](0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md#amendment-2-2026-10--a-copy-written-beside-keeps-as-much-of-its-stem-as-fits)).** Where the target's limit on one name would not hold that, the stem is the one the restore cuts to fit, and a copy is looked for by the same cut.
+
   - The first, in name order, that is a file holding the snapshot's content (§1's test) is left as it stands, its metadata applied again, and the receipt names it as `written_as` beside `found_in_place`.
   - A copy whose content differs is left too, and the restored copy is written beside it under a new name, as any run under rename writes one.
 - **A folder is listed once a run** for this, so a folder of many files is not listed again for each.
@@ -130,3 +133,4 @@ A hard-link group's first name found in place is the file its later names are ma
 | 2026-10 | Accepted (amended) | [ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md) takes up finding the run, which this record left to whoever read its folder: the service names each run before it writes, keeps it until a run of it finishes, says each one left unfinished, and resumes one by its name alone (contract 1.71, `restore-resume`). |
 | 2026-10 | Amended (§5) | [ADR-0120](0120-a-resume-is-planned.md): a resume is planned, by length as §4 measures it, saying how many files the run landed, so §5's refusal of a plan is superseded; a plan of a resume is still not kept. |
 | 2026-10 | Accepted (amended) | [ADR-0129](0129-a-restore-cut-short-resumes-within-a-file.md) takes up resuming within a file, which this record left undone: through the service a file cut short is resumed from the part its run had assembled, as far as the part proves. |
+| 2026-10 | Accepted (related) | [ADR-0173 Amendment 2](0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md#amendment-2-2026-10--a-copy-written-beside-keeps-as-much-of-its-stem-as-fits): a copy written beside under a stem cut to fit the target's limit on one name is looked for by the same cut. `Restore/RestoreExecutor`; `Repository.Tests/RestoreLongNameTests` |

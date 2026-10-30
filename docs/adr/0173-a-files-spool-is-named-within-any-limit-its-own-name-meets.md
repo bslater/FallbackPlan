@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-005 (amended: a file whose name is as long as its target holds restores, through the executor and the recovery tool), FR-RST-002 (amended by Amendment 1: a single-file restore that fails leaves its output as it was)
+**Requirements:** FR-RST-005 (amended: a file whose name is as long as its target holds restores, through the executor and the recovery tool), FR-RST-002 (amended by Amendment 1: a single-file restore that fails leaves its output as it was), FR-RST-005 and FR-RST-008 (amended by Amendment 2: under rename, the copy beside a file whose name is near its target's limit lands, and a resume finds it)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the rule for where a restore writes a path, which the recovery tool shares, and the spool a link must carry nothing out of), [ADR-0170](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) (the names a plan says a target cannot make)
 
 **Built:**
@@ -43,6 +43,8 @@ The digits come from the file's name, so a destination's spool is the same on ev
 ## What this does not do
 
 - **Name a copy written beside under rename.** Under the rename policy, a file in the way keeps its name, and the restored one lands as the name with " (restored" and the date before its extension, 22 characters more, and more after the first such copy. A name that close to its limit fails there, named, as before.
+
+  > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-copy-written-beside-keeps-as-much-of-its-stem-as-fits)).** Where the target states a limit on one name, the copy keeps as much of the file's stem as fits, cut where a whole character ends, and a resume finds it by the same cut.
 - **Judge a target's limit in the plan.** A POSIX target's limit in bytes is still not judged (ADR-0170). A name longer than the target holds, captured on Windows, fails at execution, named, rather than in the plan.
 
   > **Built 2026-10 for Linux ([ADR-0170 Amendment 1](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds)).** The plan names such a name on a Linux target before any byte moves. It still fails at execution, named, as before.
@@ -77,6 +79,28 @@ The command's type now renames a file into place, so by [ADR-0010 Amendment 9](0
 
 **Not done.** The engine still assembles the file in a working spool of its own, in the system's temporary directory for this command, and needs room there for a dense file's whole length, as the restore pipeline review records.
 
+## Amendment 2 (2026-10) — a copy written beside keeps as much of its stem as fits
+
+Under the rename policy a file in the way keeps its name, and the restored copy lands beside it as the file's stem, ` (restored `, the day, `)` and its extension, with a counter after the day once a copy of that day stands there. That is 22 characters more than the file's own name, and at most 26. This record left that undone, so a name within that of its target's limit failed there: the target held the file's name, but not the name the run chose for its copy.
+
+**Decision.** Where the target states a limit on one name, the copy keeps as much of the file's stem as fits within it beside its mark and extension:
+
+- **the limit is the one the plan judges by** ([ADR-0170](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) and its Amendment 1): bytes in UTF-8 where the target states them, as on Linux, and Windows' rules on Windows, which hold 255 UTF-16 units. A target that states neither, as a macOS one, is not judged, and its copies are named in full as before;
+- **the stem is cut where a whole character ends,** a letter kept with the marks that combine with it;
+- **a name that fits is not cut,** each mark judged on its own, so a copy is named as before wherever it was named before;
+- **the mark and the extension are kept whole.** Where even an empty stem would not fit beside them, nothing is cut, and the target refuses the name as before.
+
+A resume looks beside a file in the way for a copy an earlier run wrote ([ADR-0109 Amendment 1](0109-a-restore-cut-short-is-resumed.md#amendment-1-2026-10--a-resume-under-rename-looks-beside)). It now reads a copy's mark back and holds the whole name to the one that mark gives, so a copy whose stem was cut is found by the same cut. The receipt names the copy as `written_as`, as it names any copy.
+
+**Built:** `Restore/RestoreExecutor`; `Repository.Tests/RestoreLongNameTests`:
+
+- on Linux and Windows, beside a name of 255 ASCII characters, or of 234, the copy keeps 229 characters of the stem and lands holding the snapshot's content, and the person's file is as it was; beside one of 233, whose copy is exactly 255, and beside a short one, nothing is cut;
+- on Linux, beside a name of 255 bytes in three-byte characters, or in letters each with a combining accent, the stem keeps 76 whole units, 228 bytes, where 230 would fit;
+- on Linux and Windows, a copy an earlier run wrote on another day under the cut stem is found by a resume, and no second copy is written.
+- `Repository.Tests/RestoreResumeTests`: beside a file whose own name already carries a mark, as a copy restored earlier does, a resume finds its copy by the mark at the name's end.
+
+**Not done.** A copy's name on a macOS target is not judged, as no name is there (ADR-0170 Amendment 1).
+
 ## Status history
 
 | Date | Status | Note |
@@ -84,3 +108,4 @@ The command's type now renames a file into place, so by [ADR-0010 Amendment 9](0
 | 2026-10 | Accepted | Built in one slice, tests first. A file's spool is named in 33 characters, so a file whose name is as long as its target holds restores through the executor and the recovery tool. No contract or format change. |
 | 2026-10 | Accepted (related) | [ADR-0170 Amendment 1](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds): a name longer than a Linux target holds is named in the plan. `Restore/RestorePlan` |
 | 2026-10 | Amended | Amendment 1: the command line's `restore-file` writes its file whole beside its output and moves it there once verified, so one that fails leaves the output as it was, and a link at the output is replaced rather than written through. `Cli/CliApplication`; `Cli.Tests/InspectionCommandTests` |
+| 2026-10 | Amended | Amendment 2: under rename, the copy written beside a file in the way keeps as much of the file's stem as fits within the limit the target states on one name, cut where a whole character ends, and a resume finds it by the same cut. `Restore/RestoreExecutor`; `Repository.Tests/RestoreLongNameTests` |
