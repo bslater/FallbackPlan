@@ -84,6 +84,20 @@ The tool now removes whatever stands at the spool's name, a link included, and t
 
 **Not done.** A link a repository restores at a later file's spool name is removed when that file spools, and the receipt still counts the link as restored. Only a repository that means harm names a link so, and nothing it names is written through.
 
+## Amendment 2 (2026-10) — a displaced file is placed under the output's root
+
+A restore in place under the Preserve policy moves a file it would replace aside, into a folder of the run's own under `.fbp-displaced` at the output's root. The executor resolved each displaced path with that run's folder as the containment root. The rule follows a root through its own links ([ADR-0159](0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md)), since a root is the person's choice. This one is not the person's: its name is fixed. A repository could restore a link named `.fbp-displaced`, leading out of the output, before it restored the file that displaces one, and the person's own file was moved wherever the link led.
+
+**Decision.** A displaced path is resolved as `.fbp-displaced/<run>/<path>` under the output's own root, by the rule every restored path is resolved by. A link at `.fbp-displaced` that leads out of the output is refused there like any other. The item fails, naming the link, and the person's file stays where it was. A link that leads elsewhere inside the output is followed, as ADR-0159 has it. All three places that move something aside go through it: a file under Preserve, a symlink's destination, and a hard-link group's later name.
+
+**Built:** `Restore/RestoreExecutor`; `Repository.Tests/RestoreDisplacedContainmentTests`:
+
+- on POSIX, a repository restores a link named `.fbp-displaced` leading to a folder elsewhere, then a file over one the person already has: nothing lands elsewhere, the person's file reads as it did, and the item fails, naming the link;
+- on POSIX, the same link, then a symlink over a file the person has, or a hard-linked group's later name over one: nothing lands elsewhere at either place, and each item fails, naming the link, while the group's first name restores;
+- the control: with nothing in the way, the person's file is displaced into the run's own folder as it always was.
+
+**Not done.** The quarantine folder, `.fbp-quarantine/<run>`, is still the run's root and still followed through a link standing at its name. A repository cannot put one there in the run that quarantines, since everything it names lands below that folder. An earlier run in place into the same output, or an account that can write in the output, can. Refusing that needs a refusal of the whole run, which the executor does not have.
+
 ## Status history
 
 | Date | Status | Note |
@@ -91,3 +105,4 @@ The tool now removes whatever stands at the spool's name, a link included, and t
 | 2026-10 | Accepted | Built in one slice, tests first. The executor's path resolution moves into Domain unchanged, and the recovery tool places every folder and file by it, so a link the output holds is written through by nothing. A file's spool is made new after whatever stood at its name is removed. |
 | 2026-10 | Accepted | [ADR-0159](0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md): the rule follows the root and each folder below it through their links, so a restore into a folder that is a link, by the executor or the recovery tool, restores what lies below its top level. |
 | 2026-10 | Amended | Amendment 1: the executor makes its spool new after removing whatever stands at its name, as §3 has the recovery tool do, so a link a repository restores there carries no file's content out of the restore, and a folder there fails that file alone rather than ending the run. `Restore/RestoreExecutor`; `Repository.Tests/RestoreSpoolContainmentTests` |
+| 2026-10 | Amended | Amendment 2: a displaced path is resolved under the output's root, so a link a repository restores at the displaced folder's name, leading out, is refused, and the person's file stays where it was. `Restore/RestoreExecutor`; `Repository.Tests/RestoreDisplacedContainmentTests` |
