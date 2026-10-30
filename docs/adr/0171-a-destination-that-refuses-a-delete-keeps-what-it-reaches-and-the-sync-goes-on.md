@@ -63,6 +63,8 @@ The cost is space: objects a deleted snapshot alone reached wait for a pass with
 - **Tell a versioned bucket's delete marker from a delete.** An S3 bucket with versioning answers a delete with success and keeps the object's bytes, so the space is not freed and nothing says so. The replica is valid, since the object no longer lists or reads.
 
   > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said)).** The S3 provider reports what a delete marker hid, and the sync says how much the bucket kept. An Azure Blob account that keeps versions or soft-deletes is not yet told apart.
+  >
+  > **Built 2026-10 ([Amendment 4](#amendment-4-2026-10--a-delete-an-account-keeps-under-soft-delete-is-counted-and-noticed-nowhere)).** An account under soft delete is told apart, counted and logged, with no notice. One with versioning on gives no sign on the delete.
 - **Judge a direct-ship sink per destination.** A delete through the sink reports Deleted when any one destination deleted.
 
   > **Held 2026-10 ([Amendment 3](#amendment-3-2026-10--the-sinks-delete-is-not-done-where-a-destination-refused-it)).** Read against the sink, the answer is per key and true. A destination that refuses makes the delete fail, not succeed, and what it refused stays listed for the next pass.
@@ -139,6 +141,32 @@ It passed as the code stood. Each of three changes to the sink fails it:
 - passing over a destination's refusal, which reads as done;
 - deleting at the first destination alone, which reads as done.
 
+## Amendment 4 (2026-10) — a delete an account keeps under soft delete is counted, and noticed nowhere
+
+The review's T-12 left one item open: an Azure Blob account that keeps versions or soft-deletes. Read against the API, the two are not alike:
+- **Soft delete is on by default** for a new account. A delete answers 202 with `x-ms-delete-type-permanent: false`. The account keeps the bytes until its retention period ends, then releases them itself. Nothing lists or reads the blob meanwhile.
+- **Versioning gives no sign** on the delete at all. The account keeps the version, and the answer is the same as a permanent delete's.
+
+The provider read neither, so the sync took each soft delete as space released.
+
+It is counted, and noticed nowhere. Amendment 2's notice is for space a store keeps until its own rule for earlier versions releases it, which a person has to act on. A soft delete's space comes back on its own. A notice for it would stand on every default account, and teach people to pass notices by.
+
+**Decision.**
+
+- **The contract.** `DeleteResult` gains `SoftDeleted`: the store keeps what it deleted only for a period of its own, and then releases it. Such a store need not say how many bytes, so `RetainedBytes` may be null beside it. It is optional and last, so every provider and wrapper that builds a plain result is unchanged.
+- **The Azure Blob provider** reads the permanent header from the delete's own answer, and false is a soft delete. It still sends one request, and still never looks before it deletes.
+- **The convergence** takes the destination's listing with the lengths it already carries, since a soft-deleted object cannot be asked its length once it is gone. A soft delete is counted as deleted, and on `ConvergeOutcome.SoftDeleted` and `SoftDeletedBytes`, sized by what the store said or else by the listing. It is not counted as retained. Event 3008 logs the figure at Information, once per pass.
+- **The notice is unchanged.** It reads what was retained alone, so an account under soft delete raises nothing.
+
+**Built:** in `Storage.Abstractions/StoreResults`, `Storage.AzureBlob/AzureBlobObjectStore` and `Replication/StoreToStoreCopier`. Held by:
+- **`Storage.ContractTests/AzureBlobObjectStoreTests`:** a delete under soft delete is Deleted, soft-deleted, and one request. One the header calls permanent is a plain Deleted.
+- **`Replication.Tests/ConvergeRefusalTests`:** at a destination that soft-deletes, what the policy released is deleted. Nothing is refused or retained, both objects are counted as soft-deleted with the listing's bytes, and event 3008 says so.
+- **`Hosts.Tests/AzureBlobDestinationTests`:** a sync to a container under soft delete stays in sync and verifies whole, and no destination-deletes notice stands while the account keeps bytes. That case passed as the code stood; it fails the change that would route a soft delete into what was retained.
+
+`TestSupport/AzureBlobTestServer` puts a container's account under soft delete, and every delete it answers carries the permanent header.
+
+**Not done.** An account with versioning on keeps a version that nothing on the delete reveals, so it is not told apart.
+
 ## Status history
 
 | Date | Status | Note |
@@ -147,3 +175,4 @@ It passed as the code stood. Each of three changes to the sink fails it:
 | 2026-10 | Amended | Amendment 1: a destination's refusals and the staging sweep's deferrals are said in bytes, in the notice and on the report's "swept:" line. `Replication/StoreToStoreCopier`; `Retention/StagingSweep`; `Retention.Tests/SweepFailureTests` |
 | 2026-10 | Amended | Amendment 2: a delete a store answers and keeps as an earlier version, as an S3 bucket under object lock or with versioning does, is counted as retained, in objects and bytes, and noticed. It is a delete, not a refusal. `Storage.Abstractions/StoreResults`; `Storage.S3/S3ObjectStore`; `Replication.Tests/ConvergeRefusalTests`; `Hosts.Tests/S3DestinationTests` |
 | 2026-10 | Amended | Amendment 3: the direct-ship sink's delete, read against the code, is per key and true. A destination's refusal fails the delete, what it refused stays listed for the next pass, and the metadata store is deleted last. Held as it stands. `Agent/DestinationShipSink`; `Hosts.Tests/DirectShipTests` |
+| 2026-10 | Amended | Amendment 4: a delete an Azure Blob account keeps under soft delete is told apart by the delete's own answer, counted with its bytes from the convergence's listing, and logged, and raises no notice, because the account releases it by itself. One with versioning on gives no sign and is not told apart. `Storage.Abstractions/StoreResults`; `Storage.AzureBlob/AzureBlobObjectStore`; `Replication/StoreToStoreCopier`; `Storage.ContractTests/AzureBlobObjectStoreTests`; `Hosts.Tests/AzureBlobDestinationTests` |

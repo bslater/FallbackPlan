@@ -371,6 +371,8 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 > **2026-10 ([ADR-0171 Amendment 2](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said)).** A bucket under object lock does not refuse a delete: object lock needs versioning, and the delete is answered with a delete marker while the bytes stay. The S3 provider now reports what the marker hid, the convergence counts it as retained, and a notice says how much the bucket kept. An Azure Blob account that keeps versions or soft-deletes, and the sink, stay open.
 >
 > **2026-10 ([ADR-0171 Amendment 3](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-3-2026-10--the-sinks-delete-is-not-done-where-a-destination-refused-it)).** The sink held as it stands. Its delete is Deleted only when no destination it reached refused, and a refusal leaves the object listed for the next pass. `Hosts.Tests/DirectShipTests` holds it. An Azure Blob account that keeps versions or soft-deletes stays open.
+>
+> **Resolved (2026-10), with one stated limit ([ADR-0171 Amendment 4](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-4-2026-10--a-delete-an-account-keeps-under-soft-delete-is-counted-and-noticed-nowhere)).** An Azure Blob account under soft delete is told apart by the delete's own answer, counted with its bytes and logged, and raises no notice, since the account releases the space by itself. The limit: an account with versioning on gives no sign on the delete, so what its versions keep is not told apart.
 
 ---
 
