@@ -82,6 +82,9 @@ Each ACL line says the group keeps no more than the lists gave it. A target that
 
 - **Name an ACL's accounts.** An ACL is captured as Linux stores it, with numbers. Capturing each entry's name, as owner and group are captured, would let one come back on any machine where the names resolve. That is a capture change and a format question, and is owed.
 - **macOS's own access lists and Windows security descriptors.** Neither is written back. A security descriptor is still listed. macOS's lists are not captured.
+
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A Windows security descriptor is now written back where the machine knows every account it names, as an ACL that names accounts by number is here only where they mean what they meant. macOS's lists are still not captured.
+
 - **Extended attributes on Windows.** Architecture 06 §3 would keep them as alternate streams, which are not yet written back either.
 
   > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's own alternate streams are now written back on Windows. Extended attributes captured elsewhere are still not kept as streams there, and are listed.
@@ -112,3 +115,4 @@ Each ACL line says the group keeps no more than the lists gave it. A target that
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's extended attributes back by this record's rule, through the writer the executor uses; the recovery tool still writes none. The restore's account moves with the writer to Domain/RestoreAccount, and this record's citation follows it. |
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's extended attributes back by this record's rule, through the writer the executor uses. |
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows; extended attributes are still not kept as streams there. |
+| 2026-10 | Accepted | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): a file's and a folder's Windows security descriptor is written back on Windows where the machine knows every account it names. |

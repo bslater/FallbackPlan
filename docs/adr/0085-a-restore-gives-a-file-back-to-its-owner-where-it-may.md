@@ -74,6 +74,9 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
 
   > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** Built: a link's owner and group are given back by this record's rule, through `lchown`, with the rest of its own metadata.
 - **A Windows file's owner.** It lives in the security descriptor, which is captured and not applied.
+
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** Built: the owner comes back with the descriptor, where the machine knows every account it names and Windows lets the restoring account give it. Where it does not, the DACL lands alone and the owner is listed.
+
 - **Extended attributes**, POSIX ACLs among them, Windows attribute bits and alternate streams, which are still listed.
 
   > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's alternate streams are now written back on Windows, where the volume keeps them, each read and proved like a segment and written before the file's times. One that does not land is named, and the file is degraded.
@@ -123,3 +126,4 @@ Two alternatives were weighed and not taken. Stripping set-id bits from a quaran
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's owner and group back by this record's rule, through the writer the executor uses. |
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows. |
 | 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): a file's and a folder's Windows attribute bits are written back on Windows. |
+| 2026-10 | Accepted | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): a file's and a folder's Windows security descriptor is written back on Windows where the machine knows every account it names. |

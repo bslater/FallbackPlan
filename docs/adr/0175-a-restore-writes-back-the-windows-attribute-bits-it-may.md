@@ -35,6 +35,8 @@ A bit that is neither written back nor what an entry is, as compressed, encrypte
 
 A read-only file refuses a stream written onto it, so the bits are the last write for an entry, after its streams, times and creation time. Off Windows .NET maps the same calls onto permissions and file flags of its own, so the writer writes none there whatever a target says, and a target keeps them only on Windows.
 
+> **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** The security descriptor now goes on after the bits, last of all, since its DACL may take from the restoring account the access they need.
+
 ### 4. A file a restore replaces is replaced though it is read-only
 
 Windows refuses to move a file over a read-only one. A file an earlier restore gave its captured bits may be one, so a later restore with Replace, `restore-file` over its own earlier output, and the recovery tool over an output it wrote before would each fail at it. The three move their verified spool through one call, which clears the read-only bit of the file it replaces first. The file that lands takes its own bits back with the rest of its metadata.
@@ -63,3 +65,4 @@ Windows refuses to move a file over a read-only one. A file an earlier restore g
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The writer every way of restoring shares writes a file's and a folder's read-only, hidden, system, archive and not-content-indexed bits back on Windows, as the last write; a bit no restore sets is named and leaves the attributes not applied; and a read-only file a restore replaces is replaced. `Domain/MetadataWriter`; `Domain/MetadataRules`; `Domain/RestorePaths`; `Domain.Tests/FileAttributesWriteBackTests`; `Repository.Tests/RestoreFileAttributesTests` |
+| 2026-10 | Accepted (related) | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): the security descriptor now goes on after the bits, last of all. |
