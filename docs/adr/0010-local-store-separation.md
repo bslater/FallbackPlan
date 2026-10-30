@@ -510,6 +510,33 @@ A read still sees one whole version, and raises what it raised before.
 
 **Not done.** Some files are replaced by a rename of their own rather than through `AtomicFile`: a set's write credential, restore receipts and the writer sequence. They still read sharing reading only, so on Windows a read that meets their save can still fail. A receipt read that fails is reported as that receipt's problem rather than thrown.
 
+> **Amendment 9 (2026-10).** These are now read sharing deletion too, and a
+> second pin holds every store that renames a file into place — see
+> [Amendment 9](#amendment-9-2026-10--a-file-a-store-renames-into-place-is-read-sharing-deletion-too).
+
+## Amendment 9 (2026-10) — a file a store renames into place is read sharing deletion too
+
+Amendment 8's "not done" named the stores that rename a temporary of their own into place rather than save through `AtomicFile`. Their rename holds the file open for deletion as `AtomicFile`'s does, so Windows refuses their reads at the same moment. Six reads were left:
+- the writer sequence, read by line;
+- a set's write credential and the installation credential, read as bytes;
+- the blob writer's spool checkpoint, read as bytes when a backup resumes;
+- restore receipts, read for the listing, and read whole by the command line's `restore-receipts --run`.
+
+The receipts are what a person meets. A run keeps its receipt again under its own name. A listing taken in that moment called the receipt unreadable, and `--run` failed. The others are read where a save is unlikely to be under way:
+- the service loads a set's sequence once, when it opens the set;
+- a credential is saved when a set is set up as write-only or adopted;
+- a checkpoint is read only when a backup resumes.
+
+**Decision.** `AtomicFile` gains `ReadAllBytes` and `ReadAllLines` beside `ReadAllText`, each sharing deletion, and the six reads use them. The rule of Amendment 8 widens: a type that renames a file into place, with `File.Move` or `File.Replace`, reads through `AtomicFile` too. What each read returns, and what it throws, is unchanged.
+
+**Built:** in `Domain/AtomicFile` and the stores above. Held by:
+- **`ArchitectureTests/StateFileReadTests`**, whose second pin finds every type that calls `File.Move` with its overwrite flag, or `File.Replace`. None of them may call `File.ReadAllText`, `ReadAllBytes` or `ReadAllLines`. It failed before this amendment, naming five reads.
+- **The sixth read is beyond the scan.** The scan pairs a read with a write in the same type, and the receipt report reads what `RestoreReceipt` keeps. `Cli.Tests/RestoreReceiptsVerbTests` holds it on Windows instead: a receipt held as a rename holds it is listed as it reads, not as unreadable, and is printed whole.
+- **`Application.Tests/AtomicFileTests`** reads bytes and lines whole on every platform, and holds both on Windows while a handle like a rename's holds the file.
+- **`Repository.Tests/Index/FileSequenceStateStoreTests`** holds the sequence's load the same way on Windows.
+
+**Not done.** A reader in a type that does not write the file is held only where a test names it, as the receipt report is.
+
 ## Status history
 
 | Date | Status | Note |
@@ -524,3 +551,4 @@ A read still sees one whole version, and raises what it raised before.
 | 2026-10 | Accepted (amended) | Amendment 6: a catalogue file SQLite cannot read as a database is discarded and rebuilt like one another schema wrote, rather than failing every open of its set. A file that is busy, locked or cannot be written still fails the open. Set in `Repository.Catalogue/Catalogue`, held by `Repository.Tests/CatalogueTests` and `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
 | 2026-10 | Accepted (amended) | Amendment 7: a catalogue rebuilt at open short of the records it needed, or unable to read the repository, raises a notice naming the set, and the rebuild that reads everything resolves it. A rebuild whose index load reported findings is complete as a listing, and its findings are the catalogue's damage, which a check names. Set in `Agent/ServiceRuntime`, held by `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
 | 2026-10 | Accepted (amended) | Amendment 8: a type that saves durable state through the atomic replace reads it through the same helper, which shares deletion with the save's rename. A read on Windows that meets a save therefore reads one whole version instead of failing. Fifteen reads in twelve stores, among them `Protocol/PeerGrantStore`, the grant store whose failed read showed it. Held by `ArchitectureTests/StateFileReadTests` and, on Windows, `Protocol.Tests/PeerGrantStoreTests`. |
+| 2026-10 | Accepted (amended) | Amendment 9: a store that renames a temporary of its own into place reads through the same helper too, which gains reads of bytes and of lines. The writer sequence, the write and installation credentials, the spool checkpoint and restore receipts read sharing deletion, and a receipt kept again is listed as it reads rather than as unreadable. Set in `Domain/AtomicFile`, held by `ArchitectureTests/StateFileReadTests` and, on Windows, `Repository.Tests/Index/FileSequenceStateStoreTests` and `Cli.Tests/RestoreReceiptsVerbTests`. |
