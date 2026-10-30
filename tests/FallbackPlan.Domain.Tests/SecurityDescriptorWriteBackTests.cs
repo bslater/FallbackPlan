@@ -14,7 +14,9 @@ namespace FallbackPlan.Domain.Tests;
 /// one sets the archive bit. A descriptor that names an account this machine
 /// does not know is not written, and the account is named, so a file is never
 /// handed to a stranger's access. Where the account may not give the owner,
-/// the DACL still lands.
+/// the DACL still lands. Where it holds SeRestorePrivilege, it gives an owner
+/// it is not, with the privilege enabled for that write alone (ADR-0176
+/// Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class SecurityDescriptorWriteBackTests : IDisposable
@@ -29,6 +31,17 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
     [TestMethod]
     public void ThisPlatform_WritesSecurityDescriptors_OnlyOnWindows() =>
         Assert.AreEqual(OperatingSystem.IsWindows(), MetadataTarget.ForLocalPlatform().SupportsSecurityDescriptors);
+
+    [TestMethod]
+    public void ThisPlatform_HoldsTheRestorePrivilege_OnlyWhereItsAccountDoes()
+    {
+        Assert.AreEqual(WindowsPrivileges.Holds(WindowsPrivileges.Restore), MetadataTarget.ForLocalPlatform().HoldsRestorePrivilege);
+        Assert.IsFalse(new MetadataTarget { SupportsPosixMetadata = false }.HoldsRestorePrivilege);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.IsFalse(MetadataTarget.ForLocalPlatform().HoldsRestorePrivilege);
+        }
+    }
 
     [TestMethod]
     public void AnAccount_IsKnownOnlyWhereThisMachineNamesIt()
@@ -134,27 +147,43 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
     [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's security descriptor")]
     [PlatformTrait(TestPlatforms.Windows)]
     [SupportedOSPlatform("windows")]
-    public void Write_OnWindows_AnOwnerTheAccountMayNotGive_StillLeavesTheDaclLanded()
+    public void Write_OnWindows_AnOwnerTheAccountMayNotGive_LeavesTheDaclLanded_AndSaysSo()
     {
         // Local Service is an account every Windows machine names, and one a
-        // process without SeRestorePrivilege enabled may not make an owner.
-        var source = Landed("given-away.bin");
-        var security = new FileInfo(source).GetAccessControl();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl, AccessControlType.Allow));
-        new FileInfo(source).SetAccessControl(security);
-        var captured = new FileInfo(source).GetAccessControl();
-        captured.SetOwner(new SecurityIdentifier(WellKnownSidType.LocalServiceSid, null));
+        // process may not make an owner without SeRestorePrivilege enabled.
+        var (source, descriptor) = GivenAway("given-away.bin");
         var file = Landed("restored.bin");
+        var before = new FileInfo(file).GetAccessControl().GetOwner(typeof(SecurityIdentifier));
 
-        var written = Writer().Write(file, new EntryMetadata { WindowsSecurityDescriptor = captured.GetSecurityDescriptorBinaryForm() });
+        var written = Writer(holdsRestorePrivilege: false).Write(file, new EntryMetadata { WindowsSecurityDescriptor = descriptor });
 
+        Assert.IsFalse(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor));
+        Assert.IsNotNull(written.Detail);
+        Assert.Contains("owner and group not applied", written.Detail, StringComparison.Ordinal);
         Assert.AreEqual(Dacl(source), Dacl(file));
-        if (!written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor))
-        {
-            Assert.IsNotNull(written.Detail);
-            Assert.Contains("owner and group not applied", written.Detail, StringComparison.Ordinal);
-        }
+        Assert.AreEqual(before, new FileInfo(file).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+    }
+
+    [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process holds the privilege a restore gives an owner with")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Write_OnWindows_AnAccountHoldingTheRestorePrivilege_GivesAnOwnerItIsNot_AndLeavesThePrivilegeAsItWas()
+    {
+        var (source, descriptor) = GivenAway("given-away.bin");
+        var file = Landed("restored.bin");
+        var enabledBefore = WindowsPrivileges.IsEnabled(WindowsPrivileges.Restore);
+
+        var written = Writer(holdsRestorePrivilege: true).Write(file, new EntryMetadata { WindowsSecurityDescriptor = descriptor });
+
+        Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor));
+        Assert.IsNull(written.Detail);
+        Assert.AreEqual(
+            new SecurityIdentifier(WellKnownSidType.LocalServiceSid, null),
+            new FileInfo(file).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+        Assert.AreEqual(Dacl(source), Dacl(file));
+        Assert.AreEqual(enabledBefore, WindowsPrivileges.IsEnabled(WindowsPrivileges.Restore));
+        Assert.IsNull(WindowsIdentity.GetCurrent(ifImpersonating: true));
     }
 
     [TestMethod]
@@ -202,6 +231,27 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
     }
 
     private static MetadataWriter Writer() => new(MetadataTarget.ForLocalPlatform() with { SupportsSecurityDescriptors = true });
+
+    private static MetadataWriter Writer(bool holdsRestorePrivilege) =>
+        new(MetadataTarget.ForLocalPlatform() with { SupportsSecurityDescriptors = true, HoldsRestorePrivilege = holdsRestorePrivilege });
+
+    /// <summary>
+    /// A file whose protected DACL grants this account everything, and a
+    /// descriptor captured from it that names Local Service as its owner,
+    /// though the file itself stays this account's.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private (string Source, byte[] Descriptor) GivenAway(string name)
+    {
+        var source = Landed(name);
+        var security = new FileInfo(source).GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl, AccessControlType.Allow));
+        new FileInfo(source).SetAccessControl(security);
+        var captured = new FileInfo(source).GetAccessControl();
+        captured.SetOwner(new SecurityIdentifier(WellKnownSidType.LocalServiceSid, null));
+        return (source, captured.GetSecurityDescriptorBinaryForm());
+    }
 
     [SupportedOSPlatform("windows")]
     private static byte[] Captured(string path) => new FileInfo(path).GetAccessControl().GetSecurityDescriptorBinaryForm();

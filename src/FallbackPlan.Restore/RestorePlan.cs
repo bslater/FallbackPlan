@@ -68,6 +68,14 @@ public sealed record RestoreTargetProfile
     public Func<string, bool> KnowsAccount { get; init; } = WindowsAccounts.Knows;
 
     /// <summary>
+    /// Whether the account the restore runs as holds SeRestorePrivilege,
+    /// which the writer enables, for one write at a time, to give a file an
+    /// owner the account is not (<see cref="WindowsPrivileges"/>; ADR-0176
+    /// Amendment 1).
+    /// </summary>
+    public bool HoldsRestorePrivilege { get; init; }
+
+    /// <summary>
     /// Whether this installation captured the snapshot being restored: its
     /// device is the one the snapshot names. A Linux ACL names accounts by
     /// number, and a number names the account it meant only on the machine
@@ -124,6 +132,7 @@ public sealed record RestoreTargetProfile
         SupportsFileAttributes = SupportsFileAttributes,
         SupportsSecurityDescriptors = SupportsSecurityDescriptors,
         KnowsAccount = KnowsAccount,
+        HoldsRestorePrivilege = HoldsRestorePrivilege,
         CapturedHere = CapturedHere,
         Account = Account,
     };
@@ -143,6 +152,7 @@ public sealed record RestoreTargetProfile
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
         SupportsFileAttributes = OperatingSystem.IsWindows(),
         SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
+        HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         Account = RestoreAccount.OfThisProcess(),
     };

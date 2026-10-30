@@ -18,7 +18,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// back where the target keeps them (FR-RST-004; ADR-0176): owner, group and
 /// DACL as captured, protected as they were, after every other write, where
 /// every account the descriptor names is one the target knows. The plan and
-/// the receipt no longer list them there.
+/// the receipt no longer list them there. The profile says whether its
+/// account holds SeRestorePrivilege, which the writer enables to give an
+/// owner the account is not (ADR-0176 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class RestoreSecurityDescriptorTests : ArchiveTestHarness
@@ -40,6 +42,20 @@ public sealed class RestoreSecurityDescriptorTests : ArchiveTestHarness
         {
             Assert.IsTrue(RestoreMetadata.Applied(kind, target with { SupportsSecurityDescriptors = true }).HasFlag(CapturedMetadata.SecurityDescriptor));
             Assert.IsFalse(RestoreMetadata.Applied(kind, target with { SupportsSecurityDescriptors = false }).HasFlag(CapturedMetadata.SecurityDescriptor));
+        }
+    }
+
+    [TestMethod]
+    public void Profile_ForThisPlatform_HoldsTheRestorePrivilege_OnlyWhereItsAccountDoes_AndPassesItToTheWriter()
+    {
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        Assert.AreEqual(WindowsPrivileges.Holds(WindowsPrivileges.Restore), target.HoldsRestorePrivilege);
+        Assert.IsTrue((target with { HoldsRestorePrivilege = true }).Metadata.HoldsRestorePrivilege);
+        Assert.IsFalse((target with { HoldsRestorePrivilege = false }).Metadata.HoldsRestorePrivilege);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.IsFalse(target.HoldsRestorePrivilege);
         }
     }
 

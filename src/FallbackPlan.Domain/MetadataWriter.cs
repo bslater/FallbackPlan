@@ -191,7 +191,9 @@ public sealed class MetadataWriter(MetadataTarget target)
         // account the access they need. A SID names the account it meant only
         // where this machine or its domain issued it, so a descriptor naming
         // one this machine does not know would hand the file to nobody's
-        // access; it is not written, and the file keeps its folder's.
+        // access; it is not written, and the file keeps its folder's. The
+        // restore privilege is enabled only for a write refused without it,
+        // so a file given its own account's owner never runs under it.
         string? descriptorDetail = null;
         if (target.SupportsSecurityDescriptors && OperatingSystem.IsWindows() && !link
             && metadata.WindowsSecurityDescriptor is { IsEmpty: false } descriptor)
@@ -206,7 +208,9 @@ public sealed class MetadataWriter(MetadataTarget target)
             {
                 descriptorDetail = $"security descriptor not applied: it names {string.Join(", ", strangers)}, which this machine does not know";
             }
-            else if (WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true))
+            else if (WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true)
+                || (target.HoldsRestorePrivilege
+                    && WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true, withRestorePrivilege: true)))
             {
                 applied |= CapturedMetadata.SecurityDescriptor;
             }
