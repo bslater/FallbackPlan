@@ -1,5 +1,6 @@
 using Bodu;
 using System.Text;
+using FallbackPlan.Domain.Identifiers;
 
 namespace FallbackPlan.Domain;
 
@@ -121,6 +122,60 @@ public static class AlternateStreams
 
         name = decoded;
         return true;
+    }
+
+    /// <summary>
+    /// Writes each of <paramref name="streams"/> onto <paramref name="file"/>
+    /// through <paramref name="calls"/>: its name judged by
+    /// <see cref="TryName"/> before it is joined to the path, and its content
+    /// as <paramref name="read"/> gives it. The rule the recovery tool and the
+    /// single-file restore write a file's streams by (ADR-0174 Amendments 1
+    /// and 2).
+    /// </summary>
+    /// <param name="file">A file whose content has landed and verified.</param>
+    /// <param name="streams">The streams it was captured with.</param>
+    /// <param name="read">
+    /// A stream's verified content by its object identifier, or why it will
+    /// not read.
+    /// </param>
+    /// <param name="calls">The calls that write a stream.</param>
+    /// <param name="cancellationToken">Stops the reads.</param>
+    /// <returns>Why each stream that did not land did not, in order; empty where every one landed.</returns>
+    public static async ValueTask<IReadOnlyList<string>> WriteBackAsync(
+        string file,
+        IReadOnlyList<AlternateStreamEntry> streams,
+        Func<ObjectId, CancellationToken, ValueTask<(byte[]? Content, string? Unread)>> read,
+        IAlternateStreams calls,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(file);
+        ThrowHelper.ThrowIfNull(streams);
+        ThrowHelper.ThrowIfNull(read);
+        ThrowHelper.ThrowIfNull(calls);
+
+        List<string> left = [];
+        foreach (var stream in streams)
+        {
+            if (!TryName(stream.Name.Span, out var name, out var refused))
+            {
+                left.Add($"'{Encoding.UTF8.GetString(stream.Name.Span)}' was not written back: {refused}");
+                continue;
+            }
+
+            var (content, unread) = await read(stream.ObjectId, cancellationToken).ConfigureAwait(false);
+            if (content is null)
+            {
+                left.Add($"'{name}' was not written back: {unread}");
+                continue;
+            }
+
+            if (calls.Write(file, name, content) is { } why)
+            {
+                left.Add($"'{name}' was not written back: {why}");
+            }
+        }
+
+        return left;
     }
 
     private sealed class Platform : IAlternateStreams

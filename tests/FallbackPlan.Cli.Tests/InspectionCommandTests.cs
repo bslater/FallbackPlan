@@ -279,6 +279,38 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps alternate data streams")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task RestoreFile_OnWindows_GivesTheFileItsAlternateStreamsBack_BeforeItsTimes()
+    {
+        // The single-file restore writes a file's streams back by the rule
+        // the executor and the recovery tool hold to (ADR-0174 Amendment 2),
+        // before the modification time, which writing a stream moves.
+        await _cli.InitAsync();
+        var source = _cli.WriteFile("streams/a.txt", "restore-file streams");
+        File.WriteAllText(source + ":Zone.Identifier", "[ZoneTransfer]\nZoneId=3");
+        File.WriteAllText(source + ":notes", "kept beside the file");
+        var modified = new DateTime(2021, 3, 4, 5, 6, 7, 890, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(source, modified);
+
+        var backup = await _cli.RunAsync("backup", Path.GetDirectoryName(source)!);
+        Assert.IsTrue(backup.ExitCode == 0, backup.All);
+        var snapshots = await _cli.RunAsync("snapshots");
+        var snapshot = Regex.Match(snapshots.Output, @"\b[0-9a-f]{32}\b");
+        Assert.IsTrue(snapshot.Success, snapshots.All);
+        var destination = Path.Combine(_cli.WorkPath, "restored-with-streams.txt");
+
+        var restore = await _cli.RunAsync("restore-file", "--snapshot", snapshot.Value, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        Assert.AreEqual("restore-file streams", File.ReadAllText(destination));
+        Assert.AreEqual("[ZoneTransfer]\nZoneId=3", File.ReadAllText(destination + ":Zone.Identifier"), restore.All);
+        Assert.AreEqual("kept beside the file", File.ReadAllText(destination + ":notes"), restore.All);
+        Assert.AreEqual(modified, File.GetLastWriteTimeUtc(destination), restore.All);
+        Assert.DoesNotContain("alternate_streams", restore.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Linux, "Linux keeps a POSIX ACL as an extended attribute")]
     [PlatformTrait(TestPlatforms.Linux)]
     public async Task RestoreFile_ASnapshotThisInstallationCaptured_GivesBackAnAclThatNamesAccountsByNumber()
