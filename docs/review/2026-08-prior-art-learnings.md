@@ -337,6 +337,11 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 
 **Verdict: Deferred.** One criterion to add, from #6127: *two retention rules that disagree must resolve to the more conservative outcome, and the dry-run must say which rule bound.*
 
+> **Resolved (2026-10).** Both halves hold, and `Retention.Tests/RetentionPlannerTests` now pins them.
+> - **The more conservative outcome.** Every rule in a policy only ever keeps: daily, weekly and monthly buckets, the min-generations floor, and deleted-file history. A snapshot is expired only when no rule keeps it, so two rules that disagree resolve to the one that keeps. `Select_TwoRulesThatDisagree_KeepWhatEitherKeeps_AndNameTheRuleThatBound` keeps a snapshot only the daily rule wants and one only the weekly rule wants, and expires what neither does.
+> - **The dry run says which rule bound.** Each kept snapshot's report line carries every rule that kept it. `Describe_TwoRulesThatDisagree_TheDryRunSaysWhichRuleKeptEachSnapshot` reads the lines: the one rule for a snapshot one rule kept, both for one that both did.
+> - **What it found.** Nothing in the code, but a guard missing. A report naming only a snapshot's first rule passed every test until the second case was written.
+
 ---
 
 ### T-12 — Destinations that refuse to be written twice
@@ -436,6 +441,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 > **2026-10.** T-4 is partly resolved: two of its three tests stand, and the double interruption is open.
 >
 > **2026-10.** T-4 is resolved: the double interruption stands too, and passed as the code stood.
+>
+> **2026-10.** T-11 is resolved: two rules that disagree keep, and the dry run names the rule that bound.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 
