@@ -823,6 +823,7 @@ public sealed class RestoreExecutor(
 
         Directory.CreateDirectory(root);
         var engine = new RestoreEngine(reader);
+        var spools = RestorePlanner.SpoolsOf(plan.Items);
         var items = new List<ReceiptItem>();
         var folders = new List<Folder>();
         var displaced = new List<string>();
@@ -911,6 +912,20 @@ public sealed class RestoreExecutor(
             if (cancellationToken.IsCancellationRequested)
             {
                 break;
+            }
+
+            // The name a file is first written under is the run's own
+            // (ADR-0173): an entry there, or below it, would be removed when
+            // that file spools, after the receipt had counted it restored
+            // (ADR-0152 Amendment 4).
+            if (RestorePlanner.SpooledThere(item.Path, spools) is { } spooled)
+            {
+                items.Add(new ReceiptItem
+                {
+                    Path = item.Path, Outcome = "failed", Bytes = 0,
+                    Detail = $"refused: the restore writes {spooled} under this name first",
+                });
+                continue;
             }
 
             if (!TryResolve(root, item.Path, out var destination, out var refusal))

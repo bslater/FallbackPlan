@@ -82,7 +82,11 @@ The tool now removes whatever stands at the spool's name, a link included, and t
 - on POSIX, a link a repository restores at a file's spool name, leading to a file outside the restore, is replaced: the file outside reads as it did, and the restored file lands as a file with its content;
 - a folder a repository restores at a file's spool name fails that file alone, and a file after it restores.
 
+> **2026-10 ([Amendment 4](#amendment-4-2026-10--an-entry-a-snapshot-names-at-a-files-spool-is-refused)).** Such an entry is now refused before it is made, so these two cases put the link and the folder in the output before the run, as a run in place of another snapshot can leave one.
+
 **Not done.** A link a repository restores at a later file's spool name is removed when that file spools, and the receipt still counts the link as restored. Only a repository that means harm names a link so, and nothing it names is written through.
+
+> **2026-10 ([Amendment 4](#amendment-4-2026-10--an-entry-a-snapshot-names-at-a-files-spool-is-refused)).** Taken up: the plan names such an entry, the executor fails it and the recovery tool refuses it, each saying which file spools there.
 
 ## Amendment 2 (2026-10) — a displaced file is placed under the output's root
 
@@ -118,6 +122,30 @@ Amendment 2 left the quarantine folder as it found it. A quarantined run lands i
 
 **Not done.** A link that an account able to write in the output puts at the quarantine folder's name between the check and the write is still followed. The threat model already records that such an account can redirect a write between a check and the write.
 
+## Amendment 4 (2026-10) — an entry a snapshot names at a file's spool is refused
+
+Amendment 1 left one thing at a file's spool name undone. Both writers remove whatever stands there before making the spool new, so nothing standing there is written through. An entry the snapshot itself names at that name, or below it, was restored before the file, then removed when the file spooled. So the receipt, or the recovery tool's report, counted restored an entry that was no longer there. Below a folder so named, an entry made the folder as its parent, and the file then failed for a folder at its spool.
+
+**Decision.** The spool's name is known from the file's name alone, before anything is written, so it is held as the run's own:
+
+- **`Domain/RestorePaths` gives a spool's name from the file's name alone,** and builds the spool's path on it, so the two cannot differ;
+- **the plan names each item at a file's spool name, or below it, as a conflict,** saying which file spools there, before any byte moves, as it names every name the executor would refuse ([ADR-0170](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md));
+- **the executor fails each such item, named, before it is made,** so the file restores;
+- **the recovery tool refuses such an entry,** noting which file spools there, and carries nothing below it;
+- **names are compared without regard to case.** A target that folds case takes every spelling of a name for one. On one that does not, refusing a case variant of a writer's own spool name costs nothing anyone captured on purpose.
+
+The removal before a spool is made stays. It is what holds against what an earlier run, or another account, left at the name.
+
+**Built:** `Domain/RestorePaths`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Recovery/RecoverySession`:
+
+- `Domain.Tests/RestoreSpoolTests`: a spool's name is the one its path is given;
+- `Repository.Tests/RestoreSpoolContainmentTests`: a file the snapshot names at a file's spool, as spelled and in another case, is the plan's one conflict and fails, naming the file, which restores, and nothing stands at the name after. A folder so named fails with everything below it. On POSIX, a link so named is not made, and nothing is written through it;
+- `Repository.Tests/RecoveryContainmentTests`: the recovery tool refuses such an entry, as spelled and in another case, naming the file, and restores the file.
+
+Amendment 1's two cases now put the link, and the folder, in the output before the run, as a run in place of another snapshot can leave one. Named in the snapshot, they would never be made, and the removal they hold the executor to would go untested.
+
+**Not done.** Whatever already stands in the output at a spool's name is still removed when the file spools, whoever put it there, as Amendment 1 has it. Only the writers make such names, and one a run cut short left is the one the next run writes over.
+
 ## Status history
 
 | Date | Status | Note |
@@ -127,3 +155,4 @@ Amendment 2 left the quarantine folder as it found it. A quarantined run lands i
 | 2026-10 | Amended | Amendment 1: the executor makes its spool new after removing whatever stands at its name, as §3 has the recovery tool do, so a link a repository restores there carries no file's content out of the restore, and a folder there fails that file alone rather than ending the run. `Restore/RestoreExecutor`; `Repository.Tests/RestoreSpoolContainmentTests` |
 | 2026-10 | Amended | Amendment 2: a displaced path is resolved under the output's root, so a link a repository restores at the displaced folder's name, leading out, is refused, and the person's file stays where it was. `Restore/RestoreExecutor`; `Repository.Tests/RestoreDisplacedContainmentTests` |
 | 2026-10 | Amended | Amendment 3: a quarantined run's folder is resolved under the output's root, so a link an earlier run in place restored at the quarantine folder's name, leading out, refuses the run before anything is written. `Restore/RestoreExecutor`; `Repository.Tests/RestoreQuarantineContainmentTests` |
+| 2026-10 | Amended | Amendment 4: an entry a snapshot names at a file's spool name, or below it, is the plan's conflict, and the executor fails it and the recovery tool refuses it, each naming the file. `Domain/RestorePaths`; `Restore/RestorePlan`; `Recovery/RecoverySession`; `Repository.Tests/RestoreSpoolContainmentTests` |
