@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-005 (amended: a file whose name is as long as its target holds restores, through the executor and the recovery tool), FR-RST-002 (amended by Amendment 1: a single-file restore that fails leaves its output as it was), FR-RST-005 and FR-RST-008 (amended by Amendment 2: under rename, the copy beside a file whose name is near its target's limit lands, and a resume finds it)
+**Requirements:** FR-RST-005 (amended: a file whose name is as long as its target holds restores, through the executor and the recovery tool), FR-RST-002 (amended by Amendment 1: a single-file restore that fails leaves its output as it was), FR-RST-005 and FR-RST-008 (amended by Amendment 2: under rename, the copy beside a file whose name is near its target's limit lands, and a resume finds it), FR-RST-002 (amended by Amendment 3: a single-file restore needs no room outside where its file lands)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the rule for where a restore writes a path, which the recovery tool shares, and the spool a link must carry nothing out of), [ADR-0170](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) (the names a plan says a target cannot make)
 
 **Built:**
@@ -79,6 +79,8 @@ The command's type now renames a file into place, so by [ADR-0010 Amendment 9](0
 
 **Not done.** The engine still assembles the file in a working spool of its own, in the system's temporary directory for this command, and needs room there for a dense file's whole length, as the restore pipeline review records.
 
+> **2026-10 ([Amendment 3](#amendment-3-2026-10--the-single-file-restore-assembles-its-file-where-it-lands)).** Taken up: the engine assembles the file in the spool beside the output itself, so it is written once and needs no room in the temporary folder.
+
 ## Amendment 2 (2026-10) — a copy written beside keeps as much of its stem as fits
 
 Under the rename policy a file in the way keeps its name, and the restored copy lands beside it as the file's stem, ` (restored `, the day, `)` and its extension, with a counter after the day once a copy of that day stands there. That is 22 characters more than the file's own name, and at most 26. This record left that undone, so a name within that of its target's limit failed there: the target held the file's name, but not the name the run chose for its copy.
@@ -101,6 +103,25 @@ A resume looks beside a file in the way for a copy an earlier run wrote ([ADR-01
 
 **Not done.** A copy's name on a macOS target is not judged, as no name is there (ADR-0170 Amendment 1).
 
+## Amendment 3 (2026-10) — the single-file restore assembles its file where it lands
+
+Amendment 1 left the engine's own spool. `restore-file` wrote its file into a spool beside its output, but the engine it calls assembled the file first in a spool of its own, in the system's temporary folder, and copied it across once its hash verified. So the file was written twice, and the temporary folder needed room for a dense file's whole length. Several current Linux distributions keep `/tmp` in memory by default, which capped the largest file `restore-file` could give back.
+
+**Decision.** The engine can assemble a file where it is to stay:
+
+- **`Repository/RestoreEngine` assembles a file made new at a path its caller names,** and leaves it there once every segment and the whole-file hash verify. One that does not verify is removed. Its holes are left as the engine's spool always left them;
+- **`restore-file` assembles into the spool it already writes beside its output.** It still removes what stands at that name first, and moves the spool into place only once it verifies. The engine's promise that a caller is handed nothing unverified holds, since nothing is at the output until the move;
+- **the engine removes, on its way out, only a spool or part it made itself.** A name it is asked to make new and cannot, because something stands there, is left as it was.
+
+No product path now assembles a file in the system's temporary folder. The executor's runs assemble in their parts under the state directory, kept there for a resume within a file ([ADR-0129](0129-a-restore-cut-short-resumes-within-a-file.md), [ADR-0135](0135-direct-mode-resumes-within-a-file.md)). The engine's own spool folder stays for a caller that names no part.
+
+**Built:** `Repository/RestoreEngine`; `Cli/CliApplication`:
+
+- `Repository.Tests/SparseRestoreTests`: given an engine whose spool folder does not exist, a sparse file assembled where it stays lands whole, verified and with its holes. One whose hash it does not meet leaves nothing. At a name already taken, the engine writes nothing there, and what stood there is as it was;
+- `Cli.Tests/InspectionCommandTests`, on POSIX: with `TMPDIR` pointed at a folder that does not exist, `restore-file` restores its file.
+
+**Not done.** The executor still writes each file twice, once into its part and once into the spool beside its destination. Its parts are kept apart from where it writes on purpose, since a part holds the plaintext of a file still assembling.
+
 ## Status history
 
 | Date | Status | Note |
@@ -109,3 +130,4 @@ A resume looks beside a file in the way for a copy an earlier run wrote ([ADR-01
 | 2026-10 | Accepted (related) | [ADR-0170 Amendment 1](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds): a name longer than a Linux target holds is named in the plan. `Restore/RestorePlan` |
 | 2026-10 | Amended | Amendment 1: the command line's `restore-file` writes its file whole beside its output and moves it there once verified, so one that fails leaves the output as it was, and a link at the output is replaced rather than written through. `Cli/CliApplication`; `Cli.Tests/InspectionCommandTests` |
 | 2026-10 | Amended | Amendment 2: under rename, the copy written beside a file in the way keeps as much of the file's stem as fits within the limit the target states on one name, cut where a whole character ends, and a resume finds it by the same cut. `Restore/RestoreExecutor`; `Repository.Tests/RestoreLongNameTests` |
+| 2026-10 | Amended | Amendment 3: the engine assembles a file where it is to stay, and `restore-file` assembles into the spool beside its output, so its file is written once and needs no room in the temporary folder. `Repository/RestoreEngine`; `Cli/CliApplication`; `Repository.Tests/SparseRestoreTests`; `Cli.Tests/InspectionCommandTests` |
