@@ -86,17 +86,21 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             FileAttributes = 0x20,
         };
 
-        // A target that sets no creation times and writes no extended
-        // attributes or attribute bits, and an owner and group no machine
-        // has, so the list is one list on every platform and under any
-        // account; the tests below, RestoreExtendedAttributesTests and
+        // A target that sets no creation times, keeps no extended
+        // attributes, as attributes or as streams, and writes no attribute
+        // bits, and an owner and group no machine has, so the list is one
+        // list on every platform and under any account; the tests below,
+        // RestoreExtendedAttributesTests, ExtendedAttributeStreamsTests and
         // RestoreFileAttributesTests hold the others.
         var (receipt, output) = await PublishAndRestoreAsync(
             source,
             0xC1,
             RestoreTargetProfile.ForLocalPlatform() with
             {
-                SupportsCreationTimes = false, SupportsExtendedAttributes = false, SupportsFileAttributes = false,
+                SupportsCreationTimes = false,
+                SupportsExtendedAttributes = false,
+                SupportsAlternateStreams = false,
+                SupportsFileAttributes = false,
             });
 
         var item = receipt.Items.Single(candidate => candidate.Path == "data/owned.bin");
