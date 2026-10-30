@@ -221,6 +221,52 @@ public sealed class AtomicFileTests : IDisposable
     }
 
     [TestMethod]
+    public void AContendedReplace_WaitsAtLeast383AndAtMost766MillisecondsInAll()
+    {
+        // Each wait is drawn from the upper half of a ceiling that doubles
+        // from 2 ms to 128 ms, so writers contending for one destination spread
+        // apart rather than retry in step (ADR-0010 Amendment 10). The least it
+        // can wait in all is what a writer holding the destination briefly is
+        // given, and well past the 100 ms the Windows case below holds it; the
+        // most is how late a destination that never frees is reported.
+        Assert.AreEqual(TimeSpan.FromMilliseconds(383), AtomicFile.LeastReplaceWait);
+        Assert.AreEqual(TimeSpan.FromMilliseconds(766), AtomicFile.MostReplaceWait);
+        Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(1), AtomicFile.MostReplaceWait);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows,
+        "only Windows refuses to rename a file over one another handle holds open without sharing deletion")]
+    [DoNotParallelize] // The handle's release is timed against the replace's real waits.
+    public void WriteAllText_WhileAReaderHoldsTheDestinationBriefly_WaitsForIt_AndReplacesIt()
+    {
+        // A reader that does not share deletion, as one written before
+        // Amendment 8 did, holds the replace off until it closes. Released on
+        // a thread of its own, so a busy pool cannot hold it past the waits.
+        var path = Path.Combine(_root, "state.json");
+        AtomicFile.WriteAllText(path, "before");
+        var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var release = new Thread(() =>
+        {
+            Thread.Sleep(100);
+            held.Dispose();
+        });
+        release.Start();
+
+        try
+        {
+            AtomicFile.WriteAllText(path, "after");
+        }
+        finally
+        {
+            release.Join();
+        }
+
+        Assert.AreEqual("after", AtomicFile.ReadAllText(path));
+        Assert.IsEmpty(Directory.GetFiles(_root, "*.tmp"));
+    }
+
+    [TestMethod]
     public void IsReplaceContention_ContentionAndDefects_AreToldApart()
     {
         // The classification is the part of the retry a test can reach.

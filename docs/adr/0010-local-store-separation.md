@@ -537,6 +537,26 @@ The receipts are what a person meets. A run keeps its receipt again under its ow
 
 **Not done.** A reader in a type that does not write the file is held only where a test names it, as the receipt report is.
 
+## Amendment 10 (2026-10) — a contended replace waits long enough, and not in step
+
+`AtomicFile` writes a state file beside its destination and renames it into place. On Windows the rename is refused while another handle holds the destination without sharing deletion, or while another writer is mid-rename onto it. POSIX `rename(2)` simply wins or loses. The replace absorbed that by trying ten times, waiting one, then two, then up to nine milliseconds between tries, about 45 ms in all. CI's Windows job then failed `Application.Tests/AtomicFileTests`' 32-writer case, run beside the suite's other classes, with the refusal escaping as `Access to the path is denied`. The same commit passed the same job in the other run. Every writer waited the same fixed steps, so writers that collided once tried again in step. Forty-five milliseconds is also shorter than a busy machine takes to hand a file back. The [coverage audit](../review/2026-08-coverage-audit.md)'s G1 had already found the retry held by no test on any platform.
+
+**Decision.** A contended replace waits long enough, at random:
+
+- **twelve attempts;**
+- **after each refusal, a wait drawn at random from the upper half of a ceiling that doubles,** from 2 ms to 128 ms and held there. Writers that collided spread apart instead of colliding again in step;
+- **bounded both ways.** In all, a replace waits at least 383 ms for a contended destination to free, and at most 766 ms before it reports one that never does (`AtomicFile.LeastReplaceWait`, `AtomicFile.MostReplaceWait`);
+- **only for contention.** A missing source or folder is reported at once, as before (`AtomicFile.IsReplaceContention`).
+
+Each attempt is still one atomic rename, so what a reader can see is unchanged.
+
+**Built:** `Domain/AtomicFile`. Held by `Application.Tests/AtomicFileTests`:
+
+- on every platform, a replace waits at least 383 ms and at most 766 ms in all, never a second;
+- on Windows, a reader that holds the destination for 100 ms without sharing deletion, released on a thread of its own, holds the replace off, and the replace then lands. It runs alone, since its release is timed against the replace's real waits. Under the old waits it could not pass: 45 ms is shorter than 100.
+
+The 32-writer case stands as it was.
+
 ## Status history
 
 | Date | Status | Note |
@@ -552,3 +572,4 @@ The receipts are what a person meets. A run keeps its receipt again under its ow
 | 2026-10 | Accepted (amended) | Amendment 7: a catalogue rebuilt at open short of the records it needed, or unable to read the repository, raises a notice naming the set, and the rebuild that reads everything resolves it. A rebuild whose index load reported findings is complete as a listing, and its findings are the catalogue's damage, which a check names. Set in `Agent/ServiceRuntime`, held by `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
 | 2026-10 | Accepted (amended) | Amendment 8: a type that saves durable state through the atomic replace reads it through the same helper, which shares deletion with the save's rename. A read on Windows that meets a save therefore reads one whole version instead of failing. Fifteen reads in twelve stores, among them `Protocol/PeerGrantStore`, the grant store whose failed read showed it. Held by `ArchitectureTests/StateFileReadTests` and, on Windows, `Protocol.Tests/PeerGrantStoreTests`. |
 | 2026-10 | Accepted (amended) | Amendment 9: a store that renames a temporary of its own into place reads through the same helper too, which gains reads of bytes and of lines. The writer sequence, the write and installation credentials, the spool checkpoint and restore receipts read sharing deletion, and a receipt kept again is listed as it reads rather than as unreadable. Set in `Domain/AtomicFile`, held by `ArchitectureTests/StateFileReadTests` and, on Windows, `Repository.Tests/Index/FileSequenceStateStoreTests` and `Cli.Tests/RestoreReceiptsVerbTests`. |
+| 2026-10 | Accepted (amended) | Amendment 10: a replace refused on Windows for contention tries twelve times, each wait drawn at random from the upper half of a ceiling doubling from 2 ms to 128 ms, so it waits at least 383 ms and at most 766 ms in all, and writers that collided do not retry in step. `Domain/AtomicFile`; `Application.Tests/AtomicFileTests` |
