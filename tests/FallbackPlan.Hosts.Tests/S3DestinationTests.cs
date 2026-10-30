@@ -1,3 +1,4 @@
+using System.Globalization;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
@@ -17,7 +18,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// and what only a bucket has: a key id the key's envelope is bound to, an
 /// address the configuration and the provider must agree on, and a store
 /// that can be full or hold a quota, each told apart from a throttle and
-/// from the other (FR-QUOTA-001, FR-QUOTA-002).
+/// from the other (FR-QUOTA-001, FR-QUOTA-002). A bucket that keeps versions
+/// answers the deletes its retention asks for and keeps their bytes, and the
+/// sync says how many (FR-GC-010, ADR-0171 Amendment 2).
 /// </summary>
 /// <remarks>
 /// The access key reaches the service only as an envelope sealed to its
@@ -264,4 +267,60 @@ public sealed class S3DestinationTests() : ObjectStoreDestinationTests(StartStor
         var synced = Pair(runtime, "cloud");
         Assert.AreEqual(DestinationSyncState.InSync, synced.State, synced.LastError);
     }
+
+    [TestMethod]
+    public async Task Sync_ToABucketThatKeepsVersions_StaysInSync_AndSaysWhatItsDeletesKept()
+    {
+        // A bucket under object lock keeps versions, and so does one with
+        // versioning on: each delete the store's retention asks for is
+        // answered, and the bytes stay behind a delete marker. The replica
+        // is whole, and only a notice can say the space did not come back.
+        WriteConfiguration(directShip: false, retention: new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 });
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var now = DateTimeOffset.Now;
+        await BackUpAsync(runtime, now);
+
+        S3.KeepVersions(Namespace);
+        Harness.WriteSourceFile("docs/c.txt", "written after the first backup, so held by the second snapshot alone");
+        await BackUpAsync(runtime, now.AddHours(1));
+
+        var kept = S3.EarlierVersionBytesIn(Namespace);
+        Assert.IsGreaterThan(0L, kept, "the premise: the store's retention deleted something, and the bucket kept it");
+        var synced = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, synced.State, synced.LastError);
+        var notice = RetainedDeletesNotice(runtime);
+        Assert.IsNotNull(notice, "space a delete did not release is said, not just logged");
+        Assert.Contains("earlier version", notice.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{kept.ToString("N0", CultureInfo.InvariantCulture)} byte(s)", notice.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("damaged", await VerifyAsync(runtime), StringComparison.Ordinal);
+
+        // A pass that deletes nothing has learned nothing about the bucket.
+        // One two days on reads the store through, and its policy drops
+        // nothing more: the newest snapshot is the one generation it keeps.
+        var reading = FanOut.Enqueue(
+            runtime, runtime.Configuration.BackupSets.Single(), "cloud", now.AddDays(2), userInitiated: true);
+        Assert.IsNotNull(reading, "nothing else was syncing");
+        await reading.WaitAsync(Timeout);
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
+        Assert.AreEqual(kept, S3.EarlierVersionBytesIn(Namespace), "the premise: that pass deleted nothing");
+        Assert.IsNotNull(RetainedDeletesNotice(runtime), "a pass that deleted nothing does not resolve it");
+
+        // Once the bucket keeps no versions, the next sync's deletes release
+        // their space and the notice goes.
+        S3.KeepNoVersions(Namespace);
+        Harness.WriteSourceFile("docs/d.txt", "written once the bucket kept no versions");
+        await BackUpAsync(runtime, now.AddDays(2).AddHours(1));
+        Assert.AreEqual(kept, S3.EarlierVersionBytesIn(Namespace), "the premise: nothing more was kept");
+        Assert.IsNull(RetainedDeletesNotice(runtime));
+    }
+
+    /// <summary>The notice that the bucket kept what its deletes hid, or null.</summary>
+    /// <param name="runtime">The service.</param>
+    private Notice? RetainedDeletesNotice(ServiceRuntime runtime) =>
+        runtime.Notices.Unacknowledged.SingleOrDefault(notice =>
+            notice.Key == $"destination-deletes-retained:{Harness.DocsSetId}:cloud");
 }

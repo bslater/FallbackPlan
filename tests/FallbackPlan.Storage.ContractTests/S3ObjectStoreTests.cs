@@ -21,6 +21,9 @@ namespace FallbackPlan.Storage.ContractTests;
 /// An object a lifecycle rule moved to an archival storage class is said to
 /// be archived until a restore of it finishes, and a read of it is refused as
 /// archived, never as a fault of the credentials (FR-RST-003, ADR-0103).
+/// A delete in a bucket that keeps versions is a delete that says how many
+/// bytes the bucket kept as an earlier version (FR-GC-010, ADR-0171
+/// Amendment 2).
 /// </summary>
 [TestClass]
 public sealed class S3ObjectStoreTests : IAsyncDisposable
@@ -393,6 +396,36 @@ public sealed class S3ObjectStoreTests : IAsyncDisposable
         Assert.Contains("archival", refused.Message, StringComparison.Ordinal);
         Assert.Contains("blobs/data/ab/cold", refused.Message, StringComparison.Ordinal);
         Assert.ContainsSingle(_server.Requests.Where(request => request.Method == "GET"));
+    }
+
+    [TestMethod]
+    public async Task Delete_InABucketThatKeepsVersions_IsDeleted_AndSaysHowManyBytesItKept()
+    {
+        // Versioning, or the object lock that needs it: the API answers the
+        // delete with success and a delete marker, and the bytes stay as an
+        // earlier version that nothing lists or reads.
+        var store = Store();
+        await store.PutAsync(Key("snapshots/ab/old"), Content(new byte[37]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.KeepVersions(Bucket);
+
+        var deleted = await store.DeleteAsync(Key("snapshots/ab/old"), DeleteConditions.None, CancellationToken.None);
+
+        Assert.AreEqual(DeleteOutcome.Deleted, deleted.Outcome);
+        Assert.AreEqual(37L, deleted.RetainedBytes, "the object's bytes are kept, and the store said so");
+        Assert.IsFalse((await store.GetMetadataAsync(Key("snapshots/ab/old"), CancellationToken.None)).Found);
+        Assert.AreEqual(37L, _server.EarlierVersionBytesIn(Bucket));
+    }
+
+    [TestMethod]
+    public async Task Delete_InABucketThatKeepsNoVersions_KeepsNothing()
+    {
+        var store = Store();
+        await store.PutAsync(Key("snapshots/ab/old"), Content(new byte[37]), PutConditions.IfNotExists, CancellationToken.None);
+
+        var deleted = await store.DeleteAsync(Key("snapshots/ab/old"), DeleteConditions.None, CancellationToken.None);
+
+        Assert.AreEqual(new DeleteResult(DeleteOutcome.Deleted), deleted);
+        Assert.IsNull(deleted.RetainedBytes);
     }
 
     [TestMethod]

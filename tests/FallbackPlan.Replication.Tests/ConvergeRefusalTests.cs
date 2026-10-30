@@ -14,7 +14,9 @@ namespace FallbackPlan.Replication.Tests;
 /// pass goes on, so the sync is not failed for it, and nothing beneath the
 /// refused object is dropped in that pass, so the replica still restores
 /// every snapshot it lists. A store that cannot be reached is not a refusal:
-/// that pass fails and is tried again.
+/// that pass fails and is tried again. Neither is one that keeps versions,
+/// which answers the delete and keeps the bytes as an earlier version: the
+/// pass goes on beneath it and counts what was kept (ADR-0171 Amendment 2).
 /// </summary>
 /// <remarks>
 /// The fixture is a replica holding two snapshots and the blobs each reaches,
@@ -174,6 +176,58 @@ public sealed class ConvergeRefusalTests
         Assert.IsTrue(await HoldsAsync(OldOnlyBlob));
     }
 
+    [TestMethod]
+    public async Task Converge_ADestinationThatKeepsVersions_DropsWhatItsPolicyReleases_AndCountsWhatItKept()
+    {
+        // A bucket that keeps versions answers each delete and keeps the
+        // bytes behind a delete marker. Nothing lists or reads the object
+        // after, so it is gone as far as the replica goes and the pass drops
+        // what lay beneath it; what the store kept is counted, in bytes.
+        var versioned = new VersionKeepingStore(_replica);
+
+        var outcome = await StoreToStoreCopier.ConvergeAsync(_source, versioned, Keeps, CancellationToken.None);
+
+        Assert.AreEqual(2L, outcome.Deleted);
+        Assert.AreEqual(0L, outcome.Refused, "a store that answered the delete did not refuse it");
+        Assert.AreEqual(2L, outcome.Retained);
+        Assert.AreEqual(2 * HeldLength, outcome.RetainedBytes, "the space the store kept, in bytes");
+        Assert.IsFalse(await HoldsAsync(OldSnapshot));
+        Assert.IsFalse(await HoldsAsync(OldOnlyBlob));
+    }
+
     private async Task<bool> HoldsAsync(string key) =>
         (await _replica.GetMetadataAsync(ObjectKey.Parse(key), CancellationToken.None)).Found;
+
+    /// <summary>
+    /// A store that keeps versions: a delete hides the object, as a delete
+    /// marker does, and says how many bytes it kept.
+    /// </summary>
+    private sealed class VersionKeepingStore(IObjectStore inner) : IObjectStore
+    {
+        public StoreCapabilities Capabilities => inner.Capabilities;
+
+        public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+            inner.GetMetadataAsync(key, cancellationToken);
+
+        public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken) =>
+            inner.OpenReadAsync(key, range, cancellationToken);
+
+        public ValueTask<PutResult> PutAsync(
+            ObjectKey key,
+            Func<CancellationToken, ValueTask<Stream>> openContent,
+            PutConditions conditions,
+            CancellationToken cancellationToken) =>
+            inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+        public IAsyncEnumerable<ObjectEntry> ListAsync(ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+            inner.ListAsync(prefix, options, cancellationToken);
+
+        public async ValueTask<DeleteResult> DeleteAsync(
+            ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken)
+        {
+            var held = await inner.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
+            var deleted = await inner.DeleteAsync(key, conditions, cancellationToken).ConfigureAwait(false);
+            return deleted.Outcome == DeleteOutcome.Deleted ? deleted with { RetainedBytes = held.Metadata!.Length } : deleted;
+        }
+    }
 }
