@@ -17,6 +17,9 @@ public sealed class MetadataWriter(MetadataTarget target)
     /// <summary>The groups' names this writer has resolved.</summary>
     private readonly Dictionary<string, uint?> _groups = new(StringComparer.Ordinal);
 
+    /// <summary>The SIDs this writer has asked the machine whether it knows.</summary>
+    private readonly Dictionary<string, bool> _accounts = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Writes back what the target takes of <paramref name="metadata"/> onto
     /// the file landed, the folder made or the symlink made at
@@ -39,8 +42,12 @@ public sealed class MetadataWriter(MetadataTarget target)
     /// macOS a modification time set earlier than the creation time makes
     /// the volume move the creation time back to it, and .NET then restores
     /// the one before; written last, the captured creation time is the last
-    /// word whichever of those holds. A folder is written through the
-    /// folder's own calls, which Windows needs to open one for its times.
+    /// word whichever of those holds. On Windows the attribute bits follow,
+    /// because a read-only file refuses the writes before them, and the
+    /// security descriptor goes on after everything, because its DACL may
+    /// take from this account the access those writes need. A folder is
+    /// written through the folder's own calls, which Windows needs to open
+    /// one for its times.
     /// </para>
     /// <para>
     /// An owner or group is attempted wherever its name resolves, whatever
@@ -199,19 +206,44 @@ public sealed class MetadataWriter(MetadataTarget target)
             }
         }
 
+        // Last of all, because a DACL may take from this account the access
+        // every write before it needs. A SID names the account it meant only
+        // where this machine or its domain issued it, so a descriptor naming
+        // one this machine does not know would hand the file to nobody's
+        // access; it is not written, and the file keeps its folder's.
+        string? descriptorDetail = null;
+        if (target.SupportsSecurityDescriptors && OperatingSystem.IsWindows() && !link
+            && metadata.WindowsSecurityDescriptor is { IsEmpty: false } descriptor)
+        {
+            var read = WindowsSecurityDescriptor.Read(descriptor.Span);
+            var strangers = read?.Accounts.Where(account => !Known(account)).ToList() ?? [];
+            if (read is null)
+            {
+                descriptorDetail = "security descriptor not applied: it does not read as one";
+            }
+            else if (strangers.Count > 0)
+            {
+                descriptorDetail = $"security descriptor not applied: it names {string.Join(", ", strangers)}, which this machine does not know";
+            }
+            else if (WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true))
+            {
+                applied |= CapturedMetadata.SecurityDescriptor;
+            }
+            else
+            {
+                descriptorDetail = read.DaclPresent && WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: false)
+                    ? "security descriptor's owner and group not applied (refused by the target); its access control list was"
+                    : "security descriptor not applied (refused by the target)";
+            }
+        }
+
         var attributesDetail = left.Count == 0
             ? null
             : "extended attribute(s) not applied: " + string.Join("; ", left
                 .GroupBy(entry => entry.Why, StringComparer.Ordinal)
                 .Select(reason => $"{string.Join(", ", reason.Select(entry => entry.Name))} ({reason.Key})"));
-        return new MetadataWritten(
-            applied,
-            (attributesDetail, unsetDetail) switch
-            {
-                (null, var only) => only,
-                (var only, null) => only,
-                var (first, second) => $"{first}; {second}",
-            });
+        var details = new[] { attributesDetail, unsetDetail, descriptorDetail }.OfType<string>().ToList();
+        return new MetadataWritten(applied, details.Count == 0 ? null : string.Join("; ", details));
 
         static bool Wrote(Action write)
         {
@@ -224,6 +256,16 @@ public sealed class MetadataWriter(MetadataTarget target)
             {
                 return false;
             }
+        }
+
+        bool Known(string account)
+        {
+            if (!_accounts.TryGetValue(account, out var known))
+            {
+                _accounts[account] = known = target.KnowsAccount(account);
+            }
+
+            return known;
         }
 
         static uint? Resolved(Dictionary<string, uint?> known, string name, Func<string, uint?> resolve)

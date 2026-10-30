@@ -501,7 +501,8 @@ public sealed class RecoverySession : IDisposable
         var restored = 0;
         var failed = 0;
         var skipped = 0;
-        var writer = new MetadataWriter(MetadataTarget.ForLocalPlatform());
+        var target = MetadataTarget.ForLocalPlatform();
+        var writer = new MetadataWriter(target);
         var folders = new List<Folder>();
         var notApplied = new Dictionary<string, int>(StringComparer.Ordinal);
         var link = makeLink ?? HardLinks.TryCreate;
@@ -582,7 +583,8 @@ public sealed class RecoverySession : IDisposable
 
                 // A folder's own metadata rides on the first manifest of its
                 // chain. Only what the writer can apply is kept, so a tree of
-                // many folders holds no descriptors or streams.
+                // many folders holds no streams, and descriptors only where
+                // the writer writes them.
                 if (id == treeId && folder is { } made)
                 {
                     var own = tree.Metadata ?? EntryMetadata.Empty;
@@ -591,7 +593,11 @@ public sealed class RecoverySession : IDisposable
                         made.Destination,
                         made.Found,
                         MetadataRules.Captured(own),
-                        own with { WindowsSecurityDescriptor = null, AlternateStreams = [] }));
+                        own with
+                        {
+                            WindowsSecurityDescriptor = target.SupportsSecurityDescriptors ? own.WindowsSecurityDescriptor : null,
+                            AlternateStreams = [],
+                        }));
                 }
 
                 // The name each file here is first written under is the
