@@ -807,7 +807,6 @@ public sealed class RestoreExecutor(
             : chosen;
 
         Directory.CreateDirectory(root);
-        var displacedRoot = Path.Combine(chosen, options.DisplacedDirectory, options.RunId);
         var engine = new RestoreEngine(reader);
         var items = new List<ReceiptItem>();
         var folders = new List<Folder>();
@@ -997,7 +996,7 @@ public sealed class RestoreExecutor(
                         {
                             notLinked = $"not linked to {first.Path}: its content or attributes differ from that name's, so it was restored as a file of its own";
                         }
-                        else if (Link(item, destination, first, displacedRoot, displaced, options) is { } linked)
+                        else if (Link(item, destination, first, chosen, displaced, options) is { } linked)
                         {
                             items.Add(linked);
                             continue;
@@ -1045,8 +1044,8 @@ public sealed class RestoreExecutor(
                         // repository restored there included, is removed
                         // rather than opened, and the spool is made new, as
                         // the recovery tool's is (ADR-0152 Amendment 1):
-                        // opening the name followed the link, and the file's
-                        // content went wherever it led.
+                        // opening the name would follow the link, taking the
+                        // file's content wherever it leads.
                         File.Delete(spool);
                         var output = new FileStream(spool, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
                         await using (output.ConfigureAwait(false))
@@ -1137,7 +1136,7 @@ public sealed class RestoreExecutor(
                             // this run's own store. overwrite is false on purpose:
                             // if something is already there the displaced copy is
                             // not ours to destroy.
-                            if (!TryResolve(displacedRoot, item.Path, out var refuge, out var displacedRefusal))
+                            if (!TryDisplace(chosen, item.Path, options, out var refuge, out var displacedRefusal))
                             {
                                 File.Delete(spool);
                                 items.Add(new ReceiptItem
@@ -1232,7 +1231,7 @@ public sealed class RestoreExecutor(
                                     continue;
 
                                 case ExistingDestinationPolicy.Preserve:
-                                    if (!TryResolve(displacedRoot, item.Path, out var linkRefuge, out var linkRefusal))
+                                    if (!TryDisplace(chosen, item.Path, options, out var linkRefuge, out var linkRefusal))
                                     {
                                         items.Add(new ReceiptItem
                                         {
@@ -1767,6 +1766,18 @@ public sealed class RestoreExecutor(
     }
 
     /// <summary>
+    /// Where <paramref name="path"/>'s file is moved aside to: this run's own
+    /// folder in the displaced store, resolved under <paramref name="chosen"/>
+    /// as a restored path is (ADR-0152 Amendment 2). The store's name is fixed,
+    /// so a repository can restore a link there, and with the run's folder as
+    /// the root that link would be followed as a root's own links are, taking
+    /// the person's file wherever it leads.
+    /// </summary>
+    private static bool TryDisplace(
+        string chosen, string path, RestoreExecutionOptions options, out string refuge, out string refusal) =>
+        TryResolve(chosen, $"{options.DisplacedDirectory}/{options.RunId}/{path}", out refuge, out refusal);
+
+    /// <summary>
     /// Makes the later name <paramref name="item"/> of a hard-link group a
     /// further name for the file <paramref name="first"/> landed as
     /// (ADR-0102), meeting the existing-file policy at its destination as a
@@ -1780,7 +1791,7 @@ public sealed class RestoreExecutor(
     /// verified for it: it is the file that was.
     /// </remarks>
     private ReceiptItem? Link(
-        RestorePlanItem item, string destination, LandedName first, string displacedRoot, List<string> displaced,
+        RestorePlanItem item, string destination, LandedName first, string chosen, List<string> displaced,
         RestoreExecutionOptions options)
     {
         if (Directory.Exists(destination))
@@ -1808,7 +1819,7 @@ public sealed class RestoreExecutor(
                         };
 
                     case ExistingDestinationPolicy.Preserve:
-                        if (!TryResolve(displacedRoot, item.Path, out var refuge, out var refusal))
+                        if (!TryDisplace(chosen, item.Path, options, out var refuge, out var refusal))
                         {
                             return new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = refusal };
                         }
