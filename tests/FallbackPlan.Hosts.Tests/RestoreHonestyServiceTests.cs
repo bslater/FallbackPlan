@@ -301,12 +301,14 @@ public sealed class RestoreHonestyServiceTests : IDisposable
             out var plan);
 
         // On macOS every file, folder and link here gets all it carries back,
-        // so the plan may declare nothing at all.
+        // so the plan may declare nothing at all. On Windows the attribute
+        // bits come back (ADR-0175), and the security descriptors do not.
         var declared = plan.Degradations ?? [];
         if (OperatingSystem.IsWindows())
         {
+            Assert.DoesNotContain(line => line.Contains("File attributes", StringComparison.Ordinal), declared);
             Assert.Contains(
-                line => line.Contains("File attributes", StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
+                line => line.Contains("Security descriptors", StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
                 declared);
         }
         else
