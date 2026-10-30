@@ -61,6 +61,8 @@ The cost is space: objects a deleted snapshot alone reached wait for a pass with
 
   > **Built 2026-10 ([Amendment 1](#amendment-1-2026-10--said-in-bytes)).** Both now say how many bytes a refusal holds. What a refused object reaches, held back with it, is still not sized.
 - **Tell a versioned bucket's delete marker from a delete.** An S3 bucket with versioning answers a delete with success and keeps the object's bytes, so the space is not freed and nothing says so. The replica is valid, since the object no longer lists or reads.
+
+  > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said)).** The S3 provider reports what a delete marker hid, and the sync says how much the bucket kept. An Azure Blob account that keeps versions or soft-deletes is not yet told apart.
 - **Judge a direct-ship sink per destination.** A delete through the sink reports Deleted when any one destination deleted.
 
 ## Alternatives considered
@@ -88,9 +90,34 @@ A store that refuses a delete still answers a read, so a length costs one metada
 - `Hosts.Tests/ObjectStoreDestinationTests`, for S3 and Azure Blob: the notice states a byte figure above nothing.
 - `Retention.Tests/SweepFailureTests`: the deferred objects and the sum of their lengths are on the outcome and on the "swept:" line.
 
+## Amendment 2 (2026-10) — a delete a bucket keeps is said
+
+The review's T-12 names a bucket under object lock as the usual defence, and §1 does not reach one on S3. Object lock needs versioning, and the bucket does not refuse a delete without a version id. It answers with success and writes a delete marker. The object no longer lists or reads, and its bytes stay as an earlier version until the bucket's own rules release them. A bucket with versioning on does the same. The converge took each such delete as space released, and nothing said otherwise.
+
+**Decision.** A delete the store answers and keeps all the same is a delete that says so:
+
+- **The contract.** `DeleteResult` gains `RetainedBytes`: the bytes a store kept although it answered the delete, null where it kept none or does not say. It is optional, so every provider and wrapper that builds a plain result is unchanged.
+- **The S3 provider.** It already asks for an object's metadata before it deletes it. When the API's answer to the delete carries `x-amz-delete-marker: true`, it reports that object's length as retained.
+- **The converge.** A retained delete is a delete. Nothing lists or reads the object after, so nothing beneath it is held back for it, and it is not a refusal. It is also counted as retained, in objects and bytes.
+- **The notice.** Fan-out raises one per destination and set, keyed `destination-deletes-retained:{set}:{destination}`. It says how many objects and bytes the store kept as earlier versions, that every snapshot it lists still restores, and that the space comes back only by the store's own rule for earlier versions. A pass whose deletes kept none resolves it. A pass that deleted nothing leaves it as it stands, having learned nothing.
+
+What this does not do:
+
+- **An Azure Blob account that keeps versions or soft-deletes.** Its delete keeps the blob as a previous version or a deleted one, and its answer is not read for that. The space is held and nothing says so, as it was for S3.
+- **Size what a bucket kept before.** The figure is each pass's own deletes, not what earlier ones left.
+
+**Built:** `Storage.Abstractions/StoreResults`, `Storage.S3/S3ObjectStore`, `Replication/StoreToStoreCopier` and `Agent/FanOut`. The tests:
+
+- `Storage.ContractTests/S3ObjectStoreTests`: a delete in a bucket that keeps versions is a delete that says the length of what it hid, and the object no longer reads. One in a bucket that keeps none is a plain delete.
+- `Replication.Tests/ConvergeRefusalTests`: at a destination that keeps versions, the older snapshot and the blob only it reaches are deleted, nothing is refused, and the outcome counts both as retained, in objects and bytes.
+- `Hosts.Tests/S3DestinationTests`: a sync under a retention policy to a bucket that keeps versions stays in sync, verifies whole and raises the notice with the bytes the bucket kept. Once the bucket keeps none, the next sync's deletes resolve it.
+
+The S3-compatible test server answers a delete in a bucket that keeps versions as the API does, with the delete marker's header and a version id.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A delete a destination does not carry out is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync; a busy or unreachable store still does. No contract or format change. |
 | 2026-10 | Amended | Amendment 1: a destination's refusals and the staging sweep's deferrals are said in bytes, in the notice and on the report's "swept:" line. `Replication/StoreToStoreCopier`; `Retention/StagingSweep`; `Retention.Tests/SweepFailureTests` |
+| 2026-10 | Amended | Amendment 2: a delete a store answers and keeps as an earlier version, as an S3 bucket under object lock or with versioning does, is counted as retained, in objects and bytes, and noticed. It is a delete, not a refusal. `Storage.Abstractions/StoreResults`; `Storage.S3/S3ObjectStore`; `Replication.Tests/ConvergeRefusalTests`; `Hosts.Tests/S3DestinationTests` |

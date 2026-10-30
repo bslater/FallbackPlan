@@ -343,7 +343,7 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
     {
         // The API deletes nothing successfully, so whether there was anything
         // to delete is asked first: the contract reports the two apart.
-        if (!(await GetMetadataAsync(key, cancellationToken).ConfigureAwait(false)).Found)
+        if ((await GetMetadataAsync(key, cancellationToken).ConfigureAwait(false)).Metadata is not { } held)
         {
             return new DeleteResult(DeleteOutcome.NotFound);
         }
@@ -357,7 +357,10 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
         {
             case HttpStatusCode.NoContent or HttpStatusCode.OK:
                 Log.ObjectDeleted(_logger, key);
-                return new DeleteResult(DeleteOutcome.Deleted);
+
+                // A bucket that keeps versions answers with the delete marker
+                // it wrote, and the bytes it hid stay as an earlier version.
+                return new DeleteResult(DeleteOutcome.Deleted, WroteDeleteMarker(response) ? held.Length : null);
 
             case HttpStatusCode.NotFound:
                 return new DeleteResult(DeleteOutcome.NotFound);
@@ -368,6 +371,10 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
     }
 
     private string FullKey(ObjectKey key) => _root + key.Value;
+
+    private static bool WroteDeleteMarker(HttpResponseMessage response) =>
+        response.Headers.TryGetValues("x-amz-delete-marker", out var values)
+        && values.Any(value => string.Equals(value.Trim(), "true", StringComparison.OrdinalIgnoreCase));
 
     private async ValueTask<ListPage> ListPageAsync(
         string prefix, string? delimiter, string? startAfter, string? continuation, int pageSize,

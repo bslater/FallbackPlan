@@ -195,7 +195,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0168](adr/0168-a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it.md) | A prefetch takes a blob's envelope only where the read may want it: once an envelope the reader framed shows format 3, and none shows an older one, a run over records it can read before their envelope starts at the first of them | **Built** | `Repository/RepositoryReader` · `Repository.Tests/SparseRecordReadTests` · `Repository.Tests/RestoreBreadthTests` · [notes](#0168--a-prefetch-takes-a-blobs-envelope-only-where-the-read-may-want-it) |
 | [0169](adr/0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md) | The console lets go by age: the dialogs that let every run left unfinished and every kept receipt go take optional days, let go only what began or ended longer ago, say how many stay, and name a receipt that does not say when its run ended | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0169--the-console-lets-go-by-age-what-began-or-ended-longer-ago) |
 | [0170](adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) | A restore plan judges names by the target's naming rules: a name no target restores, and for a Windows target a name Windows would refuse or alter, is a conflict before any byte moves; a restore that runs on Windows refuses such a name rather than letting Windows write it under another | **Built** | `Domain/RestorePaths` · `Restore/RestorePlan` · `Domain.Tests/WindowsNamesTests` · `Repository.Tests/EndToEnd/RestorePlanTests` · [notes](#0170--a-restore-plan-judges-names-by-the-targets-naming-rules) |
-| [0171](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) | A destination that refuses a delete keeps what it reaches, and the sync goes on: a delete the store refuses, or answers "not found" for an object still listed, is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync | **Built** | `Replication/StoreToStoreCopier` · `Agent/FanOut` · `Replication.Tests/ConvergeRefusalTests` · `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0171--a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on) |
+| [0171](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) | A destination that refuses a delete keeps what it reaches, and the sync goes on: a delete the store refuses, or answers "not found" for an object still listed, is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync | **Built** | `Replication/StoreToStoreCopier` · `Agent/FanOut` · `Storage.Abstractions/StoreResults` · `Storage.S3/S3ObjectStore` · `Replication.Tests/ConvergeRefusalTests` · `Hosts.Tests/ObjectStoreDestinationTests` · `Hosts.Tests/S3DestinationTests` · [notes](#0171--a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on) |
 | [0172](adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) | A blob that goes while a restore reads it is one the store no longer holds: a read that fails as damage fails asks the store, and a blob it no longer holds is forgotten, read around as not held or failed, and never ends the run; a copy that stops holding a blob while the run reads around to it is passed over as not held (Amendment 1) | **Built** | `Repository/RepositoryReader` · `Repository.Tests/RestoreBesideCollectionTests` · [notes](#0172--a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds) |
 
 ---
@@ -4540,7 +4540,8 @@ is busy or unreachable still fails the pass.
 
 What remains is recorded rather than done:
 
-- a versioned bucket's delete marker is taken for a delete;
+- an Azure Blob account that keeps versions or soft-deletes keeps what its
+  deletes hid, and nothing says so;
 - a direct-ship sink reports a delete done when any one destination did.
 
 Amendment 1 says it in bytes. A refused object is asked for its
@@ -4548,6 +4549,14 @@ length, which a store that refuses a delete still gives, and the notice
 states what the refusals hold. The staging sweep counts what it
 deferred, in objects and bytes, on its report's "swept:" line. What a
 refused object reaches, held back with it, is not sized.
+
+Amendment 2 says what a bucket that keeps versions kept. Such a bucket,
+as one under object lock is, answers a delete with a delete marker and
+keeps the bytes. The delete's result now carries the bytes a store kept,
+the S3 provider reads them from the marker's answer, and the convergence
+counts the delete as retained, holding nothing back for it. Fan-out
+raises a notice with the figure, which a pass whose deletes keep none
+resolves.
 
 ### 0172 — a blob that goes while a restore reads it is one the store no longer holds
 

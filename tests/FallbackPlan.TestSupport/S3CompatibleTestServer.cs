@@ -32,6 +32,11 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
 
     private const string EmptyPayloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
+    // Buckets that keep versions, and the bytes each bucket's deletes kept as
+    // earlier versions while it did. Both guarded by the set.
+    private readonly HashSet<string> _versioned = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _earlierVersionBytes = new(StringComparer.Ordinal);
+
     /// <summary>Starts a server on an ephemeral loopback port.</summary>
     /// <param name="accessKeyId">The one access key id it accepts.</param>
     /// <param name="secretAccessKey">The secret that signs for it.</param>
@@ -61,6 +66,40 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
     /// <summary>Declares an empty bucket.</summary>
     /// <param name="name">The bucket's name.</param>
     public void CreateBucket(string name) => AddNamespace(name);
+
+    /// <summary>
+    /// Makes a bucket keep versions, as versioning or an object-lock
+    /// configuration does: a delete then hides the object behind a delete
+    /// marker and answers so, and its bytes stay as an earlier version.
+    /// </summary>
+    /// <param name="name">The bucket's name.</param>
+    public void KeepVersions(string name)
+    {
+        lock (_versioned)
+        {
+            _versioned.Add(name);
+        }
+    }
+
+    /// <summary>Stops a bucket keeping versions; what it kept stays kept.</summary>
+    /// <param name="name">The bucket's name.</param>
+    public void KeepNoVersions(string name)
+    {
+        lock (_versioned)
+        {
+            _versioned.Remove(name);
+        }
+    }
+
+    /// <summary>The bytes a bucket's deletes have kept as earlier versions since it began keeping them.</summary>
+    /// <param name="name">The bucket's name.</param>
+    public long EarlierVersionBytesIn(string name)
+    {
+        lock (_versioned)
+        {
+            return _earlierVersionBytes.GetValueOrDefault(name);
+        }
+    }
 
     /// <inheritdoc />
     protected override IEnumerable<KeyValuePair<string, string>> CommonHeaders =>
@@ -107,7 +146,7 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
                 "PUT" => Put(request, objects, key),
                 "GET" => Get(request, objects, key, head: false),
                 "HEAD" => Get(request, objects, key, head: true),
-                "DELETE" => Delete(objects, key),
+                "DELETE" => Delete(bucketName, objects, key),
                 _ => Error(405, "MethodNotAllowed", "The method is not allowed against this resource."),
             };
         }
@@ -216,11 +255,32 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
         return headers;
     }
 
-    private static Response Delete(SortedDictionary<string, StoredObject> objects, string key)
+    private Response Delete(string bucketName, SortedDictionary<string, StoredObject> objects, string key)
     {
         // 204 whether or not there was anything there, as the API answers.
+        var held = objects.TryGetValue(key, out var removed);
         objects.Remove(key);
-        return new Response(204);
+        lock (_versioned)
+        {
+            if (!_versioned.Contains(bucketName))
+            {
+                return new Response(204);
+            }
+
+            // A bucket that keeps versions writes a delete marker either way,
+            // and the object it hid stays as an earlier version.
+            _earlierVersionBytes[bucketName] =
+                _earlierVersionBytes.GetValueOrDefault(bucketName) + (held ? removed!.Bytes.LongLength : 0);
+        }
+
+        return new Response(204)
+        {
+            Headers = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["x-amz-delete-marker"] = "true",
+                ["x-amz-version-id"] = Guid.NewGuid().ToString("N"),
+            },
+        };
     }
 
     private Response List(
