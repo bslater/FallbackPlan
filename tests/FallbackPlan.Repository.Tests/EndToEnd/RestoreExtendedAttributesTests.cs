@@ -360,14 +360,17 @@ public sealed class RestoreExtendedAttributesTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Receipt_OnATargetThatWritesNoExtendedAttributes_TheyAreListed()
+    public async Task Receipt_OnATargetThatKeepsNoExtendedAttributes_TheyAreListed()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("tagged.bin", Deterministic(700, 8)).Metadata =
             new EntryMetadata { ModifiedAt = Modified, ExtendedAttributes = [Attribute("user.tag", "kept"u8)] };
 
+        // Neither as attributes nor, as Windows keeps them, as streams.
         var (receipt, _) = await PublishAndRestoreAsync(
-            source, 0xA8, RestoreTargetProfile.ForLocalPlatform() with { SupportsExtendedAttributes = false });
+            source,
+            0xA8,
+            RestoreTargetProfile.ForLocalPlatform() with { SupportsExtendedAttributes = false, SupportsAlternateStreams = false });
 
         CollectionAssert.AreEqual(new[] { "extended_attributes" }, Assert.ContainsSingle(receipt.Items).NotApplied!.ToArray());
     }

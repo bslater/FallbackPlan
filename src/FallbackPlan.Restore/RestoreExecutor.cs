@@ -605,7 +605,7 @@ public sealed class RestoreExecutor(
     /// way of restoring shares (ADR-0149), and remembers the names it has
     /// resolved, so a tree of one owner asks the system once.
     /// </summary>
-    private readonly MetadataWriter _metadata = new(target.Metadata);
+    private readonly MetadataWriter _metadata = new(target.Metadata with { Streams = streams ?? AlternateStreams.OfThisPlatform });
 
     /// <summary>
     /// Reads ahead of the restore loop so a blob costs one GET rather than

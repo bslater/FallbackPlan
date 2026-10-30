@@ -37,7 +37,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// bits are written back (ADR-0175), and its security descriptor where the
 /// target knows every account it names (ADR-0176), which the plan predicts
 /// per file, as it predicts an owner the restoring account may not give
-/// without SeRestorePrivilege (ADR-0176 Amendment 2).
+/// without SeRestorePrivilege (ADR-0176 Amendment 2). Where it writes no
+/// extended attributes but keeps streams, a file's attributes are kept as
+/// streams, save those only Linux's kernel reads (ADR-0177).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -84,17 +86,21 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             FileAttributes = 0x20,
         };
 
-        // A target that sets no creation times and writes no extended
-        // attributes or attribute bits, and an owner and group no machine
-        // has, so the list is one list on every platform and under any
-        // account; the tests below, RestoreExtendedAttributesTests and
+        // A target that sets no creation times, keeps no extended
+        // attributes, as attributes or as streams, and writes no attribute
+        // bits, and an owner and group no machine has, so the list is one
+        // list on every platform and under any account; the tests below,
+        // RestoreExtendedAttributesTests, ExtendedAttributeStreamsTests and
         // RestoreFileAttributesTests hold the others.
         var (receipt, output) = await PublishAndRestoreAsync(
             source,
             0xC1,
             RestoreTargetProfile.ForLocalPlatform() with
             {
-                SupportsCreationTimes = false, SupportsExtendedAttributes = false, SupportsFileAttributes = false,
+                SupportsCreationTimes = false,
+                SupportsExtendedAttributes = false,
+                SupportsAlternateStreams = false,
+                SupportsFileAttributes = false,
             });
 
         var item = receipt.Items.Single(candidate => candidate.Path == "data/owned.bin");
@@ -435,6 +441,38 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
 
         static byte[] Owned(string owner) => SecurityDescriptors.Build(
             owner, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, owner)));
+    }
+
+    [TestMethod]
+    public async Task Plan_AnAttributeOnlyLinuxsKernelReads_IsDeclaredOnItsOwnLine_WhereAttributesAreKeptAsStreams()
+    {
+        var source = new FakeFileSystemSource();
+        void Add(string name, string attribute, byte seed) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata = new EntryMetadata
+            {
+                ModifiedAt = Modified,
+                ExtendedAttributes = [new ExtendedAttributeEntry(System.Text.Encoding.UTF8.GetBytes(attribute), new byte[] { 2, 0, 0, 0 })],
+            };
+        Add("tagged.bin", "user.tag", 60);
+        Add("capable.bin", "security.capability", 61);
+        Add("listed.bin", "system.posix_acl_access", 62);
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xDA);
+        var asStreams = Posix with { SupportsExtendedAttributes = false, SupportsAlternateStreams = true };
+        var declared = RestoreMetadata.Declare(plan, facts, asStreams);
+
+        var kernel = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "kernel-attributes"));
+        Assert.Contains("2 file(s)", kernel.Detail, StringComparison.Ordinal);
+        Assert.Contains("streams", kernel.Detail, StringComparison.Ordinal);
+        foreach (var other in new[] { "extended-attributes", "posix-acls", "privileged-attributes", "numbered-acls" })
+        {
+            Assert.DoesNotContain(degradation => degradation.Capability == other, declared, other);
+        }
+
+        // Where the target keeps no streams either, every one is declared as before.
+        var none = RestoreMetadata.Declare(plan, facts, Posix with { SupportsExtendedAttributes = false });
+        Assert.Contains("3 file(s)", Assert.ContainsSingle(none.Where(degradation => degradation.Capability == "extended-attributes")).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "kernel-attributes", none);
     }
 
     [TestMethod]

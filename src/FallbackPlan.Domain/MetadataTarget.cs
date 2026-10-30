@@ -23,6 +23,21 @@ public sealed record MetadataTarget
     public bool SupportsExtendedAttributes { get; init; }
 
     /// <summary>
+    /// Whether the target keeps a file's alternate streams: Windows does, and
+    /// nothing else. Where it does and writes no extended attributes of its
+    /// own, a file's captured attributes are kept as streams of the same
+    /// names (ADR-0177).
+    /// </summary>
+    public bool SupportsAlternateStreams { get; init; }
+
+    /// <summary>
+    /// The calls a file's attributes are written through as streams: the
+    /// platform's unless a caller says otherwise, as a case judged on a
+    /// platform that keeps none does.
+    /// </summary>
+    public IAlternateStreams Streams { get; init; } = AlternateStreams.OfThisPlatform;
+
+    /// <summary>
     /// Whether a file's and a folder's Windows attribute bits are written
     /// back: Windows keeps them, and nothing else does (ADR-0175).
     /// </summary>
@@ -71,6 +86,7 @@ public sealed record MetadataTarget
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
         SupportsFileAttributes = OperatingSystem.IsWindows(),
         SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
+        SupportsAlternateStreams = AlternateStreams.CanWrite,
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         Account = RestoreAccount.OfThisProcess(),
     };

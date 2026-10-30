@@ -71,6 +71,8 @@ The executor takes the calls that write and read a stream as an argument, as it 
 
   > **Built 2026-10 ([Amendment 3](#amendment-3-2026-10--the-plan-names-a-file-whose-stream-has-a-name-no-stream-may-be-written-under)).** The plan's facts now count the streams whose names §2 refuses, and the plan names those files.
 - **Extended attributes on Windows.** Architecture 06 §3 would keep them as streams there. They are still listed as not applied.
+
+  > **2026-10 ([ADR-0177](0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md)).** Taken up: a file's extended attributes are kept as streams of their names, each judged by §2's rule, after the content and before the times. One whose name the file's own captured stream has is not written over it, and is named.
 - **A handle-relative write.** A stream is written by path, as the times and attributes are, so the window [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) records covers it too.
 
 ## Alternatives considered
@@ -140,3 +142,4 @@ Off Windows no capture carries a stream, so nothing there reaches `restore-file`
 | 2026-10 | Amended | Amendment 1: the recovery tool writes a file's streams back by the same rule, after its content and before its times, and notes one that does not land. `Recovery/RecoverySession`; `Repository.Tests/RecoveryAlternateStreamsTests` |
 | 2026-10 | Amended | Amendment 2: `restore-file` writes a file's streams back by the same rule, through one helper the recovery tool now shares, and says each that does not land. `Domain/AlternateStreams`; `Cli/CliApplication`; `Domain.Tests/AlternateStreamsTests`; `Cli.Tests/InspectionCommandTests` |
 | 2026-10 | Amended | Amendment 3: the plan names a file whose stream has a name no stream may be written under, from the count each item's facts now carry. `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Repository.Tests/RestoreMetadataHonestyTests` |
+| 2026-10 | Accepted | [ADR-0177](0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md): a file's extended attributes are kept on Windows as streams of their names, judged by this record's rule for a stream's name; one named as the file's own stream is not written over it. |

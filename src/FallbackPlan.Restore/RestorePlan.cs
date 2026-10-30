@@ -140,6 +140,7 @@ public sealed record RestoreTargetProfile
         SupportsExtendedAttributes = SupportsExtendedAttributes,
         SupportsFileAttributes = SupportsFileAttributes,
         SupportsSecurityDescriptors = SupportsSecurityDescriptors,
+        SupportsAlternateStreams = SupportsAlternateStreams,
         KnowsAccount = KnowsAccount,
         HoldsRestorePrivilege = HoldsRestorePrivilege,
         CapturedHere = CapturedHere,
