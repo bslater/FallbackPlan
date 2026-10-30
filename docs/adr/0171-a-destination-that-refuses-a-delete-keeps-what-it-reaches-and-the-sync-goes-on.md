@@ -65,6 +65,8 @@ The cost is space: objects a deleted snapshot alone reached wait for a pass with
   > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said)).** The S3 provider reports what a delete marker hid, and the sync says how much the bucket kept. An Azure Blob account that keeps versions or soft-deletes is not yet told apart.
 - **Judge a direct-ship sink per destination.** A delete through the sink reports Deleted when any one destination deleted.
 
+  > **Held 2026-10 ([Amendment 3](#amendment-3-2026-10--the-sinks-delete-is-not-done-where-a-destination-refused-it)).** Read against the sink, the answer is per key and true. A destination that refuses makes the delete fail, not succeed, and what it refused stays listed for the next pass.
+
 ## Alternatives considered
 
 - **Fail the sync, as before, and let a person change the policy.** Rejected. A write-once destination is a legitimate choice, often the point of one, and a sync that fails forever hides every other failure behind it.
@@ -114,6 +116,29 @@ What this does not do:
 
 The S3-compatible test server answers a delete in a bucket that keeps versions as the API does, with the delete marker's header and a version id.
 
+## Amendment 3 (2026-10) — the sink's delete is not done where a destination refused it
+
+The review's T-12 left one item at the sink: a delete through a direct-ship set's sink reports Deleted when any one destination deleted. Read against `Agent/DestinationShipSink`, that is true and is not a hazard:
+- **The order.** The sink deletes at every destination it can reach, priority first, and at the metadata store last.
+- **A refusal propagates.** A destination that refuses throws. The delete then fails rather than reading as done, at whatever point the refusal came, and the staging sweep defers it as Amendment 1 counts.
+- **What was refused stays listed,** so the next pass condemns it again. A metadata object stays in the metadata store, which is deleted last. A blob stays in the union the sink lists, which includes what each destination holds.
+- **Deleted is true wherever it is said.** It is said only when no destination refused, and a destination that answers "not found" holds nothing.
+- **What the sink reaches.** Outside a run that is local paths, which keep nothing a delete removes, so no retained figure is lost. A run reaches peers too.
+- **What it never reaches.** An object-store destination of a direct-ship set is left to the sync that follows the run. That destination's deletes are the convergence's, which judges each one (§1, Amendment 2).
+
+**Decision.** Held as it stands, by `Hosts.Tests/DirectShipTests.ASinkDeleteOneDestinationRefuses_AfterAnotherDeleted_IsNotDone_AndTheNextDeleteFinishesIt`. The case gives a direct-ship set two local destinations, and the second refuses deletes. For a snapshot and for a blob:
+- the delete fails;
+- the first destination has deleted, and the second keeps its copy;
+- the object still lists through the sink;
+- the metadata store keeps the snapshot.
+
+With the refusal lifted, the next delete is Deleted and the object is gone from both destinations and the metadata store.
+
+It passed as the code stood. Each of three changes to the sink fails it:
+- deleting at the metadata store first, which leaves the refused snapshot listed nowhere;
+- passing over a destination's refusal, which reads as done;
+- deleting at the first destination alone, which reads as done.
+
 ## Status history
 
 | Date | Status | Note |
@@ -121,3 +146,4 @@ The S3-compatible test server answers a delete in a bucket that keeps versions a
 | 2026-10 | Accepted | Built in one slice, tests first. A delete a destination does not carry out is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync; a busy or unreachable store still does. No contract or format change. |
 | 2026-10 | Amended | Amendment 1: a destination's refusals and the staging sweep's deferrals are said in bytes, in the notice and on the report's "swept:" line. `Replication/StoreToStoreCopier`; `Retention/StagingSweep`; `Retention.Tests/SweepFailureTests` |
 | 2026-10 | Amended | Amendment 2: a delete a store answers and keeps as an earlier version, as an S3 bucket under object lock or with versioning does, is counted as retained, in objects and bytes, and noticed. It is a delete, not a refusal. `Storage.Abstractions/StoreResults`; `Storage.S3/S3ObjectStore`; `Replication.Tests/ConvergeRefusalTests`; `Hosts.Tests/S3DestinationTests` |
+| 2026-10 | Amended | Amendment 3: the direct-ship sink's delete, read against the code, is per key and true. A destination's refusal fails the delete, what it refused stays listed for the next pass, and the metadata store is deleted last. Held as it stands. `Agent/DestinationShipSink`; `Hosts.Tests/DirectShipTests` |

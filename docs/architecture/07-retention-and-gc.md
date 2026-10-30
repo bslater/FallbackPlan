@@ -163,6 +163,12 @@ else's disk ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 > counts it as a delete that was retained and holds nothing back for it, and
 > the hub's notice says how much the store kept until a pass's deletes keep
 > none.
+>
+> **Held 2026-10 ([ADR-0171 Amendment 3](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-3-2026-10--the-sinks-delete-is-not-done-where-a-destination-refused-it)).**
+> A direct-ship set's sweep deletes through the ship sink, at every local
+> path it reaches and at the metadata store last. A destination that refuses
+> fails that delete rather than letting it read as done, and what it refused
+> stays listed, so the next pass condemns it again.
 
 ### 3.1 Step 4 is the one that matters
 

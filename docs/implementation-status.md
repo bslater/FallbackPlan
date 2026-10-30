@@ -4552,6 +4552,9 @@ What remains is recorded rather than done:
 - an Azure Blob account that keeps versions or soft-deletes keeps what its
   deletes hid, and nothing says so;
 - a direct-ship sink reports a delete done when any one destination did.
+  [Amendment 3](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-3-2026-10--the-sinks-delete-is-not-done-where-a-destination-refused-it)
+  holds that as it stands: a destination that refuses fails the delete, and
+  what it refused stays listed for the next pass (`Hosts.Tests/DirectShipTests`).
 
 Amendment 1 says it in bytes. A refused object is asked for its
 length, which a store that refuses a delete still gives, and the notice

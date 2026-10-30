@@ -369,6 +369,8 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 > **2026-10 ([ADR-0171 Amendment 1](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-1-2026-10--said-in-bytes)).** The bytes are said now, at both: a destination's notice states what its refusals hold, and the staging sweep's report line counts what it deferred in objects and bytes. The versioned bucket and the sink stay open.
 >
 > **2026-10 ([ADR-0171 Amendment 2](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said)).** A bucket under object lock does not refuse a delete: object lock needs versioning, and the delete is answered with a delete marker while the bytes stay. The S3 provider now reports what the marker hid, the convergence counts it as retained, and a notice says how much the bucket kept. An Azure Blob account that keeps versions or soft-deletes, and the sink, stay open.
+>
+> **2026-10 ([ADR-0171 Amendment 3](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-3-2026-10--the-sinks-delete-is-not-done-where-a-destination-refused-it)).** The sink held as it stands. Its delete is Deleted only when no destination it reached refused, and a refusal leaves the object listed for the next pass. `Hosts.Tests/DirectShipTests` holds it. An Azure Blob account that keeps versions or soft-deletes stays open.
 
 ---
 
