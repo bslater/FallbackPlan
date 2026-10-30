@@ -198,6 +198,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0171](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) | A destination that refuses a delete keeps what it reaches, and the sync goes on: a delete the store refuses, or answers "not found" for an object still listed, is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync | **Built** | `Replication/StoreToStoreCopier` · `Agent/FanOut` · `Storage.Abstractions/StoreResults` · `Storage.S3/S3ObjectStore` · `Storage.AzureBlob/AzureBlobObjectStore` · `Replication.Tests/ConvergeRefusalTests` · `Hosts.Tests/ObjectStoreDestinationTests` · `Hosts.Tests/S3DestinationTests` · `Hosts.Tests/AzureBlobDestinationTests` · [notes](#0171--a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on) |
 | [0172](adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) | A blob that goes while a restore reads it is one the store no longer holds: a read that fails as damage fails asks the store, and a blob it no longer holds is forgotten, read around as not held or failed, and never ends the run; a copy that stops holding a blob while the run reads around to it is passed over as not held (Amendment 1); with no copy, a record whose blob the store does not hold fails as not held, not as a format violation (Amendment 2) | **Built** | `Repository/RepositoryReader` · `Repository.Packing/RecordReadResult` · `Repository.Tests/RestoreBesideCollectionTests` · [notes](#0172--a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds) |
 | [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: both writers spool beside a file under 33 characters made from its name, so a file whose name is as long as its target holds restores; `restore-file` lands its file the same way, so one that fails leaves its output as it was (Amendment 1); under rename, a copy written beside keeps as much of its stem as fits (Amendment 2); `restore-file` assembles its file where it lands, needing no room in the temporary folder (Amendment 3) | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Repository/RestoreEngine` · `Domain.Tests/RestoreSpoolTests` · `Repository.Tests/RestoreLongNameTests` · `Repository.Tests/RecoveryContainmentTests` · `Repository.Tests/SparseRestoreTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets) |
+| [0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) | A restore writes a file's alternate streams back where the target keeps them: on Windows, each read and proved like a segment, written after the content and before the times, and judged by name before it is joined to the path; a stream standing as captured is left, and one that does not land degrades the file, named | **Built** | `Domain/AlternateStreams` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/AlternateStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · [notes](#0174--a-files-alternate-streams) |
 
 ---
 
@@ -3271,6 +3272,7 @@ descriptors and alternate streams are not applied, and the recovery tool and
 the CLI's `restore-file` still write no metadata. Both have since written a
 file's metadata ([0149](#0149--the-single-file-restore-writes-back-a-files-metadata),
 [0150](#0150--the-recovery-tool-writes-back-metadata)), and neither makes a link.
+A file's alternate streams have since been written back on Windows ([0174](#0174--a-files-alternate-streams)).
 
 ### 0102 — one file, every name
 
@@ -4704,3 +4706,35 @@ target's limit. Where the target states one, on Linux in bytes and on
 Windows by its rules, the copy keeps as much of the file's stem as
 fits, cut where a whole character ends, and a resume finds it by the
 same cut. A macOS target states none, so its copies are named in full.
+
+### 0174 — a file's alternate streams
+
+Capture has kept each named stream of a file on Windows since phase 1,
+and the restore review's RR-6 found that no restore wrote one back. The
+review's honesty half made the plan say so and the receipt report such
+a file degraded, with `SupportsAlternateStreams` false everywhere. So a
+file downloaded on Windows came back without the stream naming where it
+came from, and a restore of a tree of them was Partial.
+
+The executor now writes each stream back onto the file where the target
+keeps them, which a local target does on Windows. Each is read and
+proved like a segment, read ahead with the segments, and read around a
+damaged copy. Streams go on after the content and before the times,
+since writing one moves the file's modification time. A stream already
+standing as captured is left and read from nowhere, so a resume writes
+only what a run cut short did not.
+
+A stream's name is read from the manifest and becomes part of a path,
+`file:name`, which Windows resolves before it opens it. A name holding
+a separator, a colon or a NUL, or ending in a space or a period, could
+name another file or the file itself, and is never written. A stream
+that does not land is named in the item's detail, and the file is
+degraded.
+
+What remains is recorded rather than done:
+
+- the recovery tool and the CLI's `restore-file` write no streams, and
+  list them as not applied;
+- a stream's name is judged at execution, not in the plan, whose items
+  carry no stream names;
+- extended attributes on Windows are still not kept as streams.
