@@ -81,6 +81,8 @@ The exit code is unchanged. Metadata does not fail a recovery.
 
   > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** The executor now writes a file's alternate streams back on Windows. The tool still writes none, and counts them as not applied.
 
+  > **2026-10 ([ADR-0174 Amendment 1](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md#amendment-1-2026-10--the-recovery-tool-writes-a-files-streams-back-by-the-same-rule)).** The tool now writes a file's alternate streams back on Windows by the executor's rule. One that does not land is noted, and counted not applied.
+
 ## Alternatives considered
 
 - **A note per entry whose metadata did not wholly land.** Rejected. On a machine that is not the one that captured it, every file can miss the same owner, and the notes that say what failed would drown. The bundle already caps its notes, and a count says the same thing at every size.
@@ -95,3 +97,4 @@ The exit code is unchanged. Metadata does not fail a recovery.
 | 2026-10 | Accepted | [ADR-0155](0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md): the tool makes a symlink a link and writes the link's own metadata onto it, and a write the output refuses at an entry's name fails that entry alone. |
 | 2026-10 | Accepted | [ADR-0156](0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md): the tool gives a hard-link group back as one file under each of its names, by the rule the executor holds to. |
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): the executor writes a file's alternate streams back on Windows; this tool still writes none. |
+| 2026-10 | Accepted | [ADR-0174 Amendment 1](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md#amendment-1-2026-10--the-recovery-tool-writes-a-files-streams-back-by-the-same-rule): the tool writes a file's alternate streams back on Windows by the executor's rule. |
