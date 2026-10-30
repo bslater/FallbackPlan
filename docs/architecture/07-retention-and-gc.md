@@ -169,6 +169,13 @@ else's disk ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 > path it reaches and at the metadata store last. A destination that refuses
 > fails that delete rather than letting it read as done, and what it refused
 > stays listed, so the next pass condemns it again.
+>
+> **Built 2026-10 ([ADR-0171 Amendment 4](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-4-2026-10--a-delete-an-account-keeps-under-soft-delete-is-counted-and-noticed-nowhere)).**
+> An Azure Blob account under soft delete, as a new one is by default,
+> answers a delete and keeps the bytes until its retention period ends. The
+> convergence counts that apart from what a store retains, sizes it from its
+> own listing and logs it, and raises no notice, because the space comes back
+> without anyone acting.
 
 ### 3.1 Step 4 is the one that matters
 

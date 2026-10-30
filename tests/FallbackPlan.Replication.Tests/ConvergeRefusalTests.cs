@@ -17,6 +17,9 @@ namespace FallbackPlan.Replication.Tests;
 /// that pass fails and is tried again. Neither is one that keeps versions,
 /// which answers the delete and keeps the bytes as an earlier version: the
 /// pass goes on beneath it and counts what was kept (ADR-0171 Amendment 2).
+/// Nor is one under soft delete, which keeps the bytes only for its own
+/// retention period: what it keeps is counted apart and logged (ADR-0171
+/// Amendment 4).
 /// </summary>
 /// <remarks>
 /// The fixture is a replica holding two snapshots and the blobs each reaches,
@@ -36,6 +39,7 @@ public sealed class ConvergeRefusalTests
 
     private const int RefusedByStore = 3006;
     private const int StoppedShort = 3007;
+    private const int SoftDeletedByStore = 3008;
 
     private string _root = null!;
     private LocalFileSystemObjectStore _source = null!;
@@ -195,6 +199,35 @@ public sealed class ConvergeRefusalTests
         Assert.IsFalse(await HoldsAsync(OldOnlyBlob));
     }
 
+    [TestMethod]
+    public async Task Converge_ADestinationThatSoftDeletes_DropsWhatItsPolicyReleases_AndCountsItApartFromWhatAVersionKeeps()
+    {
+        // An account under soft delete answers each delete and keeps the
+        // bytes until its own retention period ends, saying only that the
+        // delete was not permanent. What it keeps it releases by itself, so
+        // it is counted apart from what a version keeps, sized from the
+        // listing the pass already took, and logged.
+        var softDeleting = new SoftDeletingStore(_replica);
+        var log = new RecordingLogger();
+
+        var outcome = await StoreToStoreCopier.ConvergeAsync(
+            _source, softDeleting, Keeps, CancellationToken.None, destinationName: "cloud", logger: log);
+
+        Assert.AreEqual(2L, outcome.Deleted);
+        Assert.AreEqual(0L, outcome.Refused, "a store that answered the delete did not refuse it");
+        Assert.AreEqual(0L, outcome.Retained, "nothing was kept until a rule of the store's releases it");
+        Assert.AreEqual(2L, outcome.SoftDeleted);
+        Assert.AreEqual(2 * HeldLength, outcome.SoftDeletedBytes, "the space the account keeps for its period, in bytes");
+        Assert.IsFalse(await HoldsAsync(OldSnapshot));
+        Assert.IsFalse(await HoldsAsync(OldOnlyBlob));
+
+        var said = log.Records.Where(record => record.EventId == SoftDeletedByStore).ToList();
+        Assert.IsNotEmpty(said, "what the account keeps is said, if nowhere a notice would stand for it");
+        Assert.AreEqual(2L, said.Sum(record => (long)record.Values.First(value => value.Key == "Count").Value!));
+        Assert.AreEqual(2 * HeldLength, said.Sum(record => (long)record.Values.First(value => value.Key == "Bytes").Value!));
+        Assert.IsTrue(said.All(record => record.Level == LogLevel.Information));
+    }
+
     private async Task<bool> HoldsAsync(string key) =>
         (await _replica.GetMetadataAsync(ObjectKey.Parse(key), CancellationToken.None)).Found;
 
@@ -228,6 +261,38 @@ public sealed class ConvergeRefusalTests
             var held = await inner.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
             var deleted = await inner.DeleteAsync(key, conditions, cancellationToken).ConfigureAwait(false);
             return deleted.Outcome == DeleteOutcome.Deleted ? deleted with { RetainedBytes = held.Metadata!.Length } : deleted;
+        }
+    }
+
+    /// <summary>
+    /// A store under soft delete: a delete hides the object and says it was
+    /// not permanent, and says nothing of how many bytes it keeps.
+    /// </summary>
+    private sealed class SoftDeletingStore(IObjectStore inner) : IObjectStore
+    {
+        public StoreCapabilities Capabilities => inner.Capabilities;
+
+        public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+            inner.GetMetadataAsync(key, cancellationToken);
+
+        public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken) =>
+            inner.OpenReadAsync(key, range, cancellationToken);
+
+        public ValueTask<PutResult> PutAsync(
+            ObjectKey key,
+            Func<CancellationToken, ValueTask<Stream>> openContent,
+            PutConditions conditions,
+            CancellationToken cancellationToken) =>
+            inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+        public IAsyncEnumerable<ObjectEntry> ListAsync(ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+            inner.ListAsync(prefix, options, cancellationToken);
+
+        public async ValueTask<DeleteResult> DeleteAsync(
+            ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken)
+        {
+            var deleted = await inner.DeleteAsync(key, conditions, cancellationToken).ConfigureAwait(false);
+            return deleted.Outcome == DeleteOutcome.Deleted ? deleted with { SoftDeleted = true } : deleted;
         }
     }
 }

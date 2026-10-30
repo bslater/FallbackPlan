@@ -46,7 +46,14 @@ public enum DeleteOutcome
 /// or reads the object after, so it is deleted as far as a repository can
 /// tell; its space is not released.
 /// </param>
-public sealed record DeleteResult(DeleteOutcome Outcome, long? RetainedBytes = null);
+/// <param name="SoftDeleted">
+/// Whether the store keeps what it deleted only for a period of its own and
+/// then releases it, as an Azure Blob account under soft delete does
+/// (ADR-0171 Amendment 4). Nothing lists or reads the object meanwhile. Such
+/// a store need not say how many bytes it keeps, so
+/// <paramref name="RetainedBytes"/> may be null beside it.
+/// </param>
+public sealed record DeleteResult(DeleteOutcome Outcome, long? RetainedBytes = null, bool SoftDeleted = false);
 
 /// <summary>Metadata for one stored object.</summary>
 /// <param name="Length">Its length in bytes.</param>

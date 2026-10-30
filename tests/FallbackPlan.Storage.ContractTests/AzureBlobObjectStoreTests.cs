@@ -15,7 +15,9 @@ namespace FallbackPlan.Storage.ContractTests;
 /// the credential, or a signature that does not allow the request, is a
 /// fault that names its code and never the secret; a body cut short is an
 /// IOException rather than a short object; a container that does not exist
-/// is a fault, never an empty store; a delete of nothing is one request; a
+/// is a fault, never an empty store; a delete of nothing is one request, and
+/// one an account under soft delete keeps is said to be kept (FR-GC-010,
+/// ADR-0171 Amendment 4); a
 /// listing spans pages from markers only the store can read and sees only
 /// its own root; and nothing is spoken in clear to anywhere but this machine.
 /// A blob in the archive tier is said to be archived until its rehydration
@@ -272,6 +274,39 @@ public sealed class AzureBlobObjectStoreTests : IAsyncDisposable
 
         Assert.AreEqual(DeleteOutcome.NotFound, deleted.Outcome);
         Assert.AreEqual("DELETE", Assert.ContainsSingle(_server.Requests).Method);
+    }
+
+    [TestMethod]
+    public async Task Delete_UnderSoftDelete_IsDeleted_AndSaysTheAccountKeepsIt_InOneRequest()
+    {
+        // Soft delete, on by default for a new account: the API answers the
+        // delete as done and says it was not permanent. The bytes stay with
+        // the account until its retention period ends, and nothing lists or
+        // reads the blob meanwhile.
+        var store = Store();
+        await store.PutAsync(Key("snapshots/ab/old"), Content(new byte[37]), PutConditions.IfNotExists, CancellationToken.None);
+        _server.SoftDelete(Container);
+        var before = _server.Requests.Count;
+
+        var deleted = await store.DeleteAsync(Key("snapshots/ab/old"), DeleteConditions.None, CancellationToken.None);
+
+        Assert.AreEqual(DeleteOutcome.Deleted, deleted.Outcome);
+        Assert.IsTrue(deleted.SoftDeleted, "the account keeps what it deleted, and the store said so");
+        Assert.AreEqual("DELETE", Assert.ContainsSingle(_server.Requests.Skip(before)).Method, "the answer says it; no look first");
+        Assert.IsFalse((await store.GetMetadataAsync(Key("snapshots/ab/old"), CancellationToken.None)).Found);
+        Assert.AreEqual(37L, _server.SoftDeletedBytesIn(Container));
+    }
+
+    [TestMethod]
+    public async Task Delete_ThatThePermanentHeaderSaysWasPermanent_KeepsNothing()
+    {
+        var store = Store();
+        await store.PutAsync(Key("snapshots/ab/old"), Content(new byte[37]), PutConditions.IfNotExists, CancellationToken.None);
+
+        var deleted = await store.DeleteAsync(Key("snapshots/ab/old"), DeleteConditions.None, CancellationToken.None);
+
+        Assert.AreEqual(new DeleteResult(DeleteOutcome.Deleted), deleted);
+        Assert.IsFalse(deleted.SoftDeleted);
     }
 
     [TestMethod]

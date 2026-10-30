@@ -82,6 +82,16 @@ public enum CopyScope
 /// goes, and nothing beneath them is held back for them.
 /// </param>
 /// <param name="RetainedBytes">How many bytes the destination said it kept of <paramref name="Retained"/>.</param>
+/// <param name="SoftDeleted">
+/// How many of <paramref name="Deleted"/> the destination keeps only for a
+/// period of its own and then releases, as an account under soft delete does
+/// (ADR-0171 Amendment 4). Counted apart from <paramref name="Retained"/>
+/// because nothing needs doing for them to come back.
+/// </param>
+/// <param name="SoftDeletedBytes">
+/// How many bytes <paramref name="SoftDeleted"/> hold: what the destination
+/// said, or else what its listing gave before the delete.
+/// </param>
 public sealed record ConvergeOutcome(
     long Copied,
     long AlreadyHeld,
@@ -90,7 +100,9 @@ public sealed record ConvergeOutcome(
     long Refused = 0,
     long RefusedBytes = 0,
     long Retained = 0,
-    long RetainedBytes = 0);
+    long RetainedBytes = 0,
+    long SoftDeleted = 0,
+    long SoftDeletedBytes = 0);
 
 /// <summary>
 /// Copies one repository archive's missing objects from any object store to
@@ -419,6 +431,8 @@ public static class StoreToStoreCopier
         var refusedBytes = 0L;
         var retained = 0L;
         var retainedBytes = 0L;
+        var softDeleted = 0L;
+        var softDeletedBytes = 0L;
         foreach (var phase in PhasePrefixes.Reverse())
         {
             if (Skip(phase, scope))
@@ -436,11 +450,13 @@ public static class StoreToStoreCopier
                 break;
             }
 
-            var present = await HeldUnderAsync(destination, phase, cancellationToken).ConfigureAwait(false)
-                ?? await EveryKeyUnderAsync(destination, phase, cancellationToken).ConfigureAwait(false);
+            // With lengths: a store that soft-deletes says nothing of how
+            // many bytes it keeps, and the object cannot be asked once it is
+            // gone, so the figure is what the listing gave.
+            var present = await EveryEntryUnderAsync(destination, phase, cancellationToken).ConfigureAwait(false);
             var sourceKeys = await EveryKeyUnderAsync(source, phase, cancellationToken).ConfigureAwait(false);
 
-            foreach (var key in present)
+            foreach (var (key, listedLength) in present)
             {
                 // Identity never goes, whatever the filter says — a replica
                 // without its descriptor is not a repository at all. And
@@ -478,7 +494,12 @@ public static class StoreToStoreCopier
                 if (outcome.Outcome == DeleteOutcome.Deleted)
                 {
                     deleted++;
-                    if (outcome.RetainedBytes is { } kept)
+                    if (outcome.SoftDeleted)
+                    {
+                        softDeleted++;
+                        softDeletedBytes += outcome.RetainedBytes ?? listedLength;
+                    }
+                    else if (outcome.RetainedBytes is { } kept)
                     {
                         retained++;
                         retainedBytes += kept;
@@ -501,9 +522,16 @@ public static class StoreToStoreCopier
             Log.ConvergeSpared(log, new LogLabel(name), spared);
         }
 
+        if (softDeleted > 0)
+        {
+            Log.ConvergeSoftDeleted(log, new LogLabel(name), softDeleted, softDeletedBytes);
+        }
+
         Log.ReplicationComplete(log, new LogLabel(name), new LogLabel("converge"), copied, alreadyHeld, deleted);
 
-        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared, refused, refusedBytes, retained, retainedBytes);
+        return new ConvergeOutcome(
+            copied, alreadyHeld, deleted, spared, refused, refusedBytes, retained, retainedBytes,
+            softDeleted, softDeletedBytes);
     }
 
     /// <summary>
@@ -619,6 +647,26 @@ public static class StoreToStoreCopier
         IObjectStore destination, string phase, CancellationToken cancellationToken) =>
         phase.Length == 0 ? null : await EveryKeyUnderAsync(destination, phase, cancellationToken)
             .ConfigureAwait(false);
+
+    /// <summary>Every key one store holds under one phase, with the length its listing gave.</summary>
+    /// <param name="store">The store to read.</param>
+    /// <param name="phase">The phase prefix.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    private static async ValueTask<Dictionary<string, long>> EveryEntryUnderAsync(
+        IObjectStore store, string phase, CancellationToken cancellationToken)
+    {
+        var entries = new Dictionary<string, long>(StringComparer.Ordinal);
+        await foreach (var entry in store.ListAsync(PrefixFor(phase), ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (InPhase(entry.Key.Value, phase))
+            {
+                entries[entry.Key.Value] = entry.Length;
+            }
+        }
+
+        return entries;
+    }
 
     /// <summary>Every key one store holds under one phase.</summary>
     /// <param name="store">The store to read.</param>
