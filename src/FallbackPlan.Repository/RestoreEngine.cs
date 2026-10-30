@@ -51,8 +51,35 @@ public sealed class RestoreEngine
     public ValueTask<RestoreResult> RestoreFileAsync(
         FileVersionManifest manifest,
         Stream destination,
-        CancellationToken cancellationToken) =>
-        RestoreAsync(manifest, destination, part: null, takeUp: false, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(destination);
+        return RestoreAsync(manifest, destination, part: null, takeUp: false, cancellationToken);
+    }
+
+    /// <summary>
+    /// Restores <paramref name="manifest"/> as a file made new at
+    /// <paramref name="path"/>, and leaves it there once everything — every
+    /// segment and the final hash — verifies (FR-RST-005). One that does not
+    /// is removed. For a caller that writes its file beside where it lands
+    /// and moves it there itself, so the file is written once, holes and all,
+    /// and needs no room anywhere else (ADR-0173 Amendment 3).
+    /// </summary>
+    /// <remarks>
+    /// Made new, so a name already taken, a link included, is refused rather
+    /// than written through: the caller removes what stands there first.
+    /// </remarks>
+    /// <param name="manifest">The file version.</param>
+    /// <param name="path">Where the file is assembled, and stays.</param>
+    /// <param name="cancellationToken">Cancels the restore; what was assembled is removed.</param>
+    public ValueTask<RestoreResult> AssembleFileAsync(
+        FileVersionManifest manifest,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+        return RestoreAsync(manifest, destination: null, path, takeUp: false, cancellationToken);
+    }
 
     /// <summary>
     /// Restores <paramref name="manifest"/> as the overload without a part
@@ -78,23 +105,33 @@ public sealed class RestoreEngine
         bool takeUp,
         CancellationToken cancellationToken)
     {
+        ThrowHelper.ThrowIfNull(destination);
         ThrowHelper.ThrowIfNullOrWhiteSpace(part);
         return RestoreAsync(manifest, destination, part, takeUp, cancellationToken);
     }
 
+    /// <summary>
+    /// Assembles <paramref name="manifest"/> in <paramref name="part"/>, or in
+    /// a spool of the engine's own, and emits it into
+    /// <paramref name="destination"/> once it verifies. With no destination,
+    /// the part is the file, and stays only once it verifies.
+    /// </summary>
     private async ValueTask<RestoreResult> RestoreAsync(
         FileVersionManifest manifest,
-        Stream destination,
+        Stream? destination,
         string? part,
         bool takeUp,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(manifest);
-        ThrowHelper.ThrowIfNull(destination);
 
         var spoolPath = part ?? Path.Combine(_spoolDirectory, $"fbp-restore-{Guid.NewGuid():n}.spool");
         var holes = manifest.SparseExtents.Count > 0;
-        var keep = part is not null;
+        var keep = part is not null && destination is not null;
+
+        // Only what this call made is removed: a name it could not make new
+        // is someone else's.
+        var made = false;
 
         try
         {
@@ -103,7 +140,10 @@ public sealed class RestoreEngine
             var pieces = RestorePart.PiecesOf(manifest);
 
             var spool = SparseFile.Create(
-                spoolPath, part is null ? FileMode.CreateNew : takeUp ? FileMode.OpenOrCreate : FileMode.Create, holes);
+                spoolPath,
+                part is null || destination is null ? FileMode.CreateNew : takeUp ? FileMode.OpenOrCreate : FileMode.Create,
+                holes);
+            made = true;
             await using (spool.ConfigureAwait(false))
             {
                 var taken = takeUp ? await TakeUpAsync(spool, pieces, wholeFile, cancellationToken).ConfigureAwait(false) : 0;
@@ -164,6 +204,12 @@ public sealed class RestoreEngine
                         "Every segment verified individually, but the reassembly does not hash to whole_file_hash (specification 06 §4.2; FR-RST-002).");
                 }
 
+                if (destination is null)
+                {
+                    keep = true;
+                    return new RestoreResult(true, spool.Length, hash, null) { Resumed = resumed };
+                }
+
                 if (holes && destination.CanSeek && destination.Position >= destination.Length)
                 {
                     await EmitLeavingHolesAsync(spool, destination, pieces, cancellationToken).ConfigureAwait(false);
@@ -180,7 +226,7 @@ public sealed class RestoreEngine
         }
         finally
         {
-            if (!keep && File.Exists(spoolPath))
+            if (!keep && made && File.Exists(spoolPath))
             {
                 File.Delete(spoolPath);
             }

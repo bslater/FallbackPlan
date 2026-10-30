@@ -14,7 +14,9 @@ namespace FallbackPlan.Cli.Tests;
 /// installation captured the snapshot it names (FR-RST-004; ADR-0154). It
 /// lands its file as the executor does, written whole beside the output and
 /// moved there once verified, so one that fails leaves what stood at the
-/// output as it was (FR-RST-002; ADR-0173 Amendment 1).
+/// output as it was (FR-RST-002; ADR-0173 Amendment 1). It is assembled in
+/// that spool itself, so it needs no room in the temporary folder
+/// (FR-RST-002; ADR-0173 Amendment 3).
 /// </summary>
 [TestClass]
 public sealed class InspectionCommandTests : IDisposable
@@ -151,6 +153,32 @@ public sealed class InspectionCommandTests : IDisposable
         var destination = Path.Combine(_cli.WorkPath, "restored-by-snapshot.txt");
 
         var restore = await _cli.RunAsync("restore-file", "--snapshot", archived.SnapshotId, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        Assert.AreEqual(content, File.ReadAllText(destination));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "the temporary folder is named by TMPDIR on POSIX")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    // Alone: it points TMPDIR, which every class in the process reads, at a folder that does not exist.
+    [DoNotParallelize]
+    public async Task RestoreFile_NeedsNoRoomInTheTemporaryFolder()
+    {
+        const string content = "restore-file with no temporary folder";
+        var archived = await ArchiveAsync(content);
+        var destination = Path.Combine(_cli.WorkPath, "restored-without-temp.txt");
+        var temporary = Environment.GetEnvironmentVariable("TMPDIR");
+        Environment.SetEnvironmentVariable("TMPDIR", Path.Combine(_cli.WorkPath, "no-such-folder"));
+        CliHarness.Invocation restore;
+        try
+        {
+            restore = await _cli.RunAsync("restore-file", "--manifest", archived.FileVersion, "--output", destination);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TMPDIR", temporary);
+        }
 
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         Assert.AreEqual(content, File.ReadAllText(destination));

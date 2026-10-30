@@ -197,7 +197,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0170](adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) | A restore plan judges names by the target's naming rules: a name no target restores, and for a Windows target a name Windows would refuse or alter, is a conflict before any byte moves; a restore that runs on Windows refuses such a name rather than letting Windows write it under another; a name longer in bytes than a Linux target holds is a conflict too (Amendment 1) | **Built** | `Domain/RestorePaths` · `Restore/RestorePlan` · `Domain.Tests/WindowsNamesTests` · `Repository.Tests/EndToEnd/RestorePlanTests` · `Repository.Tests/EndToEnd/RestoreLongNameTests` · [notes](#0170--a-restore-plan-judges-names-by-the-targets-naming-rules) |
 | [0171](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) | A destination that refuses a delete keeps what it reaches, and the sync goes on: a delete the store refuses, or answers "not found" for an object still listed, is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync | **Built** | `Replication/StoreToStoreCopier` · `Agent/FanOut` · `Storage.Abstractions/StoreResults` · `Storage.S3/S3ObjectStore` · `Storage.AzureBlob/AzureBlobObjectStore` · `Replication.Tests/ConvergeRefusalTests` · `Hosts.Tests/ObjectStoreDestinationTests` · `Hosts.Tests/S3DestinationTests` · `Hosts.Tests/AzureBlobDestinationTests` · [notes](#0171--a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on) |
 | [0172](adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) | A blob that goes while a restore reads it is one the store no longer holds: a read that fails as damage fails asks the store, and a blob it no longer holds is forgotten, read around as not held or failed, and never ends the run; a copy that stops holding a blob while the run reads around to it is passed over as not held (Amendment 1); with no copy, a record whose blob the store does not hold fails as not held, not as a format violation (Amendment 2) | **Built** | `Repository/RepositoryReader` · `Repository.Packing/RecordReadResult` · `Repository.Tests/RestoreBesideCollectionTests` · [notes](#0172--a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds) |
-| [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: both writers spool beside a file under 33 characters made from its name, so a file whose name is as long as its target holds restores; `restore-file` lands its file the same way, so one that fails leaves its output as it was (Amendment 1); under rename, a copy written beside keeps as much of its stem as fits (Amendment 2) | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Domain.Tests/RestoreSpoolTests` · `Repository.Tests/RestoreLongNameTests` · `Repository.Tests/RecoveryContainmentTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets) |
+| [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: both writers spool beside a file under 33 characters made from its name, so a file whose name is as long as its target holds restores; `restore-file` lands its file the same way, so one that fails leaves its output as it was (Amendment 1); under rename, a copy written beside keeps as much of its stem as fits (Amendment 2); `restore-file` assembles its file where it lands, needing no room in the temporary folder (Amendment 3) | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Repository/RestoreEngine` · `Domain.Tests/RestoreSpoolTests` · `Repository.Tests/RestoreLongNameTests` · `Repository.Tests/RecoveryContainmentTests` · `Repository.Tests/SparseRestoreTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets) |
 
 ---
 
@@ -2302,7 +2302,9 @@ than done. Windows capture still reads holes as data, so only a manifest
 from POSIX restores sparse there. On APFS a hole shorter than 16 MiB is
 still allocated, by the filesystem's own choice. The engine's spool still defaults to the
 system temporary directory, which caps the largest dense file a restore can
-produce where that directory is small or RAM-backed.
+produce where that directory is small or RAM-backed. No product path has
+assembled there since [0173](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets)'s
+Amendment 3.
 
 ### 0080 — the request is a tombstone, and a missing row is not a missing copy
 
@@ -4688,6 +4690,14 @@ was verified, and deleted it when the restore failed, so a restore that
 failed on damage destroyed whatever stood at the output. It now writes
 into a spool beside the output and moves it there once verified, and a
 link at the output is replaced rather than written through.
+
+Amendment 3 takes up what Amendment 1 left. The engine assembled
+`restore-file`'s file in a spool of its own in the temporary folder
+and copied it across, so the file was written twice and the folder
+needed room for a dense file's whole length. The engine now assembles
+a file where it is to stay, and `restore-file` has it assemble into
+the spool beside its output. No product path assembles in the
+temporary folder now.
 
 Amendment 2 names a copy written beside under rename within the
 target's limit. Where the target states one, on Linux in bytes and on
