@@ -309,7 +309,8 @@ public static class RestoreBlobSet
                 RestoreSpace.HeldBytes(manifest, heldSegments), MetadataRules.AccountsOf(manifest.Metadata),
                 manifest.Metadata.FileAttributes,
                 manifest.Metadata.AlternateStreams.Count(stream => !AlternateStreams.TryName(stream.Name.Span, out _, out _)),
-                MetadataRules.DescriptorOwnerOf(manifest.Metadata));
+                MetadataRules.DescriptorOwnerOf(manifest.Metadata),
+                MetadataRules.RefusedAttributeNames(manifest.Metadata));
 
             // A lost segment makes the path missing whatever else of it is
             // archived, because no rehydration brings that segment back. The

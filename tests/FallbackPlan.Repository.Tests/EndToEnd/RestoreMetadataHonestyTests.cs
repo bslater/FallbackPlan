@@ -39,7 +39,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// per file, as it predicts an owner the restoring account may not give
 /// without SeRestorePrivilege (ADR-0176 Amendment 2). Where it writes no
 /// extended attributes but keeps streams, a file's attributes are kept as
-/// streams, save those only Linux's kernel reads (ADR-0177).
+/// streams, save those only Linux's kernel reads (ADR-0177), and the plan
+/// names a file whose attribute's name no stream is kept under (ADR-0177
+/// Amendment 1).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -473,6 +475,44 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         var none = RestoreMetadata.Declare(plan, facts, Posix with { SupportsExtendedAttributes = false });
         Assert.Contains("3 file(s)", Assert.ContainsSingle(none.Where(degradation => degradation.Capability == "extended-attributes")).Detail, StringComparison.Ordinal);
         Assert.DoesNotContain(degradation => degradation.Capability == "kernel-attributes", none);
+    }
+
+    [TestMethod]
+    public async Task Plan_AnAttributeWhoseNameNoStreamIsKeptUnder_IsDeclaredOnItsOwnLine_WhereAttributesAreKeptAsStreams()
+    {
+        var source = new FakeFileSystemSource();
+        void Add(string name, byte seed, params string[] attributes) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata = new EntryMetadata
+            {
+                ModifiedAt = Modified,
+                ExtendedAttributes = [.. attributes.Select(attribute =>
+                    new ExtendedAttributeEntry(System.Text.Encoding.UTF8.GetBytes(attribute), new byte[] { 1 }))],
+            };
+        Add("tagged.bin", 70, "user.tag");
+        Add("downloaded.bin", 71, "com.apple.metadata:kMDItemWhereFroms", "user.tag");
+        Add("cased.bin", 72, "user.Tag", "user.tag");
+        Add("labelled.bin", 73, "security.selinux");
+        var withStream = source.AddFile("docs/zoned.bin", Deterministic(700, 74));
+        withStream.AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]"u8.ToArray();
+        withStream.Metadata = new EntryMetadata
+        {
+            ModifiedAt = Modified,
+            ExtendedAttributes = [new ExtendedAttributeEntry("zone.identifier"u8.ToArray(), new byte[] { 1 })],
+        };
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xDB);
+        var asStreams = Posix with { SupportsExtendedAttributes = false, SupportsAlternateStreams = true };
+        var declared = RestoreMetadata.Declare(plan, facts, asStreams);
+
+        var names = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "attribute-stream-names"));
+        Assert.Contains("3 file(s)", names.Detail, StringComparison.Ordinal);
+        Assert.Contains("1 file(s)", Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "kernel-attributes")).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "extended-attributes", declared);
+
+        // Where the target keeps no streams, the attributes line speaks for
+        // every file, and no name is judged.
+        var none = RestoreMetadata.Declare(plan, facts, Posix with { SupportsExtendedAttributes = false });
+        Assert.DoesNotContain(degradation => degradation.Capability == "attribute-stream-names", none);
     }
 
     [TestMethod]

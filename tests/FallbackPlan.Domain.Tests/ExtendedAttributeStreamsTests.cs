@@ -12,7 +12,8 @@ namespace FallbackPlan.Domain.Tests;
 /// no stream may have, one the file's own captured stream already has, and a
 /// stream the target refuses are each not written, and are named. A folder
 /// keeps no streams, and a target that writes attributes of its own writes
-/// them as attributes.
+/// them as attributes. The plan counts by the writer's own judgement of each
+/// name (ADR-0177 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class ExtendedAttributeStreamsTests : IDisposable
@@ -127,6 +128,34 @@ public sealed class ExtendedAttributeStreamsTests : IDisposable
     }
 
     [TestMethod]
+    public void AsStreams_NamesTheStreamEachAttributeIsKeptAs_OrWhyNot_InTheOrderTheyWereCaptured()
+    {
+        var judged = MetadataRules.AsStreams(Mixed);
+
+        Assert.HasCount(5, judged);
+        Assert.AreEqual(new AttributeKeptAs("user.tag", null), judged[0]);
+        Assert.IsNull(judged[1].Stream);
+        Assert.Contains("colon", judged[1].Why!, StringComparison.Ordinal);
+        Assert.IsNull(judged[2].Stream);
+        Assert.Contains("Windows compares names", judged[2].Why!, StringComparison.Ordinal);
+        Assert.IsNull(judged[3].Stream);
+        Assert.Contains("Linux", judged[3].Why!, StringComparison.Ordinal);
+        Assert.IsNull(judged[4].Stream);
+        Assert.Contains("captured with a stream of that name", judged[4].Why!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void RefusedAttributeNames_CountsTheAttributesNotKeptForTheirNames_NotTheKernels()
+    {
+        Assert.AreEqual(3, MetadataRules.RefusedAttributeNames(Mixed));
+        Assert.AreEqual(0, MetadataRules.RefusedAttributeNames(new EntryMetadata
+        {
+            ExtendedAttributes = [Attribute("user.tag", "kept"u8), Attribute("security.selinux", "label"u8)],
+        }));
+        Assert.AreEqual(0, MetadataRules.RefusedAttributeNames(EntryMetadata.Empty));
+    }
+
+    [TestMethod]
     public void Write_AStreamTheTargetRefuses_IsNamed_WithItsReason()
     {
         var streams = new Held { Refusal = "the volume keeps no streams" };
@@ -196,6 +225,24 @@ public sealed class ExtendedAttributeStreamsTests : IDisposable
             // A test directory that will not delete is not a test failure.
         }
     }
+
+    /// <summary>
+    /// A file whose attributes are one of each judgement: a name kept, a name
+    /// no stream may have, a name an earlier attribute has but for case, one
+    /// only Linux's kernel reads, and the file's own stream's name.
+    /// </summary>
+    private static EntryMetadata Mixed => new()
+    {
+        AlternateStreams = [new AlternateStreamEntry("Zone.Identifier"u8.ToArray(), ObjectId.FromBytes(Enumerable.Repeat((byte)0xAA, 32).ToArray()), 4)],
+        ExtendedAttributes =
+        [
+            Attribute("user.tag", "kept"u8),
+            Attribute("com.apple.metadata:kMDItemWhereFroms", "where"u8),
+            Attribute("USER.TAG", "again"u8),
+            Attribute("security.selinux", "label"u8),
+            Attribute("zone.identifier", "over"u8),
+        ],
+    };
 
     /// <summary>A target that keeps streams and writes no attributes of its own, as Windows is.</summary>
     private static MetadataWriter Writer(Held streams) => new(new MetadataTarget

@@ -114,19 +114,13 @@ public sealed class MetadataWriter(MetadataTarget target)
         ExtendedAttributeEntry? acl = null;
         var aclLanded = false;
 
-        // Windows matches a stream's name without regard to case, so a name
-        // is held against the file's own streams and the attributes written
-        // before it in that way, and never lands over either.
-        var own = asStreams
-            ? new HashSet<string>(metadata.AlternateStreams.Select(stream => System.Text.Encoding.UTF8.GetString(stream.Name.Span)), StringComparer.OrdinalIgnoreCase)
-            : null;
-        var taken = asStreams ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
-
-        foreach (var attribute in metadata.ExtendedAttributes)
+        var streams = asStreams ? MetadataRules.AsStreams(metadata) : null;
+        for (var at = 0; at < metadata.ExtendedAttributes.Count; at++)
         {
+            var attribute = metadata.ExtendedAttributes[at];
             var isAcl = MetadataRules.IsAccessAcl(attribute.Name.Span);
-            var why = asStreams
-                ? AsStream(destination, attribute, own!, taken!)
+            var why = streams is not null
+                ? streams[at] is { Stream: { } stream } ? target.Streams.Write(destination, stream, attribute.Value.Span) : streams[at].Why
                 : !native ? null : MetadataRules.Withheld(attribute, target, link) is { } withheld
                     ? withheld
                     : ExtendedAttributes.TrySet(destination, attribute.Name.Span, attribute.Value.Span) ? null : "refused by the target";
@@ -299,35 +293,6 @@ public sealed class MetadataWriter(MetadataTarget target)
 
             return id;
         }
-    }
-
-    /// <summary>
-    /// Writes <paramref name="attribute"/> onto <paramref name="file"/> as the
-    /// stream of its name, or says why not: it means something to Linux's
-    /// kernel alone, its name is one no stream may have, the file was
-    /// captured with a stream of that name, an attribute written before it
-    /// has that name, or the target refuses it.
-    /// </summary>
-    private string? AsStream(string file, ExtendedAttributeEntry attribute, HashSet<string> own, HashSet<string> taken)
-    {
-        if (MetadataRules.WithheldAsStream(attribute) is { } withheld)
-        {
-            return withheld;
-        }
-
-        if (!AlternateStreams.TryName(attribute.Name.Span, out var name, out var why))
-        {
-            return why;
-        }
-
-        if (own.Contains(name))
-        {
-            return "the file was captured with a stream of that name";
-        }
-
-        return taken.Add(name)
-            ? target.Streams.Write(file, name, attribute.Value.Span)
-            : "another of the file's attributes has that name, as Windows compares names";
     }
 }
 
