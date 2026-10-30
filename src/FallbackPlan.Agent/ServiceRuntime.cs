@@ -1,3 +1,4 @@
+using System.Globalization;
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
@@ -1371,13 +1372,15 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// that could not read the repository, or could not see every record it
     /// needed, leaves the catalogue marked and the set open: a backup into a
     /// catalogue short of its history stores again what it cannot find, which
-    /// costs a rewrite and never a restore, and the next open tries again.
+    /// costs a rewrite and never a restore, and the next open tries again. A
+    /// notice says so until one does.
     /// </remarks>
     private async ValueTask RebuildCatalogueAsync(string setId, ArchiveHandle archive, CancellationToken cancellationToken)
     {
         var log = LoggerFor<ServiceRuntime>();
         var rebuiltSet = LogId.BackupSet(setId);
         var warnings = new List<string>();
+        string? shortfall;
         try
         {
             using var reader = await CatalogueRebuild
@@ -1387,6 +1390,10 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 this, archive.Catalogue, archive.Store, archive.Repository, reader, warnings, cancellationToken)
                 .ConfigureAwait(false);
             Log.CatalogueRebuiltAtOpen(log, rebuiltSet, projected.Snapshots, projected.FileVersions, projected.Missing);
+            shortfall = projected.Missing == 0
+                ? null
+                : string.Create(
+                    CultureInfo.InvariantCulture, $"{projected.Missing} record(s) it needed could not be read");
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
             or FormatException or System.Security.Cryptography.CryptographicException)
@@ -1395,12 +1402,44 @@ public sealed class ServiceRuntime : IAsyncDisposable
             // keep the set from opening at every attempt, which would deny
             // the backup and the restore that are the way out of it.
             Log.CatalogueRebuildAtOpenFailed(log, rebuiltSet, exception.Message);
+            shortfall = "the repository could not be read";
         }
 
         foreach (var warning in warnings)
         {
             Log.CatalogueRebuildAtOpenFinding(log, rebuiltSet, warning);
         }
+
+        ReportIncompleteRebuild(setId, shortfall);
+    }
+
+    /// <summary>
+    /// Says that a set's catalogue was rebuilt at open short of its history,
+    /// or stops saying so once a rebuild has read all of it (ADR-0010
+    /// Amendment 7). The set lists what the catalogue holds, so a snapshot
+    /// listed with none of its files, or no snapshot at all, would otherwise
+    /// carry its reason only in the log.
+    /// </summary>
+    /// <param name="setId">The set.</param>
+    /// <param name="shortfall">What the rebuild could not read, or null when it read everything it needed.</param>
+    private void ReportIncompleteRebuild(string setId, string? shortfall)
+    {
+        var key = $"catalogue-rebuild-incomplete:{setId}";
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (shortfall is null)
+        {
+            Notices.Resolve(key, now);
+            return;
+        }
+
+        Notices.Raise(
+            key,
+            $"The catalogue of set '{FindConfiguredSet(setId)?.Name ?? setId}' was rebuilt from its repository when "
+            + $"the service opened it, and {shortfall}. Until a rebuild reads all of it, the set lists its snapshots "
+            + "with fewer files than they hold, or none at all, and a backup stores again what it cannot find. The "
+            + "repository itself is unchanged. The service log says what was not read, and the next time the service "
+            + "opens the set it tries again.",
+            now);
     }
 
     /// <summary>How a heal from a destination ended.</summary>
