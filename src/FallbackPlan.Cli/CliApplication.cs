@@ -970,17 +970,15 @@ public static class CliApplication
                 // stands there only once verified, as the executor lands a
                 // file (ADR-0173 Amendment 1): a restore that fails leaves the
                 // output as it was, and a link there is replaced, never
-                // written through.
+                // written through. The file is assembled in that spool itself,
+                // so it is written once and needs no room but where it lands
+                // (ADR-0173 Amendment 3).
                 var spool = RestorePaths.SpoolBeside(outputPath, "restore");
                 RestoreResult result;
                 try
                 {
                     File.Delete(spool);
-                    var destination = new FileStream(spool, FileMode.CreateNew, FileAccess.Write);
-                    await using (destination.ConfigureAwait(false))
-                    {
-                        result = await new RestoreEngine(reader).RestoreFileAsync(manifest, destination, cancellationToken).ConfigureAwait(false);
-                    }
+                    result = await new RestoreEngine(reader).AssembleFileAsync(manifest, spool, cancellationToken).ConfigureAwait(false);
 
                     if (result.Success)
                     {
