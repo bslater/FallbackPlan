@@ -3,6 +3,7 @@ using System.Text.Json;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Cli.Resources;
+using FallbackPlan.Domain;
 using FallbackPlan.Restore;
 
 namespace FallbackPlan.Cli;
@@ -108,7 +109,7 @@ internal static class RestoreReceiptReport
             throw new CliFailureException(Strings.FormatRestoreReceiptReport_NoReceiptKept(run, directory));
         }
 
-        output.WriteLine(File.ReadAllText(path).TrimEnd());
+        output.WriteLine(AtomicFile.ReadAllText(path).TrimEnd());
     }
 
     /// <summary>
