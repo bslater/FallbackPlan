@@ -66,6 +66,41 @@ public sealed class CompactionInterruptionTests : InterruptionHarness
     }
 
     /// <summary>
+    /// Criterion 4 as the ledger wrote it, verification after a cut: every
+    /// blob the store holds verifies record by record, a blob the pass put
+    /// and never named among them, and the index loads with no finding.
+    /// </summary>
+    [TestMethod]
+    public async Task ACompactionCutAtEveryStep_LeavesARepositoryThatVerifies()
+    {
+        foreach (var cut in CutPoints)
+        {
+            using var world = await CompactionWorld.CreateAsync(this, cut);
+            await Assert.ThrowsExactlyAsync<CompactionKilledException>(async () => await world.CompactAsync());
+
+            using var verifier = new VerifyEngine(world.Repository.RepositoryId, world.Keys, world.Store);
+            var verified = 0;
+            await foreach (var blob in world.Store.ListAsync(
+                ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
+            {
+                var result = await verifier.VerifyBlobAsync(
+                    blob.Key, blob.Length, VerifyLevel.EveryRecord, bindKey: true, CancellationToken.None);
+                Assert.IsTrue(result.Ok, $"cut after {cut}: {blob.Key} does not verify: {result.Detail}");
+                verified++;
+            }
+
+            Assert.IsGreaterThan(0, verified, "the premise: the store holds blobs");
+            using var loader = new IndexLoader(world.Store, world.Repository.RepositoryId, world.Credential);
+            var state = await loader.LoadAsync(
+                currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+                blobState: null, CancellationToken.None);
+            Assert.IsEmpty(
+                state.Findings,
+                $"cut after {cut}: {string.Join(" | ", state.Findings.Select(finding => finding.Detail))}");
+        }
+    }
+
+    /// <summary>
     /// Criterion 12, at its root: at every cut, a blob this pass produced is
     /// either covered by its unretired intent or named by the published
     /// index — never neither. The window in which it is neither is the one a
