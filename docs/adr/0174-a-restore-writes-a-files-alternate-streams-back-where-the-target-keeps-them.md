@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: a file's captured alternate streams come back where the target keeps them, and one that does not is named), FR-RST-005, FR-RST-004 (amended by Amendment 1: the recovery tool gives them back by the same rule), FR-RST-004 (amended by Amendment 2: so does the single-file restore)
+**Requirements:** FR-RST-004 (amended: a file's captured alternate streams come back where the target keeps them, and one that does not is named), FR-RST-005, FR-RST-004 (amended by Amendment 1: the recovery tool gives them back by the same rule), FR-RST-004 (amended by Amendment 2: so does the single-file restore), FR-RST-003 (amended by [Amendment 3](#amendment-3-2026-10--the-plan-names-a-file-whose-stream-has-a-name-no-stream-may-be-written-under): the plan names a file whose stream has a name no stream may be written under)
 **Related:** [ADR-0026](0026-phase-1-capture-shapes.md) §5 (a stream is captured whole as one segment record), [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (what a restore says it does not write back), [ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md) (each attribute on its own, and a receipt that records what each write did), [ADR-0109](0109-a-restore-cut-short-is-resumed.md) (a resumed run leaves what an earlier one landed as it stands), [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) (the recovery tool, which still writes none), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (alternate data streams are preserved on Windows), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 9, each stream's name, object identifier and length), [restore review RR-6](../review/2026-08-restore-pipeline-review.md#rr-6--alternate-data-streams-are-captured-and-never-restored)
 
 **Built:**
@@ -68,6 +68,8 @@ The executor takes the calls that write and read a stream as an argument, as it 
 
   > **2026-10 ([Amendment 1](#amendment-1-2026-10--the-recovery-tool-writes-a-files-streams-back-by-the-same-rule)).** Taken up: the tool writes a file's streams back by this record's rule, and notes one that does not land.
 - **Judge a stream's name in the plan.** The plan's items carry whether a file has streams, not their names, so a name no stream can have is found at execution and named in the receipt.
+
+  > **Built 2026-10 ([Amendment 3](#amendment-3-2026-10--the-plan-names-a-file-whose-stream-has-a-name-no-stream-may-be-written-under)).** The plan's facts now count the streams whose names §2 refuses, and the plan names those files.
 - **Extended attributes on Windows.** Architecture 06 §3 would keep them as streams there. They are still listed as not applied.
 - **A handle-relative write.** A stream is written by path, as the times and attributes are, so the window [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) records covers it too.
 
@@ -122,6 +124,14 @@ The executor keeps its own write, which also proves a stream already standing as
 
 Off Windows no capture carries a stream, so nothing there reaches `restore-file`'s write; its case runs on Windows alone.
 
+## Amendment 3 (2026-10) — the plan names a file whose stream has a name no stream may be written under
+
+**Gap.** §2 judges a stream's name before it is joined to the file's path. A stream whose name would reach another file or the file itself is neither read nor written, and the file is restored degraded. The plan's items carried whether a file had streams, not their names. So the plan said nothing of such a file, and it was found only at execution, where the receipt named it.
+
+**Decision.** Each item's facts now count the captured streams whose names §2's rule (`Domain/AlternateStreams.TryName`) refuses. The plan's probe counts them from the manifest it already reads (`Restore/RestoreBlobSet`). On a target that writes streams, the plan declares the files carrying one on a line of their own, `alternate-stream-names`. The line says that stream will not be written and the file will be restored degraded. On a target that writes none, the planner's own line already speaks for every stream, and no name is judged. The plan does not repeat the names, which the receipt gives and which are the manifest's to say.
+
+**Tests.** `Repository.Tests/RestoreMetadataHonestyTests` holds the plan to it on every platform, against manifests the fake source writes. Of three files, one has a zone identifier, one a stream named `..\..\escape` and one a stream named `..`. On a target that writes streams, the plan declares two of them on the new line. On one that writes none, it declares no such line.
+
 ## Status history
 
 | Date | Status | Note |
@@ -129,3 +139,4 @@ Off Windows no capture carries a stream, so nothing there reaches `restore-file`
 | 2026-10 | Accepted | Built in one slice, tests first. The executor writes a file's alternate streams back on Windows, each proved like a segment, judged by name before it is joined to the path, and written after the content and before the times; one that does not land degrades the file, named. A stream standing as captured is left. `Domain/AlternateStreams`; `Restore/RestoreExecutor`; `Domain.Tests/AlternateStreamsTests`; `Repository.Tests/RestoreAlternateStreamsTests` |
 | 2026-10 | Amended | Amendment 1: the recovery tool writes a file's streams back by the same rule, after its content and before its times, and notes one that does not land. `Recovery/RecoverySession`; `Repository.Tests/RecoveryAlternateStreamsTests` |
 | 2026-10 | Amended | Amendment 2: `restore-file` writes a file's streams back by the same rule, through one helper the recovery tool now shares, and says each that does not land. `Domain/AlternateStreams`; `Cli/CliApplication`; `Domain.Tests/AlternateStreamsTests`; `Cli.Tests/InspectionCommandTests` |
+| 2026-10 | Amended | Amendment 3: the plan names a file whose stream has a name no stream may be written under, from the count each item's facts now carry. `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Repository.Tests/RestoreMetadataHonestyTests` |
