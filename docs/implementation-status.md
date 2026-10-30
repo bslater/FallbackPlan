@@ -414,7 +414,7 @@ Four of those cases asked less than their criterion, and [Amendment 5](adr/0025-
 - 8 and 9 rebuild the index plane before and after the sweep (`Repository.Tests/Index/CompactionIndexTests`);
 - 10 holds each delta to the budget it was given.
 
-All passed as the code stood.
+All passed as the code stood. [Amendment 6](adr/0025-compaction-reseals-records.md#amendment-6-2026-10--criterion-11-beside-a-backup) holds 11 against the service: a compaction beside its set's parked backup, the two one writer, leaves the backup committing and the newest snapshot restoring whole (`Hosts.Tests/CompactionRetentionTests`). It passed as the code stood too.
 
 ### 0026 — the shapes are captured, the POSIX traversal is handle-relative, and one gap is left
 

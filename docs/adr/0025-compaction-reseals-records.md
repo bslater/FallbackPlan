@@ -285,6 +285,10 @@ nothing could be tested. Each criterion now names the case that discharges it:
 > cases restore rather than verify, 8 and 9's rebuild is the forensic one,
 > and 10's checks the object limit rather than the budget. Amendment 5 names
 > the cases that ask each criterion itself.
+>
+> **Amended 2026-10 ([Amendment 6](#amendment-6-2026-10--criterion-11-beside-a-backup)).** Row 11's case runs two
+> publications on stores of their own. Amendment 6 adds the concurrency the
+> product has: a compaction beside a backup of its own set.
 
 Criterion 4's prediction held exactly: it rests on the interruption discipline
 [ADR-0009](0009-garbage-collection-safety.md) gives the collector, and the
@@ -315,6 +319,14 @@ All of them passed as the code stood. What each adds:
 - **3 and 9's rebuild through the index** catches a supersession that names a record a byte off where it went, as does `Repository.Tests/Packing/BlobCompactionTests`. It also catches a rebuild that passes over a compaction's deltas, with 8 and 9's rebuild and the checkpoint rebuild in `Repository.Tests/Index/CheckpointBundleTests`. The footer-only restore caught neither.
 - **4's verification** has nothing in the compactor to catch that a restore would not. A put lands whole or not at all, so a cut leaves whole blobs. The case holds the claim the row makes rather than a defect that was there.
 
+## Amendment 6 (2026-10) — criterion 11 beside a backup
+
+Amendment 4's row 11 holds concurrent index generation with two publications at once, each on a store, catalogue, sequence and publisher of its own. In the product the concurrency that happens is a compaction beside a backup of its own set. A retention apply holds the collector's deletes while the set's backup is in flight ([ADR-0009 Amendment 8](0009-garbage-collection-safety.md#amendment-8-2026-10--a-backup-builds-on-more-than-its-intent-names)), and its compaction phase still runs. The two are one writer: they draw blob counters and delta sequence numbers from one sequence and publish into one index.
+
+**Decision.** That is held against the service. `Hosts.Tests/CompactionRetentionTests` gives a direct-ship set a compaction backlog and a scheduled backup still scanning when a person's apply arrives. The apply parks the backup, compacts, and says it held the collector's deletes beside it. The backup then resumes and commits. The passes after it condemn and sweep what the rewrite drained, and the newest snapshot restores the file the rewrite moved and the file the parked backup captured, byte for byte.
+
+It passed as the code stood. No mutant was found that this case alone kills. A compaction given a sequence of its own, over the same state file, fails every compaction case this suite holds, this one among them: a second sequence loses the delta chain the set's one keeps, and the next restore fails whether or not a backup is parked.
+
 ## Status history
 
 | Date | Status | Note |
@@ -326,3 +338,4 @@ All of them passed as the code stood. What each adds:
 | 2026-09 | Accepted (superseded for v3, now built) | ADR-0052 is built for the record and blob planes, so the supersession is no longer prospective: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` copies a sealed record into another blob without opening it, and `Repository.Tests/Packing/RelocatableBlobTests` reads it back there. Two corrections this record must carry rather than leave for a reader to notice: ADR-0052 Amendment 1 **withdrew the constant nonce** for a carried random one, so "makes the nonce constant" above described a design that was never written; and Amendment 1 item 6 **retires Amendment 1's staging confinement by rule** — a compactor runs where the structure key and a writer identity are, which is the source service, and a destination never compacts — rather than leaving it orphaned. Decrypt-and-reseal remains the only answer for format 2, and nothing compacts in any format yet |
 | 2026-09 | Accepted (superseded for v3, its criteria discharged) | Amendment 4: the compactor is built as [ADR-0067](0067-the-keyless-compactor.md) — a keyless rewrite over `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync`, not this record's decrypt-and-reseal — and Amendment 2's twelve exit criteria each name the case that discharges them. Decrypt-and-reseal stands only where format 3 does not reach, which is format 2, where a service holds no content key and so cannot compact at all |
 | 2026-10 | Accepted (superseded for v3, its criteria discharged) | Amendment 5: four of Amendment 4's rows named a case that asked less than its criterion, and each now names one that asks it: a restore through an index rebuilt after the compaction with no location fallback (3 and 9), verification at every cut (4), an index-plane rebuild before and after the sweep (8 and 9), and each delta inside its budget (10). `Repository.Tests/EndToEnd/CompactedRestoreTests`; `Repository.Tests/Index/CompactionIndexTests`; `InterruptionTests/CompactionInterruptionTests` |
+| 2026-10 | Accepted (superseded for v3, its criteria discharged) | Amendment 6: criterion 11 held against the service, a compaction beside a parked backup of its own set, the two one writer on one sequence and one index; the backup commits and the newest snapshot restores whole. `Hosts.Tests/CompactionRetentionTests` |
