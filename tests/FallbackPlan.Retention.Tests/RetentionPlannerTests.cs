@@ -86,6 +86,47 @@ public sealed class RetentionPlannerTests
     }
 
     [TestMethod]
+    public void Select_TwoRulesThatDisagree_KeepWhatEitherKeeps_AndNameTheRuleThatBound()
+    {
+        // Wednesday 2026-08-12. The daily rule reaches back two days, the
+        // weekly rule three weeks, and each would expire what the other keeps.
+        var today = At(Now.AddHours(-2));
+        var yesterday = At(Now.AddDays(-1).AddHours(-2));
+        var lastWeek = At(Now.AddDays(-8).AddHours(-2));
+        var lastWeekEarlier = At(Now.AddDays(-9).AddHours(-2));
+        var longAgo = At(Now.AddDays(-72));
+
+        var selection = RetentionPlanner.Select(
+            [longAgo, lastWeekEarlier, lastWeek, yesterday, today],
+            new RetentionConfiguration { KeepDaily = 2, KeepWeekly = 3 },
+            Now);
+
+        // Yesterday is not its week's newest, so the weekly rule alone would
+        // expire it; last week is outside the daily window, so the daily rule
+        // alone would. Each is kept, and named by the one rule that kept it.
+        CollectionAssert.AreEqual(new[] { "daily 2026-08-11" }, Reasons(selection, yesterday));
+        CollectionAssert.AreEqual(new[] { "weekly 2026-W32" }, Reasons(selection, lastWeek));
+        CollectionAssert.AreEquivalent(new[] { "daily 2026-08-12", "weekly 2026-W33" }, Reasons(selection, today));
+        CollectionAssert.AreEquivalent(new[] { lastWeekEarlier, longAgo }, selection.Expire.ToList());
+    }
+
+    [TestMethod]
+    public void Describe_TwoRulesThatDisagree_TheDryRunSaysWhichRuleKeptEachSnapshot()
+    {
+        var yesterday = At(Now.AddDays(-1).AddHours(-2));
+        var lastWeek = At(Now.AddDays(-8).AddHours(-2));
+        var today = At(Now.AddHours(-2));
+        var selection = RetentionPlanner.Select(
+            [lastWeek, yesterday, today], new RetentionConfiguration { KeepDaily = 2, KeepWeekly = 3 }, Now);
+
+        var lines = CollectionPlanner.Describe(new CollectionPlan(selection.Keep, [], [], [], []), []);
+
+        Assert.Contains($"  keep {yesterday.SnapshotId[..12]}… — daily 2026-08-11", lines);
+        Assert.Contains($"  keep {lastWeek.SnapshotId[..12]}… — weekly 2026-W32", lines);
+        Assert.Contains($"  keep {today.SnapshotId[..12]}… — daily 2026-08-12, weekly 2026-W33", lines);
+    }
+
+    [TestMethod]
     public void Select_TheSameInstant_BreaksTheTieDeterministically()
     {
         var first = new SnapshotFact(new string('a', 64), (ulong)Now.AddDays(-1).ToUnixTimeMilliseconds());
@@ -267,6 +308,9 @@ public sealed class RetentionPlannerTests
         Assert.HasCount(3, selection.Keep);
         Assert.HasCount(4, selection.Expire);
     }
+
+    private static List<string> Reasons(RetentionSelection selection, SnapshotFact snapshot) =>
+        [.. selection.Keep.Single(keep => keep.Snapshot == snapshot).Reasons];
 
     private static SnapshotFact At(DateTimeOffset capturedAt) =>
         new(Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()).PadRight(64, 'f'),
