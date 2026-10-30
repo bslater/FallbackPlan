@@ -11,7 +11,10 @@ namespace FallbackPlan.Cli.Tests;
 /// exactly the ones that must not themselves be broken. <c>restore-file</c>
 /// writes a file's captured metadata back as the executor does (FR-RST-004;
 /// ADR-0149), an ACL that names accounts by number included where this
-/// installation captured the snapshot it names (FR-RST-004; ADR-0154).
+/// installation captured the snapshot it names (FR-RST-004; ADR-0154). It
+/// lands its file as the executor does, written whole beside the output and
+/// moved there once verified, so one that fails leaves what stood at the
+/// output as it was (FR-RST-002; ADR-0173 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class InspectionCommandTests : IDisposable
@@ -41,6 +44,21 @@ public sealed class InspectionCommandTests : IDisposable
             Field(archive.Output, "snapshot object"),
             Field(archive.Output, "file version"),
             Field(archive.Output, "root tree"));
+    }
+
+    /// <summary>Turns every byte of each data blob past its envelope, so no record in it reads.</summary>
+    private void DamageEveryDataBlob()
+    {
+        foreach (var blob in Directory.GetFiles(Path.Combine(_cli.RepositoryPath, "blobs", "data"), "*", SearchOption.AllDirectories))
+        {
+            var bytes = File.ReadAllBytes(blob);
+            for (var i = 200; i < bytes.Length; i++)
+            {
+                bytes[i] ^= 0xFF;
+            }
+
+            File.WriteAllBytes(blob, bytes);
+        }
     }
 
     private string FirstBlobKey(string blobClass)
@@ -136,6 +154,64 @@ public sealed class InspectionCommandTests : IDisposable
 
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         Assert.AreEqual(content, File.ReadAllText(destination));
+    }
+
+    [TestMethod]
+    public async Task RestoreFile_ThatFails_LeavesWhatStoodAtTheOutputAsItWas()
+    {
+        // The file is written whole beside the output and moved there once
+        // verified, as the executor lands one (ADR-0173 Amendment 1), so a
+        // restore that fails never touches what the output already held.
+        var archived = await ArchiveAsync();
+        var folder = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "out")).FullName;
+        var destination = Path.Combine(folder, "kept.txt");
+        File.WriteAllText(destination, "the person's own file");
+        DamageEveryDataBlob();
+
+        var restore = await _cli.RunAsync("restore-file", "--manifest", archived.FileVersion, "--output", destination);
+
+        Assert.AreNotEqual(0, restore.ExitCode, restore.All);
+        Assert.AreEqual("the person's own file", File.ReadAllText(destination));
+        Assert.AreEqual(destination, Assert.ContainsSingle(Directory.GetFiles(folder)), "no spool is left beside it");
+    }
+
+    [TestMethod]
+    public async Task RestoreFile_OverAFileAlreadyThere_ReplacesItWithTheVerifiedFile()
+    {
+        const string content = "restore-file over an older file";
+        var archived = await ArchiveAsync(content);
+        var folder = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "over")).FullName;
+        var destination = Path.Combine(folder, "older.txt");
+        File.WriteAllText(destination, "an older file, longer than what replaces it");
+
+        var restore = await _cli.RunAsync("restore-file", "--manifest", archived.FileVersion, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        Assert.AreEqual(content, File.ReadAllText(destination));
+        Assert.AreEqual(destination, Assert.ContainsSingle(Directory.GetFiles(folder)), "no spool is left beside it");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link is made there without a privilege")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task RestoreFile_AtALink_LandsOverTheLink_AndWritesNothingThroughIt()
+    {
+        // A file lands over whatever stands at its name, a link included,
+        // and never through it, as the executor's do (ADR-0152).
+        const string content = "restore-file over a link";
+        var archived = await ArchiveAsync(content);
+        var folder = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "linked")).FullName;
+        var elsewhere = Path.Combine(_cli.WorkPath, "elsewhere.txt");
+        File.WriteAllText(elsewhere, "where the link leads");
+        var destination = Path.Combine(folder, "link.txt");
+        File.CreateSymbolicLink(destination, elsewhere);
+
+        var restore = await _cli.RunAsync("restore-file", "--manifest", archived.FileVersion, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        Assert.IsNull(new FileInfo(destination).LinkTarget, "the link was written through, not replaced");
+        Assert.AreEqual(content, File.ReadAllText(destination));
+        Assert.AreEqual("where the link leads", File.ReadAllText(elsewhere));
     }
 
     [TestMethod]
