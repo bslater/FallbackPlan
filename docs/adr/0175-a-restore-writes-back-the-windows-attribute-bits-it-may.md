@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: a file's and a folder's Windows attribute bits come back where the target keeps them, and a bit no restore sets is named), FR-RST-003
+**Requirements:** FR-RST-004 (amended: a file's and a folder's Windows attribute bits come back where the target keeps them, and a bit no restore sets is named), FR-RST-003 (amended by [Amendment 1](#amendment-1-2026-10--the-plan-names-a-bit-no-restore-sets): the plan names a bit no restore sets)
 **Related:** [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (what a restore says it does not write back), [ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md) (each attribute on its own, and a receipt that records what each write did), [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) (a folder's metadata, which goes on last), [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md) and [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) (the one writer the executor, the command line and the recovery tool share), [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) (a file's streams, which go on before), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (compression and encryption attributes are degraded and reported), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 10, the bits as captured)
 
 **Built:**
@@ -46,12 +46,16 @@ Windows refuses to move a file over a read-only one. A file an earlier restore g
 - A file restored on Windows comes back read-only, hidden or system as it was captured, and a folder hidden as it was.
 - A restore on Windows lists the bits only where a compressed or encrypted file, or another bit no restore sets, was captured.
 - A plan on Windows declares no file-attributes line. The plan does not yet say beforehand which files carry a bit no restore sets.
+
+  > **Built 2026-10 ([Amendment 1](#amendment-1-2026-10--the-plan-names-a-bit-no-restore-sets)).** It does now, on a line of its own that names the bits.
 - A restored read-only file is read-only to the person too, as it was before the backup.
 
 ## What this does not do
 
 - **Compress or encrypt a file as captured.** NTFS compression and EFS encryption are set through calls of their own, and EFS needs the key of the account that encrypted. They are named, not set.
 - **Predict a bit no restore sets in the plan.** The plan's facts carry which attributes an item has, not which bits, so a compressed file's line is the receipt's.
+
+  > **Built 2026-10 ([Amendment 1](#amendment-1-2026-10--the-plan-names-a-bit-no-restore-sets)).** The facts now carry the bits, and the plan names those no restore sets.
 - **A link's bits.** No restore on Windows makes a symlink.
 
 ## Alternatives considered
@@ -60,9 +64,18 @@ Windows refuses to move a file over a read-only one. A file an earlier restore g
 - **Set only the bits captured, leaving the rest as they are.** Rejected. A file captured without the archive bit would keep the one the restore's own write gave it, and the attributes would read applied while differing.
 - **Clear the read-only bit only under Replace.** Rejected. `restore-file` and the recovery tool replace what stands at their output whole too, and each would fail at a read-only file it wrote before.
 
+## Amendment 1 (2026-10) — the plan names a bit no restore sets
+
+**Gap.** A plan on Windows declared no file-attributes line, so a file captured compressed or encrypted was said only by the receipt: its attributes were listed not applied, with the bits named in its detail, after the run. ADR-0083 holds the plan and the receipt to one rule, and for these files they disagreed. The plan's facts carried which kinds of metadata an item had, not its bits, so the plan could not tell.
+
+**Decision.** Each item's facts now carry its captured attribute bits (`Restore/RestoreBlobSet`), as they carry its descriptor's accounts (ADR-0176). On a target that writes bits, the rule judges them by `MetadataRules.UnsetFileAttributes`, as the writer does. An item captured with a bit no restore sets is declared on a line of its own, `unset-file-attributes`, which counts the files and folders and names every such bit the tree carries, in the bits' order. That line says the five bits a restore sets still land. Such an item is not also counted on the file-attributes line. Where the target writes no bits, every item that carries some is declared on that line, as before, and no bit is singled out.
+
+**Tests.** `Repository.Tests/RestoreMetadataHonestyTests` holds the plan to it on every platform, against manifests captured with archive, archive and compressed, and encrypted bits. On a target that writes bits, the plan declares two files on the new line, naming Compressed and Encrypted, and no file-attributes line. On one that writes none, it declares all three on the file-attributes line and nothing on the new one.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The writer every way of restoring shares writes a file's and a folder's read-only, hidden, system, archive and not-content-indexed bits back on Windows, as the last write; a bit no restore sets is named and leaves the attributes not applied; and a read-only file a restore replaces is replaced. `Domain/MetadataWriter`; `Domain/MetadataRules`; `Domain/RestorePaths`; `Domain.Tests/FileAttributesWriteBackTests`; `Repository.Tests/RestoreFileAttributesTests` |
 | 2026-10 | Accepted (related) | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): the security descriptor now goes on just before the bits, which stay the last write. |
+| 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--the-plan-names-a-bit-no-restore-sets): the plan names a bit no restore sets, on a line of its own, from the bits each item's facts now carry. `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Repository.Tests/RestoreMetadataHonestyTests` |
