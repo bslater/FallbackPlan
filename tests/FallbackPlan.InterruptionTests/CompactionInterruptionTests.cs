@@ -106,31 +106,74 @@ public sealed class CompactionInterruptionTests : InterruptionHarness
             using var world = await CompactionWorld.CreateAsync(this, cut);
             await Assert.ThrowsExactlyAsync<CompactionKilledException>(async () => await world.CompactAsync());
 
-            // A collector that knows what 08 §8 obliges it to know and no
-            // more: a blob the index names is reachable, a blob an unretired
-            // intent covers is reachable, and everything else is garbage.
-            // Everything it would take, it takes.
-            var named = await LoadIndexedBlobIdsAsync(world);
-            var intents = await LoadIntentsAsync(world);
-            foreach (var (key, blobId) in await ReadStoredBlobsAsync(world.Store))
-            {
-                if (!named.Contains(blobId) && !intents.IsCovered(blobId))
-                {
-                    await world.Store.DeleteAsync(key, DeleteConditions.None, CancellationToken.None);
-                }
-            }
+            await CollectAsync(world);
 
             // And the pass finishes, as a resumed one would.
             await world.CompleteAsync();
 
-            var present = (await ReadStoredBlobsAsync(world.Store)).Select(blob => blob.BlobId).ToHashSet();
-            foreach (var covered in await LoadIndexedBlobIdsAsync(world))
+            await AssertEveryIndexedBlobIsHeldAsync(world, $"cut after {cut}");
+        }
+    }
+
+    /// <summary>
+    /// The review's two-fault sequence (T-4): a pass cut, a collector, a
+    /// second pass over the same blob cut somewhere else, a collector again,
+    /// and only then a pass that finishes. Each pass starts from what the one
+    /// before it left: an intent not retired, blobs put and not yet named, or
+    /// an index already naming a rewrite of the blob it is about to rewrite
+    /// again. Every pair of cut points is run.
+    /// </summary>
+    [TestMethod]
+    public async Task Compaction_InterruptedTwiceAndRecovered_StillRestoresEverySnapshotByteIdentically()
+    {
+        foreach (var first in CutPoints)
+        {
+            foreach (var second in CutPoints)
             {
-                Assert.Contains(
-                    covered,
-                    present,
-                    $"cut after {cut}: the index names blob {covered}, which the collector took");
+                var label = $"cut after {first}, then after {second}";
+                using var world = await CompactionWorld.CreateAsync(this, first, name: $"{first}-{second}");
+
+                await Assert.ThrowsExactlyAsync<CompactionKilledException>(async () => await world.CompactAsync());
+                await CollectAsync(world);
+                await Assert.ThrowsExactlyAsync<CompactionKilledException>(
+                    async () => await world.CompactCutAfterAsync(second));
+                await CollectAsync(world);
+                await world.CompleteAsync();
+                await CollectAsync(world);
+
+                var restored = await RestoreSnapshotAsync(
+                    world.Store, world.Keys, CompactionWorld.SnapshotSeed, world.Repository.RepositoryId);
+                Assert.IsTrue(world.Original.AsSpan().SequenceEqual(restored), $"{label}: lost data");
+                await AssertEveryIndexedBlobIsHeldAsync(world, label);
             }
+        }
+    }
+
+    /// <summary>
+    /// A collector that knows what 08 §8 obliges it to know and no more: a
+    /// blob the index names is reachable, a blob an unretired intent covers
+    /// is reachable, and everything else is garbage. Everything it would
+    /// take, it takes.
+    /// </summary>
+    private static async Task CollectAsync(CompactionWorld world)
+    {
+        var named = await LoadIndexedBlobIdsAsync(world);
+        var intents = await LoadIntentsAsync(world);
+        foreach (var (key, blobId) in await ReadStoredBlobsAsync(world.Store))
+        {
+            if (!named.Contains(blobId) && !intents.IsCovered(blobId))
+            {
+                await world.Store.DeleteAsync(key, DeleteConditions.None, CancellationToken.None);
+            }
+        }
+    }
+
+    private static async Task AssertEveryIndexedBlobIsHeldAsync(CompactionWorld world, string label)
+    {
+        var present = (await ReadStoredBlobsAsync(world.Store)).Select(blob => blob.BlobId).ToHashSet();
+        foreach (var covered in await LoadIndexedBlobIdsAsync(world))
+        {
+            Assert.Contains(covered, present, $"{label}: the index names blob {covered}, which the collector took");
         }
     }
 
@@ -359,12 +402,13 @@ public sealed class CompactionInterruptionTests : InterruptionHarness
         /// <summary>What the capture left behind, so the produced blobs can be told apart from it.</summary>
         public HashSet<BlobId> CaptureBlobs { get; } = [];
 
-        public static async Task<CompactionWorld> CreateAsync(CompactionInterruptionTests owner, CompactionStep cut)
+        public static async Task<CompactionWorld> CreateAsync(
+            CompactionInterruptionTests owner, CompactionStep cut, string? name = null)
         {
             // Each cut gets its own store: a pass is a process life, and a
             // half-done one must not be inherited by the next case.
-            var root = Path.Combine(owner.StoreRoot, "worlds", cut.ToString());
-            var spool = Path.Combine(owner.SpoolDirectory, "worlds", cut.ToString());
+            var root = Path.Combine(owner.StoreRoot, "worlds", name ?? cut.ToString());
+            var spool = Path.Combine(owner.SpoolDirectory, "worlds", name ?? cut.ToString());
             Directory.CreateDirectory(root);
             Directory.CreateDirectory(spool);
 
@@ -408,6 +452,9 @@ public sealed class CompactionInterruptionTests : InterruptionHarness
 
         /// <summary>Compacts the first data blob whole, cut where this world was built to be cut.</summary>
         public Task CompactAsync() => CompactAsync(new KillCompactionAfter(_cut));
+
+        /// <summary>The same pass, cut after <paramref name="step"/> instead.</summary>
+        public Task CompactCutAfterAsync(CompactionStep step) => CompactAsync(new KillCompactionAfter(step));
 
         /// <summary>The same pass, run to the end — what a resumed compaction does.</summary>
         public Task CompleteAsync() => CompactAsync(observer: null);
