@@ -30,6 +30,10 @@ namespace FallbackPlan.Restore;
 /// asks the target whether it knows (ADR-0176), or null where it carries none
 /// or one that does not read.
 /// </param>
+/// <param name="FileAttributes">
+/// Its captured Windows attribute bits, whose bits no restore sets the plan
+/// names (ADR-0175 Amendment 1), or null where none were captured.
+/// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -40,7 +44,8 @@ public sealed record RestoreItemFacts(
     ExtendedAttributeKinds Attributes = ExtendedAttributeKinds.None,
     string? HardLink = null,
     ulong HeldBytes = 0,
-    IReadOnlyList<string>? Accounts = null);
+    IReadOnlyList<string>? Accounts = null,
+    uint? FileAttributes = null);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
@@ -224,6 +229,12 @@ public static class RestoreMetadata
     /// read as a descriptor at all (ADR-0176).
     /// </para>
     /// <para>
+    /// On a target that writes Windows attribute bits, the items captured with
+    /// a bit no restore sets, as compressed or encrypted, are declared on a
+    /// line of their own that names those bits, because the rest of their
+    /// bits still land (ADR-0175 Amendment 1).
+    /// </para>
+    /// <para>
     /// What the planner already says is not said twice. On a target that
     /// applies no POSIX metadata, its line covers permissions and ownership.
     /// Its alternate-streams line covers streams. Symlinks on a target that
@@ -255,6 +266,8 @@ public static class RestoreMetadata
         var linkPermissions = new Tally();
         var linkAttributes = new Tally();
         var strangers = new Tally();
+        var unsetBits = new Tally();
+        var unsetMask = 0u;
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -333,6 +346,16 @@ public static class RestoreMetadata
                     apart |= CapturedMetadata.SecurityDescriptor;
                     strangers.Add(item.Kind);
                 }
+            }
+
+            if ((applied & known.Captured & CapturedMetadata.FileAttributes) != 0
+                && known.FileAttributes is { } bits
+                && MetadataRules.UnsetFileAttributes(bits).Count > 0)
+            {
+                applied &= ~CapturedMetadata.FileAttributes;
+                apart |= CapturedMetadata.FileAttributes;
+                unsetBits.Add(item.Kind);
+                unsetMask |= bits;
             }
 
             var missing = known.Captured & ~(applied | given | apart);
@@ -420,6 +443,10 @@ public static class RestoreMetadata
         var flags = attributes.GetValueOrDefault(CapturedMetadata.FileAttributes);
         Add("file-attributes", flags, string.Create(CultureInfo.InvariantCulture,
             $"File attributes (read-only, hidden, system, archive) captured on {flags} will not be applied."));
+        Add("unset-file-attributes", unsetBits, string.Create(CultureInfo.InvariantCulture,
+            $"File attributes captured on {unsetBits} include bits no restore sets: "
+            + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask))}. Those will not be applied; "
+            + $"the read-only, hidden, system, archive and not-content-indexed bits will."));
 
         return declared;
     }
