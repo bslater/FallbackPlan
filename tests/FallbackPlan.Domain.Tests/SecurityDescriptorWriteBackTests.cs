@@ -8,9 +8,10 @@ namespace FallbackPlan.Domain.Tests;
 /// <summary>
 /// A restore writes back the Windows security descriptor captured with a file
 /// or a folder, where the platform keeps one (FR-RST-004; ADR-0176): its
-/// owner, its group and its DACL as captured, protected as it was, as the last
-/// write, since a DACL may take from the restoring account the access every
-/// write before it needs. A descriptor that names an account this machine
+/// owner, its group and its DACL's entries as captured, protected as it was,
+/// after the streams and times, since a DACL may take from the restoring
+/// account the access they need, and before the attribute bits, since writing
+/// one sets the archive bit. A descriptor that names an account this machine
 /// does not know is not written, and the account is named, so a file is never
 /// handed to a stranger's access. Where the account may not give the owner,
 /// the DACL still lands.
@@ -82,10 +83,30 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
             new EntryMetadata { WindowsSecurityDescriptor = source.GetAccessControl().GetSecurityDescriptorBinaryForm() },
             EntryKind.DirectoryPlaceholder);
 
-        Assert.AreEqual(
-            source.GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access),
-            new DirectoryInfo(folder).GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access));
+        Assert.AreEqual(Dacl(source.GetAccessControl()), Dacl(new DirectoryInfo(folder).GetAccessControl()));
         Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor), written.Detail);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's security descriptor and attribute bits")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Write_OnWindows_ADescriptorWrittenWithTheBits_LeavesNoArchiveBitTheCaptureDidNotHave()
+    {
+        var source = Landed("source.bin");
+        var file = Landed("restored.bin");
+        File.SetAttributes(file, FileAttributes.Normal);
+
+        var written = Writer().Write(file, new EntryMetadata
+        {
+            WindowsSecurityDescriptor = Captured(source),
+            FileAttributes = (uint)(FileAttributes.ReadOnly | FileAttributes.Hidden),
+        });
+
+        Assert.AreEqual(FileAttributes.ReadOnly | FileAttributes.Hidden, File.GetAttributes(file));
+        Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor), written.Detail);
+        Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.FileAttributes), written.Detail);
+        File.SetAttributes(file, FileAttributes.Normal);
     }
 
     [TestMethod]
@@ -186,8 +207,22 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
     private static byte[] Captured(string path) => new FileInfo(path).GetAccessControl().GetSecurityDescriptorBinaryForm();
 
     [SupportedOSPlatform("windows")]
-    private static string Dacl(string path) =>
-        new FileInfo(path).GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+    private static string Dacl(string path) => Dacl(new FileInfo(path).GetAccessControl());
+
+    /// <summary>
+    /// A DACL's protection and its entries, in order, each with whether its
+    /// folder gave it. Windows does not keep, through the call a restore
+    /// writes a descriptor with, the control bit that marks a DACL's
+    /// inherited entries as given by automatic inheritance (ADR-0176), so the
+    /// descriptor's own control bits are not compared.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static string Dacl(FileSystemSecurity security) =>
+        (security.AreAccessRulesProtected ? "protected: " : "inheriting: ")
+        + string.Join("; ", security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>()
+            .Select(rule => $"{rule.AccessControlType} {rule.IdentityReference} {rule.FileSystemRights} "
+                + $"{rule.InheritanceFlags} {rule.PropagationFlags}{(rule.IsInherited ? " inherited" : string.Empty)}"));
 
     private string Landed(string name)
     {

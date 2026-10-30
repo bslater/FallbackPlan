@@ -42,10 +42,11 @@ public sealed class MetadataWriter(MetadataTarget target)
     /// macOS a modification time set earlier than the creation time makes
     /// the volume move the creation time back to it, and .NET then restores
     /// the one before; written last, the captured creation time is the last
-    /// word whichever of those holds. On Windows the attribute bits follow,
-    /// because a read-only file refuses the writes before them, and the
-    /// security descriptor goes on after everything, because its DACL may
-    /// take from this account the access those writes need. A folder is
+    /// word whichever of those holds. On Windows the security descriptor
+    /// follows, because its DACL may take from this account the access the
+    /// writes before it need, and the attribute bits go on last, because a
+    /// read-only file refuses those writes and writing a descriptor sets the
+    /// archive bit. A folder is
     /// written through the folder's own calls, which Windows needs to open
     /// one for its times.
     /// </para>
@@ -186,28 +187,8 @@ public sealed class MetadataWriter(MetadataTarget target)
             applied |= CapturedMetadata.CreatedAt;
         }
 
-        // Last, because a read-only file refuses the writes before it. Off
-        // Windows .NET maps these bits onto permissions and flags of its own,
-        // so none is written there whatever a target says.
-        string? unsetDetail = null;
-        if (target.SupportsFileAttributes && OperatingSystem.IsWindows() && !link && metadata.FileAttributes is { } bits)
-        {
-            var unset = MetadataRules.UnsetFileAttributes(bits);
-            if (Wrote(() => File.SetAttributes(destination, (FileAttributes)MetadataRules.FileAttributesToSet(
-                    (uint)File.GetAttributes(destination), bits)))
-                && unset.Count == 0)
-            {
-                applied |= CapturedMetadata.FileAttributes;
-            }
-
-            if (unset.Count > 0)
-            {
-                unsetDetail = $"file attribute(s) not applied: {string.Join(", ", unset)} (not set by a restore)";
-            }
-        }
-
-        // Last of all, because a DACL may take from this account the access
-        // every write before it needs. A SID names the account it meant only
+        // After the times and streams, because a DACL may take from this
+        // account the access they need. A SID names the account it meant only
         // where this machine or its domain issued it, so a descriptor naming
         // one this machine does not know would hand the file to nobody's
         // access; it is not written, and the file keeps its folder's.
@@ -234,6 +215,28 @@ public sealed class MetadataWriter(MetadataTarget target)
                 descriptorDetail = read.DaclPresent && WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: false)
                     ? "security descriptor's owner and group not applied (refused by the target); its access control list was"
                     : "security descriptor not applied (refused by the target)";
+            }
+        }
+
+        // Last, because a read-only file refuses the writes before it, and
+        // writing a descriptor sets the archive bit. A DACL that withholds the
+        // right to write attributes from this account leaves them unwritten.
+        // Off Windows .NET maps these bits onto permissions and flags of its
+        // own, so none is written there whatever a target says.
+        string? unsetDetail = null;
+        if (target.SupportsFileAttributes && OperatingSystem.IsWindows() && !link && metadata.FileAttributes is { } bits)
+        {
+            var unset = MetadataRules.UnsetFileAttributes(bits);
+            if (Wrote(() => File.SetAttributes(destination, (FileAttributes)MetadataRules.FileAttributesToSet(
+                    (uint)File.GetAttributes(destination), bits)))
+                && unset.Count == 0)
+            {
+                applied |= CapturedMetadata.FileAttributes;
+            }
+
+            if (unset.Count > 0)
+            {
+                unsetDetail = $"file attribute(s) not applied: {string.Join(", ", unset)} (not set by a restore)";
             }
         }
 

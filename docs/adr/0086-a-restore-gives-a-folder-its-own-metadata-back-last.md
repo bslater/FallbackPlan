@@ -38,7 +38,7 @@ The run reads each folder's tree when it reaches the folder, makes the folder, a
 
 The run keeps only what the rule can apply, plus which attributes were captured. A tree of many folders holds no security descriptors or extended attributes the run will not write.
 
-> **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A folder's security descriptor is now kept where the target writes one, and written last of all for the folder.
+> **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A folder's security descriptor is now kept where the target writes one, and written after the folder's times and before its attribute bits.
 
 > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** A folder's extended attributes are now written back by the file's rule, so the run keeps them with the rest. A folder's default ACL goes on with them, after the files restored into it are made, so none of them inherits from it.
 
@@ -79,7 +79,7 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 
   > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** A file's and a folder's Windows attribute bits are now written back on Windows: read-only, hidden, system, archive and not-content-indexed, as the last write. A bit no restore sets, as compressed or encrypted, is named.
 
-  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A file's and a folder's Windows security descriptor is now written back on Windows, last of all, where the machine knows every account it names. One that names an account it does not know is named, and the file keeps its folder's access.
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A file's and a folder's Windows security descriptor is now written back on Windows, after the times and before the attribute bits, where the machine knows every account it names. One that names an account it does not know is named, and the file keeps its folder's access.
 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back, for folders as for files. The rest of this item remains owed.
 

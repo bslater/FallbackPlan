@@ -109,12 +109,24 @@ public sealed class RestoreSecurityDescriptorTests : ArchiveTestHarness
         base.Dispose(disposing);
     }
 
+    /// <summary>
+    /// An entry's DACL: its protection and its entries, in order, each with
+    /// whether its folder gave it. The control bit that marks inherited
+    /// entries as given by automatic inheritance is not kept by the call a
+    /// restore writes a descriptor with (ADR-0176), so it is not compared.
+    /// </summary>
     [SupportedOSPlatform("windows")]
-    private static string Dacl(FileSystemInfo entry) =>
-        (entry is DirectoryInfo folder
+    private static string Dacl(FileSystemInfo entry)
+    {
+        var security = entry is DirectoryInfo folder
             ? (FileSystemSecurity)folder.GetAccessControl(AccessControlSections.Access)
-            : ((FileInfo)entry).GetAccessControl(AccessControlSections.Access))
-        .GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+            : ((FileInfo)entry).GetAccessControl(AccessControlSections.Access);
+        return (security.AreAccessRulesProtected ? "protected: " : "inheriting: ")
+            + string.Join("; ", security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>()
+                .Select(rule => $"{rule.AccessControlType} {rule.IdentityReference} {rule.FileSystemRights} "
+                    + $"{rule.InheritanceFlags} {rule.PropagationFlags}{(rule.IsInherited ? " inherited" : string.Empty)}"));
+    }
 
     private async Task<(LocalFileSystemObjectStore Store, RepositoryKeySet Keys, CatalogueDb Catalogue)> PublishAsync(byte seed)
     {

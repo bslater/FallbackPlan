@@ -200,7 +200,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: both writers spool beside a file under 33 characters made from its name, so a file whose name is as long as its target holds restores; `restore-file` lands its file the same way, so one that fails leaves its output as it was (Amendment 1); under rename, a copy written beside keeps as much of its stem as fits (Amendment 2); `restore-file` assembles its file where it lands, needing no room in the temporary folder (Amendment 3) | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Repository/RestoreEngine` · `Domain.Tests/RestoreSpoolTests` · `Repository.Tests/RestoreLongNameTests` · `Repository.Tests/RecoveryContainmentTests` · `Repository.Tests/SparseRestoreTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets) |
 | [0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) | A restore writes a file's alternate streams back where the target keeps them: on Windows, each read and proved like a segment, written after the content and before the times, and judged by name before it is joined to the path; a stream standing as captured is left, and one that does not land degrades the file, named; the recovery tool writes them by the same rule, noting one that does not land (Amendment 1), and so does `restore-file`, through one helper the two share (Amendment 2) | **Built** | `Domain/AlternateStreams` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Domain.Tests/AlternateStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · `Repository.Tests/RecoveryAlternateStreamsTests` · [notes](#0174--a-files-alternate-streams) |
 | [0175](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) | A restore writes back the Windows attribute bits it may: a file's and a folder's read-only, hidden, system, archive and not-content-indexed bits, as captured and as the last write, by the writer every way of restoring shares; a bit no restore sets, as compressed or encrypted, is named; a read-only file a restore replaces is replaced | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Domain/RestorePaths` · `Restore/RestoreMetadata` · `Domain.Tests/FileAttributesWriteBackTests` · `Repository.Tests/RestoreFileAttributesTests` · [notes](#0175--windows-attribute-bits) |
-| [0176](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) | A restore writes back a Windows security descriptor whose accounts the machine knows: a file's and a folder's owner, group and DACL, as captured, protected as they were and as the last write, by the writer every way of restoring shares; one that names an account the machine does not know, or does not read, is not written and is named, and the plan predicts it per item; where the owner is refused the DACL lands alone | **Built** | `Domain/WindowsSecurityDescriptor` · `Domain/WindowsSecurity` · `Domain/MetadataWriter` · `Domain/MetadataTarget` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Domain.Tests/WindowsSecurityDescriptorTests` · `Domain.Tests/SecurityDescriptorWriteBackTests` · `Repository.Tests/RestoreSecurityDescriptorTests` · [notes](#0176--windows-security-descriptors) |
+| [0176](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) | A restore writes back a Windows security descriptor whose accounts the machine knows: a file's and a folder's owner, group and DACL, as captured, protected as they were, after the times and before the attribute bits, by the writer every way of restoring shares; one that names an account the machine does not know, or does not read, is not written and is named, and the plan predicts it per item; where the owner is refused the DACL lands alone | **Built** | `Domain/WindowsSecurityDescriptor` · `Domain/WindowsSecurity` · `Domain/MetadataWriter` · `Domain/MetadataTarget` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Domain.Tests/WindowsSecurityDescriptorTests` · `Domain.Tests/SecurityDescriptorWriteBackTests` · `Repository.Tests/RestoreSecurityDescriptorTests` · [notes](#0176--windows-security-descriptors) |
 
 ---
 
@@ -4787,9 +4787,10 @@ Capture records each entry's Windows security descriptor, owner, group and
 DACL, and no restore wrote any back, so a file kept private came back as
 open as its new folder and every restore on Windows listed the descriptor.
 The writer every way of restoring shares now writes it back as captured,
-in one call with the DACL's protection said outright, on Windows alone and
-last of all, since its DACL may take from the restoring account the access
-the writes before it need. It does so only where the machine knows every
+in one call with the DACL's protection said outright, on Windows alone,
+after the streams and times, since its DACL may take from the restoring
+account the access they need, and before the attribute bits, since writing
+a descriptor sets the archive bit. It does so only where the machine knows every
 account the descriptor names: a local account's SID names nobody on
 another machine, or on the same one rebuilt, so a descriptor naming one is
 not written, the file keeps its folder's access, and the SID is named.
@@ -4806,4 +4807,6 @@ What remains is recorded rather than done:
 - a SID the machine does not know is not mapped to one it does;
 - architecture 06 §3's refusal, where a descriptor not written leaves a
   file more open than it was, is still not made;
-- the plan does not predict a refused owner.
+- the plan does not predict a refused owner;
+- the DACL's mark that its inherited entries came by automatic
+  inheritance is not kept, as the call it is written with does not keep it.

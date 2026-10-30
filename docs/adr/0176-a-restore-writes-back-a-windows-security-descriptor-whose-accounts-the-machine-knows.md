@@ -7,11 +7,11 @@
 
 **Built:**
 - The reading: `Domain/WindowsSecurityDescriptor` reads a self-relative descriptor for the accounts it names and whether its DACL is protected, and holds every offset and length inside the bytes. `Domain/MetadataRules` gives the plan's facts those accounts.
-- The write: `Domain/WindowsSecurity` hands a descriptor to the platform as captured, with its DACL's protection said outright. `Domain/WindowsAccounts` asks the machine whether it knows a SID. `Domain/MetadataWriter` writes the descriptor last of all, on Windows alone, where every account it names is known, and the DACL alone where the owner is refused. `Domain/MetadataTarget` and `Restore/RestorePlan` say a local target keeps descriptors on Windows and how it knows an account. `Restore/RestoreMetadata` counts them applied there and declares the rest. `Restore/RestoreBlobSet` carries each item's accounts into the plan. `Restore/RestoreExecutor` and `Recovery/RecoverySession` keep a folder's descriptor for the writer where it writes one.
+- The write: `Domain/WindowsSecurity` hands a descriptor to the platform as captured, with its DACL's protection said outright. `Domain/WindowsAccounts` asks the machine whether it knows a SID. `Domain/MetadataWriter` writes the descriptor on Windows alone, after the streams and times and before the attribute bits, where every account it names is known, and the DACL alone where the owner is refused. `Domain/MetadataTarget` and `Restore/RestorePlan` say a local target keeps descriptors on Windows and how it knows an account. `Restore/RestoreMetadata` counts them applied there and declares the rest. `Restore/RestoreBlobSet` carries each item's accounts into the plan. `Restore/RestoreExecutor` and `Recovery/RecoverySession` keep a folder's descriptor for the writer where it writes one.
 - The tests:
   - `Domain.Tests/WindowsSecurityDescriptorTests` — on every platform, against descriptors built byte by byte (`TestSupport/SecurityDescriptors`): the owner, the group and each account the DACL names are read once each, in order; a protected DACL says so; a null DACL is present and names none; a descriptor with no DACL says so; an authority past 32 bits is written in hex; an object ACE's account is found past the GUIDs its flags say, and a callback ACE's past its mask; and thirteen kinds of bytes that do not read as a descriptor are none
-  - `Domain.Tests/SecurityDescriptorWriteBackTests` — the local target writes descriptors only on Windows, and an account is known only where the machine names it; on Windows a file gets its protected DACL back with its time kept, a folder gets its DACL, a descriptor naming an unknown SID is not written and the SID is named, the DACL lands where the owner is refused, and one that does not read says so; on POSIX a target said to keep descriptors writes none
-  - `Repository.Tests/RestoreSecurityDescriptorTests` — the profile writes descriptors only on Windows, passes them and its account rule to the writer, and the rule counts them applied for a file and a folder where it does; on Windows a real file with a protected DACL and its folder with an added entry come back so through the executor, the plan declaring nothing and the receipt listing nothing
+  - `Domain.Tests/SecurityDescriptorWriteBackTests` — the local target writes descriptors only on Windows, and an account is known only where the machine names it; on Windows a file gets its protected DACL's entries back with its time kept, a folder gets its DACL's, a descriptor written with the bits leaves no archive bit the capture did not have, a descriptor naming an unknown SID is not written and the SID is named, the DACL lands where the owner is refused, and one that does not read says so; on POSIX a target said to keep descriptors writes none
+  - `Repository.Tests/RestoreSecurityDescriptorTests` — the profile writes descriptors only on Windows, passes them and its account rule to the writer, and the rule counts them applied for a file and a folder where it does; on Windows a real file with a protected DACL and its folder with an added entry come back with those entries through the executor, the plan declaring nothing and the receipt listing nothing
   - `Repository.Tests/RestoreMetadataHonestyTests` — the plan declares, on a line of its own, the files whose descriptor names an account the target does not know, with the rest one that does not read, and every descriptor where the target keeps none
   - `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` — on Windows the service's plan and receipt, and the command line's output, no longer list a descriptor
 
@@ -27,7 +27,9 @@ A descriptor names accounts by SID. A SID is the number a machine or its domain 
 
 ### 1. A descriptor is written as captured, in one call
 
-The writer hands the captured descriptor to `SetFileSecurityW`: owner, group and DACL in one call, with the DACL's protection said outright, so a DACL that took nothing from its folder still takes nothing. The DACL keeps the entries its folder had given it when captured. Restored in place, a file has exactly the access it had, and restored elsewhere, the access it had where it was. Nothing beneath a folder is walked.
+The writer hands the captured descriptor to `SetFileSecurityW`: owner, group and DACL in one call, with the DACL's protection said outright, so a DACL that took nothing from its folder still takes nothing. The DACL keeps the entries its folder had given it when captured, each still marked as given. Restored in place, a file has exactly the access it had, and restored elsewhere, the access it had where it was. Nothing beneath a folder is walked.
+
+The call does not keep the DACL's control bit that marks its inherited entries as given by automatic inheritance. The entries and their own marks land; that bit does not. Setting it is the work of `SetNamedSecurityInfoW`, which the alternatives below reject because it takes the inherited entries from the new folder.
 
 ### 2. Only where the machine knows every account it names
 
@@ -39,9 +41,9 @@ It is all or nothing. Writing the DACL without the entries for unknown accounts 
 
 Windows lets a process make an owner only of its own account, or of a group it may own by, unless it holds SeRestorePrivilege and has enabled it. It lets the owner of a file write its DACL. So where the call with the owner fails, the writer writes the DACL alone. The descriptor is then not applied, and the detail says that its owner and group were refused and that its access control list landed.
 
-### 4. Last of all
+### 4. After the times, before the attribute bits
 
-A DACL may take from the restoring account the access the writes before it need: the streams, the times and the attribute bits. So the descriptor is the last write for an entry, after the attribute bits ADR-0175 put last.
+A DACL may take from the restoring account the access the writes before it need: the streams and the times. So the descriptor follows them. Writing a descriptor sets a file's archive bit, so the attribute bits ADR-0175 put last stay last, after it, and clear the bit where it was not captured. A DACL that withholds the right to write attributes from the restoring account leaves the bits unwritten, and the receipt says so for the file.
 
 ### 5. The plan predicts by the same rule
 
@@ -53,6 +55,7 @@ The plan's facts carry the SIDs each item's descriptor names. A target that writ
 - On another machine, a descriptor that names one of the old machine's local accounts is named in the plan and in the receipt. Its file takes its new folder's access, as every file did before.
 - A plan on Windows declares descriptors only for those that name an account the machine does not know, and those that do not read.
 - A file whose restored DACL withholds deletion from the restoring account is one a later restore with Replace may be refused over. That is said for the file.
+- A file whose restored DACL withholds the right to write attributes from the restoring account does not get its attribute bits back. That is said for the file.
 
 ## What this does not do
 
@@ -61,6 +64,7 @@ The plan's facts carry the SIDs each item's descriptor names. A target that writ
 - **Map an account.** A SID the machine does not know is not mapped to one it does, by name or otherwise. Capture records SIDs, not names.
 - **Refuse where the folder would grant more.** Architecture 06 §3 reserves refusal for a descriptor that cannot be applied into a place whose own access is broader. A descriptor that is not written is degraded and declared, as before. Comparing the two is not built.
 - **Predict a refused owner in the plan.** The plan does not judge the restoring account's privilege on Windows.
+- **Keep the mark of automatic inheritance.** A restored DACL lacks the control bit that marks its inherited entries as given by automatic inheritance (§1). Its entries, their own marks and its protection are as captured.
 - **A link's descriptor.** No restore on Windows makes a symlink.
 
 ## Alternatives considered
@@ -74,4 +78,4 @@ The plan's facts carry the SIDs each item's descriptor names. A target that writ
 
 | Date | Status | Note |
 |------|--------|------|
-| 2026-10 | Accepted | Built in one slice, tests first. The writer every way of restoring shares writes a file's and a folder's security descriptor back on Windows, as captured and last of all, where the machine knows every account it names; one naming an account it does not know is not written and is named; the DACL lands alone where the owner is refused; and the plan predicts it per item. `Domain/WindowsSecurityDescriptor`; `Domain/WindowsSecurity`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/WindowsSecurityDescriptorTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreSecurityDescriptorTests` |
+| 2026-10 | Accepted | Built in one slice, tests first. The writer every way of restoring shares writes a file's and a folder's security descriptor back on Windows, as captured, after the times and before the attribute bits, where the machine knows every account it names; one naming an account it does not know is not written and is named; the DACL lands alone where the owner is refused; and the plan predicts it per item. `Domain/WindowsSecurityDescriptor`; `Domain/WindowsSecurity`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/WindowsSecurityDescriptorTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreSecurityDescriptorTests` |

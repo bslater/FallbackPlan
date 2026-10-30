@@ -241,7 +241,7 @@ Status per record. **A hundred and sixty-eight of the hundred and seventy-six ar
 | [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: 33 characters beside it, so a file whose name is as long as its target holds restores |
 | [0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) | A restore writes a file's alternate streams back where the target keeps them: on Windows, each proved like a segment and judged by name before it is joined to the path, and one that does not land is named |
 | [0175](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) | A restore writes back the Windows attribute bits it may: read-only, hidden, system, archive and not-content-indexed, last, and a bit no restore sets is named |
-| [0176](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) | A restore writes back a Windows security descriptor whose accounts the machine knows: owner, group and DACL as captured, last of all, and one naming an account it does not know is named |
+| [0176](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) | A restore writes back a Windows security descriptor whose accounts the machine knows: owner, group and DACL as captured, before the attribute bits, and one naming an account it does not know is named |
 
 Template: [0000](adr/0000-template.md)
 
