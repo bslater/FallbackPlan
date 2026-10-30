@@ -367,6 +367,8 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 >   - a direct-ship sink, which reports a delete done when any one destination did.
 >
 > **2026-10 ([ADR-0171 Amendment 1](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-1-2026-10--said-in-bytes)).** The bytes are said now, at both: a destination's notice states what its refusals hold, and the staging sweep's report line counts what it deferred in objects and bytes. The versioned bucket and the sink stay open.
+>
+> **2026-10 ([ADR-0171 Amendment 2](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said)).** A bucket under object lock does not refuse a delete: object lock needs versioning, and the delete is answered with a delete marker while the bytes stay. The S3 provider now reports what the marker hid, the convergence counts it as retained, and a notice says how much the bucket kept. An Azure Blob account that keeps versions or soft-deletes, and the sink, stay open.
 
 ---
 

@@ -155,6 +155,14 @@ else's disk ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 > Both reclaim paths say how much space a refusal holds. The notice states
 > the bytes the refused objects hold, and the staging sweep's report line
 > counts what it deferred in objects and bytes.
+>
+> **Built 2026-10 ([ADR-0171 Amendment 2](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said)).**
+> A bucket under object lock, or with versioning on, does not refuse a
+> delete: it answers with a delete marker and keeps the bytes as an earlier
+> version. The S3 provider reports what the marker hid, the convergence
+> counts it as a delete that was retained and holds nothing back for it, and
+> the hub's notice says how much the store kept until a pass's deletes keep
+> none.
 
 ### 3.1 Step 4 is the one that matters
 

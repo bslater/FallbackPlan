@@ -82,6 +82,8 @@ Faults are typed where what a person can do differs ([ADR-0012](../adr/0012-stor
 
 A `StoreQuotaExceededException` is a limit the store's owner set. It holds until a person raises it or keeps less there, so it is a failure with a notice for that person. Any other refusal, such as a credential the store will not take, is a plain fault.
 
+> **2026-10.** A delete's result says how many bytes a store kept although it answered the delete, as a bucket that keeps versions does behind a delete marker ([ADR-0171 Amendment 2](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said)). That is an expected outcome, so it is a result rather than a fault. The S3 provider reads it from the delete's answer.
+
 ### 2.3 Continuation belongs to the enumerator
 
 `IAsyncEnumerable` already models resumable iteration. A continuation-token parameter alongside it forces every provider to decide which wins and leaves callers unable to tell whether re-enumerating resumes or restarts. Callers needing to persist a position across process restarts read a resume token from `ObjectEntry`.
