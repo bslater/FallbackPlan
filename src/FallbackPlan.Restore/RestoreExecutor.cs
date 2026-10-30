@@ -883,7 +883,7 @@ public sealed class RestoreExecutor(
                 }
                 else if (options.ExistingDestination == ExistingDestinationPolicy.WriteBeside && File.Exists(where))
                 {
-                    foreach (var copy in BesideCopies(where, listed))
+                    foreach (var copy in BesideCopies(where, target, listed))
                     {
                         if (await HoldsAsync(copy, manifest, token).ConfigureAwait(false))
                         {
@@ -1174,7 +1174,7 @@ public sealed class RestoreExecutor(
                             // the resolved destination's directory plus a new
                             // final component, so containment holds by
                             // construction.
-                            if (!TryBesideName(destination, options.NowUnixMilliseconds, out landing, out var besideRefusal))
+                            if (!TryBesideName(destination, options.NowUnixMilliseconds, target, out landing, out var besideRefusal))
                             {
                                 File.Delete(spool);
                                 items.Add(new ReceiptItem
@@ -1261,7 +1261,7 @@ public sealed class RestoreExecutor(
                                     break;
 
                                 case ExistingDestinationPolicy.WriteBeside:
-                                    if (!TryBesideName(destination, options.NowUnixMilliseconds, out linkLanding, out var linkBesideRefusal))
+                                    if (!TryBesideName(destination, options.NowUnixMilliseconds, target, out linkLanding, out var linkBesideRefusal))
                                     {
                                         items.Add(new ReceiptItem
                                         {
@@ -1664,21 +1664,19 @@ public sealed class RestoreExecutor(
     /// construction.
     /// </summary>
     private static bool TryBesideName(
-        string destination, ulong nowUnixMilliseconds, out string landing, out string refusal)
+        string destination, ulong nowUnixMilliseconds, RestoreTargetProfile target, out string landing, out string refusal)
     {
         landing = string.Empty;
         refusal = string.Empty;
 
         var directory = Path.GetDirectoryName(destination)!;
-        var stem = Path.GetFileNameWithoutExtension(destination);
-        var extension = Path.GetExtension(destination);
         var date = DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds)
             .UtcDateTime.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
 
         for (var attempt = 1; attempt <= 100; attempt++)
         {
-            var suffix = attempt == 1 ? $" (restored {date})" : $" (restored {date}-{attempt})";
-            var candidate = Path.Combine(directory, stem + suffix + extension);
+            var mark = attempt == 1 ? date : $"{date}-{attempt}";
+            var candidate = Path.Combine(directory, BesideName(destination, mark, target));
             if (!File.Exists(candidate) && !Directory.Exists(candidate))
             {
                 landing = candidate;
@@ -1691,12 +1689,52 @@ public sealed class RestoreExecutor(
     }
 
     /// <summary>
+    /// The name a copy written beside <paramref name="destination"/> carries
+    /// for <paramref name="mark"/>: the file's stem, <c> (restored </c>, the
+    /// mark, <c>)</c> and the file's extension. Where that passes the limit
+    /// <paramref name="target"/> states on one name, the stem keeps as much of
+    /// itself as fits, cut where a whole character ends (ADR-0173 Amendment
+    /// 2): the file's own name fits there, and the copy would otherwise fail
+    /// for a name the run chose. Where even an empty stem would not fit, the
+    /// stem is left whole and the target refuses the name.
+    /// </summary>
+    private static string BesideName(string destination, string mark, RestoreTargetProfile target)
+    {
+        var stem = Path.GetFileNameWithoutExtension(destination);
+        var tail = $" (restored {mark}){Path.GetExtension(destination)}";
+        if (!HoldsAsOneName(stem + tail, target) && HoldsAsOneName(tail, target))
+        {
+            var starts = System.Globalization.StringInfo.ParseCombiningCharacters(stem);
+            var kept = starts.Length - 1;
+            while (kept > 0 && !HoldsAsOneName(stem[..starts[kept]] + tail, target))
+            {
+                kept--;
+            }
+
+            stem = stem[..starts[kept]];
+        }
+
+        return stem + tail;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="target"/> holds <paramref name="name"/> as one
+    /// name by the limits it states: bytes in UTF-8 where it states them, and
+    /// Windows' rules where it names by them. A target that states neither
+    /// holds any.
+    /// </summary>
+    private static bool HoldsAsOneName(string name, RestoreTargetProfile target) =>
+        (target.MaxNameBytes is not { } most || System.Text.Encoding.UTF8.GetByteCount(name) <= most)
+        && (!target.WindowsNamingRules || RestorePaths.IsWindowsName(name, out _));
+
+    /// <summary>
     /// The copies written beside <paramref name="destination"/> under the
     /// names <see cref="TryBesideName"/> gives, whatever day they were
     /// written, in name order. Its folder is listed once a run, in
     /// <paramref name="listed"/>; one that will not list holds none.
     /// </summary>
-    private static IEnumerable<string> BesideCopies(string destination, Dictionary<string, string[]> listed)
+    private static IEnumerable<string> BesideCopies(
+        string destination, RestoreTargetProfile target, Dictionary<string, string[]> listed)
     {
         var directory = Path.GetDirectoryName(destination)!;
         if (!listed.TryGetValue(directory, out var names))
@@ -1713,13 +1751,17 @@ public sealed class RestoreExecutor(
             listed[directory] = names;
         }
 
-        var prefix = Path.GetFileNameWithoutExtension(destination) + " (restored ";
-        var suffix = ")" + Path.GetExtension(destination);
+        // Read back by the mark, then held to the whole name the mark gives,
+        // so a copy whose stem was cut to fit is found by the same cut.
+        const string Opening = " (restored ";
+        var closing = ")" + Path.GetExtension(destination);
         return names
-            .Where(name => name.Length > prefix.Length + suffix.Length
-                && name.StartsWith(prefix, StringComparison.Ordinal)
-                && name.EndsWith(suffix, StringComparison.Ordinal)
-                && IsBesideMark(name[prefix.Length..^suffix.Length]))
+            .Where(name => name.EndsWith(closing, StringComparison.Ordinal)
+                && name.LastIndexOf(Opening, StringComparison.Ordinal) is var at and >= 0
+                && at + Opening.Length <= name.Length - closing.Length
+                && name[(at + Opening.Length)..^closing.Length] is var mark
+                && IsBesideMark(mark)
+                && string.Equals(name, BesideName(destination, mark, target), StringComparison.Ordinal))
             .Order(StringComparer.Ordinal)
             .Select(name => Path.Combine(directory, name));
     }
@@ -1874,7 +1916,7 @@ public sealed class RestoreExecutor(
                         break;
 
                     case ExistingDestinationPolicy.WriteBeside:
-                        if (!TryBesideName(destination, options.NowUnixMilliseconds, out landing, out var besideRefusal))
+                        if (!TryBesideName(destination, options.NowUnixMilliseconds, target, out landing, out var besideRefusal))
                         {
                             return new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = besideRefusal };
                         }
