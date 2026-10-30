@@ -1226,7 +1226,7 @@ public sealed class RestoreExecutor(
 
                     try
                     {
-                        File.Move(spool, landing, overwrite: true);
+                        RestorePaths.MoveOver(spool, landing);
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {

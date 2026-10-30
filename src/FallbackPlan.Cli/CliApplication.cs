@@ -982,7 +982,7 @@ public static class CliApplication
 
                     if (result.Success)
                     {
-                        File.Move(spool, outputPath, overwrite: true);
+                        RestorePaths.MoveOver(spool, outputPath);
                     }
                 }
                 finally

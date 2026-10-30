@@ -44,6 +44,14 @@ public sealed record RestoreTargetProfile
     public bool SupportsExtendedAttributes { get; init; }
 
     /// <summary>
+    /// Whether the executor writes a file's and a folder's Windows attribute
+    /// bits back on this target: Windows keeps them, and nothing else does
+    /// (ADR-0175). A bit no restore sets, as compressed or encrypted, is the
+    /// receipt's to name.
+    /// </summary>
+    public bool SupportsFileAttributes { get; init; }
+
+    /// <summary>
     /// Whether this installation captured the snapshot being restored: its
     /// device is the one the snapshot names. A Linux ACL names accounts by
     /// number, and a number names the account it meant only on the machine
@@ -97,6 +105,7 @@ public sealed record RestoreTargetProfile
         SupportsPosixMetadata = SupportsPosixMetadata,
         SupportsCreationTimes = SupportsCreationTimes,
         SupportsExtendedAttributes = SupportsExtendedAttributes,
+        SupportsFileAttributes = SupportsFileAttributes,
         CapturedHere = CapturedHere,
         Account = Account,
     };
@@ -114,6 +123,7 @@ public sealed record RestoreTargetProfile
         MaxNameBytes = OperatingSystem.IsLinux() ? 255u : null,
         SupportsCreationTimes = FileTimes.CanSetCreationTime,
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
+        SupportsFileAttributes = OperatingSystem.IsWindows(),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         Account = RestoreAccount.OfThisProcess(),
     };

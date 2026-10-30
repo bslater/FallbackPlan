@@ -60,6 +60,56 @@ public static class MetadataRules
         (CapturedMetadata.FileAttributes, "file_attributes"),
     ];
 
+    /// <summary>
+    /// The Windows attribute bits a restore writes back, set as captured and
+    /// cleared where not: read-only, hidden, system, archive and
+    /// not-content-indexed (ADR-0175).
+    /// </summary>
+    public const uint WrittenFileAttributes = 0x1 | 0x2 | 0x4 | 0x20 | 0x2000;
+
+    /// <summary>
+    /// The bits that say what an entry is rather than how it is kept: a
+    /// directory, a file with nothing else set, a sparse file and a reparse
+    /// point. A restore gives an entry these by what it makes, or not at all.
+    /// </summary>
+    public const uint EntryFileAttributes = 0x10 | 0x80 | 0x200 | 0x400;
+
+    /// <summary>
+    /// Each bit of <paramref name="captured"/> a restore neither writes back
+    /// nor gives an entry by making it, as compressed and encrypted, named in
+    /// the code's words, in the bits' order. Any such bit leaves the
+    /// attributes not applied.
+    /// </summary>
+    /// <param name="captured">An entry's captured attribute bits.</param>
+    public static IReadOnlyList<string> UnsetFileAttributes(uint captured)
+    {
+        List<string> unset = [];
+        for (var left = captured & ~(WrittenFileAttributes | EntryFileAttributes); left != 0; left &= left - 1)
+        {
+            var bit = left & (~left + 1);
+            unset.Add(Enum.IsDefined(typeof(FileAttributes), (int)bit)
+                ? ((FileAttributes)bit).ToString()
+                : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"0x{bit:X8}"));
+        }
+
+        return unset;
+    }
+
+    /// <summary>
+    /// The bits to set on an entry standing with <paramref name="standing"/>
+    /// to give it those of <paramref name="captured"/> a restore writes back,
+    /// keeping every other bit it has. Windows takes the plain-file bit only
+    /// alone, and alone it is how every written bit is cleared.
+    /// </summary>
+    /// <param name="standing">The entry's bits as it stands.</param>
+    /// <param name="captured">The entry's captured bits.</param>
+    public static uint FileAttributesToSet(uint standing, uint captured)
+    {
+        const uint plain = 0x80;
+        var bits = (standing & ~(WrittenFileAttributes | plain)) | (captured & WrittenFileAttributes);
+        return bits == 0 ? plain : bits;
+    }
+
     /// <summary>The attributes <paramref name="metadata"/> carries.</summary>
     public static CapturedMetadata Captured(EntryMetadata metadata)
     {
