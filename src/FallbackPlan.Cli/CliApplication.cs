@@ -964,18 +964,39 @@ public static class CliApplication
                 }
 
                 var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
-                var outputPath = parse.GetValue(outputOption)!;
+                var outputPath = Path.GetFullPath(parse.GetValue(outputOption)!);
 
+                // Written whole beside the output and moved over whatever
+                // stands there only once verified, as the executor lands a
+                // file (ADR-0173 Amendment 1): a restore that fails leaves the
+                // output as it was, and a link there is replaced, never
+                // written through.
+                var spool = RestorePaths.SpoolBeside(outputPath, "restore");
                 RestoreResult result;
-                var destination = File.Create(outputPath);
-                await using (destination.ConfigureAwait(false))
+                try
                 {
-                    result = await new RestoreEngine(reader).RestoreFileAsync(manifest, destination, cancellationToken).ConfigureAwait(false);
+                    File.Delete(spool);
+                    var destination = new FileStream(spool, FileMode.CreateNew, FileAccess.Write);
+                    await using (destination.ConfigureAwait(false))
+                    {
+                        result = await new RestoreEngine(reader).RestoreFileAsync(manifest, destination, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (result.Success)
+                    {
+                        File.Move(spool, outputPath, overwrite: true);
+                    }
+                }
+                finally
+                {
+                    if (File.Exists(spool))
+                    {
+                        File.Delete(spool);
+                    }
                 }
 
                 if (!result.Success)
                 {
-                    File.Delete(outputPath);
                     throw new CliFailureException(Strings.FormatCliApplication_RestoreRefused(result.FailureDetail));
                 }
 
@@ -3910,7 +3931,7 @@ public static class CliApplication
         RestorePlanFile.Kept kept;
         try
         {
-            kept = RestorePlanFile.Read(File.ReadAllText(file));
+            kept = RestorePlanFile.Read(AtomicFile.ReadAllText(file));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
         {
