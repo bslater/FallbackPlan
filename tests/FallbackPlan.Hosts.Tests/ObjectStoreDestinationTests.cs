@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using System.Text.Json;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
@@ -359,12 +357,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     {
         // Unavailable is the gap closing itself when the store comes back
         // (FR-DEST-003); nothing here needs a person.
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var closed = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-
-        WriteConfiguration(directShip: false, endpoint: EndpointAt(new Uri($"http://127.0.0.1:{closed}")));
+        WriteConfiguration(directShip: false, endpoint: EndpointAt(new Uri($"http://127.0.0.1:{LoopbackPorts.Refused}")));
         WriteFiles();
 
         await using var runtime = await StartAsync();
@@ -425,12 +418,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     [TestMethod]
     public async Task Probe_OfAnEndpointNothingAnswers_IsUnavailable_NotFailed()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var closed = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-
-        WriteConfiguration(directShip: false, endpoint: EndpointAt(new Uri($"http://127.0.0.1:{closed}")));
+        WriteConfiguration(directShip: false, endpoint: EndpointAt(new Uri($"http://127.0.0.1:{LoopbackPorts.Refused}")));
 
         await using var runtime = await StartAsync();
         await StoreCredentialAsync(runtime);

@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.S3;
 using FallbackPlan.TestSupport;
@@ -319,7 +317,7 @@ public sealed class S3ObjectStoreTests : IAsyncDisposable
     public async Task AnyRequest_ToAStoreNobodyAnswers_IsUnreachable_AfterItsRetries()
     {
         var store = new S3ObjectStore(
-            new S3Location(new Uri($"http://127.0.0.1:{ClosedPort()}"), Bucket, _server.Region),
+            new S3Location(new Uri($"http://127.0.0.1:{LoopbackPorts.Refused}"), Bucket, _server.Region),
             new S3Credentials(_server.AccessKeyId, _server.SecretAccessKey),
             options: QuickRetries);
 
@@ -457,15 +455,6 @@ public sealed class S3ObjectStoreTests : IAsyncDisposable
 
     private static Func<CancellationToken, ValueTask<Stream>> Content(byte[] bytes) =>
         _ => ValueTask.FromResult<Stream>(new MemoryStream(bytes, writable: false));
-
-    private static int ClosedPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
 
     /// <summary>Content that can be read once, front to back, as a pipe would give it.</summary>
     private sealed class ForwardOnlyStream(byte[] bytes) : Stream
