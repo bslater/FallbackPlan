@@ -235,6 +235,12 @@ What remains is the peer write adapter (a declared peer is a stated
 it lands). Done looks like: a set shipping to a peer destination through
 the sink, and the staging machinery retiring behind it.
 
+> **2026-10.** The first half is done: a set ships to a peer through the
+> sink ([ADR-0058](adr/0058-peer-write-adapter.md)). The second is not, and
+> by decision: §8 of that record keeps a peer-only set defaulting to
+> staging, so the staging machinery has not retired, and that default is
+> the owner's call rather than a gap in the code.
+
 F1 is done and off this list, and it has now been measured — what it decided is
 recorded under Wave F above, what it bought in
 [phase-2-benchmarks.md](phase-2-benchmarks.md).
@@ -416,6 +422,15 @@ reports rotted citations). What both reviews deliberately left is below.
    owed: physical-vs-logical transfer size and archival-tier rehydration
    (FR-RST-003), and a plan that is exportable and resumable (arch 08 §2). Done
    when the plan reports each and a plan survives a round trip.
+
+   > **2026-10.** All of it is done. A plan says what its run reads
+   > ([ADR-0083 Amendment 2](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads))
+   > and names what is held only in an archival tier
+   > ([ADR-0103](adr/0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md)).
+   > A plan is kept in a file and run as it was approved
+   > ([ADR-0108](adr/0108-a-restores-plan-can-be-kept-in-a-file.md),
+   > [ADR-0114](adr/0114-a-kept-plan-is-run-as-it-was-approved.md)), and a
+   > resume is planned ([ADR-0120](adr/0120-a-resume-is-planned.md)).
 10. **Alternate data streams on restore** (RR-6) — the *honesty* half is
     ✅ done: catalogue schema v5 carries `has_alternate_streams` through the
     live projection and both rebuilders, `RestorePlanner` declares the
@@ -438,6 +453,11 @@ reports rotted citations). What both reviews deliberately left is below.
     describe a file that is one hole. Left open: the engine's spool still
     needs a dense file's full length free in the system temporary directory
     ([RR-7 resolution note](review/2026-08-restore-pipeline-review.md#rr-7--the-restore-materialises-sparse-holes-as-written-zeroes)).
+
+    > **2026-10.** Closed for every product path. A run through the service
+    > or in direct mode assembles in its parts under the state directory, and
+    > `restore-file` assembles where its file lands
+    > ([ADR-0173 Amendment 3](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md#amendment-3-2026-10--the-single-file-restore-assembles-its-file-where-it-lands)).
 13. ✅ **The restore GET budget** (NFR-PERF-009) — done
     ([ADR-0068](adr/0068-the-catalogue-directed-restore-read.md)), and it took
     all three terms the item named plus one it did not. The load became
