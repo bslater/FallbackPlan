@@ -72,14 +72,36 @@ Damage stays damage. The blob reader is unchanged. Its other callers, the loader
 - **Say "not held" in the failure.** A record no loaded blob carries is reported as a format violation, as it was for a blob missing before the run began.
 - **Tell a blob that went from damage at another copy.** A blob that goes from a destination while the run reads around to it is still passed over there as damaged, so it lands on that destination's ledger as a finding.
 
+  > **Built 2026-10 ([Amendment 1](#amendment-1-2026-10--at-another-copy-too)).** A copy is now asked as the own store is, and a blob that went from it is passed over there as not held.
+
 ## Alternatives considered
 
 - **Hold every blob a restore in flight might read, as a backup in flight holds blobs (ADR-0009 Amendment 8 rule 3).** Rejected for now. A restore can run for hours over a slow peer, and holding the trim and the sweep for its length holds space a destination already holds a copy of. It would also not help a restore of the snapshot being expired, which a person chose to expire.
 - **Make the blob reader answer a missing range as an I/O error.** Rejected. Every caller of the blob reader would then take a blob that went for a transient fault, and the loader would fail a load over a blob it could have skipped.
 - **Re-resolve every record before reading it.** It already is. What a reader keeps is about the blob, and the blob is what went.
 
+## Amendment 1 (2026-10) — at another copy too
+
+A restore of a set's own archive reads around to the set's destinations, and a destination's own retention converges while the run reads. So a blob can go from the copy the run is reading as well as from its own store. At a copy it failed in the same two ways:
+
+- **It was filed as damage.** The location read failed as the store's NotFound, and the footer opened to fall back would not read either. The copy was passed over as damaged, and through the service that finding goes on the destination's ledger, so a sync would set about repairing a replica that had only done what its policy said.
+- **It ended the run.** Where the copy's footer was already held, from a record that failed its checks there earlier, the record read through it threw. The copy read catches only an I/O error.
+
+**Decision.** Both places ask the copy's store whether it still holds the blob, as §1 has the own store asked:
+
+- if it does not, the copy is passed over as not holding the blob, which is no finding, and the run goes on;
+- a footer that would not open because its blob had gone is not kept, since it says nothing about the blob were it to come back;
+- if the store still holds the blob, nothing changes.
+
+**Built:** `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests`, at formats 2 and 5:
+
+- a copy's blob that goes after it served a record is not held there, and no copy is named damaged;
+- one that goes after its footer was read is not held there, and nothing throws;
+- through the executor, with the copy's blob swept after its first, second or third read, the run keeps its receipt, fails only what no copy could still read, and holds no damage against the copy.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The review's compaction case held as it stood. A blob that goes while a restore reads it no longer ends the run or reads as damage. No contract, format or schema change. |
+| 2026-10 | Amended | Amendment 1: a blob that goes from another copy while the run reads around to it is passed over there as not held, and a read through that copy's footer no longer ends the run. `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |

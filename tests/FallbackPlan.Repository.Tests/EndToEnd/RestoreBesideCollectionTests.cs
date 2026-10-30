@@ -4,6 +4,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Restore;
@@ -202,6 +203,102 @@ public sealed class RestoreBesideCollectionTests : ArchiveTestHarness
         Assert.IsEmpty(reader.SkippedBlobs);
     }
 
+    [TestMethod]
+    [DataRow(FormatVersions.SealedDataPlane, DisplayName = "format 2")]
+    [DataRow(FormatVersions.DeltaCheckpoints, DisplayName = "format 5")]
+    public async Task ABlobThatGoesFromTheCopyARestoreReadsAroundTo_IsNotHeldThere_AndIsNoFinding(ushort format)
+    {
+        // Staging trimmed the blob, so a destination serves it, and then the
+        // destination's own retention drops it while the restore still reads.
+        var world = await PublishAsync(format);
+        using var held = world.Keys;
+        using var _ = world.Catalogue;
+        var spare = await MirrorAsync(world.Store, SpareRoot);
+        var (first, second, blob) = await TwoSegmentsInOneBlobAsync(world);
+        await world.Store.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, world.Keys, world.Store, Authority);
+        reader.UseLocationSource(world.Catalogue.ResolveLocation);
+        reader.UseOtherCopies(Own, [Serve(Sibling, spare)]);
+        Assert.AreEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(first, CancellationToken.None)).Outcome);
+
+        await spare.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
+        var read = await reader.ReadSegmentAsync(second, CancellationToken.None);
+
+        Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
+        var atSpare = reader.Refusals.Where(refusal => refusal.Source == Sibling).ToList();
+        Assert.AreEqual(CopyFault.NotHeld, Assert.ContainsSingle(atSpare).Fault, Assert.ContainsSingle(atSpare).Detail);
+        Assert.IsEmpty(reader.Refusals.Where(refusal => refusal.Fault == CopyFault.Damaged).ToList());
+    }
+
+    [TestMethod]
+    [DataRow(FormatVersions.SealedDataPlane, DisplayName = "format 2")]
+    [DataRow(FormatVersions.DeltaCheckpoints, DisplayName = "format 5")]
+    public async Task ABlobThatGoesFromACopyWhoseFooterWasRead_IsNotHeldThere_AndThrowsNothing(ushort format)
+    {
+        // The copy's footer is opened when a record at a location fails its
+        // checks there; it is kept, and the blob under it can still go.
+        var world = await PublishAsync(format);
+        using var held = world.Keys;
+        using var _ = world.Catalogue;
+        var spare = await MirrorAsync(world.Store, SpareRoot);
+        var (first, second, blob) = await TwoSegmentsInOneBlobAsync(world);
+        await world.Store.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
+        RotRecord(SpareRoot, blob, world.Catalogue.ResolveLocation(first)!);
+
+        using var reader = new RepositoryReader(Repo, world.Keys, world.Store, Authority);
+        reader.UseLocationSource(world.Catalogue.ResolveLocation);
+        reader.UseOtherCopies(Own, [Serve(Sibling, spare)]);
+        Assert.AreNotEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(first, CancellationToken.None)).Outcome);
+        Assert.AreEqual(
+            CopyFault.Damaged,
+            Assert.ContainsSingle(reader.Refusals.Where(refusal => refusal.Source == Sibling)).Fault,
+            "the control: the copy's footer was read for a record that is damaged there");
+
+        await spare.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
+        var before = reader.Refusals.Count;
+        var read = await reader.ReadSegmentAsync(second, CancellationToken.None);
+
+        Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
+        var atSpare = reader.Refusals.Skip(before).Where(refusal => refusal.Source == Sibling).ToList();
+        Assert.AreEqual(CopyFault.NotHeld, Assert.ContainsSingle(atSpare).Fault, Assert.ContainsSingle(atSpare).Detail);
+    }
+
+    [TestMethod]
+    [DataRow(FormatVersions.SealedDataPlane, 1, DisplayName = "format 2, after one read")]
+    [DataRow(FormatVersions.SealedDataPlane, 2, DisplayName = "format 2, after two reads")]
+    [DataRow(FormatVersions.SealedDataPlane, 3, DisplayName = "format 2, after three reads")]
+    [DataRow(FormatVersions.DeltaCheckpoints, 1, DisplayName = "format 5, after one read")]
+    [DataRow(FormatVersions.DeltaCheckpoints, 2, DisplayName = "format 5, after two reads")]
+    [DataRow(FormatVersions.DeltaCheckpoints, 3, DisplayName = "format 5, after three reads")]
+    public async Task ARestoreReadingAroundToACopyWhoseBlobGoesPartway_KeepsItsReceipt_AndCallsNothingDamaged(
+        ushort format, int servedReads)
+    {
+        var world = await PublishAsync(format);
+        using var held = world.Keys;
+        using var _ = world.Catalogue;
+        var spare = await MirrorAsync(world.Store, SpareRoot);
+        var (_, _, blob) = await TwoSegmentsInOneBlobAsync(world);
+        await world.Store.DeleteAsync(blob, DeleteConditions.None, CancellationToken.None);
+        var collected = new SweptAfterReadObjectStore(spare, key => key == blob.Value, servedReads);
+
+        using var reader = new RepositoryReader(Repo, world.Keys, world.Store, Authority);
+        reader.UseLocationSource(world.Catalogue.ResolveLocation);
+        reader.UseOtherCopies(Own, [Serve(Sibling, collected)]);
+        reader.UsePrefetchPolicy(OneReadARecord);
+        var output = Path.Combine(SpoolDirectory, "swept-at-copy");
+        var receipt = await RestoreAsync(reader, world.Plan, output);
+
+        Assert.IsTrue(collected.Swept, $"the blob went from the copy partway through the run ({collected.Reads} reads)");
+        Assert.AreEqual(RestoreOutcome.Failed, receipt.Outcome, "a file no copy could still read fails the run");
+        Assert.IsNotEmpty(receipt.Items.Where(item => item.Outcome == "failed").ToList(), "and is named in it");
+        Assert.IsEmpty(
+            reader.Refusals.Where(refusal => refusal.Fault == CopyFault.Damaged).ToList(),
+            "a copy whose blob went is no damage to hold against it");
+        AssertRestoredByteForByte(
+            world, output, receipt.Items.Where(item => item.Outcome == "restored").Select(item => item.Path));
+    }
+
     /// <summary>What the restores read: four incompressible files, their catalogue, and how to write more.</summary>
     private sealed record World(
         RestorePlan Plan,
@@ -337,6 +434,20 @@ public sealed class RestoreBesideCollectionTests : ArchiveTestHarness
             var written = File.ReadAllBytes(Path.Combine(output, path.Replace('/', Path.DirectorySeparatorChar)));
             Assert.IsTrue(world.Files[path].AsSpan().SequenceEqual(written), $"{path} restored other bytes");
         }
+    }
+
+    /// <summary>
+    /// Flips one byte inside a record's ciphertext in the store at
+    /// <paramref name="root"/> alone, where its tag will catch it.
+    /// </summary>
+    private static void RotRecord(string root, ObjectKey blob, Repository.Catalogue.ResolvedLocation location)
+    {
+        var path = Path.Combine(root, blob.Value.Replace('/', Path.DirectorySeparatorChar));
+        using var file = File.Open(path, FileMode.Open, FileAccess.ReadWrite);
+        file.Seek((long)location.PhysicalOffset + RecordHeader.Length + 4, SeekOrigin.Begin);
+        var original = file.ReadByte();
+        file.Seek(-1, SeekOrigin.Current);
+        file.WriteByte((byte)(original ^ 0xFF));
     }
 
     private static async Task<LocalFileSystemObjectStore> MirrorAsync(LocalFileSystemObjectStore from, string root)
