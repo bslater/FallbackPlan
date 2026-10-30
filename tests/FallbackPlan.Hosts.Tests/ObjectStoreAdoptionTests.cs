@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
@@ -280,11 +278,7 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
     [TestMethod]
     public async Task Discover_AStoreThatDoesNotAnswer_IsUnavailable()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var closed = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        WriteConfiguration(withDocsSet: false, endpoint: EndpointAt(new Uri($"http://127.0.0.1:{closed}")));
+        WriteConfiguration(withDocsSet: false, endpoint: EndpointAt(new Uri($"http://127.0.0.1:{LoopbackPorts.Refused}")));
 
         await using var runtime = await StartAsync();
         await StoreCredentialAsync(runtime);
