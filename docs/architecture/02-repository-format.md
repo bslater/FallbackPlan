@@ -361,6 +361,8 @@ Damage is reported by kind, because the kinds have different consequences and di
 
 The catalogue discards itself rather than migrate: a file another schema version or another repository wrote, or one SQLite cannot read as a database at all, is deleted and created again, empty ([ADR-0010](../adr/0010-local-store-separation.md) Amendment 6). A file that is busy, locked or cannot be written is not the catalogue's to delete, and still fails the open. An empty catalogue answers as though its repository had no history, so the service rebuilds it by the normal path when it opens the set, before anything reads it, and a rebuild that could not see every record it needed — a direct-ship set's metadata blobs are read back from its destinations, and they may be away — leaves the catalogue marked so the next open tries again ([ADR-0010](../adr/0010-local-store-separation.md) Amendment 4, FR-MAN-002). Reading those blobs creates nothing at a destination that holds no replica of the set.
 
+> **2026-10.** A rebuild at open that could not see every record, or could not read the repository, raises a notice naming the set, and the rebuild that reads everything resolves it ([ADR-0010 Amendment 7](../adr/0010-local-store-separation.md#amendment-7-2026-10--a-rebuild-at-open-that-falls-short-says-so)). One whose index load reported findings is complete as a listing and is not tried again: its findings are the catalogue's damage, which a set's status counts and a check names.
+
 ---
 
 **Previous:** [01 — Domain model](01-domain-model.md) · **Next:** [03 — Cryptography](03-crypto.md)
