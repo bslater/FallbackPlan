@@ -514,7 +514,7 @@ public sealed class BlobWriter : IAsyncDisposable
             return new ResumeResult.MustRestart(reason);
         }
 
-        if (!SpoolCheckpoint.TryParse(File.ReadAllBytes(checkpointPath), out var checkpoint))
+        if (!SpoolCheckpoint.TryParse(AtomicFile.ReadAllBytes(checkpointPath), out var checkpoint))
         {
             return Discard("checkpoint_unreadable");
         }

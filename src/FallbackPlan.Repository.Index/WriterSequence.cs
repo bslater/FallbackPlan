@@ -52,7 +52,7 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
         DeltaId? lastDelta = null;
         ulong lastIndexGeneration = 0;
 
-        foreach (var line in File.ReadAllLines(_path))
+        foreach (var line in AtomicFile.ReadAllLines(_path))
         {
             var separator = line.IndexOf('=', StringComparison.Ordinal);
             if (separator < 0)

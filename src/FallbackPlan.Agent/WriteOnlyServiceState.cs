@@ -148,7 +148,7 @@ public sealed class WriteCredentialStore(string stateDirectory)
             return null;
         }
 
-        var bytes = File.ReadAllBytes(path);
+        var bytes = AtomicFile.ReadAllBytes(path);
         try
         {
             return RepositoryWriteCredential.FromBytes(bytes);
@@ -376,7 +376,7 @@ public sealed class InstallationCredentialStore(string stateDirectory)
             return null;
         }
 
-        var bytes = File.ReadAllBytes(path);
+        var bytes = AtomicFile.ReadAllBytes(path);
         try
         {
             return InstallationProvisioning.FromBytes(bytes);

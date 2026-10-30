@@ -80,6 +80,44 @@ public static class AtomicFile
         return reader.ReadToEnd();
     }
 
+    /// <summary>Reads a file whole, as bytes, even while a rename of it into place is in flight.</summary>
+    /// <param name="path">The file to read.</param>
+    /// <returns>The file's bytes, from the version its name held when the read began.</returns>
+    /// <remarks>
+    /// For a file a store replaces by renaming a temporary of its own into
+    /// place, which holds the file open for deletion exactly as
+    /// <see cref="WriteAllText"/>'s rename does. It shares deletion for the
+    /// reason <see cref="ReadAllText"/> gives.
+    /// </remarks>
+    public static byte[] ReadAllBytes(string path)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        var bytes = new byte[stream.Length];
+        stream.ReadExactly(bytes);
+        return bytes;
+    }
+
+    /// <summary>Reads a file's lines, without their endings, even while a rename of it into place is in flight.</summary>
+    /// <param name="path">The file to read.</param>
+    /// <returns>The file's lines, from the version its name held when the read began.</returns>
+    /// <remarks>Shares deletion for the reason <see cref="ReadAllText"/> gives.</remarks>
+    public static string[] ReadAllLines(string path)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line)
+        {
+            lines.Add(line);
+        }
+
+        return [.. lines];
+    }
+
     /// <summary>
     /// The number of replace attempts before a contended destination is
     /// reported as a failure rather than retried again.

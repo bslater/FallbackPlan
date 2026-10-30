@@ -466,7 +466,7 @@ public sealed record RestoreReceipt
         string? problem;
         try
         {
-            receipt = JsonSerializer.Deserialize<RestoreReceipt>(File.ReadAllText(path));
+            receipt = JsonSerializer.Deserialize<RestoreReceipt>(AtomicFile.ReadAllText(path));
             problem = receipt is null ? "the file holds no receipt" : null;
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)

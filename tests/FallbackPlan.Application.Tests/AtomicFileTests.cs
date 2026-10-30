@@ -169,6 +169,58 @@ public sealed class AtomicFileTests : IDisposable
     }
 
     [TestMethod]
+    public void ReadAllBytes_ReadsTheFileWhole()
+    {
+        var path = Path.Combine(_root, "credential.bin");
+        File.WriteAllBytes(path, [0x00, 0x01, 0xFE, 0xFF]);
+
+        CollectionAssert.AreEqual(new byte[] { 0x00, 0x01, 0xFE, 0xFF }, AtomicFile.ReadAllBytes(path));
+    }
+
+    [TestMethod]
+    public void ReadAllLines_ReadsEveryLine_WithoutItsEnding()
+    {
+        var path = Path.Combine(_root, "sequence.txt");
+        File.WriteAllText(path, "next=4\npending=\r\nlast-index-generation=2\n");
+
+        CollectionAssert.AreEqual(
+            new[] { "next=4", "pending=", "last-index-generation=2" }, AtomicFile.ReadAllLines(path));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows,
+        "a rename holds the file it renamed open for deletion until it returns, and only Windows refuses "
+        + "a reader that does not share deletion with that handle")]
+    public void ReadAllBytes_WhileAReplaceHoldsTheFileForDeletion_StillReadsIt()
+    {
+        // As the text read above: the handle is a rename's moment held still.
+        var path = Path.Combine(_root, "credential.bin");
+        File.WriteAllBytes(path, [0x2A]);
+
+        using (File.OpenHandle(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.DeleteOnClose))
+        {
+            CollectionAssert.AreEqual(new byte[] { 0x2A }, AtomicFile.ReadAllBytes(path));
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows,
+        "a rename holds the file it renamed open for deletion until it returns, and only Windows refuses "
+        + "a reader that does not share deletion with that handle")]
+    public void ReadAllLines_WhileAReplaceHoldsTheFileForDeletion_StillReadsIt()
+    {
+        var path = Path.Combine(_root, "sequence.txt");
+        File.WriteAllText(path, "next=4\n");
+
+        using (File.OpenHandle(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.DeleteOnClose))
+        {
+            CollectionAssert.AreEqual(new[] { "next=4" }, AtomicFile.ReadAllLines(path));
+        }
+    }
+
+    [TestMethod]
     public void IsReplaceContention_ContentionAndDefects_AreToldApart()
     {
         // The classification is the part of the retry a test can reach.
