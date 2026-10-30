@@ -3,6 +3,9 @@ using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Diagnostics;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -17,7 +20,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// a sibling, because every committed snapshot's closure exists at at least
 /// one destination by construction. Establishes FR-DEST-013 and
 /// FR-DEST-015, and the direct-ship shape of FR-DEST-002, FR-DEST-003,
-/// FR-DEST-004 and FR-DEST-014.
+/// FR-DEST-004 and FR-DEST-014. A delete through the sink that a
+/// destination refuses is not done, and what was refused stays listed for
+/// the next pass: the sink's half of FR-GC-010.
 /// </summary>
 [TestClass]
 public sealed class DirectShipTests : IDisposable
@@ -1066,6 +1071,91 @@ public sealed class DirectShipTests : IDisposable
     }
 
     /// <summary>Two local destinations and one direct-ship set over them.</summary>
+    [TestMethod]
+    public async Task ASinkDeleteOneDestinationRefuses_AfterAnotherDeleted_IsNotDone_AndTheNextDeleteFinishesIt()
+    {
+        // The sink deletes at each destination it can reach, priority first,
+        // and at the metadata store last. vault-a is first, so it has
+        // deleted by the time vault-b refuses. Whatever a destination
+        // refuses has to read as not done, and the object has to stay
+        // listed, so the next pass condemns it again: a metadata object by
+        // the planning copy, a blob by the union of what the destinations
+        // hold (prior-art review T-12).
+        Directory.CreateDirectory(VaultA);
+        Directory.CreateDirectory(VaultB);
+        WriteDirectShipConfiguration();
+        _harness.WriteSourceFile("docs/report.txt", "the words worth keeping");
+
+        var refusing = false;
+        await using var runtime = await StartAsync(decorate: (name, store) =>
+        {
+            var faulting = new DeleteFaultingObjectStore(store);
+            if (refusing && string.Equals(name, "vault-b", StringComparison.Ordinal))
+            {
+                faulting.ArmThrow();
+            }
+
+            return faulting;
+        });
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.AreEqual(
+            "ran",
+            (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
+
+        var sink = (await runtime.ArchiveForAsync(set, Timeout)).Store;
+        var replicaA = new LocalFileSystemObjectStore(Assert.ContainsSingle(Directory.GetDirectories(VaultA)));
+        var replicaB = new LocalFileSystemObjectStore(Assert.ContainsSingle(Directory.GetDirectories(VaultB)));
+        var metadata = new LocalFileSystemObjectStore(MetadataRoot);
+
+        var snapshot = (await KeysAsync(sink, "snapshots/")).First();
+        var blob = (await KeysAsync(sink, "blobs/")).First();
+        foreach (var key in new[] { snapshot, blob })
+        {
+            Assert.IsTrue(await HoldsAsync(replicaA, key) && await HoldsAsync(replicaB, key), key.Value);
+        }
+
+        Assert.IsTrue(await HoldsAsync(metadata, snapshot), "the planning copy holds the snapshot");
+
+        refusing = true;
+        foreach (var key in new[] { snapshot, blob })
+        {
+            await Assert.ThrowsExactlyAsync<IOException>(
+                async () => await sink.DeleteAsync(key, DeleteConditions.None, Timeout));
+
+            Assert.IsFalse(await HoldsAsync(replicaA, key), $"vault-a, first, deleted {key}");
+            Assert.IsTrue(await HoldsAsync(replicaB, key), $"vault-b refused {key}, and keeps it");
+            Assert.Contains(
+                key.Value, (await KeysAsync(sink, key.Value[..key.Value.IndexOf('/', StringComparison.Ordinal)] + "/"))
+                    .Select(listed => listed.Value).ToList(),
+                $"{key} must stay listed, or no later pass condemns it again");
+        }
+
+        Assert.IsTrue(await HoldsAsync(metadata, snapshot), "the planning copy goes last, so a refusal leaves it");
+
+        refusing = false;
+        foreach (var key in new[] { snapshot, blob })
+        {
+            Assert.AreEqual(DeleteOutcome.Deleted, (await sink.DeleteAsync(key, DeleteConditions.None, Timeout)).Outcome);
+            Assert.IsFalse(await HoldsAsync(replicaA, key) || await HoldsAsync(replicaB, key), key.Value);
+        }
+
+        Assert.IsFalse(await HoldsAsync(metadata, snapshot));
+    }
+
+    private async Task<List<ObjectKey>> KeysAsync(IObjectStore store, string prefix)
+    {
+        var keys = new List<ObjectKey>();
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse(prefix), ListOptions.Default, Timeout))
+        {
+            keys.Add(entry.Key);
+        }
+
+        return keys;
+    }
+
+    private async Task<bool> HoldsAsync(LocalFileSystemObjectStore store, ObjectKey key) =>
+        (await store.GetMetadataAsync(key, Timeout)).Found;
+
     private void WriteDirectShipConfiguration(bool vaultBToo = true, int? vaultAReferencePriority = null)
     {
         List<DestinationConfiguration> destinations =
@@ -1105,7 +1195,8 @@ public sealed class DirectShipTests : IDisposable
         }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
     }
 
-    private async Task<ServiceRuntime> StartAsync(bool withLogging = false)
+    private async Task<ServiceRuntime> StartAsync(
+        bool withLogging = false, Func<string, IObjectStore, IObjectStore>? decorate = null)
     {
         if (withLogging && _logging is null)
         {
@@ -1128,6 +1219,7 @@ public sealed class DirectShipTests : IDisposable
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 Logging = withLogging ? _logging : null,
+                ReplicaStoreDecorator = decorate,
             },
             Timeout);
     }
