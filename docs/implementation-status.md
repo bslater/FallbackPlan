@@ -202,6 +202,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0175](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) | A restore writes back the Windows attribute bits it may: a file's and a folder's read-only, hidden, system, archive and not-content-indexed bits, as captured and as the last write, by the writer every way of restoring shares; a bit no restore sets, as compressed or encrypted, is named; a read-only file a restore replaces is replaced; since [Amendment 1](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md#amendment-1-2026-10--the-plan-names-a-bit-no-restore-sets) the plan names a bit no restore sets, on a line of its own; since [Amendment 2](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md#amendment-2-2026-10--a-restore-gives-a-file-and-a-folder-their-compression-back) a file and a folder get their NTFS compression back as captured, before the times, through its own call, and only encryption is named of the two | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Domain/RestorePaths` · `Restore/RestoreMetadata` · `Domain.Tests/FileAttributesWriteBackTests` · `Repository.Tests/RestoreFileAttributesTests` · `Restore/RestoreBlobSet` · `Domain/FileCompression` · `Domain.Tests/FileCompressionTests` · [notes](#0175--windows-attribute-bits) |
 | [0176](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) | A restore writes back a Windows security descriptor whose accounts the machine knows: a file's and a folder's owner, group and DACL, as captured, protected as they were, after the times and before the attribute bits, by the writer every way of restoring shares; one that names an account the machine does not know, or does not read, is not written and is named, and the plan predicts it per item; where the owner is refused the DACL lands alone; since [Amendment 1](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not) an account that holds SeRestorePrivilege gives an owner it is not, with the privilege enabled on its own thread for that write alone; since [Amendment 2](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give) the plan names a descriptor whose owner the account may not give where it does not hold the privilege | **Built** | `Domain/WindowsSecurityDescriptor` · `Domain/WindowsSecurity` · `Domain/MetadataWriter` · `Domain/MetadataTarget` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Domain/WindowsPrivileges` · `Domain.Tests/WindowsSecurityDescriptorTests` · `Domain.Tests/SecurityDescriptorWriteBackTests` · `Repository.Tests/RestoreSecurityDescriptorTests` · `Domain.Tests/WindowsPrivilegesTests` · [notes](#0176--windows-security-descriptors) |
 | [0177](adr/0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md) | A restore on Windows keeps a file's extended attributes as alternate streams: where the target keeps streams and writes no attributes of its own, each of a file's attributes is written as the stream of its name, before the times, by the writer every way of restoring shares; one in Linux's security or trusted namespace, or a POSIX ACL, is not kept and is named, as is a name no stream may have, one the file's own captured stream has, one an attribute before it has but for case and a stream the target refuses; a folder's are not kept; and the plan declares on a line of its own the files whose attributes only Linux's kernel reads; since [Amendment 1](adr/0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md#amendment-1-2026-10--the-plan-names-a-file-whose-attribute-no-stream-is-kept-under) the plan names a file whose attribute no stream is kept under, by the writer's own judgement of each name | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Domain.Tests/ExtendedAttributeStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0177--extended-attributes-as-streams) |
+| [0178](adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md) | The plan names a file its new folder would open wider than it was: for a file whose security descriptor names an account the machine does not know, so is not written, the access the folder it lands in would give is held against what its own DACL gave, and the files opened wider, the folders and the accounts that gain are named on a line of their own, through the service and direct mode alike; the refusal architecture 06 §3 reserves for them is not yet made | **Built** | `Domain/WindowsAccess` · `Domain/WindowsSecurityDescriptor` · `Domain/MetadataRules` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Restore/RestoreBlobSet` · `Domain.Tests/WindowsAccessTests` · `Repository.Tests/RestoreMetadataHonestyTests` · `Hosts.Tests/RestoreHonestyServiceTests` · `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0178--opened-wider) |
 
 ---
 
@@ -2481,7 +2482,8 @@ Every plan over real files now lists access times, and most list creation
 times and ownership. That is the truth, and it is the next slice's work.
 Still owed: writing those back, which the times have since been
 ([0084](#0084--the-receipt-says-what-landed)); architecture 06 §3's refusal
-for a security descriptor; hard links, which restored as separate files
+for a security descriptor, whose plan half has since landed
+([0178](#0178--opened-wider)); hard links, which restored as separate files
 without saying so until [0102](#0102--one-file-every-name); the physical
 transfer size, until [Amendment 2](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads); plan export and resume;
 archival-tier reporting, until [0103](#0103--held-but-cold); and the recovery
@@ -4832,7 +4834,8 @@ What remains is recorded rather than done:
 - the SACL is not captured;
 - a SID the machine does not know is not mapped to one it does;
 - architecture 06 §3's refusal, where a descriptor not written leaves a
-  file more open than it was, is still not made;
+  file more open than it was, is still not made (its plan half taken up
+  by [0178](#0178--opened-wider));
 - the plan does not predict a refused owner (taken up by Amendment 2);
 - the DACL's mark that its inherited entries came by automatic
   inheritance is not kept, as the call it is written with does not keep it.
@@ -4900,3 +4903,35 @@ facts count the attributes it refuses for their names, the kernel's
 apart, and on a target that keeps attributes as streams the plan
 declares those files on a line of their own, `attribute-stream-names`,
 while their other attributes still count applied.
+
+### 0178 — opened wider
+
+A restore on Windows writes a file's captured security descriptor back
+only where the machine knows every account it names, so on another
+machine, or the same one rebuilt, a file usually takes the access of the
+folder it lands in. The plan said the descriptor would not be applied,
+and nothing about what the file would be open to instead. Architecture
+06 §3 reserves the restore's refusal for a file that lands where the
+default would give more than its own did, which needs the plan to know
+which files those are.
+
+The descriptor reader now reads each DACL entry that allows or denies one
+account, with its mask and flags. `Domain/WindowsAccess` reads from those
+entries:
+- the access a DACL gives each account, generic rights read as a file's;
+- what a file made in a folder takes from it, the creator's entries apart;
+- which accounts gain.
+On Windows it reads that from the nearest folder at or above the
+destination that stands. For a file whose descriptor names an account
+the machine does not know, the plan holds the folder's access against
+its own and names, on a line of its own, the files opened wider, the
+folders and the accounts that gain. The service and direct mode pass the
+folders their slices already measure for room.
+
+What remains is recorded rather than done:
+
+- the refusal itself, and the acknowledgement that goes past it;
+- a folder's own access, which takes container-inheriting entries;
+- an account that gains through a group it is in, which counts only
+  where the group gains;
+- a descriptor that does not read, which has no DACL to compare.

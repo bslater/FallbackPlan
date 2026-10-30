@@ -107,6 +107,8 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
 
   > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A descriptor is now applied where the machine knows every account it names. One that is not is declared and degraded; the refusal is still not made.
 
+  > **2026-10 ([ADR-0178](0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md)).** The plan now names the files whose descriptor is not written and whose folder would give an account access their own did not. The refusal is still not made.
+
 - It does not estimate the physical transfer size, which differs from the logical size when a store lacks range reads. It does not export a plan or resume one. And it does not report an object held only in an archival tier. All three are architecture 08 §2's, and all three stay owed.
 
   > **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--a-plan-says-what-its-run-reads)).** The physical transfer size is estimated: a plan says what its run will read. Export, resume and archival-tier reporting stay owed.
@@ -206,3 +208,4 @@ A restore of part of a tree can meet the first, and a tree larger than the read 
 | 2026-10 | Accepted | [ADR-0138](0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md): §2's working-directory need is said as room to assemble the run's files one at a time, not for its largest file. The figure is as it was. |
 | 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): a file's and a folder's Windows attribute bits are written back on Windows. |
 | 2026-10 | Accepted | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): a file's and a folder's Windows security descriptor is written back on Windows where the machine knows every account it names. |
+| 2026-10 | Accepted | [ADR-0178](0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md): the plan names a file whose descriptor is not written and whose folder would open it wider; the refusal this record does not make is still not made. |

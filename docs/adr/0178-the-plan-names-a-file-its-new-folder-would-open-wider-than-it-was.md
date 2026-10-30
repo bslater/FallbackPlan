@@ -1,0 +1,81 @@
+# ADR-0178 — The plan names a file its new folder would open wider than it was
+
+**Status:** Accepted
+**Date:** 2026-10
+**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain)
+**Related:** [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) (a descriptor is written only where the machine knows every account it names, and is otherwise declared), [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (the plan and the receipt say what a target will not get back, and a run that will not fit is refused unless a person goes on), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (refuse is reserved for a descriptor that cannot be applied where the default would grant broader access)
+
+**Built:**
+- The reading: `Domain/WindowsSecurityDescriptor` reads each DACL entry that allows or denies one account, with its mask and flags, and says when the DACL is null. `Domain/WindowsAccess` reads the access a DACL gives each account, the access a file made in a folder takes from it, and which accounts gain. On Windows it reads that from the nearest folder that stands.
+- The plan: `Domain/MetadataRules` gives each item's facts the access its captured DACL gave, through `Restore/RestoreBlobSet`. `Restore/RestorePlan` carries the call that reads a folder's inherited access. `Restore/RestoreMetadata` holds the two against each other for a file whose descriptor names an account the machine does not know, and maps a restore's slices to the folders their items land in. `Restore/RestorePlanFigures`, `Agent/ServiceCommandHandler` and `Cli/OperationGateway` pass those folders, so the service and direct mode say it alike.
+- The tests:
+  - `Domain.Tests/WindowsAccessTests` — on every platform, each allowing and denying entry is read from bytes with its mask and flags. The tests also hold:
+    - the access a DACL gives, denies taken off, inherit-only entries apart and generic rights mapped;
+    - a null DACL giving everyone everything, and no DACL saying nothing;
+    - what a file inherits, the creator's entries apart;
+    - which accounts gain, synchronising apart.
+
+    On Windows a real folder's inherited access is read, through a path not yet made.
+  - `Repository.Tests/RestoreMetadataHonestyTests` — of three files, only the one kept to an unknown account and the system is declared, naming the accounts that gain and the folder. Their folder, kept the same way, is not. A plan told no destinations, or whose folder will not read, says nothing. A restore's slices map their items to their own folders.
+  - `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` — on Windows, the service and direct mode each plan the restore of a real file kept to an unknown account into a folder that shares with Users, and name it.
+
+---
+
+## Context
+
+A restore on Windows writes a file's captured security descriptor back only where the machine knows every account it names ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)). A local account's SID names nobody on another machine, or on the same one rebuilt. So a file restored there is usually one whose descriptor is not written, and it takes the access of the folder it lands in. The plan said the descriptor would not be applied, and nothing about what the file would be open to instead.
+
+Architecture 06 §3 reserves refusal for exactly this case: a file whose descriptor cannot be applied, landing where the default would grant broader access than the original. A file kept private on the machine that captured it, restored into a folder that shares with every user, is open to people it never was, and nothing on screen says so. Before a restore can refuse that, the plan has to know which files they are, and what "broader" means.
+
+## Decision
+
+### 1. Access is read from the DACL's own entries
+
+The access a DACL gives an account is what its allowing entries grant the account, less what its denying entries take, read as a file's rights.
+- An entry that governs only what is made in a folder (inherit-only) is not the entry's own access.
+- Generic rights are read as Windows gives them to a file.
+- A null DACL gives everyone everything.
+- A descriptor captured with no DACL says nothing, and nothing is judged of it.
+- Only entries that allow or deny one account are read. An object entry or a conditional one is passed over.
+
+The reading is per account, not per person: a right an account holds through a group it is in is that group's.
+
+### 2. A file made in a folder takes the folder's file-inheriting entries
+
+What a file made in a folder takes is each entry the folder marks to pass to files, wherever the folder got it. The creator's entries are left out: they become the restoring account's, which already holds what it restores. The folder read is the nearest one that stands at or above where the file lands. A restore makes the folders below it, each taking what passes down, and writes their own descriptors only after their files have landed, without passing them down again.
+
+### 3. Wider is a right an account gains
+
+A file's folder opens it wider where some account gets a right from the folder that the file's own DACL did not give that account. Synchronising alone is not counted, since every read grants it.
+
+### 4. The plan names those files, the folders and the accounts
+
+For a file whose descriptor names an account the machine does not know, the plan holds what its folder gives against what its own DACL gave. It declares those opened wider on a line of their own, `wider-access`, beside the line that already says their descriptors will not be applied. The new line names the folders and every account that gains. The plan finds each item's folder from the slices the service and direct mode already measure for room, and reads each folder once.
+
+A file whose owner is refused still gets its DACL (ADR-0176 Amendment 1), so it is not judged. Nor is a file whose descriptor is written.
+
+## Consequences
+
+- A restore of a private file to a rebuilt machine, into a folder that shares with Users, says so before it runs, and names Users.
+- A file whose captured DACL already gave what the folder gives is not named, though its descriptor is still not written.
+- The refusal itself, and the acknowledgement that goes past it, are not built here. This record gives them something to refuse on.
+
+## What this does not do
+
+- **Refuse.** The plan names the files. The run still restores them, as before. Making the run refuse unless a person acknowledges it is architecture 06 §3's other half.
+- **Judge a folder.** A folder the restore makes takes container-inheriting entries, not file ones, and its own access is not compared.
+- **Judge a descriptor that does not read.** With no DACL to compare, nothing is said beyond the line that already declares it.
+- **Follow group membership.** An account that gains access through a group is counted only where the group itself gains.
+- **Judge a target it cannot read.** Off Windows, or where the folder's DACL will not read, nothing is said.
+
+## Alternatives considered
+
+- **Name every file whose descriptor is not written.** Rejected. That is the existing line, and it says nothing about whether the file ends up more open. A private file restored into an equally private folder loses nothing anyone could see.
+- **Judge by whether the captured DACL was protected.** Rejected. Protection says the file did not inherit, not that its folder would give more. A protected DACL that granted Users read loses nothing to a folder that grants Users read.
+- **Re-read the access the file actually gets after the run.** Rejected for the plan. The point is to say it before anything moves. A receipt that reads back what landed is a separate check, not this one.
+
+## Status history
+
+| Date | Status | Note |
+|------|--------|------|
+| 2026-10 | Accepted | Built in one slice, tests first. The plan reads each captured DACL's access per account, and the access a file would take from the folder it lands in. For a file whose descriptor will not be written, it names those opened wider, the folders and the accounts that gain, through the service and direct mode alike. `Domain/WindowsAccess`; `Domain/WindowsSecurityDescriptor`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Restore/RestoreBlobSet`; `Domain.Tests/WindowsAccessTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Cli.Tests/RestoreHonestyCommandTests` |

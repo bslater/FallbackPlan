@@ -73,6 +73,8 @@ For each metadata class and target platform: **preserve** it, **degrade** it and
 
 > **2026-10 ([ADR-0177](../adr/0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md)).** Extended attributes on Windows are now preserved as alternate streams, as the matrix says, for a file: each is written as the stream of its name, before the times. One in Linux's security or trusted namespace, or a POSIX ACL, is degraded and reported, since only Linux's kernel reads it, and so is one whose name no stream may have. A folder's are still reported.
 
+> **2026-10 ([ADR-0178](../adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md)).** Where a descriptor is not applied, the plan now names the files whose folder would give an account access their own did not, with the folder and the accounts that gain — the files the refusal below is for. The refusal itself is still not made.
+
 **Refuse** is reserved for cases where restoring would produce a file that is wrong in a way the user could not detect — for example, restoring a file whose security descriptor cannot be applied into a location where the default descriptor would grant broader access than the original. These are enumerated in the restore plan and require explicit acknowledgement.
 
 Everything a snapshot captured is preserved in the repository regardless of the restore target. Degradation is a property of a particular restore, not of the backup: the same snapshot restored to its original platform is lossless.
