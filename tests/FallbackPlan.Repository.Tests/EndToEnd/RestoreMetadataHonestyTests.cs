@@ -41,7 +41,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// extended attributes but keeps streams, a file's attributes are kept as
 /// streams, save those only Linux's kernel reads (ADR-0177), and the plan
 /// names a file whose attribute's name no stream is kept under (ADR-0177
-/// Amendment 1).
+/// Amendment 1). Where the target keeps compression, a compressed file's
+/// bits are no longer among those it names (ADR-0175 Amendment 2).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -542,6 +543,29 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         var none = RestoreMetadata.Declare(plan, facts, Posix);
         Assert.Contains("3 file(s)", Assert.ContainsSingle(none.Where(degradation => degradation.Capability == "file-attributes")).Detail, StringComparison.Ordinal);
         Assert.DoesNotContain(degradation => degradation.Capability == "unset-file-attributes", none);
+    }
+
+    [TestMethod]
+    public async Task Plan_WhereTheTargetKeepsCompression_NamesOnlyTheBitsItStillDoesNotSet()
+    {
+        const uint Archive = 0x20;
+        const uint Compressed = 0x800;
+        const uint Encrypted = 0x4000;
+        var source = new FakeFileSystemSource();
+        void Add(string name, uint bits, byte seed) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata =
+                new EntryMetadata { ModifiedAt = Modified, FileAttributes = bits };
+        Add("plain.bin", Archive, 43);
+        Add("packed.bin", Archive | Compressed, 44);
+        Add("sealed.bin", Compressed | Encrypted, 45);
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xDC);
+        var declared = RestoreMetadata.Declare(plan, facts, Posix with { SupportsFileAttributes = true, SupportsCompression = true });
+
+        var unset = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "unset-file-attributes"));
+        Assert.Contains("1 file(s)", unset.Detail, StringComparison.Ordinal);
+        Assert.Contains("Encrypted", unset.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("Compressed", unset.Detail, StringComparison.Ordinal);
     }
 
     [TestMethod]

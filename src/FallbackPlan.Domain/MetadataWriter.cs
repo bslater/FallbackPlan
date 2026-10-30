@@ -163,6 +163,18 @@ public sealed class MetadataWriter(MetadataTarget target)
             }
         }
 
+        // Before the times, since compressing or expanding rewrites a file's
+        // clusters, and before the descriptor and the bits, which may take
+        // the access it needs.
+        string? compressionDetail = null;
+        if (target.SupportsCompression
+            && !link
+            && metadata.FileAttributes is { } kept
+            && target.Compression.Apply(destination, (kept & MetadataRules.CompressedFileAttribute) != 0) is { } refused)
+        {
+            compressionDetail = $"compression not applied ({refused})";
+        }
+
         if (link)
         {
             var modifiedAt = FileTimes.FromUnixMilliseconds(metadata.ModifiedAt);
@@ -239,10 +251,11 @@ public sealed class MetadataWriter(MetadataTarget target)
         string? unsetDetail = null;
         if (target.SupportsFileAttributes && OperatingSystem.IsWindows() && !link && metadata.FileAttributes is { } bits)
         {
-            var unset = MetadataRules.UnsetFileAttributes(bits);
+            var unset = MetadataRules.UnsetFileAttributes(bits, target.SupportsCompression);
             if (Wrote(() => File.SetAttributes(destination, (FileAttributes)MetadataRules.FileAttributesToSet(
                     (uint)File.GetAttributes(destination), bits)))
-                && unset.Count == 0)
+                && unset.Count == 0
+                && compressionDetail is null)
             {
                 applied |= CapturedMetadata.FileAttributes;
             }
@@ -258,7 +271,7 @@ public sealed class MetadataWriter(MetadataTarget target)
             : "extended attribute(s) not applied: " + string.Join("; ", left
                 .GroupBy(entry => entry.Why, StringComparer.Ordinal)
                 .Select(reason => $"{string.Join(", ", reason.Select(entry => entry.Name))} ({reason.Key})"));
-        var details = new[] { attributesDetail, unsetDetail, descriptorDetail }.OfType<string>().ToList();
+        var details = new[] { attributesDetail, unsetDetail, compressionDetail, descriptorDetail }.OfType<string>().ToList();
         return new MetadataWritten(applied, details.Count == 0 ? null : string.Join("; ", details));
 
         static bool Wrote(Action write)

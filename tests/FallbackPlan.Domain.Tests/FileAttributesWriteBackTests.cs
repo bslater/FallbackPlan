@@ -8,8 +8,9 @@ namespace FallbackPlan.Domain.Tests;
 /// a folder, where the platform keeps them (FR-RST-004; ADR-0175): read-only,
 /// hidden, system, archive and not-content-indexed, set as captured and
 /// cleared where not, after every other write, since a read-only file refuses
-/// its own streams. A bit no restore sets, as compressed or encrypted, leaves
-/// the attributes not applied and is named. A file a restore replaces whole
+/// its own streams. A bit no restore sets, as encrypted, leaves the
+/// attributes not applied and is named; compression is set by a call of its
+/// own (ADR-0175 Amendment 2, <see cref="FileCompressionTests"/>). A file a restore replaces whole
 /// is replaced though it is read-only.
 /// </summary>
 [TestClass]
@@ -112,14 +113,14 @@ public sealed class FileAttributesWriteBackTests : IDisposable
     [PlatformTrait(TestPlatforms.Windows)]
     public void Write_OnWindows_ABitNoRestoreSets_LeavesTheAttributesNotApplied_AndIsNamed()
     {
-        var file = Landed("compressed.bin");
+        var file = Landed("encrypted.bin");
 
-        var written = Writer().Write(file, new EntryMetadata { FileAttributes = Hidden | Compressed });
+        var written = Writer().Write(file, new EntryMetadata { FileAttributes = Hidden | Encrypted });
 
         Assert.IsTrue(File.GetAttributes(file).HasFlag(FileAttributes.Hidden), "the bits a restore sets still land");
         Assert.IsFalse(written.Applied.HasFlag(CapturedMetadata.FileAttributes));
         Assert.IsNotNull(written.Detail);
-        Assert.Contains("Compressed", written.Detail, StringComparison.Ordinal);
+        Assert.Contains("Encrypted", written.Detail, StringComparison.Ordinal);
     }
 
     [TestMethod]

@@ -46,10 +46,19 @@ public sealed record RestoreTargetProfile
     /// <summary>
     /// Whether the executor writes a file's and a folder's Windows attribute
     /// bits back on this target: Windows keeps them, and nothing else does
-    /// (ADR-0175). A bit no restore sets, as compressed or encrypted, is the
-    /// receipt's to name.
+    /// (ADR-0175). A bit no restore sets, as encrypted, is named in the plan
+    /// and the receipt.
     /// </summary>
     public bool SupportsFileAttributes { get; init; }
+
+    /// <summary>
+    /// Whether the executor gives a file and a folder their NTFS compression
+    /// back on this target: Windows keeps it, and nothing else does
+    /// (<see cref="FileCompression"/>; ADR-0175 Amendment 2). Where it does,
+    /// the plan does not name the compressed bit among those no restore sets.
+    /// A volume that keeps none refuses it, and the receipt says so.
+    /// </summary>
+    public bool SupportsCompression { get; init; }
 
     /// <summary>
     /// Whether the executor writes a file's and a folder's Windows security
@@ -141,6 +150,7 @@ public sealed record RestoreTargetProfile
         SupportsFileAttributes = SupportsFileAttributes,
         SupportsSecurityDescriptors = SupportsSecurityDescriptors,
         SupportsAlternateStreams = SupportsAlternateStreams,
+        SupportsCompression = SupportsCompression,
         KnowsAccount = KnowsAccount,
         HoldsRestorePrivilege = HoldsRestorePrivilege,
         CapturedHere = CapturedHere,
@@ -164,6 +174,7 @@ public sealed record RestoreTargetProfile
         SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
+        SupportsCompression = FileCompression.CanSet,
         Account = RestoreAccount.OfThisProcess(),
     };
 

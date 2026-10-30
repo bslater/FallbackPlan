@@ -38,6 +38,19 @@ public sealed record MetadataTarget
     public IAlternateStreams Streams { get; init; } = AlternateStreams.OfThisPlatform;
 
     /// <summary>
+    /// Whether a file's and a folder's NTFS compression is given back as
+    /// their captured bits say: Windows keeps it, and nothing else does
+    /// (ADR-0175 Amendment 2).
+    /// </summary>
+    public bool SupportsCompression { get; init; }
+
+    /// <summary>
+    /// The calls compression is set through: the platform's unless a caller
+    /// says otherwise, as a case judged on a platform that keeps none does.
+    /// </summary>
+    public IFileCompression Compression { get; init; } = FileCompression.OfThisPlatform;
+
+    /// <summary>
     /// Whether a file's and a folder's Windows attribute bits are written
     /// back: Windows keeps them, and nothing else does (ADR-0175).
     /// </summary>
@@ -87,6 +100,7 @@ public sealed record MetadataTarget
         SupportsFileAttributes = OperatingSystem.IsWindows(),
         SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
+        SupportsCompression = FileCompression.CanSet,
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         Account = RestoreAccount.OfThisProcess(),
     };
