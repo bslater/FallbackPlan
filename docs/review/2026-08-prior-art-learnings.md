@@ -361,6 +361,8 @@ The scheduler side is also untested. `AgentPass_ABackupSetIsDue_RunsItOnceAndSki
 >   - the space left unreclaimed, in bytes, at either;
 >   - a versioned S3 bucket, whose delete marker answers as a delete while the bytes stay;
 >   - a direct-ship sink, which reports a delete done when any one destination did.
+>
+> **2026-10 ([ADR-0171 Amendment 1](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-1-2026-10--said-in-bytes)).** The bytes are said now, at both: a destination's notice states what its refusals hold, and the staging sweep's report line counts what it deferred in objects and bytes. The versioned bucket and the sink stay open.
 
 ---
 
