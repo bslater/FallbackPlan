@@ -280,12 +280,40 @@ nothing could be tested. Each criterion now names the case that discharges it:
 | 11 | Concurrent index generation shares no mutable buffer | same suite — two publications at once each produce a delta that decodes and resolves |
 | 12 | An index never names an object no blob holds | `InterruptionTests/CompactionInterruptionTests`, inverted into the guard that matters: a supersession condemns a record only when the blob the index names is one the reader actually opened |
 
+> **Amended 2026-10 ([Amendment 5](#amendment-5-2026-10--the-criteria-held-as-written)).** Four rows named a case
+> that asks less than its criterion: 3's restore loads every footer, 4's
+> cases restore rather than verify, 8 and 9's rebuild is the forensic one,
+> and 10's checks the object limit rather than the budget. Amendment 5 names
+> the cases that ask each criterion itself.
+
 Criterion 4's prediction held exactly: it rests on the interruption discipline
 [ADR-0009](0009-garbage-collection-safety.md) gives the collector, and the
 pass needed no new mechanism — retiring its intent **last** is what makes a
 cut anywhere leave the produced blobs covered. Criterion 7's held too:
 compaction rewrites no manifest, so "loses a live record" could only ever be
 an index error.
+
+## Amendment 5 (2026-10) — the criteria held as written
+
+Read case by case against the criteria, four of Amendment 4's rows name a case that asks less than the criterion does:
+
+- **3, a restore needs no extra fetch.** `Repository.Tests/EndToEnd/CompactedRestoreTests` restores through a reader that loaded every footer first. Such a reader finds a moved record whether the index names it or not, so the case could not see a record the index lost.
+- **4, an interruption leaves a repository that verifies.** The cut-point cases restore, and check that every blob the index names is held. Nothing verifies.
+- **8 and 9, a re-derived index reports what was deleted, and is complete.** The case is the forensic rebuild, which reads the blobs. The rebuild a catalogue discarded at open gets is the index-plane one, and nothing ran it after a compaction.
+- **10, a produced index stays within its size bound.** The split case gives the pass a budget of 400 bytes, and then checks each delta against the sixteen-mebibyte object limit, so a delta over the budget passed.
+
+**Decision.** Each is held as written, by the case that asks it:
+
+- **3 and 9:** `Repository.Tests/EndToEnd/CompactedRestoreTests` rebuilds a catalogue from the index plane after the compaction and the drained blob's delete. The rebuild reports no finding and locates every moved record in the blob it went to, and a reader that asks that catalogue alone restores the file byte for byte with no location fallback.
+- **4:** `InterruptionTests/CompactionInterruptionTests` verifies every blob the store holds at the every-record level, with its key bound, at every cut point, a blob the pass put and never named among them, and loads the index with no finding.
+- **8 and 9:** `Repository.Tests/Index/CompactionIndexTests` rebuilds the index plane against a complete blob inventory before the sweep, with the drained blob still held, and after it. Each time every moved object resolves to the rewritten blob, the untouched blob's objects stay where they were, and nothing is recorded as damage.
+- **10:** the split case holds each delta's signed bytes to the budget it passed, as the backup's split case already did.
+
+All of them passed as the code stood. What each adds:
+
+- **10's bound** is the only check of a compaction delta's size. A pass that gave its deltas twice their budget still published more than one, each inside the object limit, and only the bound failed: one delta held 439 bytes against 400.
+- **3 and 9's rebuild through the index** catches a supersession that names a record a byte off where it went, as does `Repository.Tests/Packing/BlobCompactionTests`. It also catches a rebuild that passes over a compaction's deltas, with 8 and 9's rebuild and the checkpoint rebuild in `Repository.Tests/Index/CheckpointBundleTests`. The footer-only restore caught neither.
+- **4's verification** has nothing in the compactor to catch that a restore would not. A put lands whole or not at all, so a cut leaves whole blobs. The case holds the claim the row makes rather than a defect that was there.
 
 ## Status history
 
@@ -297,3 +325,4 @@ an index error.
 | 2026-09 | Accepted (superseded for v3) | Amendment 3: the decrypt-and-reseal decision stands for format v1 and v2 and is superseded for format v3 by [ADR-0052](0052-relocatable-records-format-v3.md), which scopes the record key to the object identifier, carries a fresh nonce in each record and drops the ordinal from the AAD — the three changes this record rejected one at a time, each on the grounds that the other two existed. Amendment 1's staging confinement is separately orphaned for direct-ship sets, which have no staging archive |
 | 2026-09 | Accepted (superseded for v3, now built) | ADR-0052 is built for the record and blob planes, so the supersession is no longer prospective: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` copies a sealed record into another blob without opening it, and `Repository.Tests/Packing/RelocatableBlobTests` reads it back there. Two corrections this record must carry rather than leave for a reader to notice: ADR-0052 Amendment 1 **withdrew the constant nonce** for a carried random one, so "makes the nonce constant" above described a design that was never written; and Amendment 1 item 6 **retires Amendment 1's staging confinement by rule** — a compactor runs where the structure key and a writer identity are, which is the source service, and a destination never compacts — rather than leaving it orphaned. Decrypt-and-reseal remains the only answer for format 2, and nothing compacts in any format yet |
 | 2026-09 | Accepted (superseded for v3, its criteria discharged) | Amendment 4: the compactor is built as [ADR-0067](0067-the-keyless-compactor.md) — a keyless rewrite over `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync`, not this record's decrypt-and-reseal — and Amendment 2's twelve exit criteria each name the case that discharges them. Decrypt-and-reseal stands only where format 3 does not reach, which is format 2, where a service holds no content key and so cannot compact at all |
+| 2026-10 | Accepted (superseded for v3, its criteria discharged) | Amendment 5: four of Amendment 4's rows named a case that asked less than its criterion, and each now names one that asks it: a restore through an index rebuilt after the compaction with no location fallback (3 and 9), verification at every cut (4), an index-plane rebuild before and after the sweep (8 and 9), and each delta inside its budget (10). `Repository.Tests/EndToEnd/CompactedRestoreTests`; `Repository.Tests/Index/CompactionIndexTests`; `InterruptionTests/CompactionInterruptionTests` |

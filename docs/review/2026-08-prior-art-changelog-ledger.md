@@ -190,6 +190,11 @@ deleted blocks (2025-07-11); a recreated index volume not containing all data
 (2025-09-23); large index files (2018-06-17); shared buffers causing
 validation errors across concurrent index generators (2018-06-17).
 
+> **2026-10.** The compactor exists ([ADR-0067](../adr/0067-the-keyless-compactor.md)), and each of these
+> is an exit criterion held by a named case: [ADR-0025 Amendment 4](../adr/0025-compaction-reseals-records.md#amendment-4-2026-09--the-twelve-criteria-answered)
+> lists them, and [Amendment 5](../adr/0025-compaction-reseals-records.md#amendment-5-2026-10--the-criteria-held-as-written) replaces
+> the four cases that asked less than their criterion.
+
 ### N/A — architecture, worth restating
 
 61 entries reduce to one sentence: the surveyed product's local SQLite database is

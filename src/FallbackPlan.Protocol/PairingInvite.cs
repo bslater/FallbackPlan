@@ -200,7 +200,7 @@ public sealed class PairingInviteStore
 
         try
         {
-            var stored = JsonSerializer.Deserialize<List<StoredInvite>>(File.ReadAllText(path), SerializerOptions) ?? [];
+            var stored = JsonSerializer.Deserialize<List<StoredInvite>>(AtomicFile.ReadAllText(path), SerializerOptions) ?? [];
             return new PairingInviteStore(path, [.. stored.Select(invite => invite.ToInvite())]);
         }
         catch (JsonException exception)

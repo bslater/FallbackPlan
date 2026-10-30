@@ -266,7 +266,7 @@ internal static class PeerReceiptFiles
         Envelope? envelope;
         try
         {
-            envelope = JsonSerializer.Deserialize<Envelope>(System.IO.File.ReadAllText(path), SerializerOptions);
+            envelope = JsonSerializer.Deserialize<Envelope>(AtomicFile.ReadAllText(path), SerializerOptions);
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
         {

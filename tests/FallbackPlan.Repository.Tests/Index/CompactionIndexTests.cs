@@ -232,6 +232,61 @@ public sealed class CompactionIndexTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Criteria 8 and 9 through the index plane, the rebuild a catalogue
+    /// discarded at open gets: before the sweep, with the drained blob still
+    /// held, and after it, the moved objects resolve to the blob they went
+    /// to, the untouched ones stay where they were, and nothing is reported
+    /// damaged, because the drained blob was superseded rather than lost.
+    /// </summary>
+    [TestMethod]
+    public async Task AnIndexRebuildAfterCompaction_LocatesTheNewBlob_BeforeTheSweepAndAfterIt()
+    {
+        using var fixture = await Fixture.CreateAsync(_root, SpoolDirectory);
+        var source = await fixture.WriteBlobAsync(Payloads(4));
+        var untouched = await fixture.WriteBlobAsync(Payloads(2, seed: 0x90));
+        await fixture.PublishOriginalAsync(source);
+        await fixture.PublishOriginalAsync(untouched);
+
+        var produced = await fixture.CompactAsync([Candidate(source, 0, 4)]);
+        var published = await fixture.PublishAsync(produced);
+        var rewritten = Assert.ContainsSingle(published.Published);
+
+        foreach (var (moment, held) in new[]
+        {
+            ("before the sweep", new[] { source.BlobId, untouched.BlobId, rewritten }),
+            ("after the sweep", new[] { untouched.BlobId, rewritten }),
+        })
+        {
+            if (!held.Contains(source.BlobId))
+            {
+                await fixture.Store.DeleteAsync(source.Key, DeleteConditions.None, CancellationToken.None);
+            }
+
+            using var rebuilt = CatalogueDb.Open(Path.Combine(_root, $"rebuilt-{held.Length}.db"), Repo);
+            var report = await new CatalogueRebuilder(new IndexLoader(fixture.Store, Repo, fixture.Credential))
+                .RebuildAsync(
+                    rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+                    CancellationToken.None, CatalogueRebuilder.KnownBlobs(held, inventoryComplete: true));
+
+            Assert.IsEmpty(report.Findings, $"{moment}: {string.Join(" | ", report.Findings.Select(f => f.Detail))}");
+            Assert.IsEmpty(rebuilt.Findings(), moment);
+            foreach (var record in source.Table)
+            {
+                Assert.AreEqual(
+                    rewritten, rebuilt.ResolveLocation(record.ObjectId)?.BlobId,
+                    $"{moment}: moved object {record.ObjectId} is not located in the blob it went to");
+            }
+
+            foreach (var record in untouched.Table)
+            {
+                Assert.AreEqual(
+                    untouched.BlobId, rebuilt.ResolveLocation(record.ObjectId)?.BlobId,
+                    $"{moment}: untouched object {record.ObjectId} moved");
+            }
+        }
+    }
+
     /// <summary>Criterion 10: a pass past the budget publishes several deltas, each inside the bound.</summary>
     [TestMethod]
     public async Task APassPastTheDeltaBudget_PublishesSeveralDeltas_EachWithinTheBound()
@@ -262,6 +317,10 @@ public sealed class CompactionIndexTests : IDisposable
         {
             var encoded = await fixture.ReadDeltaObjectAsync(deltaId);
             Assert.IsLessThanOrEqualTo(FormatLimits.MaxMetadataObjectSize, encoded.Length);
+
+            // And inside the budget the pass was given, which is the bound
+            // the split exists to keep: one blob's entries and not two.
+            Assert.IsLessThanOrEqualTo(400, (await fixture.ReadDecodedDeltaAsync(deltaId)).SignedBytes.Length);
         }
 
         // Split or not, every object still resolves — the point of the bound
@@ -508,7 +567,11 @@ public sealed class CompactionIndexTests : IDisposable
         /// value from, and what these cases are about is what this
         /// publication wrote.
         /// </summary>
-        public async ValueTask<IndexDelta> ReadDeltaAsync(DeltaId deltaId)
+        public async ValueTask<IndexDelta> ReadDeltaAsync(DeltaId deltaId) =>
+            (await ReadDecodedDeltaAsync(deltaId)).Delta;
+
+        /// <summary>The published delta, as <see cref="ReadDeltaAsync"/> reads it, with the bytes it signs.</summary>
+        public async ValueTask<DecodedDelta> ReadDecodedDeltaAsync(DeltaId deltaId)
         {
             using var loader = new IndexLoader(Store, Repo, Credential);
             var state = await loader.LoadAsync(
@@ -523,7 +586,7 @@ public sealed class CompactionIndexTests : IDisposable
                 Assert.IsTrue(
                     StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext),
                     $"delta {deltaId} failed authentication");
-                return IndexDeltaCodec.Decode(plaintext).Delta;
+                return IndexDeltaCodec.Decode(plaintext);
             }
             finally
             {

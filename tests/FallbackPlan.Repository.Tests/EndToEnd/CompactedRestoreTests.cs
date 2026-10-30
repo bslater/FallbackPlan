@@ -1,5 +1,6 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
@@ -38,6 +39,71 @@ public sealed class CompactedRestoreTests : ArchiveTestHarness
         var store = CreateStore();
         using var keys = CreateKeys();
         using var credential = CreateCredential();
+        var moved = await BackUpAndCompactOneDataBlobAsync(store, keys, credential, data);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var manifest = await ReadFileManifestAsync(store, keys, reader);
+        AssertSpansBothHalves(manifest, moved);
+
+        using var restored = new MemoryStream();
+        var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
+
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(data, restored.ToArray());
+    }
+
+    /// <summary>
+    /// Exit criteria 3 and 9, through the index as a restore reads it: a
+    /// catalogue rebuilt from the index plane after the compaction locates
+    /// every record, the moved ones in the rewritten blob, and a reader that
+    /// asks it alone reads each at its location and never falls back to a
+    /// footer. A footer-only reader, as above, could not tell a moved record
+    /// the index lost from one it kept.
+    /// </summary>
+    [TestMethod]
+    public async Task ARestoreThroughAnIndexRebuiltAfterCompaction_ReadsEveryRecordWhereTheIndexSays()
+    {
+        var data = BuildTestFile(regions: 24);
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var moved = await BackUpAndCompactOneDataBlobAsync(store, keys, credential, data);
+
+        using var rebuilt = CatalogueDb.Open(Path.Combine(SpoolDirectory, "rebuilt.db"), Repo);
+        var report = await new CatalogueRebuilder(new IndexLoader(store, Repo, credential)).RebuildAsync(
+            rebuilt, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+            CancellationToken.None);
+        Assert.IsEmpty(report.Findings, string.Join(" | ", report.Findings.Select(finding => finding.Detail)));
+        foreach (var record in moved.Sealed.RecordTable)
+        {
+            Assert.AreEqual(
+                moved.Sealed.BlobId, rebuilt.ResolveLocation(record.ObjectId)?.BlobId,
+                $"the rebuilt index does not locate moved object {record.ObjectId} in the blob it went to");
+        }
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        reader.UseLocationSource(rebuilt.ResolveLocation);
+
+        var manifest = await ReadFileManifestAsync(store, keys, reader);
+        AssertSpansBothHalves(manifest, moved);
+
+        using var restored = new MemoryStream();
+        var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
+
+        Assert.IsTrue(restore.Success, restore.FailureDetail);
+        SequenceAssert.AreEqual(data, restored.ToArray());
+        Assert.AreEqual(0, reader.LocationFallbacks, "a record the index placed was not where it said");
+    }
+
+    /// <summary>
+    /// A file backed up, one of its data blobs compacted whole and published,
+    /// and the drained blob deleted, so nothing can quietly fall back to it.
+    /// </summary>
+    private async Task<CompactedBlob> BackUpAndCompactOneDataBlobAsync(
+        LocalFileSystemObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, byte[] data)
+    {
         var sequence = new WriterSequence(
             new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt")));
 
@@ -74,28 +140,26 @@ public sealed class CompactedRestoreTests : ArchiveTestHarness
 
         Assert.AreNotEqual(candidate.BlobId, moved.Sealed.BlobId);
         await store.DeleteAsync(candidate.StoreKey, DeleteConditions.None, CancellationToken.None);
+        return moved;
+    }
 
-        using var reader = new RepositoryReader(Repo, keys, store, Authority);
-        await reader.LoadBlobsAsync(CancellationToken.None);
-
+    private static async Task<FileVersionManifest> ReadFileManifestAsync(
+        LocalFileSystemObjectStore store, RepositoryKeySet keys, RepositoryReader reader)
+    {
         var snapshot = SnapshotManifestCodec.Decode(await ReadSnapshotAsync(store, keys));
         var tree = TreeManifestCodec.Decode(
             (await reader.ReadSegmentAsync(snapshot.Manifest.RootTree, CancellationToken.None)).Plaintext!);
-        var manifest = FileVersionManifestCodec.Decode(
+        return FileVersionManifestCodec.Decode(
             (await reader.ReadSegmentAsync(tree.Entries[0].ObjectId, CancellationToken.None)).Plaintext!);
+    }
 
-        // The file genuinely spans both halves: some of its segments are in
-        // the rewritten blob and some were never touched.
+    /// <summary>The file genuinely spans both halves: some of its segments are in the rewritten blob and some were never touched.</summary>
+    private static void AssertSpansBothHalves(FileVersionManifest manifest, CompactedBlob moved)
+    {
         var relocated = moved.Sealed.RecordTable.Select(record => record.ObjectId).ToHashSet();
         var segments = manifest.SegmentReferences.Select(segment => segment.ObjectId).ToList();
         Assert.IsGreaterThan(0, segments.Count(relocated.Contains), "no segment was relocated");
         Assert.IsGreaterThan(0, segments.Count(id => !relocated.Contains(id)), "every segment was relocated");
-
-        using var restored = new MemoryStream();
-        var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
-
-        Assert.IsTrue(restore.Success, restore.FailureDetail);
-        SequenceAssert.AreEqual(data, restored.ToArray());
     }
 
     private static async Task<CompactionSource> FirstDataBlobAsync(LocalFileSystemObjectStore store, RepositoryKeySet keys)
