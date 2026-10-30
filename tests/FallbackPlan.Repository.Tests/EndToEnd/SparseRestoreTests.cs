@@ -22,7 +22,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// standalone recovery tool. They stay holes in the spool the engine holds the
 /// file in until its hash verifies, too. Its bytes and its whole-file hash are
 /// the captured file's exactly. Where a destination cannot take a hole, it is
-/// given the zeroes written out, and the bytes are the same.
+/// given the zeroes written out, and the bytes are the same. Assembled where
+/// it is to stay, as <c>restore-file</c> assembles it beside its output, it
+/// is written once, with its holes, in no spool of the engine's own, and
+/// left only once it verifies (FR-RST-002, FR-RST-005; ADR-0173 Amendment 3).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -106,6 +109,53 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
             $"the spool allocated {destination.SpoolAllocated} bytes for a file holding {DataIn(Logical, Holes)} bytes of data");
         AssertSameBytes(content, destination.Written);
         Assert.IsEmpty(Directory.GetFiles(spoolDirectory), "the spool outlived the restore");
+    }
+
+    [TestMethod]
+    public async Task TheEngine_AssemblingAFileWhereItIsToStay_WritesItThereWithItsHoles_AndInNoSpoolOfItsOwn()
+    {
+        // The engine's spool folder does not exist, so a spool of its own
+        // could not be made there.
+        var content = Layout();
+        using var published = await PublishAsync(Holes, content);
+        var path = Path.Combine(Root, "assembled.img");
+
+        var result = await new RestoreEngine(published.Reader, Path.Combine(Root, "no-spool-here")).AssembleFileAsync(
+            published.Manifest, path, CancellationToken.None);
+
+        Assert.IsTrue(result.Success, result.FailureDetail);
+        Assert.AreEqual(Logical, result.Length);
+        AssertRestoredSparse(path, content, Holes);
+    }
+
+    [TestMethod]
+    public async Task TheEngine_AssemblingAFileThatDoesNotVerify_LeavesNothingWhereItWasAssembled()
+    {
+        var content = Layout();
+        using var published = await PublishAsync(Holes, content);
+        var path = Path.Combine(Root, "unverified.img");
+
+        var result = await new RestoreEngine(published.Reader).AssembleFileAsync(
+            published.Manifest with { WholeFileHash = new byte[32] }, path, CancellationToken.None);
+
+        Assert.IsFalse(result.Success);
+        Assert.IsFalse(File.Exists(path), "a file that does not verify was left");
+    }
+
+    [TestMethod]
+    public async Task TheEngine_AssemblingAtANameAlreadyTaken_WritesNothingThere()
+    {
+        // The file is made new, so whatever stands at the name, a link
+        // included, is never written through: the caller removes it first.
+        var content = Layout();
+        using var published = await PublishAsync(Holes, content);
+        var path = Path.Combine(Root, "taken.img");
+        File.WriteAllText(path, "already here");
+
+        await Assert.ThrowsExactlyAsync<IOException>(
+            () => new RestoreEngine(published.Reader).AssembleFileAsync(published.Manifest, path, CancellationToken.None).AsTask());
+
+        Assert.AreEqual("already here", File.ReadAllText(path));
     }
 
     [TestMethod]
