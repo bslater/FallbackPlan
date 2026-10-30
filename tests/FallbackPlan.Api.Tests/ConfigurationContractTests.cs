@@ -34,11 +34,44 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_LettingAKeptReceiptGo_IsRecordedAtOneSeventyNine()
+    public void ContractVersion_AcknowledgingWiderAccess_IsRecordedAtOneEighty()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.79", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.80", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void AcknowledgingWiderAccess_CrossesUnderItsWireName_AndAClientThatNeverHeardOfIt_GoesNoFurther()
+    {
+        // Contract 1.80 (FR-RST-003, ADR-0178 Amendment 1): a run and a
+        // resume go past files their folder would open wider only when told,
+        // and a plan says how many such files there are.
+        var run = JsonSerializer.Serialize<ServiceCommand>(
+            new RunRestoreCommand(new string('a', 32), null, "/srv/restored", AcknowledgeWiderAccess: true), FrameCodec.SerializerOptions);
+        var resume = JsonSerializer.Serialize<ServiceCommand>(
+            new ResumeRestoreCommand("0123456789abcdef", AcknowledgeWiderAccess: true), FrameCodec.SerializerOptions);
+        var plan = JsonSerializer.Serialize<ServiceResult>(new RestorePlanResult(1, 10, [], OpenedWider: 1), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"acknowledge_wider_access\":true", run, StringComparison.Ordinal);
+        Assert.Contains("\"acknowledge_wider_access\":true", resume, StringComparison.Ordinal);
+        Assert.Contains("\"opened_wider\":1", plan, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RunRestoreCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                $$"""{"command":"run_restore","snapshot_id":"{{new string('a', 32)}}","output_directory":"/srv/restored"}""",
+                FrameCodec.SerializerOptions),
+            out var bareRun);
+        Assert.IsFalse(bareRun.AcknowledgeWiderAccess, "a client that never heard of the refusal must not go past it");
+        Assert.IsInstanceOfType<ResumeRestoreCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>("""{"command":"resume_restore","run":"0123456789abcdef"}""", FrameCodec.SerializerOptions),
+            out var bareResume);
+        Assert.IsFalse(bareResume.AcknowledgeWiderAccess);
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            JsonSerializer.Deserialize<ServiceResult>(
+                """{"result":"restore_plan","files":1,"bytes":10,"missing_objects":[]}""", FrameCodec.SerializerOptions),
+            out var older);
+        Assert.IsNull(older.OpenedWider, "a service before 1.80 says nothing of it");
     }
 
     [TestMethod]

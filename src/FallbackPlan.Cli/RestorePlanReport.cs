@@ -11,8 +11,9 @@ namespace FallbackPlan.Cli;
 /// </summary>
 /// <remarks>
 /// The report is a success only where the run would restore every file the
-/// plan names and fit, so a script can plan before it restores. A conflict is
-/// not a failure: the existing-file policy settles it.
+/// plan names, fit, and open none wider than it was (ADR-0178 Amendment 1),
+/// so a script can plan before it restores. A conflict is not a failure: the
+/// existing-file policy settles it.
 /// </remarks>
 internal static class RestorePlanReport
 {
@@ -92,6 +93,17 @@ internal static class RestorePlanReport
         }
 
         lines.AddRange(plan.Degradations ?? []);
+
+        // The run it plans is refused for these unless a person goes on
+        // (ADR-0178 Amendment 1), as one that will not fit is.
+        if (plan.OpenedWider is > 0 and var wider)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"wider access: {wider} file(s) would be opened wider than they were, so the restore would be refused; "
+                + $"--acknowledge-wider-access restores anyway"));
+        }
+
         if (request.PlanExport is { } file)
         {
             RestorePlanExport.Write(file, request, plan);
@@ -101,7 +113,7 @@ internal static class RestorePlanReport
         lines.Add("nothing was restored: this was a plan");
 
         return new OperationReport(
-            fits && plan.MissingObjects.Count == 0 && plan.ArchivedObjects is not { Count: > 0 },
+            fits && plan.MissingObjects.Count == 0 && plan.ArchivedObjects is not { Count: > 0 } && plan.OpenedWider is not > 0,
             lines);
     }
 

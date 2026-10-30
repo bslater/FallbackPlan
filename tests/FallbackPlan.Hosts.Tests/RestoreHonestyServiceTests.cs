@@ -20,7 +20,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// there is a creation time Linux cannot set. The service assembles each file
 /// in its run's parts under the state directory (ADR-0129), so the working
 /// space is measured there, and the system's temporary folder not at all
-/// (FR-RST-003, ADR-0131).
+/// (FR-RST-003, ADR-0131). On Windows a plan counts the files a folder would
+/// open wider than they were, and a run of them is refused before anything
+/// is written, leaving no run to resume, unless it acknowledges wider access
+/// (FR-RST-003, ADR-0178 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class RestoreHonestyServiceTests : IDisposable
@@ -60,6 +63,7 @@ public sealed class RestoreHonestyServiceTests : IDisposable
             plan.ConflictSample);
 
         Assert.IsFalse(Directory.Exists(destination), "a plan writes nothing");
+        Assert.IsNull(plan.OpenedWider, "the account's own files are opened no wider anywhere");
     }
 
     [TestMethod]
@@ -373,6 +377,49 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         var wider = Assert.ContainsSingle((plan.Degradations ?? []).Where(line => line.Contains("access their own did not", StringComparison.Ordinal)));
         Assert.Contains("1 file(s)", wider, StringComparison.Ordinal);
         Assert.Contains(Users, wider, StringComparison.Ordinal);
+        Assert.AreEqual(1L, plan.OpenedWider, "and counts it, so a client can ask for the acknowledgement its run needs");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Run_OnWindows_ThatAFolderWouldOpenAFileWiderIn_IsRefused_AndWritesNothing_UnlessAcknowledged()
+    {
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        const string Users = "S-1-5-32-545";
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("private.txt", "kept to two accounts");
+        WindowsAcls.KeepTo(Path.Combine(_harness.SourceRoot, "private.txt"), Stranger);
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        var destination = WindowsAcls.Sharing(Path.Combine(_harness.WorkPath, "shared"), Users);
+        await using var runtime = await StartAsync(availableBytes: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, destination, Source: source.SourceId, InPlace: true), _timeout.Token),
+            out var refused);
+
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains(Users, refused.Message, StringComparison.Ordinal);
+        Assert.Contains("Nothing was written", refused.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(Directory.EnumerateFileSystemEntries(destination), "a refused run writes nothing");
+        Assert.IsInstanceOfType<RestoreRunsResult>(
+            await handler.ExecuteAsync(new ListRestoreRunsCommand(), _timeout.Token), out var runs);
+        Assert.IsEmpty(runs.Runs, "and leaves no run to resume");
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, destination, Source: source.SourceId, InPlace: true, AcknowledgeWiderAccess: true),
+                _timeout.Token),
+            out var restored);
+
+        Assert.AreEqual(1L, restored.Restored);
+        Assert.AreEqual("kept to two accounts", await File.ReadAllTextAsync(Path.Combine(destination, "private.txt"), _timeout.Token));
     }
 
     [TestMethod]

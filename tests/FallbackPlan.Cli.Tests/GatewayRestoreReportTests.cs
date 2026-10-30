@@ -21,7 +21,9 @@ namespace FallbackPlan.Cli.Tests;
 /// changed since it was kept, or that nothing did. And a resume's plan
 /// through the service (FR-RST-008, ADR-0120): asked for the run it
 /// continues, or for a run left unfinished by its name alone, saying how many
-/// files the run already landed.
+/// files the run already landed. And a restore that goes past a file its
+/// folder would open wider, only when told, with a plan that counts such
+/// files failing and saying how to go on (FR-RST-003, ADR-0178 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class GatewayRestoreReportTests
@@ -61,10 +63,27 @@ public sealed class GatewayRestoreReportTests
 
         Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
         Assert.IsFalse(report.Lines.Any(printed => printed.Contains("another copy", StringComparison.Ordinal)));
-        Assert.IsNull(
-            Assert.ContainsSingle(client.Received.OfType<RunRestoreCommand>()).Resume,
-            "a restore not told to resume names no run");
+        var asked = Assert.ContainsSingle(client.Received.OfType<RunRestoreCommand>());
+        Assert.IsNull(asked.Resume, "a restore not told to resume names no run");
+        Assert.IsFalse(asked.AcknowledgeWiderAccess, "nor goes past a file its folder would open wider");
         Assert.IsFalse(report.Lines.Any(printed => printed.Contains("already in place", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task ARestoreAcknowledgingWiderAccess_SaysSoToTheService()
+    {
+        // ADR-0178 Amendment 1: the service refuses a run that a folder would
+        // open a file wider in, unless the person says to go on.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(2, 0, "/out/.fbp-quarantine/run", "complete"));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.RestoreAsync(new RestoreRequest(SnapshotId, null, "/out", AcknowledgeWiderAccess: true), token),
+            timeout.Token);
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        Assert.IsTrue(Assert.ContainsSingle(client.Received.OfType<RunRestoreCommand>()).AcknowledgeWiderAccess);
     }
 
     [TestMethod]
@@ -404,6 +423,25 @@ public sealed class GatewayRestoreReportTests
         Assert.IsFalse(report.Ok, "a run would fail what the store will not serve");
         Assert.IsTrue(report.Lines.Any(line => line.Contains("archival tier", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
         Assert.IsTrue(report.Lines.Any(line => line.Contains("docs/cold.txt", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
+    public async Task APlanWhoseFolderWouldOpenAFileWider_IsNotOk_AndSaysHowToGoOn()
+    {
+        // ADR-0178 Amendment 1: the run it plans would be refused unless a
+        // person acknowledges it, as one that would not fit is.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 9_000, [], OpenedWider: 1));
+
+        var report = await PlanAsync(client, timeout.Token);
+
+        Assert.IsFalse(report.Ok);
+        Assert.IsTrue(
+            report.Lines.Any(line => line.Contains("1 file(s)", StringComparison.Ordinal)
+                && line.Contains("--acknowledge-wider-access", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
     }
 
     [TestMethod]

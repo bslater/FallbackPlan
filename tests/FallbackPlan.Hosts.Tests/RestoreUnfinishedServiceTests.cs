@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Agent;
@@ -37,7 +38,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// resume runs where whole files would not fit (FR-RST-003, ADR-0136).
 /// The command line lets every run left unfinished go at once, and the
 /// parts of each with it (ADR-0162), or only those begun longer ago than it
-/// says, keeping the rest and their parts (ADR-0165).
+/// says, keeping the rest and their parts (ADR-0165). A resume is refused
+/// where a folder would open a file wider than it was, as its run was, unless
+/// it says to go on (FR-RST-003, ADR-0178 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -231,6 +234,40 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         Assert.AreEqual(run, Assert.ContainsSingle(await RunsAsync(handler)).Run, "a refused resume leaves the run as it was");
 
         var resumed = await CliAsync("restore-resume", run, "--ignore-free-space");
+        Assert.AreEqual(0, resumed.ExitCode, resumed.Output + resumed.Error);
+        Assert.IsEmpty(await RunsAsync(handler));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task AResumeThatAFolderWouldOpenAFileWiderIn_IsRefused_UnlessTheCommandLineSaysToGoOn()
+    {
+        // The run went on when told, and its resume asks again: what was
+        // acknowledged once is not taken as acknowledged for every run after.
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        const string Users = "S-1-5-32-545";
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("private.txt", "kept to two accounts");
+        WindowsAcls.KeepTo(Path.Combine(_harness.SourceRoot, "private.txt"), Stranger);
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        await _harness.SetupAsync();
+        WindowsAcls.Sharing(Destination, Users);
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var run = (await CutShortAsync(handler, acknowledgeWiderAccess: true)).Run!;
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new ResumeRestoreCommand(run, source.SourceId), _timeout.Token), out var refused);
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains(Users, refused.Message, StringComparison.Ordinal);
+        Assert.AreEqual(run, Assert.ContainsSingle(await RunsAsync(handler)).Run, "a refused resume leaves the run as it was");
+
+        var resumed = await CliAsync("restore-resume", run, "--acknowledge-wider-access");
         Assert.AreEqual(0, resumed.ExitCode, resumed.Output + resumed.Error);
         Assert.IsEmpty(await RunsAsync(handler));
     }
@@ -691,12 +728,14 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
     private string Destination => Path.Combine(_harness.WorkPath, "restored");
 
     /// <summary>Runs a restore stopped once it is named, as a caller hanging up stops one.</summary>
-    private async Task<RestoreResult> CutShortAsync(ServiceCommandHandler handler, bool inPlace = false)
+    private async Task<RestoreResult> CutShortAsync(
+        ServiceCommandHandler handler, bool inPlace = false, bool acknowledgeWiderAccess = false)
     {
         _cutShortAt = CancellationTokenSource.CreateLinkedTokenSource(_timeout.Token);
         try
         {
-            var cut = await RestoreAsync(handler, Destination, _cutShortAt.Token, inPlace: inPlace);
+            var cut = await RestoreAsync(
+                handler, Destination, _cutShortAt.Token, inPlace: inPlace, acknowledgeWiderAccess: acknowledgeWiderAccess);
             Assert.AreEqual("cancelled", cut.Outcome);
             Assert.IsNotNull(cut.Run);
             return cut;
@@ -710,7 +749,7 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
 
     private async Task<RestoreResult> RestoreAsync(
         ServiceCommandHandler handler, string destination, CancellationToken cancellationToken,
-        string? existing = null, bool inPlace = false, bool tampered = false)
+        string? existing = null, bool inPlace = false, bool tampered = false, bool acknowledgeWiderAccess = false)
     {
         var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
         var snapshot = await SnapshotIdAsync(handler);
@@ -718,7 +757,9 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         try
         {
             var answer = await handler.ExecuteAsync(
-                new RunRestoreCommand(snapshot, null, destination, Source: source.SourceId, Existing: existing, InPlace: inPlace),
+                new RunRestoreCommand(
+                    snapshot, null, destination, Source: source.SourceId, Existing: existing, InPlace: inPlace,
+                    AcknowledgeWiderAccess: acknowledgeWiderAccess),
                 cancellationToken);
             Assert.IsInstanceOfType<RestoreResult>(answer, out var restored, (answer as ServiceError)?.Message);
             return restored;

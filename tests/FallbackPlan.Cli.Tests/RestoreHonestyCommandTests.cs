@@ -8,7 +8,9 @@ namespace FallbackPlan.Cli.Tests;
 /// metadata it will not apply (FR-RST-003, FR-RST-004; ADR-0083). In direct
 /// mode the CLI runs the restore itself, so it is the CLI that refuses a run
 /// that will not fit before it writes anything, and the CLI that says what
-/// was not applied once it ends.
+/// was not applied once it ends. On Windows it is the CLI, too, that refuses
+/// a run whose folder would open a file wider than it was, unless told to go
+/// on (ADR-0178 Amendment 1).
 /// </summary>
 /// <remarks>
 /// The disk is the flow's own: <c>DirectGateway.AvailableBytesInFlow</c>
@@ -65,9 +67,39 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
         var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
 
-        Assert.IsTrue(plan.ExitCode == 0, plan.All);
+        // The run it plans would be refused (ADR-0178 Amendment 1), so the
+        // plan is not a success, and says how to go on.
+        Assert.AreNotEqual(0, plan.ExitCode, plan.All);
         Assert.Contains("access their own did not", plan.Output, StringComparison.Ordinal);
         Assert.Contains(Users, plan.Output, StringComparison.Ordinal);
+        Assert.Contains("--acknowledge-wider-access", plan.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Restore_OnWindows_IntoAFolderThatWouldOpenAFileWider_IsRefused_AndWritesNothing_UnlessAcknowledged()
+    {
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        const string Users = "S-1-5-32-545";
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/private.txt", "kept to two accounts");
+        WindowsAcls.KeepTo(Path.Combine(_cli.WorkPath, "tree", "private.txt"), Stranger);
+        var snapshot = await BackUpTreeAsync();
+        var destination = WindowsAcls.Sharing(Path.Combine(_cli.WorkPath, "shared"), Users);
+
+        var refused = await _cli.RunAsync("restore", snapshot, "--output", destination);
+
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains(Users, refused.All, StringComparison.Ordinal);
+        Assert.Contains("--acknowledge-wider-access", refused.All, StringComparison.Ordinal);
+        Assert.IsEmpty(Directory.EnumerateFileSystemEntries(destination), "a refused restore writes nothing");
+
+        var restored = await _cli.RunAsync("restore", snapshot, "--output", destination, "--acknowledge-wider-access");
+
+        Assert.IsTrue(restored.ExitCode == 0, restored.All);
+        Assert.AreEqual("kept to two accounts", await File.ReadAllTextAsync(Path.Combine(destination, "private.txt")));
     }
 
     [TestMethod]

@@ -910,8 +910,9 @@ public sealed partial class ServiceCommandHandler(
             // the probe has already read.
             var writeBytes = RestorePlanFigures.WriteBytes(plan, probed);
             var conflicts = RestorePlanFigures.Conflicts(plan);
-            var degradations = RestorePlanFigures.Degradations(
-                plan, probed, target, measured is null ? null : RestoreMetadata.DestinationsOf(measured));
+            var destinationOf = measured is null ? null : RestoreMetadata.DestinationsOf(measured);
+            var degradations = RestorePlanFigures.Degradations(plan, probed, target, destinationOf);
+            var wider = RestoreMetadata.OpenedWider(plan, probed.Facts, target, destinationOf);
 
             IReadOnlyList<RestoreSpaceDescriptor>? space = null;
             long? landed = null;
@@ -944,7 +945,8 @@ public sealed partial class ServiceCommandHandler(
                 space,
                 (long)probed.ReadBytes,
                 probed.Archived.Count == 0 ? null : probed.Archived,
-                landed);
+                landed,
+                wider?.Files);
         }
         finally
         {
@@ -1189,6 +1191,23 @@ public sealed partial class ServiceCommandHandler(
                 return absent;
             }
 
+            // Whether a folder it writes to would open a file wider than it
+            // was (ADR-0178 Amendment 1; architecture 06 §3), judged as its
+            // plan judges it, before anything is written.
+            if (!command.AcknowledgeWiderAccess
+                && await RestoreMetadata.OpenedWiderAsync(
+                    plan,
+                    target,
+                    RestoreMetadata.DestinationsOf([.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory))]),
+                    reader,
+                    cancellationToken).ConfigureAwait(false) is { } wider)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused,
+                    $"{wider.Describe()} Nothing was written. Restore them into a folder that gives no more than they had, "
+                    + "or restore anyway, acknowledging the wider access.");
+            }
+
             // Whether the whole run fits, before its first slice writes a byte
             // (FR-RST-003): every slice is measured together, because two on
             // one volume share its room. The figure errs high, and a volume
@@ -1370,7 +1389,8 @@ public sealed partial class ServiceCommandHandler(
         return await RunRestoreAsync(
             new RunRestoreCommand(
                 record.SnapshotId, record.Path, record.OutputDirectory ?? string.Empty, command.Source, record.Paths,
-                record.Target, record.Existing, record.InPlace, command.IgnoreFreeSpace, Resume: command.Run)
+                record.Target, record.Existing, record.InPlace, command.IgnoreFreeSpace, Resume: command.Run,
+                AcknowledgeWiderAccess: command.AcknowledgeWiderAccess)
             {
                 SessionId = command.SessionId,
             },

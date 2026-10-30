@@ -23,7 +23,9 @@ namespace FallbackPlan.Cli.Tests;
 /// direct mode no run is let go (FR-RST-008, ADR-0162). With
 /// <c>--older-than-days</c> beside it, only the runs that began longer ago
 /// than that go, and how many stay is said; without <c>--forget-all</c>, or
-/// below one day, it is refused (ADR-0165).
+/// below one day, it is refused (ADR-0165). A resume goes past a file a
+/// folder would open wider only when told, the run's own acknowledgement not
+/// being kept with it (FR-RST-003, ADR-0178 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class RestoreResumeVerbTests : IDisposable
@@ -95,17 +97,36 @@ public sealed class RestoreResumeVerbTests : IDisposable
             [new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000)],
             new RestoreResult(2, 0, $"/srv/restored/.fbp-quarantine/{Run}", "complete", FoundInPlace: 1, Run: Run));
 
-        var report = await ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: true, token));
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: true, acknowledgeWiderAccess: false, token));
 
         Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
         var asked = Assert.ContainsSingle(client.Received.OfType<ResumeRestoreCommand>());
         Assert.AreEqual(Run, asked.Run);
         Assert.AreEqual(ScriptedClient.SourceId, asked.Source, "the resume reads through the source the passphrase unlocked");
         Assert.IsTrue(asked.IgnoreFreeSpace);
+        Assert.IsFalse(asked.AcknowledgeWiderAccess, "a resume not told to goes past no file its folder would open wider");
         Assert.IsTrue(report.Lines.Any(printed => printed.Contains("restored 2 file(s)", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
         Assert.IsTrue(report.Lines.Any(printed => printed.Contains("1 file(s) already in place", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
         Assert.ContainsSingle(client.Received.OfType<CloseRestoreSourceCommand>());
         Assert.IsEmpty(client.Received.OfType<RunRestoreCommand>(), "the run is the service's to ask again, as it was asked");
+    }
+
+    [TestMethod]
+    public async Task ARunResumed_AcknowledgingWiderAccess_SaysSoToTheService()
+    {
+        // ADR-0178 Amendment 1: the resume is refused where a folder would
+        // open a file wider, as its run was, unless a person says to go on.
+        await using var client = new ScriptedClient(
+            [new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000)],
+            new RestoreResult(2, 0, $"/srv/restored/.fbp-quarantine/{Run}", "complete", Run: Run));
+
+        var report = await ThroughAsync(
+            client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: true, token));
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        var asked = Assert.ContainsSingle(client.Received.OfType<ResumeRestoreCommand>());
+        Assert.IsTrue(asked.AcknowledgeWiderAccess);
+        Assert.IsFalse(asked.IgnoreFreeSpace);
     }
 
     [TestMethod]
@@ -115,7 +136,7 @@ public sealed class RestoreResumeVerbTests : IDisposable
             [new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000)],
             new RestoreResult(1, 1, $"/srv/restored/.fbp-quarantine/{Run}", "failed", Run: Run));
 
-        var report = await ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, token));
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, token));
 
         Assert.IsFalse(report.Ok);
         Assert.IsTrue(report.Lines.Any(printed => printed.Contains($"restore-resume {Run}", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
@@ -127,7 +148,7 @@ public sealed class RestoreResumeVerbTests : IDisposable
         await using var client = new ScriptedClient([]);
 
         var refused = await Assert.ThrowsExactlyAsync<CliFailureException>(
-            () => ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, token)));
+            () => ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, token)));
 
         Assert.Contains(Run, refused.Message, StringComparison.Ordinal);
         Assert.IsEmpty(client.Received.OfType<OpenRestoreSourceCommand>());
