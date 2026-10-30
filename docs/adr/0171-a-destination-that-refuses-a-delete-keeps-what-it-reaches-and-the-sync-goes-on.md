@@ -58,6 +58,8 @@ The cost is space: objects a deleted snapshot alone reached wait for a pass with
 
 - **Report the unreclaimed space in bytes.** The notice counts deletes, not the bytes they would have freed, or the objects held back beneath them.
 - **The staging sweep's figure.** The sweep already holds back a refused snapshot's blobs (ADR-0009 Amendment 8); it does not total what it could not reclaim either.
+
+  > **Built 2026-10 ([Amendment 1](#amendment-1-2026-10--said-in-bytes)).** Both now say how many bytes a refusal holds. What a refused object reaches, held back with it, is still not sized.
 - **Tell a versioned bucket's delete marker from a delete.** An S3 bucket with versioning answers a delete with success and keeps the object's bytes, so the space is not freed and nothing says so. The replica is valid, since the object no longer lists or reads.
 - **Judge a direct-ship sink per destination.** A delete through the sink reports Deleted when any one destination deleted.
 
@@ -67,8 +69,28 @@ The cost is space: objects a deleted snapshot alone reached wait for a pass with
 - **Delete beneath a refused snapshot anyway, trusting the next pass to retry the snapshot.** Rejected. Between the passes the replica lists a snapshot it cannot restore, and a write-once store never lets it go.
 - **Read the refused snapshot's closure and hold back only that.** Rejected for now. The converge carries no keys, and reading a closure needs them. Holding back every deeper phase costs space for one pass at a destination that refuses, and nothing at one that does not.
 
+## Amendment 1 (2026-10) — said in bytes
+
+The review's T-12 asks that reclamation report the space it could not reclaim. This record and the sweep before it said that a delete did not happen, and nothing said how much space that holds, which is what a person needs to judge whether it matters.
+
+**Decision.** Each reclaim path sizes what its refusals hold:
+
+- **A destination.** When a destination refuses a delete, or answers "not found" for an object the pass listed a moment before, it is asked for the object's length. The converge's outcome carries the total, and the notice states it: it refused N deletes, "holding B byte(s) its policy released". The notice says what those objects reach is held on top of that figure, since §2 drops no deeper phase that pass and does not size what it holds back.
+- **The staging sweep.** A snapshot or blob delete that does not happen is counted as deferred, at the length the store gives the object once it has refused. The report's "swept:" line ends ", N deferred (B byte(s) not reclaimed)" when there are any.
+  - The blobs held behind a standing snapshot have their own finding and are not in the figure.
+  - Neither is a tombstone's own delete.
+
+A store that refuses a delete still answers a read, so a length costs one metadata call, and only on a refusal. Where the store will not say, the object is counted and its length is not. Both figures are formatted in the invariant culture.
+
+**Built:** `Replication/StoreToStoreCopier`, `Agent/FanOut`, `Retention/StagingSweep` and `Retention/RetentionRunner`. The tests:
+
+- `Replication.Tests/ConvergeRefusalTests`: each refusal counts the refused object's length, and a healed pass counts none.
+- `Hosts.Tests/ObjectStoreDestinationTests`, for S3 and Azure Blob: the notice states a byte figure above nothing.
+- `Retention.Tests/SweepFailureTests`: the deferred objects and the sum of their lengths are on the outcome and on the "swept:" line.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A delete a destination does not carry out is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync; a busy or unreachable store still does. No contract or format change. |
+| 2026-10 | Amended | Amendment 1: a destination's refusals and the staging sweep's deferrals are said in bytes, in the notice and on the report's "swept:" line. `Replication/StoreToStoreCopier`; `Retention/StagingSweep`; `Retention.Tests/SweepFailureTests` |

@@ -4540,10 +4540,14 @@ is busy or unreachable still fails the pass.
 
 What remains is recorded rather than done:
 
-- the notice counts deletes, not the bytes they would have freed;
-- the staging sweep does not total what it could not reclaim;
 - a versioned bucket's delete marker is taken for a delete;
 - a direct-ship sink reports a delete done when any one destination did.
+
+Amendment 1 says it in bytes. A refused object is asked for its
+length, which a store that refuses a delete still gives, and the notice
+states what the refusals hold. The staging sweep counts what it
+deferred, in objects and bytes, on its report's "swept:" line. What a
+refused object reaches, held back with it, is not sized.
 
 ### 0172 — a blob that goes while a restore reads it is one the store no longer holds
 

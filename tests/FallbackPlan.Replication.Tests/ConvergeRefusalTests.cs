@@ -29,6 +29,9 @@ public sealed class ConvergeRefusalTests
     private const string OldOnlyBlob = "blobs/data/aaaa/old-only";
     private const string SharedBlob = "blobs/data/bbbb/shared";
 
+    /// <summary>Every object in the fixture is the four bytes <c>held</c>.</summary>
+    private const long HeldLength = 4;
+
     private const int RefusedByStore = 3006;
     private const int StoppedShort = 3007;
 
@@ -87,6 +90,7 @@ public sealed class ConvergeRefusalTests
 
         Assert.AreEqual(1L, outcome.Refused);
         Assert.AreEqual(0L, outcome.Deleted);
+        Assert.AreEqual(HeldLength, outcome.RefusedBytes, "the space the refusal kept, in bytes");
         Assert.IsTrue(await HoldsAsync(OldSnapshot), "the store kept what it refused");
         Assert.IsTrue(await HoldsAsync(OldOnlyBlob), "and what that snapshot reaches, so it still restores");
 
@@ -94,6 +98,7 @@ public sealed class ConvergeRefusalTests
         refusing.Heal();
         var healed = await StoreToStoreCopier.ConvergeAsync(_source, refusing, Keeps, CancellationToken.None);
         Assert.AreEqual(0L, healed.Refused);
+        Assert.AreEqual(0L, healed.RefusedBytes);
         Assert.AreEqual(2L, healed.Deleted);
         Assert.IsFalse(await HoldsAsync(OldSnapshot));
         Assert.IsFalse(await HoldsAsync(OldOnlyBlob));
@@ -111,6 +116,7 @@ public sealed class ConvergeRefusalTests
         var outcome = await StoreToStoreCopier.ConvergeAsync(_source, lying, Keeps, CancellationToken.None);
 
         Assert.AreEqual(1L, outcome.Refused);
+        Assert.AreEqual(HeldLength, outcome.RefusedBytes, "still there, so still counted");
         Assert.IsTrue(await HoldsAsync(OldSnapshot));
         Assert.IsTrue(await HoldsAsync(OldOnlyBlob));
     }
@@ -125,6 +131,7 @@ public sealed class ConvergeRefusalTests
 
         Assert.AreEqual(1L, outcome.Deleted);
         Assert.AreEqual(1L, outcome.Refused);
+        Assert.AreEqual(HeldLength, outcome.RefusedBytes);
         Assert.IsFalse(await HoldsAsync(OldSnapshot));
         Assert.IsTrue(await HoldsAsync(OldOnlyBlob), "a blob no snapshot lists is space unreclaimed, not damage");
     }

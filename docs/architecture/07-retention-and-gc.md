@@ -150,6 +150,11 @@ else's disk ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 > snapshot it lists, and the hub's notice names the destination, the set and
 > the count until a pass refuses nothing. A store that is busy or unreachable
 > has not answered, and that pass still fails.
+>
+> **Built 2026-10 ([ADR-0171 Amendment 1](../adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-1-2026-10--said-in-bytes)).**
+> Both reclaim paths say how much space a refusal holds. The notice states
+> the bytes the refused objects hold, and the staging sweep's report line
+> counts what it deferred in objects and bytes.
 
 ### 3.1 Step 4 is the one that matters
 

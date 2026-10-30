@@ -1,3 +1,4 @@
+using System.Globalization;
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Diagnostics;
@@ -288,7 +289,12 @@ public static class RetentionRunner
             .ConfigureAwait(false);
         lines.Add(
             $"swept: {swept.Deleted} deleted, {swept.NotYetEligible} awaiting grace, "
-            + $"{swept.TombstonesCleared} tombstone(s) cleared");
+            + $"{swept.TombstonesCleared} tombstone(s) cleared"
+            + (swept.Deferred > 0
+                ? string.Create(
+                    CultureInfo.InvariantCulture,
+                    $", {swept.Deferred} deferred ({swept.DeferredBytes:N0} byte(s) not reclaimed)")
+                : string.Empty));
         lines.AddRange(swept.Findings);
 
         if (holdBlobs)

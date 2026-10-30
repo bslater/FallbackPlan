@@ -1401,6 +1401,9 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         var notice = DeletesRefusedNotice(runtime);
         Assert.IsNotNull(notice, "a refused delete is said, not just logged");
         Assert.Contains("refused", notice.Message, StringComparison.Ordinal);
+        var held = System.Text.RegularExpressions.Regex.Match(notice.Message, @"holding ([\d,]+) byte\(s\)");
+        Assert.IsTrue(held.Success, $"the notice says how much space the refusal holds: {notice.Message}");
+        Assert.IsGreaterThan(0L, long.Parse(held.Groups[1].Value, System.Globalization.NumberStyles.AllowThousands, System.Globalization.CultureInfo.InvariantCulture));
 
         // Nothing the store kept is short of what it reaches.
         var line = await VerifyAsync(runtime);
