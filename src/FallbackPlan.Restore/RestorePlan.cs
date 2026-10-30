@@ -52,6 +52,15 @@ public sealed record RestoreTargetProfile
     public bool SupportsFileAttributes { get; init; }
 
     /// <summary>
+    /// The access a file made in a folder would take from it, read from the
+    /// nearest folder at or above it that stands, which the plan holds
+    /// against a file's own where its descriptor will not be written
+    /// (<see cref="WindowsAccess"/>; ADR-0178). Null where it does not say:
+    /// off Windows, and for a target no case names.
+    /// </summary>
+    public Func<string, IReadOnlyDictionary<string, uint>?> InheritedAccessAt { get; init; } = _ => null;
+
+    /// <summary>
     /// Whether the executor gives a file and a folder their NTFS compression
     /// back on this target: Windows keeps it, and nothing else does
     /// (<see cref="FileCompression"/>; ADR-0175 Amendment 2). Where it does,
@@ -175,6 +184,7 @@ public sealed record RestoreTargetProfile
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         SupportsCompression = FileCompression.CanSet,
+        InheritedAccessAt = WindowsAccess.InheritedByAFileAt,
         Account = RestoreAccount.OfThisProcess(),
     };
 

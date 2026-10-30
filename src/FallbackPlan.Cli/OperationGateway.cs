@@ -1804,7 +1804,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             cancellationToken).ConfigureAwait(false);
 
         var conflicts = RestorePlanFigures.Conflicts(plan);
-        var degradations = RestorePlanFigures.Degradations(plan, probed, target);
+        var degradations = RestorePlanFigures.Degradations(plan, probed, target, RestoreMetadata.DestinationsOf(slices));
         return RestorePlanReport.Describe(
             new RestorePlanResult(
                 plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),

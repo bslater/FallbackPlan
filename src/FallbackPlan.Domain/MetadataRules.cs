@@ -219,6 +219,22 @@ public static class MetadataRules
             : null;
     }
 
+    /// <summary>
+    /// The access the DACL of the Windows security descriptor
+    /// <paramref name="metadata"/> carries gives each account
+    /// (<see cref="WindowsAccess"/>; ADR-0178), or null where it carries none,
+    /// one that does not read, or one with no DACL.
+    /// </summary>
+    public static IReadOnlyDictionary<string, uint>? AccessOf(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        return metadata.WindowsSecurityDescriptor is { IsEmpty: false } descriptor
+            && WindowsSecurityDescriptor.Read(descriptor.Span) is { } read
+            ? WindowsAccess.Of(read)
+            : null;
+    }
+
     /// <summary>The kinds of extended attribute <paramref name="metadata"/> carries that are not written back everywhere.</summary>
     public static ExtendedAttributeKinds KindsOf(EntryMetadata metadata)
     {

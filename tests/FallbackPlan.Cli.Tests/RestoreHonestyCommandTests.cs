@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
@@ -46,6 +47,27 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         Assert.AreEqual("first", await File.ReadAllTextAsync(Path.Combine(destination, "one.txt")));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Plan_OnWindows_NamesAFileItsFolderWouldOpenWider_WhereItsDescriptorNamesAnAccountTheMachineDoesNotKnow()
+    {
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        const string Users = "S-1-5-32-545";
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/private.txt", "kept to two accounts");
+        WindowsAcls.KeepTo(Path.Combine(_cli.WorkPath, "tree", "private.txt"), Stranger);
+        var snapshot = await BackUpTreeAsync();
+        var destination = WindowsAcls.Sharing(Path.Combine(_cli.WorkPath, "shared"), Users);
+
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+
+        Assert.IsTrue(plan.ExitCode == 0, plan.All);
+        Assert.Contains("access their own did not", plan.Output, StringComparison.Ordinal);
+        Assert.Contains(Users, plan.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -129,6 +151,11 @@ public sealed class RestoreHonestyCommandTests : IDisposable
             Xattr.Set(Path.Combine(_cli.WorkPath, "tree", "one.txt"), "system.posix_acl_access", acl);
         }
 
+        return await BackUpTreeAsync();
+    }
+
+    private async Task<string> BackUpTreeAsync()
+    {
         var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
         Assert.IsTrue(backup.ExitCode == 0, backup.All);
 
