@@ -71,9 +71,15 @@ public static partial class WindowsSecurity
     /// <param name="descriptor">The descriptor as captured, self-relative.</param>
     /// <param name="read">What it names (<see cref="WindowsSecurityDescriptor.Read"/>).</param>
     /// <param name="withOwner">Whether its owner and group are written too.</param>
+    /// <param name="withRestorePrivilege">
+    /// Whether the write is made with SeRestorePrivilege enabled, for it alone
+    /// (<see cref="WindowsPrivileges.RunWith"/>), so an owner the account is
+    /// not may be given. False where the account does not hold it.
+    /// </param>
     /// <returns>Whether the platform took it: false wherever it refuses.</returns>
     [SupportedOSPlatform("windows")]
-    public static bool TryWrite(string path, ReadOnlySpan<byte> descriptor, WindowsSecurityDescriptor read, bool withOwner)
+    public static bool TryWrite(
+        string path, ReadOnlySpan<byte> descriptor, WindowsSecurityDescriptor read, bool withOwner, bool withRestorePrivilege = false)
     {
         ThrowHelper.ThrowIfNullOrEmpty(path);
         ThrowHelper.ThrowIfNull(read);
@@ -94,7 +100,11 @@ public static partial class WindowsSecurity
             information |= DaclInformation | (read.DaclProtected ? ProtectedDaclInformation : UnprotectedDaclInformation);
         }
 
-        return information == 0 || SetFileSecurity(path, information, descriptor.ToArray());
+        var bytes = descriptor.ToArray();
+        return information == 0
+            || (withRestorePrivilege
+                ? WindowsPrivileges.RunWith(WindowsPrivileges.Restore, () => SetFileSecurity(path, information, bytes))
+                : SetFileSecurity(path, information, bytes));
     }
 
     [SupportedOSPlatform("windows")]

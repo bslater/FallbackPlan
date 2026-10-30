@@ -42,6 +42,14 @@ public sealed record MetadataTarget
     public Func<string, bool> KnowsAccount { get; init; } = WindowsAccounts.Knows;
 
     /// <summary>
+    /// Whether the account the restore runs as holds SeRestorePrivilege,
+    /// which lets it give a file an owner it is not. A descriptor whose owner
+    /// is refused without it is written again with it enabled, for that write
+    /// alone (<see cref="WindowsPrivileges.RunWith"/>; ADR-0176 Amendment 1).
+    /// </summary>
+    public bool HoldsRestorePrivilege { get; init; }
+
+    /// <summary>
     /// Whether this installation captured what is restored, so that a Linux
     /// ACL naming accounts by number names the accounts it meant (ADR-0087).
     /// False unless a caller that knows who captured it says so.
@@ -63,6 +71,7 @@ public sealed record MetadataTarget
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
         SupportsFileAttributes = OperatingSystem.IsWindows(),
         SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
+        HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         Account = RestoreAccount.OfThisProcess(),
     };
 }
