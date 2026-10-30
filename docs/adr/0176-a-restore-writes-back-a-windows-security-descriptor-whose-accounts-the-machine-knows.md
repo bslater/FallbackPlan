@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: a file's and a folder's Windows security descriptor comes back where the target keeps one and knows every account it names, and one that names an account it does not know is named; by [Amendment 1](#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not), an account that holds SeRestorePrivilege gives an owner it is not), FR-RST-003 (the plan says so per item)
+**Requirements:** FR-RST-004 (amended: a file's and a folder's Windows security descriptor comes back where the target keeps one and knows every account it names, and one that names an account it does not know is named; by [Amendment 1](#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not), an account that holds SeRestorePrivilege gives an owner it is not), FR-RST-003 (the plan says so per item; amended by [Amendment 2](#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give): it names a descriptor whose owner the restoring account may not give)
 **Related:** [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (what a restore says it does not write back, and its Amendment 1: an empty descriptor is none), [ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) (an owner is given back where its name resolves and the account may give it), [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) (a folder's metadata, which goes on last), [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) (an ACL that names accounts by number is written only where they mean what they meant), [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md) and [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) (the one writer the executor, the command line and the recovery tool share), [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) (the attribute bits, which now go on before it), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (Windows ACLs are preserved on Windows), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 7, the descriptor as captured)
 
 **Built:**
@@ -51,6 +51,8 @@ A DACL may take from the restoring account the access the writes before it need:
 
 The plan's facts carry the SIDs each item's descriptor names. A target that writes descriptors asks whether it knows each one, as the writer will. Where it does not, the plan declares those files and folders on a line of their own, because no privilege mends that. A descriptor that does not read is declared with the rest. Where the target writes no descriptors, every one is declared as before. Whether the owner will be refused is the receipt's to say: the plan does not judge privilege on Windows.
 
+> **2026-10 ([Amendment 2](#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give)).** The plan now judges it. Where the restoring account does not hold SeRestorePrivilege, a descriptor whose owner the account may not give is declared on a line of its own.
+
 ## Consequences
 
 - On the machine that captured them, or one in the same domain, a file and a folder come back with their own access, owner and group.
@@ -68,6 +70,8 @@ The plan's facts carry the SIDs each item's descriptor names. A target that writ
 - **Map an account.** A SID the machine does not know is not mapped to one it does, by name or otherwise. Capture records SIDs, not names.
 - **Refuse where the folder would grant more.** Architecture 06 §3 reserves refusal for a descriptor that cannot be applied into a place whose own access is broader. A descriptor that is not written is degraded and declared, as before. Comparing the two is not built.
 - **Predict a refused owner in the plan.** The plan does not judge the restoring account's privilege on Windows.
+
+  > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give)).** It does now, by the privilege the target says its account holds (Amendment 1) and the owners its token lets it give without it.
 - **Keep the mark of automatic inheritance.** A restored DACL lacks the control bit that marks its inherited entries as given by automatic inheritance (§1). Its entries, their own marks and its protection are as captured.
 - **A link's descriptor.** No restore on Windows makes a symlink.
 
@@ -108,9 +112,38 @@ The plan is unchanged. It still does not judge whether an owner will be refused,
 
 The privileged cases need an elevated process, and run where one runs, as on CI's Windows job; elsewhere they are reported as skipped.
 
+## Amendment 2 (2026-10) — the plan names an owner the restoring account may not give
+
+**Gap.** §5 left a refused owner to the receipt: the plan did not judge the restoring account's privilege. An account without SeRestorePrivilege, restoring files another account owned, was told before the run that their descriptors would be applied. After the run, the receipt listed each one as not applied, its owner and group refused. ADR-0083 holds the plan and the receipt to one rule, and here they disagreed. Amendment 1 had the target say whether its account holds the privilege, but the plan did not ask.
+
+**Decision.** The plan judges an owner as the platform will:
+
+- **Each item's facts carry the SID its descriptor names as owner** (`MetadataRules.DescriptorOwnerOf`, through `Restore/RestoreBlobSet`), as they carry every account it names.
+- **The target says which owners its account may give without the privilege.** `MayOwnBy` joins `Restore/RestorePlan`'s profile, as `KnowsAccount` did: stated, so a plan for another account can be made and tested anywhere. The local profile answers by `WindowsAccounts.MayOwn`. That reads the process's token for the account's own SID, and for each group the token marks as one it may own by, as an elevated administrator's token marks the administrators' group.
+- **An owner the account may not give is declared.** The plan judges it where the target writes descriptors and knows every account the descriptor names, and its account does not hold the privilege. An item whose descriptor names an owner the account may not give is declared on a line of its own, `security-descriptor-owners`. That line says the access control lists will land and the owner and group will not. Such an item is not also counted on the descriptors line.
+- **What the plan already declares stays where it is.** A descriptor naming an account the machine does not know is not written at all, and stays on that line alone. One that does not read stays with the rest. One that names no owner is not judged.
+- **Where the account holds the privilege, no owner is declared,** since the writer gives every owner then.
+
+**Built:** `Domain/WindowsPrivileges`; `Domain/WindowsSecurity`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Restore/RestorePlan`:
+
+- `Repository.Tests/RestoreMetadataHonestyTests`, on every platform, against manifests the fake source writes, of a file the account may own by, one it may not, and one that names no owner:
+  - on a target that writes descriptors and holds no privilege, the plan declares one file on the new line, and nothing on the descriptors line;
+  - where the account holds the privilege, it declares no descriptor at all;
+  - where a descriptor also names an account the target does not know, it is declared on that line alone;
+  - where the target keeps no descriptors, all three are declared as before.
+- `Repository.Tests/RestoreSecurityDescriptorTests`:
+  - the local profile refuses a stranger and Local Service as owners, and a stated rule is the one it keeps;
+  - on Windows, it may give its own account;
+  - the executor's case plans clean with the privilege stated absent too, since the account captured those files itself.
+- `Domain.Tests/SecurityDescriptorWriteBackTests`:
+  - an owner that is a stranger, no SID, or Local Service is none the account may give;
+  - on Windows, its own account is one;
+  - in an elevated process, so is the administrators' group.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The writer every way of restoring shares writes a file's and a folder's security descriptor back on Windows, as captured, after the times and before the attribute bits, where the machine knows every account it names; one naming an account it does not know is not written and is named; the DACL lands alone where the owner is refused; and the plan predicts it per item. `Domain/WindowsSecurityDescriptor`; `Domain/WindowsSecurity`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/WindowsSecurityDescriptorTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreSecurityDescriptorTests` |
 | 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not): an account that holds SeRestorePrivilege gives a file an owner it is not; the writer enables the privilege, on its own thread, only for a descriptor write refused without it, and the process's token is left as it was. `Domain/WindowsPrivileges`; `Domain/MetadataWriter`; `Domain/MetadataTarget`; `Domain.Tests/WindowsPrivilegesTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreSecurityDescriptorTests` |
+| 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give): the plan names, on a line of its own, a descriptor whose owner the restoring account may not give without SeRestorePrivilege, where it does not hold it, from the owner each item's facts now carry and the owners the account's token lets it give. `Domain/WindowsPrivileges`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Repository.Tests/RestoreMetadataHonestyTests`; `Repository.Tests/RestoreSecurityDescriptorTests`; `Domain.Tests/SecurityDescriptorWriteBackTests` |

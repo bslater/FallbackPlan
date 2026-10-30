@@ -122,7 +122,24 @@ public static class AtomicFile
     /// The number of replace attempts before a contended destination is
     /// reported as a failure rather than retried again.
     /// </summary>
-    public const int ReplaceAttempts = 10;
+    public const int ReplaceAttempts = 12;
+
+    private const int LongestReplaceWaitMs = 128;
+
+    /// <summary>
+    /// The least a replace waits in all, across its attempts, for a contended
+    /// destination to free: what a writer or reader holding it briefly is
+    /// given before the replace fails (ADR-0010 Amendment 10).
+    /// </summary>
+    public static TimeSpan LeastReplaceWait =>
+        TimeSpan.FromMilliseconds(Enumerable.Range(1, ReplaceAttempts - 1).Sum(ReplaceWaitFloor));
+
+    /// <summary>
+    /// The most a replace waits in all before it reports a destination that
+    /// never frees.
+    /// </summary>
+    public static TimeSpan MostReplaceWait =>
+        TimeSpan.FromMilliseconds(Enumerable.Range(1, ReplaceAttempts - 1).Sum(ReplaceWaitCeiling));
 
     /// <summary>
     /// Whether a failed replace attempt is contention worth retrying, or a
@@ -131,20 +148,19 @@ public static class AtomicFile
     /// <param name="exception">What the replace attempt threw.</param>
     /// <remarks>
     /// <para>
-    /// Public because it is the only part of the retry that can be proven. The
-    /// contention itself cannot: <c>rename(2)</c> is atomic and simply wins or
-    /// loses, so no POSIX test can manufacture the <c>ERROR_ACCESS_DENIED</c>
-    /// this absorbs, and a Windows-only integration test would exercise one leg
-    /// of the matrix at a cost out of proportion to what it proves. The
-    /// classification is where a mistake would actually live, and it is
-    /// testable everywhere.
+    /// Public because it is the part of the retry that can be proven on every
+    /// platform. The contention itself is Windows' alone: <c>rename(2)</c> is
+    /// atomic and simply wins or loses, so no POSIX test can manufacture the
+    /// <c>ERROR_ACCESS_DENIED</c> this absorbs. On Windows a reader holding the
+    /// destination without sharing deletion manufactures it, and that is where
+    /// the waits are held (ADR-0010 Amendment 10).
     /// </para>
     /// <para>
     /// The subtlety worth pinning: <see cref="FileNotFoundException"/> and
     /// <see cref="DirectoryNotFoundException"/> <i>are</i>
     /// <see cref="IOException"/>s, and they are the two that must not be
     /// retried. A missing source or directory is not contention — it is a
-    /// defect, and ten sleeps only delay the report of it.
+    /// defect, and the waits only delay the report of it.
     /// </para>
     /// </remarks>
     public static bool IsReplaceContention(Exception exception) =>
@@ -182,10 +198,18 @@ public static class AtomicFile
             {
                 // A missing source or directory is not contention and is not
                 // retried — it is a defect, and delaying it only hides it.
-                Thread.Sleep(attempt);
+                // Each wait is a random point in the upper half of its
+                // ceiling, so writers that collided do not collide again in step.
+                Thread.Sleep(Random.Shared.Next(ReplaceWaitFloor(attempt), ReplaceWaitCeiling(attempt) + 1));
             }
         }
     }
+
+    /// <summary>The longest wait after replace attempt <paramref name="attempt"/>: doubling from 2 ms, up to 128 ms.</summary>
+    private static int ReplaceWaitCeiling(int attempt) => Math.Min(LongestReplaceWaitMs, 2 << Math.Min(attempt - 1, 6));
+
+    /// <summary>The shortest wait after replace attempt <paramref name="attempt"/>: half its ceiling.</summary>
+    private static int ReplaceWaitFloor(int attempt) => ReplaceWaitCeiling(attempt) / 2;
 
     private static void TryDelete(string path)
     {

@@ -100,6 +100,8 @@ Uncovered:
 
 The retry deserves its own sentence, because it is not merely untested *here*. POSIX `rename` over an open file succeeds, so the contention the loop guards against cannot be manufactured on Linux or macOS at all, and no Windows test creates the share violation it was written for. **It is untested on every platform in the matrix.** It is also the branch most likely to be reached in the field, on the operating system where file locking is real.
 
+> **2026-10 ([ADR-0010 Amendment 10](../adr/0010-local-store-separation.md#amendment-10-2026-10--a-contended-replace-waits-long-enough-and-not-in-step)).** The retry loop is now held on Windows. A reader that holds the destination briefly without sharing deletion manufactures the contention, and the replace waits it out. Its waits are bounded on every platform. The loop's waits also changed, after CI's Windows job found the old ones short under the 32-writer case. The two `TryDelete` catch arms remain uncovered, for the reason `AtomicFileTests` gives.
+
 ### G2 — `ServiceCommandHandler.UpsertBackupSet` — 21 contiguous uncovered lines, zero test references
 
 **Where:** `src/FallbackPlan.Agent/ServiceCommandHandler.cs`, the `UpsertBackupSet` body.

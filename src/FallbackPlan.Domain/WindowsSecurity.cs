@@ -41,6 +41,20 @@ public static class WindowsAccounts
             return false;
         }
     }
+
+    /// <summary>
+    /// Whether this process's account may make <paramref name="sid"/> a
+    /// file's owner without SeRestorePrivilege: its own account, or a group
+    /// its token marks as one it may own by (ADR-0176 Amendment 2). False off
+    /// Windows, and for text that is no SID.
+    /// </summary>
+    /// <param name="sid">The SID in its string form.</param>
+    public static bool MayOwn(string sid)
+    {
+        ThrowHelper.ThrowIfNull(sid);
+
+        return OperatingSystem.IsWindows() && WindowsPrivileges.Owners().Contains(sid);
+    }
 }
 
 /// <summary>

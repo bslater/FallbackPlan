@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security.Principal;
 using Bodu;
 
 namespace FallbackPlan.Domain;
@@ -27,7 +28,10 @@ public static partial class WindowsPrivileges
 
     private const uint TokenQuery = 0x0008;
     private const uint TokenAdjustPrivileges = 0x0020;
+    private const int TokenUserClass = 1;
+    private const int TokenGroupsClass = 2;
     private const int TokenPrivilegesClass = 3;
+    private const uint GroupOwner = 0x8;
     private const uint PrivilegeEnabled = 0x2;
     private const int SecurityImpersonation = 2;
     private const int ErrorNotAllAssigned = 1300;
@@ -119,6 +123,59 @@ public static partial class WindowsPrivileges
         }
     }
 
+    /// <summary>
+    /// The SIDs this process's account may make a file's owner without
+    /// SeRestorePrivilege: its own, and each group its token marks as one it
+    /// may own by, as an elevated administrator's token marks the
+    /// administrators' group. Empty where the token cannot be read.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    internal static unsafe IReadOnlySet<string> Owners()
+    {
+        var owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!OpenProcessToken(GetCurrentProcess(), TokenQuery, out var token))
+        {
+            return owners;
+        }
+
+        try
+        {
+            // Each SID's pointer points into the buffer that holds it, so a
+            // SID is read while its buffer is pinned.
+            if (InformationOf(token, TokenUserClass) is { Length: > 0 } user && user.Length >= nint.Size)
+            {
+                fixed (byte* pointer = user)
+                {
+                    owners.Add(new SecurityIdentifier(*(nint*)pointer).Value);
+                }
+            }
+
+            // The groups follow their count, aligned to a pointer, and each is
+            // a pointer and its attributes, padded to two pointers.
+            if (InformationOf(token, TokenGroupsClass) is { } groups && groups.Length >= 4)
+            {
+                fixed (byte* pointer = groups)
+                {
+                    var count = *(uint*)pointer;
+                    var entry = 2 * nint.Size;
+                    for (long at = nint.Size; count > 0 && at + entry <= groups.Length; count--, at += entry)
+                    {
+                        if ((*(uint*)(pointer + at + nint.Size) & GroupOwner) != 0)
+                        {
+                            owners.Add(new SecurityIdentifier(*(nint*)(pointer + at)).Value);
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            CloseHandle(token);
+        }
+
+        return owners;
+    }
+
     [SupportedOSPlatform("windows")]
     private static T Closing<T>(nint token, T answer)
     {
@@ -144,21 +201,11 @@ public static partial class WindowsPrivileges
     }
 
     [SupportedOSPlatform("windows")]
-    private static unsafe uint? AttributesOf(nint token, long luid)
+    private static uint? AttributesOf(nint token, long luid)
     {
-        _ = GetTokenInformation(token, TokenPrivilegesClass, null, 0, out var needed);
-        if (needed < 4)
+        if (InformationOf(token, TokenPrivilegesClass) is not { Length: >= 4 } buffer)
         {
             return null;
-        }
-
-        var buffer = new byte[needed];
-        fixed (byte* pointer = buffer)
-        {
-            if (!GetTokenInformation(token, TokenPrivilegesClass, pointer, needed, out _))
-            {
-                return null;
-            }
         }
 
         var count = BinaryPrimitives.ReadUInt32LittleEndian(buffer);
@@ -171,6 +218,22 @@ public static partial class WindowsPrivileges
         }
 
         return null;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static unsafe byte[]? InformationOf(nint token, int informationClass)
+    {
+        _ = GetTokenInformation(token, informationClass, null, 0, out var needed);
+        if (needed == 0)
+        {
+            return null;
+        }
+
+        var buffer = new byte[needed];
+        fixed (byte* pointer = buffer)
+        {
+            return GetTokenInformation(token, informationClass, pointer, needed, out _) ? buffer : null;
+        }
     }
 
     [SupportedOSPlatform("windows")]

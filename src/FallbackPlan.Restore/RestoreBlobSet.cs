@@ -274,7 +274,8 @@ public static class RestoreBlobSet
                     facts[item.ObjectId] = new RestoreItemFacts(
                         EntryKind.DirectoryPlaceholder, 0, MetadataRules.Captured(own),
                         own.OwnerName, own.GroupName, own.PosixMode, MetadataRules.KindsOf(own),
-                        Accounts: MetadataRules.AccountsOf(own), FileAttributes: own.FileAttributes);
+                        Accounts: MetadataRules.AccountsOf(own), FileAttributes: own.FileAttributes,
+                        DescriptorOwner: MetadataRules.DescriptorOwnerOf(own));
                 }
 
                 continue;
@@ -307,7 +308,8 @@ public static class RestoreBlobSet
                 MetadataRules.KindsOf(manifest.Metadata), HardLinkGroups.KeyOf(manifest),
                 RestoreSpace.HeldBytes(manifest, heldSegments), MetadataRules.AccountsOf(manifest.Metadata),
                 manifest.Metadata.FileAttributes,
-                manifest.Metadata.AlternateStreams.Count(stream => !AlternateStreams.TryName(stream.Name.Span, out _, out _)));
+                manifest.Metadata.AlternateStreams.Count(stream => !AlternateStreams.TryName(stream.Name.Span, out _, out _)),
+                MetadataRules.DescriptorOwnerOf(manifest.Metadata));
 
             // A lost segment makes the path missing whatever else of it is
             // archived, because no rehydration brings that segment back. The

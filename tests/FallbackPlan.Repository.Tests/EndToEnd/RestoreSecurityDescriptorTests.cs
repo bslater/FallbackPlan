@@ -20,7 +20,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// every account the descriptor names is one the target knows. The plan and
 /// the receipt no longer list them there. The profile says whether its
 /// account holds SeRestorePrivilege, which the writer enables to give an
-/// owner the account is not (ADR-0176 Amendment 1).
+/// owner the account is not (ADR-0176 Amendment 1), and which owners its
+/// account may give without it, by which the plan predicts (ADR-0176
+/// Amendment 2).
 /// </summary>
 [TestClass]
 public sealed class RestoreSecurityDescriptorTests : ArchiveTestHarness
@@ -60,6 +62,28 @@ public sealed class RestoreSecurityDescriptorTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public void Profile_ForThisPlatform_AsksItsOwnAccountWhichOwnersItMayGive()
+    {
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        Func<string, bool> mayOwn = account => account == "S-1-5-18";
+
+        Assert.IsFalse(target.MayOwnBy("S-1-5-21-1-2-3-4242"));
+        Assert.IsFalse(target.MayOwnBy("S-1-5-19"));
+        Assert.AreSame(mayOwn, (target with { MayOwnBy = mayOwn }).MayOwnBy);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows names an account by SID")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Profile_OnWindows_MayGiveItsOwnAccountAsOwner()
+    {
+        using var self = WindowsIdentity.GetCurrent();
+
+        Assert.IsTrue(RestoreTargetProfile.ForLocalPlatform().MayOwnBy(self.User!.Value));
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's security descriptor")]
     [PlatformTrait(TestPlatforms.Windows)]
     [SupportedOSPlatform("windows")]
@@ -90,6 +114,12 @@ public sealed class RestoreSecurityDescriptorTests : ArchiveTestHarness
         Assert.DoesNotContain(
             degradation => degradation.Capability.StartsWith("security-descriptor", StringComparison.Ordinal),
             RestoreMetadata.Declare(plan, probed.Facts, target));
+
+        // The account captured these, so it may own by every owner they name
+        // without the privilege.
+        Assert.DoesNotContain(
+            degradation => degradation.Capability.StartsWith("security-descriptor", StringComparison.Ordinal),
+            RestoreMetadata.Declare(plan, probed.Facts, target with { HoldsRestorePrivilege = false }));
 
         var output = Path.Combine(SpoolDirectory, "descriptors-out");
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
