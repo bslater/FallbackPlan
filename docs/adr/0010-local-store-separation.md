@@ -55,6 +55,11 @@ Separate files, not separate tables in one file, so "delete the catalogue and le
 
 **Durable local state:** separate store, OS-key-store protected where available. The device *private key* is never written to the recovery kit — a recovering device establishes a new identity and is re-authorised.
 
+> **Amendment 8 (2026-10).** A durable state file is read whole while a
+> save replaces it, on Windows too: a store that saves through the atomic
+> replace reads through the same helper — see
+> [Amendment 8](#amendment-8-2026-10--durable-local-state-is-read-whole-while-it-is-saved).
+
 **Configuration:** file-based, schema-versioned, validated before use, exportable without secrets. Files rather than a database because users edit, version-control, and diff them.
 
 ## Consequences
@@ -474,6 +479,37 @@ holds it:
 The three notice cases failed before this amendment for want of a notice.
 The T-3 case passed as the code stood.
 
+## Amendment 8 (2026-10) — durable local state is read whole while it is saved
+
+A durable state file is saved by `AtomicFile.WriteAllText`: written beside, then renamed into place. The rename holds the new file open for deletion until it returns, and Windows refuses any open that does not share deletion with that handle. `AtomicFile.ReadAllText` shares deletion, and eight reads used it. Fifteen others, in twelve types that save through `AtomicFile`, used `File.ReadAllText`, which shares reading only. On Windows, a read of theirs that arrived during a save threw where it should have read one version or the other.
+
+The grant store is where it showed:
+- every peer session saves the terms its peer announced into `peers.json`;
+- a dial reads that file before it connects;
+- a dial that landed on a background session's save threw `IOException`, and a Windows run of `Hosts.Tests/PeerRepairTests` failed on it.
+
+**Decision.** A type that saves a file through `AtomicFile` reads it through `AtomicFile` too. The fifteen reads now do. They cover:
+- the pairing grants and their revocations;
+- the peer keypair;
+- pairing invites;
+- peer receipts;
+- the envelope recipient key;
+- notices;
+- replica owners;
+- users;
+- local state;
+- the writer lock's owner;
+- the command line's session cache;
+- a direct restore's record.
+
+A read still sees one whole version, and raises what it raised before.
+
+**Built:** in each of those stores. Held by:
+- **`ArchitectureTests/StateFileReadTests`**, in the compiled code. No type that calls `AtomicFile.WriteAllText` calls `File.ReadAllText`, `ReadAllBytes` or `ReadAllLines`. It failed before this amendment, naming the fifteen. A test that raced a save would pass on every platform but the one this is about.
+- **`Protocol.Tests/PeerGrantStoreTests`**, on Windows alone. The store opens and finds its grant while a handle like the rename's holds `peers.json` for deletion. `Application.Tests/AtomicFileTests` holds the helper the same way.
+
+**Not done.** Some files are replaced by a rename of their own rather than through `AtomicFile`: a set's write credential, restore receipts and the writer sequence. They still read sharing reading only, so on Windows a read that meets their save can still fail. A receipt read that fails is reported as that receipt's problem rather than thrown.
+
 ## Status history
 
 | Date | Status | Note |
@@ -487,3 +523,4 @@ The T-3 case passed as the code stood.
 | 2026-10 | Accepted (amended) | Amendment 5: a set's backup has the archive's catalogue connection to itself. A sync's verification, retention, a snapshot deletion and the heal each open one of their own (`Agent/ArchiveHandle`), and SQLite keeps the connections apart. Held by `ArchitectureTests/CatalogueConnectionTests`, by three tests run with the backup's connection closed, and by `Repository.Tests/Catalogue/CatalogueConnectionsTests`. |
 | 2026-10 | Accepted (amended) | Amendment 6: a catalogue file SQLite cannot read as a database is discarded and rebuilt like one another schema wrote, rather than failing every open of its set. A file that is busy, locked or cannot be written still fails the open. Set in `Repository.Catalogue/Catalogue`, held by `Repository.Tests/CatalogueTests` and `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
 | 2026-10 | Accepted (amended) | Amendment 7: a catalogue rebuilt at open short of the records it needed, or unable to read the repository, raises a notice naming the set, and the rebuild that reads everything resolves it. A rebuild whose index load reported findings is complete as a listing, and its findings are the catalogue's damage, which a check names. Set in `Agent/ServiceRuntime`, held by `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
+| 2026-10 | Accepted (amended) | Amendment 8: a type that saves durable state through the atomic replace reads it through the same helper, which shares deletion with the save's rename. A read on Windows that meets a save therefore reads one whole version instead of failing. Fifteen reads in twelve stores, among them `Protocol/PeerGrantStore`, the grant store whose failed read showed it. Held by `ArchitectureTests/StateFileReadTests` and, on Windows, `Protocol.Tests/PeerGrantStoreTests`. |
