@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FallbackPlan.Restore;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
 
@@ -310,6 +311,35 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
 
         Assert.AreEqual(1, listed.ExitCode, listed.All);
         Assert.Contains("--limit takes at least 1", listed.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows,
+        "a rename holds the file it renamed open for deletion until it returns, and only Windows refuses "
+        + "a reader that does not share deletion with that handle")]
+    public async Task AReceiptBeingKeptAgain_IsListedAsItReads_AndPrintedWhole()
+    {
+        const string run = "0123456789abcdef";
+        Kept(run, new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 1 });
+        var path = Path.Combine(Receipts, $"{run}.json");
+        var kept = await File.ReadAllTextAsync(path);
+
+        // A run keeps its receipt again under its own name, renaming the new
+        // one into place. The handle below is that rename held still, as its
+        // own handle is: opened for deletion and sharing everything. The
+        // receipt goes when it closes, after the reads this test is about.
+        using (File.OpenHandle(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.DeleteOnClose))
+        {
+            var listed = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath);
+            var shown = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--run", run);
+
+            Assert.AreEqual(0, listed.ExitCode, listed.All);
+            Assert.Contains(run, listed.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("unreadable", listed.Output, StringComparison.Ordinal);
+            Assert.AreEqual(0, shown.ExitCode, shown.All);
+            Assert.AreEqual(kept.Trim(), shown.Output.Trim());
+        }
     }
 
     [TestMethod]
