@@ -156,6 +156,10 @@ Three things the surveyed history says those criteria are missing:
 > - **No manifest modified.** `InterruptionTests/CompactionInterruptionTests` holds it as `ACompactionOfEveryDataBlob_ChangesNoSnapshotOrManifestByte`.
 > - **Double interruption stays open.** A compaction cut at each step, and the next pass finishing it, are tested; one cut twice and then recovered is not.
 
+> **Resolved (2026-10).** The double interruption stands too, verbatim-named in `InterruptionTests/CompactionInterruptionTests`: `Compaction_InterruptedTwiceAndRecovered_StillRestoresEverySnapshotByteIdentically`.
+> - **Every pair of cut points, 25 in all.** A pass is cut, a collector runs, a second pass over the same blob is cut at the other point, a collector runs again, and only then does a pass finish, with a third collector after it. The snapshot restores byte for byte, and every blob the index names is still held.
+> - **It passed as the code stood.** The surveyed product needed this test to find its bug; this one has none there. Each pass starts from what the one before it left: an intent not retired, blobs put and not yet named, or an index already naming a rewrite of the blob it rewrites again.
+
 ---
 
 ### T-5 — A well-formed index that lies
@@ -430,6 +434,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 > **2026-10.** T-12 is partly resolved ahead of its phase: a destination that refuses a delete no longer fails its sync. Its note says what stays open.
 >
 > **2026-10.** T-4 is partly resolved: two of its three tests stand, and the double interruption is open.
+>
+> **2026-10.** T-4 is resolved: the double interruption stands too, and passed as the code stood.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 
