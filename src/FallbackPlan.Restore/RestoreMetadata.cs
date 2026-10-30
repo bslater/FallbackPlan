@@ -34,6 +34,11 @@ namespace FallbackPlan.Restore;
 /// Its captured Windows attribute bits, whose bits no restore sets the plan
 /// names (ADR-0175 Amendment 1), or null where none were captured.
 /// </param>
+/// <param name="RefusedStreams">
+/// How many of its captured alternate streams have a name no stream may be
+/// written under (<see cref="AlternateStreams.TryName"/>), which the plan
+/// declares (ADR-0174 Amendment 3).
+/// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -45,7 +50,8 @@ public sealed record RestoreItemFacts(
     string? HardLink = null,
     ulong HeldBytes = 0,
     IReadOnlyList<string>? Accounts = null,
-    uint? FileAttributes = null);
+    uint? FileAttributes = null,
+    int RefusedStreams = 0);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
@@ -235,6 +241,12 @@ public static class RestoreMetadata
     /// bits still land (ADR-0175 Amendment 1).
     /// </para>
     /// <para>
+    /// On a target that writes alternate streams, the files captured with a
+    /// stream whose name no stream may be written under are declared on a
+    /// line of their own, because the executor will not write that stream and
+    /// will restore the file degraded (ADR-0174 Amendment 3).
+    /// </para>
+    /// <para>
     /// What the planner already says is not said twice. On a target that
     /// applies no POSIX metadata, its line covers permissions and ownership.
     /// Its alternate-streams line covers streams. Symlinks on a target that
@@ -268,6 +280,7 @@ public static class RestoreMetadata
         var strangers = new Tally();
         var unsetBits = new Tally();
         var unsetMask = 0u;
+        var refusedStreams = new Tally();
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -358,6 +371,13 @@ public static class RestoreMetadata
                 unsetMask |= bits;
             }
 
+            if ((applied & known.Captured & CapturedMetadata.AlternateStreams) != 0 && known.RefusedStreams > 0)
+            {
+                applied &= ~CapturedMetadata.AlternateStreams;
+                apart |= CapturedMetadata.AlternateStreams;
+                refusedStreams.Add(item.Kind);
+            }
+
             var missing = known.Captured & ~(applied | given | apart);
             if (missing == CapturedMetadata.None)
             {
@@ -443,6 +463,10 @@ public static class RestoreMetadata
         var flags = attributes.GetValueOrDefault(CapturedMetadata.FileAttributes);
         Add("file-attributes", flags, string.Create(CultureInfo.InvariantCulture,
             $"File attributes (read-only, hidden, system, archive) captured on {flags} will not be applied."));
+        Add("alternate-stream-names", refusedStreams, string.Create(CultureInfo.InvariantCulture,
+            $"Alternate streams captured on {refusedStreams} include one whose name no stream may be written "
+            + $"under: joined to the file's path, it would name another file or the file itself. That stream will "
+            + $"not be written, and the file will be restored degraded."));
         Add("unset-file-attributes", unsetBits, string.Create(CultureInfo.InvariantCulture,
             $"File attributes captured on {unsetBits} include bits no restore sets: "
             + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask))}. Those will not be applied; "
