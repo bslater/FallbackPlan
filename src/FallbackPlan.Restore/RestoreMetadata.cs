@@ -2,7 +2,9 @@ using Bodu;
 using System.Globalization;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository;
 using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Repository.Packing;
 
 namespace FallbackPlan.Restore;
 
@@ -74,6 +76,23 @@ public sealed record RestoreItemFacts(
     IReadOnlyDictionary<string, uint>? Access = null);
 
 /// <summary>
+/// The files a restore would open wider than they were (ADR-0178): their
+/// descriptors will not be written, and the folders they land in give some
+/// account access their own did not. A run is refused for them unless a
+/// person acknowledges it (ADR-0178 Amendment 1; architecture 06 §3).
+/// </summary>
+/// <param name="Files">How many files.</param>
+/// <param name="Folders">The folders they land in, each once.</param>
+/// <param name="Accounts">Every account that gains, by SID, each once.</param>
+public sealed record WiderAccess(int Files, IReadOnlyList<string> Folders, IReadOnlyList<string> Accounts)
+{
+    /// <summary>The plan's <c>wider-access</c> line, which the run's refusal says too.</summary>
+    public string Describe() => string.Create(CultureInfo.InvariantCulture,
+        $"Security descriptors captured on {Files} file(s) will not be applied, and the folder they land in "
+        + $"({string.Join(", ", Folders)}) gives them access their own did not, to {string.Join(", ", Accounts)}.");
+}
+
+/// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
 /// does not (FR-RST-003, FR-RST-004; ADR-0083, ADR-0084, ADR-0085,
 /// ADR-0086, ADR-0087, ADR-0101; architecture 06 §3).
@@ -111,6 +130,9 @@ public sealed record RestoreItemFacts(
 /// </remarks>
 public static class RestoreMetadata
 {
+    /// <summary>How many manifests a run asks for together: as many as the executor's own reading ahead.</summary>
+    private const int ManifestWave = 1024;
+
     /// <summary>
     /// The attributes the executor writes back for an entry of
     /// <paramref name="kind"/> on <paramref name="target"/>: the same for a
@@ -307,10 +329,6 @@ public static class RestoreMetadata
         var linkPermissions = new Tally();
         var linkAttributes = new Tally();
         var strangers = new Tally();
-        var widened = new Tally();
-        var gainers = new List<string>();
-        var widenedIn = new List<string>();
-        var inheritedAt = new Dictionary<string, IReadOnlyDictionary<string, uint>?>(StringComparer.Ordinal);
         var refusedOwners = new Tally();
         var kernelAttributes = new Tally();
         var attributeNames = new Tally();
@@ -407,22 +425,6 @@ public static class RestoreMetadata
                     applied &= ~CapturedMetadata.SecurityDescriptor;
                     apart |= CapturedMetadata.SecurityDescriptor;
                     strangers.Add(item.Kind);
-
-                    // The file takes its folder's access instead of its own,
-                    // which architecture 06 §3 has the plan say where it is more.
-                    if (item.Kind == EntryKind.File
-                        && known.Access is { } own
-                        && destinationOf?.Invoke(item) is { } folder
-                        && Inherited(folder) is { } inherited
-                        && WindowsAccess.Wider(own, inherited) is { Count: > 0 } gaining)
-                    {
-                        widened.Add(item.Kind);
-                        gainers.AddRange(gaining.Where(account => !gainers.Contains(account, StringComparer.Ordinal)));
-                        if (!widenedIn.Contains(folder, StringComparer.Ordinal))
-                        {
-                            widenedIn.Add(folder);
-                        }
-                    }
                 }
                 else if (!target.HoldsRestorePrivilege
                     && known.DescriptorOwner is { } owner
@@ -482,17 +484,6 @@ public static class RestoreMetadata
         }
 
         var declared = new List<MetadataDegradation>();
-        // Each folder's access is read once, however many files land in it.
-        IReadOnlyDictionary<string, uint>? Inherited(string folder)
-        {
-            if (!inheritedAt.TryGetValue(folder, out var access))
-            {
-                inheritedAt[folder] = access = target.InheritedAccessAt(folder);
-            }
-
-            return access;
-        }
-
         void Add(string capability, Tally? count, string detail)
         {
             if (count is { Any: true })
@@ -524,9 +515,11 @@ public static class RestoreMetadata
         Add("security-descriptor-accounts", strangers, string.Create(CultureInfo.InvariantCulture,
             $"Security descriptors captured on {strangers} name accounts this machine does not know, so they will "
             + $"not be applied; they will take the permissions of the folder they land in."));
-        Add("wider-access", widened, string.Create(CultureInfo.InvariantCulture,
-            $"Security descriptors captured on {widened} will not be applied, and the folder they land in "
-            + $"({string.Join(", ", widenedIn)}) gives them access their own did not, to {string.Join(", ", gainers)}."));
+        if (Widened(plan, facts, target, destinationOf, names) is { } wider)
+        {
+            declared.Add(new MetadataDegradation("wider-access", wider.Describe()));
+        }
+
         Add("security-descriptor-owners", refusedOwners, string.Create(CultureInfo.InvariantCulture,
             $"Security descriptors captured on {refusedOwners} name an owner the account running the restore may "
             + $"not give: giving it needs SeRestorePrivilege, which the account does not hold. Their access control "
@@ -653,11 +646,6 @@ public static class RestoreMetadata
     }
 
     /// <summary>
-    /// How many files, folders and symlinks a declaration covers, said the way
-    /// a person reads it: "2 file(s)", "1 symlink(s)", or those it covers
-    /// joined, as in "2 file(s), 1 folder(s) and 1 symlink(s)".
-    /// </summary>
-    /// <summary>
     /// The folder each item of <paramref name="slices"/> is restored into,
     /// its slice's own (ADR-0178), or null for an item none of them holds.
     /// </summary>
@@ -678,6 +666,193 @@ public static class RestoreMetadata
         return item => into.GetValueOrDefault(item.ObjectId);
     }
 
+    /// <summary>
+    /// The files of <paramref name="plan"/> whose descriptors will not be
+    /// written, for an account the target does not know, and whose folder
+    /// would give some account access their own DACL did not (ADR-0178): the
+    /// line the plan declares them on, counted.
+    /// </summary>
+    /// <param name="plan">The plan.</param>
+    /// <param name="facts">What each item's manifest says, keyed by the item's object.</param>
+    /// <param name="target">The target, which says which accounts it knows and what a folder passes to a file.</param>
+    /// <param name="destinationOf">The folder each item lands in, or null where the plan is told none.</param>
+    /// <returns>The files, their folders and the accounts that gain; null where there are none.</returns>
+    public static WiderAccess? OpenedWider(
+        RestorePlan plan,
+        IReadOnlyDictionary<ObjectId, RestoreItemFacts> facts,
+        RestoreTargetProfile target,
+        Func<RestorePlanItem, string?>? destinationOf)
+    {
+        ThrowHelper.ThrowIfNull(plan);
+        ThrowHelper.ThrowIfNull(facts);
+        ThrowHelper.ThrowIfNull(target);
+
+        return Widened(plan, facts, target, destinationOf, new Names());
+    }
+
+    /// <summary>
+    /// What <see cref="OpenedWider"/> says of <paramref name="plan"/>, for a
+    /// run, which is asked without its plan's facts (ADR-0178 Amendment 1):
+    /// each file's manifest is read through <paramref name="reader"/> before
+    /// anything is written, where the folder the file lands in says what a
+    /// file made there takes. Where none does, as off Windows, nothing is
+    /// read.
+    /// </summary>
+    /// <remarks>
+    /// The manifests are asked for a wave at a time, so a blob holding many
+    /// is read once (NFR-PERF-009). One that will not read is passed over:
+    /// the run fails that file, and opens nothing wider.
+    /// </remarks>
+    /// <param name="plan">The run's plan.</param>
+    /// <param name="target">The target, which says which accounts it knows and what a folder passes to a file.</param>
+    /// <param name="destinationOf">The folder each item lands in.</param>
+    /// <param name="reader">Reads each manifest.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The files, their folders and the accounts that gain; null where there are none.</returns>
+    public static async ValueTask<WiderAccess?> OpenedWiderAsync(
+        RestorePlan plan,
+        RestoreTargetProfile target,
+        Func<RestorePlanItem, string?> destinationOf,
+        RepositoryReader reader,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(plan);
+        ThrowHelper.ThrowIfNull(target);
+        ThrowHelper.ThrowIfNull(destinationOf);
+        ThrowHelper.ThrowIfNull(reader);
+
+        // Each folder is read once, to choose what to read and to judge it.
+        var inheritedAt = new Dictionary<string, IReadOnlyDictionary<string, uint>?>(StringComparer.Ordinal);
+        IReadOnlyDictionary<string, uint>? Inherited(string folder)
+        {
+            if (!inheritedAt.TryGetValue(folder, out var access))
+            {
+                inheritedAt[folder] = access = target.InheritedAccessAt(folder);
+            }
+
+            return access;
+        }
+
+        var judged = plan.Items
+            .Where(item => item.Kind == EntryKind.File && destinationOf(item) is { } folder && Inherited(folder) is not null)
+            .ToList();
+        var facts = new Dictionary<ObjectId, RestoreItemFacts>();
+        foreach (var wave in judged.Chunk(ManifestWave))
+        {
+            try
+            {
+                await reader.PrefetchAsync([.. wave.Select(item => item.ObjectId)], cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                // A prefetch is never what fails: each manifest is still read alone.
+            }
+
+            foreach (var item in wave)
+            {
+                if (await ManifestMetadataAsync(reader, item.ObjectId, cancellationToken).ConfigureAwait(false) is { } metadata)
+                {
+                    facts[item.ObjectId] = new RestoreItemFacts(
+                        EntryKind.File, 0, MetadataRules.Captured(metadata),
+                        Accounts: MetadataRules.AccountsOf(metadata), Access: MetadataRules.AccessOf(metadata));
+                }
+            }
+        }
+
+        return Widened(plan, facts, target with { InheritedAccessAt = Inherited }, destinationOf, new Names());
+    }
+
+    /// <summary>What a file's manifest says was captured with it, or null where it will not read.</summary>
+    private static async ValueTask<EntryMetadata?> ManifestMetadataAsync(
+        RepositoryReader reader, ObjectId objectId, CancellationToken cancellationToken)
+    {
+        RecordReadResult read;
+        try
+        {
+            read = await reader.ReadSegmentAsync(objectId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+
+        if (read.Outcome != RecordReadOutcome.Ok || read.Plaintext is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return FileVersionManifestCodec.Decode(read.Plaintext).Metadata;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// A file whose descriptor names an account the target does not know
+    /// takes its folder's access instead of its own, which architecture 06 §3
+    /// has a restore say, and refuse, where that is more.
+    /// </summary>
+    private static WiderAccess? Widened(
+        RestorePlan plan,
+        IReadOnlyDictionary<ObjectId, RestoreItemFacts> facts,
+        RestoreTargetProfile target,
+        Func<RestorePlanItem, string?>? destinationOf,
+        Names names)
+    {
+        if (destinationOf is null)
+        {
+            return null;
+        }
+
+        var files = 0;
+        var folders = new List<string>();
+        var accounts = new List<string>();
+
+        // Each folder's access is read once, however many files land in it.
+        var inheritedAt = new Dictionary<string, IReadOnlyDictionary<string, uint>?>(StringComparer.Ordinal);
+        foreach (var item in plan.Items)
+        {
+            if (item.Kind != EntryKind.File
+                || !facts.TryGetValue(item.ObjectId, out var known)
+                || (Applied(item.Kind, target) & known.Captured & CapturedMetadata.SecurityDescriptor) == 0
+                || known.Accounts is not { } named
+                || named.All(account => names.Knows(account, target.KnowsAccount))
+                || known.Access is not { } own
+                || destinationOf(item) is not { } folder)
+            {
+                continue;
+            }
+
+            if (!inheritedAt.TryGetValue(folder, out var inherited))
+            {
+                inheritedAt[folder] = inherited = target.InheritedAccessAt(folder);
+            }
+
+            if (inherited is null || WindowsAccess.Wider(own, inherited) is not { Count: > 0 } gaining)
+            {
+                continue;
+            }
+
+            files++;
+            accounts.AddRange(gaining.Where(account => !accounts.Contains(account, StringComparer.Ordinal)));
+            if (!folders.Contains(folder, StringComparer.Ordinal))
+            {
+                folders.Add(folder);
+            }
+        }
+
+        return files == 0 ? null : new WiderAccess(files, folders, accounts);
+    }
+
+    /// <summary>
+    /// How many files, folders and symlinks a declaration covers, said the way
+    /// a person reads it: "2 file(s)", "1 symlink(s)", or those it covers
+    /// joined, as in "2 file(s), 1 folder(s) and 1 symlink(s)".
+    /// </summary>
     private sealed class Tally
     {
         private int _files;

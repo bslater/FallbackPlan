@@ -829,6 +829,15 @@ public sealed record DirectoryResult(
 /// it stands, and the room is measured without them. Null for a plan of a
 /// run that resumes nothing, and from a service before 1.72.
 /// </param>
+/// <param name="OpenedWider">
+/// How many files the folder they land in would open wider than they were
+/// (contract 1.80, FR-RST-003, ADR-0178 Amendment 1): their descriptors name
+/// an account the machine does not know, and the folder gives some account
+/// access their own did not. The run is refused for them unless it
+/// acknowledges wider access; <paramref name="Degradations"/> names the
+/// folders and the accounts. Null where there are none, and from a service
+/// before 1.80.
+/// </param>
 public sealed record RestorePlanResult(
     long Files,
     long Bytes,
@@ -840,7 +849,8 @@ public sealed record RestorePlanResult(
     IReadOnlyList<RestoreSpaceDescriptor>? Space = null,
     long? ReadBytes = null,
     IReadOnlyList<string>? ArchivedObjects = null,
-    long? Landed = null) : ServiceResult;
+    long? Landed = null,
+    long? OpenedWider = null) : ServiceResult;
 
 /// <summary>The room a restore needs on one volume it writes to (contract 1.53, FR-RST-003).</summary>
 /// <param name="Directory">

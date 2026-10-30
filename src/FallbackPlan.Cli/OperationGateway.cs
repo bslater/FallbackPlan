@@ -208,9 +208,14 @@ public interface IOperationGateway : IAsyncDisposable
     /// </summary>
     /// <param name="run">The run, as the list names it.</param>
     /// <param name="ignoreFreeSpace">Whether to restore although the volume looks too small.</param>
+    /// <param name="acknowledgeWiderAccess">
+    /// Whether to restore although a folder would open a file wider than it
+    /// was (ADR-0178 Amendment 1): the run's own acknowledgement is not kept.
+    /// </param>
     /// <param name="cancellationToken">Cancels the resume.</param>
     /// <returns>What the restore says; not ok when a file failed.</returns>
-    ValueTask<OperationReport> ResumeRestoreAsync(string run, bool ignoreFreeSpace, CancellationToken cancellationToken);
+    ValueTask<OperationReport> ResumeRestoreAsync(
+        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, CancellationToken cancellationToken);
 
     /// <summary>
     /// Plans the resume of a restore run left unfinished, by its name alone
@@ -286,6 +291,11 @@ public interface IOperationGateway : IAsyncDisposable
 /// than in a quarantine folder of its own. A run in direct mode lands in place
 /// whether asked or not.
 /// </param>
+/// <param name="AcknowledgeWiderAccess">
+/// Whether to restore although a folder it writes to would open a file wider
+/// than it was (FR-RST-003, ADR-0178 Amendment 1). Such a restore is
+/// otherwise refused before anything is written.
+/// </param>
 public sealed record RestoreRequest(
     string SnapshotId,
     string? Path,
@@ -298,7 +308,8 @@ public sealed record RestoreRequest(
     IReadOnlyList<string>? Paths = null,
     string? Target = null,
     string? Existing = null,
-    bool InPlace = false)
+    bool InPlace = false,
+    bool AcknowledgeWiderAccess = false)
 {
     /// <summary>Whether the run lands each file where it was captured.</summary>
     public bool ToOriginal => string.Equals(Target, "original", StringComparison.Ordinal);
@@ -690,7 +701,8 @@ internal sealed class ServiceGateway(
                 new RunRestoreCommand(
                     request.SnapshotId, request.Path, request.OutputDirectory, Source: source, Paths: request.Paths,
                     Target: request.Target, Existing: request.Existing, InPlace: request.InPlace,
-                    IgnoreFreeSpace: request.IgnoreFreeSpace, Resume: request.Resume ? request.ResumedRun : null),
+                    IgnoreFreeSpace: request.IgnoreFreeSpace, Resume: request.Resume ? request.ResumedRun : null,
+                    AcknowledgeWiderAccess: request.AcknowledgeWiderAccess),
                 "a restore",
                 cancellationToken).ConfigureAwait(false);
 
@@ -717,7 +729,7 @@ internal sealed class ServiceGateway(
 
     /// <inheritdoc/>
     public async ValueTask<OperationReport> ResumeRestoreAsync(
-        string run, bool ignoreFreeSpace, CancellationToken cancellationToken)
+        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(run);
 
@@ -734,7 +746,8 @@ internal sealed class ServiceGateway(
         try
         {
             var result = await SendAsync<RestoreResult>(
-                new ResumeRestoreCommand(run, source, ignoreFreeSpace), "a restore", cancellationToken).ConfigureAwait(false);
+                new ResumeRestoreCommand(run, source, ignoreFreeSpace, acknowledgeWiderAccess), "a restore", cancellationToken)
+                .ConfigureAwait(false);
             return Restored(result, again => $"to restore what is left, run restore-resume {again}");
         }
         finally
@@ -1606,6 +1619,20 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         // direct mode names no run a resume could ask by.
         var parts = DirectRestoreParts.Of(session.StateDirectory, slices.Select(slice => slice.OutputDirectory));
 
+        // Whether a folder it writes to would open a file wider than it was
+        // (ADR-0178 Amendment 1; architecture 06 §3), judged as its plan
+        // judges it, before anything is written.
+        if (!request.AcknowledgeWiderAccess
+            && await RestoreMetadata.OpenedWiderAsync(
+                plan,
+                target,
+                RestoreMetadata.DestinationsOf([.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory))]),
+                reader,
+                cancellationToken).ConfigureAwait(false) is { } wider)
+        {
+            throw new CliFailureException(Strings.FormatDirectGateway_RestoreWouldOpenWider(wider.Describe()));
+        }
+
         // Whether it fits, before anything is written (FR-RST-003). The run
         // below lands in place under the policy asked, so that is the run
         // measured, at every root it writes to together, less what a resume
@@ -1804,7 +1831,9 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             cancellationToken).ConfigureAwait(false);
 
         var conflicts = RestorePlanFigures.Conflicts(plan);
-        var degradations = RestorePlanFigures.Degradations(plan, probed, target, RestoreMetadata.DestinationsOf(slices));
+        var destinationOf = RestoreMetadata.DestinationsOf(slices);
+        var degradations = RestorePlanFigures.Degradations(plan, probed, target, destinationOf);
+        var wider = RestoreMetadata.OpenedWider(plan, probed.Facts, target, destinationOf);
         return RestorePlanReport.Describe(
             new RestorePlanResult(
                 plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
@@ -1820,7 +1849,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 ],
                 (long)probed.ReadBytes,
                 probed.Archived.Count == 0 ? null : probed.Archived,
-                request.Resume ? space.Landed : null),
+                request.Resume ? space.Landed : null,
+                wider?.Files),
             request);
     }
 
@@ -1929,7 +1959,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
 
     /// <inheritdoc/>
-    public ValueTask<OperationReport> ResumeRestoreAsync(string run, bool ignoreFreeSpace, CancellationToken cancellationToken) =>
+    public ValueTask<OperationReport> ResumeRestoreAsync(
+        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, CancellationToken cancellationToken) =>
         throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
 
     /// <inheritdoc/>

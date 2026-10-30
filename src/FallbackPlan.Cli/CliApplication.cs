@@ -1590,10 +1590,17 @@ public static class CliApplication
                 Description = "Restore even when the destination looks too small. Without it, a restore that will not fit "
                     + "is refused before anything is written; a volume that compresses what it stores can hold more than the estimate.",
             };
+            var acknowledgeWiderAccessOption = new Option<bool>("--acknowledge-wider-access")
+            {
+                Description = "Restore even where a folder would open a file wider than it was: its security descriptor names "
+                    + "an account this machine does not know, so it is not written, and the folder gives some account access "
+                    + "the file's own did not. Without it, such a restore is refused before anything is written.",
+            };
             var planOption = new Option<bool>("--plan")
             {
                 Description = "Say what the restore would do and restore nothing: what it writes and reads, whether it fits, "
-                    + "and what it could not bring back. Exits non-zero unless the restore would bring back every file and fit.",
+                    + "and what it could not bring back. Exits non-zero unless the restore would bring back every file, fit, "
+                    + "and open none wider than it was.",
             };
             var exportOption = new Option<string?>("--export")
             {
@@ -1621,6 +1628,7 @@ public static class CliApplication
             command.Options.Add(existingOption);
             command.Options.Add(inPlaceOption);
             command.Options.Add(ignoreFreeSpaceOption);
+            command.Options.Add(acknowledgeWiderAccessOption);
             command.Options.Add(planOption);
             command.Options.Add(exportOption);
             command.Options.Add(resumeOption);
@@ -1674,7 +1682,8 @@ public static class CliApplication
                     Paths: paths.Length > 1 ? paths : null,
                     Target: target,
                     Existing: parse.GetValue(existingOption),
-                    InPlace: parse.GetValue(inPlaceOption));
+                    InPlace: parse.GetValue(inPlaceOption),
+                    AcknowledgeWiderAccess: parse.GetValue(acknowledgeWiderAccessOption));
 
                 // A kept plan is read and held to the run asked before
                 // anything is asked of the repository or the service.
@@ -1747,6 +1756,11 @@ public static class CliApplication
             {
                 Description = "Resume even when the destination looks too small, as restore takes it.",
             };
+            var acknowledgeWiderAccessOption = new Option<bool>("--acknowledge-wider-access")
+            {
+                Description = "Resume even where a folder would open a file wider than it was, as restore takes it. The "
+                    + "run's own acknowledgement is not kept, so a resume asks for it again.",
+            };
             var planOption = new Option<bool>("--plan")
             {
                 Description = "Say what the resume would do and resume nothing: what it would write and read, whether it "
@@ -1761,6 +1775,7 @@ public static class CliApplication
             command.Options.Add(forgetAllOption);
             command.Options.Add(olderThanOption);
             command.Options.Add(ignoreFreeSpaceOption);
+            command.Options.Add(acknowledgeWiderAccessOption);
             command.Options.Add(planOption);
             command.Options.Add(directOption);
 
@@ -1811,7 +1826,8 @@ public static class CliApplication
                             ? gateway.ForgetRestoreRunAsync(run, token)
                             : plan
                                 ? gateway.PlanResumeRestoreAsync(run, token)
-                                : gateway.ResumeRestoreAsync(run, parse.GetValue(ignoreFreeSpaceOption), token),
+                                : gateway.ResumeRestoreAsync(
+                                    run, parse.GetValue(ignoreFreeSpaceOption), parse.GetValue(acknowledgeWiderAccessOption), token),
                     cancellationToken);
             }));
         }

@@ -118,6 +118,9 @@
   <data name="DirectGateway_RestoreWouldNotFit" xml:space="preserve">
     <value>{0} Nothing was written. Free some space or choose another folder, or pass --ignore-free-space to restore anyway: a volume that compresses what it stores can hold more than this estimate.</value>
   </data>
+  <data name="DirectGateway_RestoreWouldOpenWider" xml:space="preserve">
+    <value>{0} Nothing was written. Restore them into a folder that gives no more than they had, or pass --acknowledge-wider-access to restore anyway.</value>
+  </data>
   <data name="DirectGateway_ResumeLandsInPlace" xml:space="preserve">
     <value>In direct mode a restore lands in place, where --output points, so there is no run to name: pass --resume alone.</value>
   </data>

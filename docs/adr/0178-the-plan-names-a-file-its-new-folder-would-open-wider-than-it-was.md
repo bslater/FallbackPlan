@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain)
+**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain; amended by [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such files is refused before anything is written unless it acknowledges wider access, and the plan counts them)
 **Related:** [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) (a descriptor is written only where the machine knows every account it names, and is otherwise declared), [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (the plan and the receipt say what a target will not get back, and a run that will not fit is refused unless a person goes on), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (refuse is reserved for a descriptor that cannot be applied where the default would grant broader access)
 
 **Built:**
@@ -18,6 +18,10 @@
     On Windows a real folder's inherited access is read, through a path not yet made.
   - `Repository.Tests/RestoreMetadataHonestyTests` — of three files, only the one kept to an unknown account and the system is declared, naming the accounts that gain and the folder. Their folder, kept the same way, is not. A plan told no destinations, or whose folder will not read, says nothing. A restore's slices map their items to their own folders.
   - `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` — on Windows, the service and direct mode each plan the restore of a real file kept to an unknown account into a folder that shares with Users, and name it.
+- The refusal ([Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged)): `Restore/RestoreMetadata` counts the files a folder would open wider, and for a run reads each one's manifest to count them, a blob at a time, only where a folder says what a file takes. `Agent/ServiceCommandHandler` and `Cli/OperationGateway` refuse such a run before anything is written unless it acknowledges wider access, and count the files in the plan. `Cli/CliApplication` takes `--acknowledge-wider-access` on `restore` and `restore-resume`, and `Cli/RestorePlanReport` fails a plan that counts any. The tests:
+  - `Repository.Tests/RestoreMetadataHonestyTests` — the count says what the plan's line says; a run reads each manifest to say the same, within NFR-PERF-009's budget of a request a blob, and reads nothing where no folder says what a file takes.
+  - `Hosts.Tests/RestoreHonestyServiceTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` — on Windows, the service, a resume and direct mode each refuse a run of a real file kept to an unknown account into a folder that shares with Users, writing nothing, and run it when acknowledged.
+  - `Cli.Tests/GatewayRestoreReportTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` — the acknowledgement crosses only when told, under contract 1.80's names, and a plan that counts such files fails, saying how to go on.
 
 ---
 
@@ -60,9 +64,13 @@ A file whose owner is refused still gets its DACL (ADR-0176 Amendment 1), so it 
 - A file whose captured DACL already gave what the folder gives is not named, though its descriptor is still not written.
 - The refusal itself, and the acknowledgement that goes past it, are not built here. This record gives them something to refuse on.
 
+  > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged)).** Built: a run with such a file is refused before anything is written, unless it acknowledges wider access.
+
 ## What this does not do
 
 - **Refuse.** The plan names the files. The run still restores them, as before. Making the run refuse unless a person acknowledges it is architecture 06 §3's other half.
+
+  > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged)).** The run refuses now, before anything is written, unless it acknowledges wider access.
 - **Judge a folder.** A folder the restore makes takes container-inheriting entries, not file ones, and its own access is not compared.
 - **Judge a descriptor that does not read.** With no DACL to compare, nothing is said beyond the line that already declares it.
 - **Follow group membership.** An account that gains access through a group is counted only where the group itself gains.
@@ -74,8 +82,40 @@ A file whose owner is refused still gets its DACL (ADR-0176 Amendment 1), so it 
 - **Judge by whether the captured DACL was protected.** Rejected. Protection says the file did not inherit, not that its folder would give more. A protected DACL that granted Users read loses nothing to a folder that grants Users read.
 - **Re-read the access the file actually gets after the run.** Rejected for the plan. The point is to say it before anything moves. A receipt that reads back what landed is a separate check, not this one.
 
+## Amendment 1 (2026-10) — a run that would open a file wider is refused unless acknowledged
+
+### Context
+
+The plan names the files a restore would open wider (§4), and the run restored them all the same. Architecture 06 §3 reserves refusal for exactly these files, and asks for explicit acknowledgement. A person who ran without reading the plan, or through a client that never showed it, got a file open to accounts it never was. Nothing said so but a line they may not have seen.
+
+### Decision
+
+1. **A run judges what its plan judges.** Before anything is written, a run holds each file against the folder it lands in, by §§1–4. A run is asked without its plan's facts, so it reads each file's manifest for this.
+   - It reads them a wave at a time, so a blob that holds many is read once.
+   - It reads only a file whose folder says what a file made there takes. Off Windows no folder says, and nothing more is read.
+   - A manifest that will not read is passed over. The run fails that file, and opens nothing wider.
+2. **Such a run is refused.** A run with any such file is refused before anything is written, and leaves no run to resume. The refusal names the files, the folders and the accounts that gain, in the plan's words. It is judged before the run's room is measured.
+3. **A person may go on.** A run that acknowledges wider access runs as before, and reads nothing more.
+   - The service takes `acknowledge_wider_access` on `run_restore` and `resume_restore` (contract 1.80).
+   - The command line takes `--acknowledge-wider-access` on `restore` and `restore-resume`. Direct mode refuses and goes on the same way.
+   - A resume asks again. The run's acknowledgement is not kept with it.
+4. **The plan counts them.** The plan says how many such files there are, as `opened_wider` (contract 1.80), so a client can ask for the acknowledgement its run needs. The command line's plan exits non-zero where there are any, as it does where the run would not fit.
+
+### Consequences
+
+- A restore of a private file into a folder that shares with Users stops before it writes anything, naming Users, through the service and direct mode alike.
+- On Windows a run reads each file's manifest once more before it writes, a blob at a time. A run that acknowledges wider access reads nothing more, and off Windows no run does.
+- The run and its plan judge the same folder: the one the run is told to write to, read where it stands. A quarantined run's own folder, made below it, takes what that folder passes down.
+
+### What this does not do
+
+- **Ask in the console.** The console shows the plan's line, and sends no acknowledgement. A run it asks is refused, naming the files, until its wizard gives the person a way to go on. That is the next record's.
+- **Keep the acknowledgement.** A resume, and a later run of the same plan, ask for it again.
+- **Judge more than §4 does.** A folder, a descriptor that does not read and a group's members are left as §4 leaves them.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The plan reads each captured DACL's access per account, and the access a file would take from the folder it lands in. For a file whose descriptor will not be written, it names those opened wider, the folders and the accounts that gain, through the service and direct mode alike. `Domain/WindowsAccess`; `Domain/WindowsSecurityDescriptor`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Restore/RestoreBlobSet`; `Domain.Tests/WindowsAccessTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Cli.Tests/RestoreHonestyCommandTests` |
+| 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run that a folder would open a file wider in is refused before anything is written, naming the files, the folders and the accounts, unless it acknowledges wider access, through the service, direct mode and a resume. The run reads each file's manifest for it, a blob at a time, only where a folder says what a file takes, and the plan counts the files (contract 1.80). `Restore/RestoreMetadata`; `Agent/ServiceCommandHandler`; `Cli/OperationGateway`; `Cli/CliApplication`; `Cli/RestorePlanReport`; `Api/Commands`; `Api/Results`; `Api/ContractVersion`; `Repository.Tests/RestoreMetadataHonestyTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Hosts.Tests/RestoreUnfinishedServiceTests`; `Cli.Tests/RestoreHonestyCommandTests`; `Cli.Tests/GatewayRestoreReportTests`; `Cli.Tests/RestoreResumeVerbTests`; `Api.Tests/ConfigurationContractTests` |

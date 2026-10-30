@@ -218,6 +218,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, DirectGateway_RestoreWouldNotFit, arg0);
 
     /// <summary>
+    /// {0} Nothing was written. Restore them into a folder that gives no more than they had, or pass --acknowledge-wider-access to restore anyway.
+    /// </summary>
+    private static string DirectGateway_RestoreWouldOpenWider => Get(nameof(DirectGateway_RestoreWouldOpenWider));
+
+    /// <summary>
+    /// {0} Nothing was written. Restore them into a folder that gives no more than they had, or pass --acknowledge-wider-access to restore anyway.
+    /// </summary>
+    internal static string FormatDirectGateway_RestoreWouldOpenWider(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, DirectGateway_RestoreWouldOpenWider, arg0);
+
+    /// <summary>
     /// In direct mode a restore lands in place, where --output points, so there is no run to name: pass --resume alone.
     /// </summary>
     internal static string DirectGateway_ResumeLandsInPlace => Get(nameof(DirectGateway_ResumeLandsInPlace));

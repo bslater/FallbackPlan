@@ -614,6 +614,14 @@ public sealed record PlanRestoreCommand(
 /// that includes a copy beside a file in the way, under a name the restore
 /// writes beside (ADR-0109 Amendment 1). Null resumes nothing.
 /// </param>
+/// <param name="AcknowledgeWiderAccess">
+/// Whether to run although a folder it writes to would open a file wider than
+/// it was (contract 1.80, FR-RST-003, ADR-0178 Amendment 1): the file's
+/// descriptor names an account the machine does not know, so it is not
+/// written, and the folder gives some account access the file's own did not.
+/// False, the default, refuses such a run before anything is written, naming
+/// the files, the folders and the accounts that gain, as the plan does.
+/// </param>
 public sealed record RunRestoreCommand(
     string SnapshotId,
     string? Path,
@@ -624,7 +632,8 @@ public sealed record RunRestoreCommand(
     string? Existing = null,
     bool InPlace = false,
     bool IgnoreFreeSpace = false,
-    string? Resume = null) : ServiceCommand;
+    string? Resume = null,
+    bool AcknowledgeWiderAccess = false) : ServiceCommand;
 
 /// <summary>
 /// Lists the restore runs the service began and has not seen finish
@@ -673,7 +682,13 @@ public sealed record GetRestoreReceiptCommand(string Run, string? Source = null,
 /// <param name="Run">The run, as <see cref="ListRestoreRunsCommand"/> or the run's own result names it.</param>
 /// <param name="Source">An open restore source of the run's snapshot to read from; null reads the staging archives.</param>
 /// <param name="IgnoreFreeSpace">Whether to run although the volume looks too small, as <see cref="RunRestoreCommand"/> takes it.</param>
-public sealed record ResumeRestoreCommand(string Run, string? Source = null, bool IgnoreFreeSpace = false) : ServiceCommand;
+/// <param name="AcknowledgeWiderAccess">
+/// Whether to run although a folder would open a file wider than it was, as
+/// <see cref="RunRestoreCommand"/> takes it (contract 1.80). The run's own
+/// acknowledgement is not kept with it, so a resume asks again.
+/// </param>
+public sealed record ResumeRestoreCommand(
+    string Run, string? Source = null, bool IgnoreFreeSpace = false, bool AcknowledgeWiderAccess = false) : ServiceCommand;
 
 /// <summary>
 /// Plans the resume of a restore run left unfinished, by its name alone

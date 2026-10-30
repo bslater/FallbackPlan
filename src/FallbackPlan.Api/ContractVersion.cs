@@ -791,8 +791,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// keeps no receipt of is not found, and what is not a run's name is
     /// refused. Additive: a pre-1.79 service refuses the command as unknown.
     /// </para>
+    /// <para>
+    /// 1.80 refuses a run that a folder would open a file wider in, unless it
+    /// is acknowledged (FR-RST-003, ADR-0178 Amendment 1). `run_restore` and
+    /// `resume_restore` take `acknowledge_wider_access`; without it, a run
+    /// whose file's descriptor will not be written, and whose folder gives
+    /// some account access the file's own did not, is refused before anything
+    /// is written, naming the files, the folders and the accounts that gain.
+    /// `restore_plan` says how many such files there are in `opened_wider`.
+    /// Additive on the wire, and a client that never sends the field is
+    /// refused, never passed: a pre-1.80 service ignores the field and runs.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 79);
+    public static ContractVersion Current { get; } = new(1, 80);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

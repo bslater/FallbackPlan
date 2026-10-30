@@ -42,7 +42,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// streams, save those only Linux's kernel reads (ADR-0177), and the plan
 /// names a file whose attribute's name no stream is kept under (ADR-0177
 /// Amendment 1). Where the target keeps compression, a compressed file's
-/// bits are no longer among those it names (ADR-0175 Amendment 2).
+/// bits are no longer among those it names (ADR-0175 Amendment 2). The plan
+/// names a file its folder would open wider than it was (ADR-0178), and
+/// counts such files; a run, asked without its plan's facts, reads each
+/// file's manifest to count them as its plan does, a blob at a time, and
+/// nothing where no folder says what a file takes (ADR-0178 Amendment 1).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -65,6 +69,18 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
 
     /// <summary>An id no account or group is given on any machine the suite runs on.</summary>
     private const uint Unclaimed = 54_321;
+
+    /// <summary>An account the machine knows, by SID.</summary>
+    private const string Ana = "S-1-5-21-1-2-3-1001";
+
+    /// <summary>An account the machine does not know, by SID.</summary>
+    private const string Stranger = "S-1-5-21-9-9-9-4242";
+
+    private const string LocalSystem = "S-1-5-18";
+    private const string Users = "S-1-5-32-545";
+    private const string Administrators = "S-1-5-32-544";
+    private const uint FullControl = 0x1F01FF;
+    private const uint ReadAndExecute = 0x1200A9;
 
     private static readonly RestoreTargetProfile Posix = new()
     {
@@ -404,51 +420,9 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     [TestMethod]
     public async Task Plan_AFileWhoseDescriptorIsNotWritten_AndWhoseFolderGivesMore_IsDeclared_NamingWhoGainsAccess()
     {
-        const string Ana = "S-1-5-21-1-2-3-1001";
-        const string Stranger = "S-1-5-21-9-9-9-4242";
-        const string LocalSystem = "S-1-5-18";
-        const string Users = "S-1-5-32-545";
-        const string Administrators = "S-1-5-32-544";
-        const uint FullControl = 0x1F01FF;
-        const uint ReadAndExecute = 0x1200A9;
-        var source = new FakeFileSystemSource();
-        void Add(string name, byte seed, params byte[][] aces) =>
-            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata = new EntryMetadata
-            {
-                ModifiedAt = Modified,
-                WindowsSecurityDescriptor = SecurityDescriptors.Build(Stranger, null, SecurityDescriptors.Acl(aces), SecurityDescriptors.Protected),
-            };
-        var strangers = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Stranger, FullControl);
-        var system = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, LocalSystem, FullControl);
-        Add("private.bin", 60, strangers, system);
-        Add("shared.bin", 61, strangers, system,
-            SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Users, ReadAndExecute),
-            SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Administrators, FullControl));
-        source.AddFile("docs/known.bin", Deterministic(700, 62)).Metadata = new EntryMetadata
-        {
-            ModifiedAt = Modified,
-            WindowsSecurityDescriptor = SecurityDescriptors.Build(
-                Ana, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Ana, FullControl))),
-        };
-
-        // A folder the restore makes takes what passes to folders, not to
-        // files, so its own is not judged.
-        source.Folders["docs"] = new EntryMetadata
-        {
-            ModifiedAt = Modified,
-            WindowsSecurityDescriptor = SecurityDescriptors.Build(Stranger, null, SecurityDescriptors.Acl(strangers, system), SecurityDescriptors.Protected),
-        };
-
-        var (plan, facts) = await PublishAndProbeAsync(source, 0xDD);
+        var (plan, facts) = await PublishAndProbeAsync(KeptToAStranger(), 0xDD);
         var here = Path.Combine(SpoolDirectory, "restored-here");
-        var keeps = Posix with
-        {
-            SupportsSecurityDescriptors = true,
-            KnowsAccount = account => account != Stranger,
-            InheritedAccessAt = folder => folder == here
-                ? new Dictionary<string, uint> { [LocalSystem] = FullControl, [Users] = ReadAndExecute, [Administrators] = FullControl }
-                : null,
-        };
+        var keeps = SharingWithUsers(here);
         var declared = RestoreMetadata.Declare(plan, facts, keeps, _ => here);
 
         var wider = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "wider-access"));
@@ -463,6 +437,111 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         // access does not read, nothing is said of it.
         Assert.DoesNotContain(degradation => degradation.Capability == "wider-access", RestoreMetadata.Declare(plan, facts, keeps));
         Assert.DoesNotContain(degradation => degradation.Capability == "wider-access", RestoreMetadata.Declare(plan, facts, keeps, _ => SpoolDirectory));
+    }
+
+    [TestMethod]
+    public async Task OpenedWider_CountsTheFilesTheirFolderWouldOpenWider_WithTheFolderAndTheAccountsThatGain()
+    {
+        var (plan, facts) = await PublishAndProbeAsync(KeptToAStranger(), 0xDF);
+        var here = Path.Combine(SpoolDirectory, "restored-here");
+        var keeps = SharingWithUsers(here);
+
+        var wider = RestoreMetadata.OpenedWider(plan, facts, keeps, _ => here);
+
+        Assert.IsNotNull(wider);
+        Assert.AreEqual(1, wider.Files);
+        Assert.AreEqual(here, Assert.ContainsSingle(wider.Folders));
+        CollectionAssert.AreEquivalent(new[] { Users, Administrators }, wider.Accounts.ToArray());
+        Assert.AreEqual(
+            Assert.ContainsSingle(RestoreMetadata.Declare(plan, facts, keeps, _ => here).Where(degradation => degradation.Capability == "wider-access")).Detail,
+            wider.Describe(),
+            "the plan's line says what the count says");
+
+        Assert.IsNull(RestoreMetadata.OpenedWider(plan, facts, keeps, destinationOf: null));
+        Assert.IsNull(RestoreMetadata.OpenedWider(plan, facts, keeps, _ => SpoolDirectory));
+
+        // Only a descriptor the target would otherwise write is held to its
+        // folder: one it writes none of is the line every descriptor is on.
+        Assert.IsNull(RestoreMetadata.OpenedWider(plan, facts, keeps with { SupportsSecurityDescriptors = false }, _ => here));
+    }
+
+    [TestMethod]
+    public async Task OpenedWider_ForARun_ReadsEachFilesManifest_AndSaysWhatItsPlanSays()
+    {
+        // A run is asked without its plan's facts, so it reads the
+        // descriptors itself before it writes (ADR-0178 Amendment 1).
+        var (store, keys, catalogue) = await PublishAsync(KeptToAStranger(), 0xE0);
+        using (keys)
+        using (catalogue)
+        {
+            var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xE0, 16).ToArray(), string.Empty, Posix);
+            var here = Path.Combine(SpoolDirectory, "restored-here");
+            using var reader = new RepositoryReader(Repo, keys, store, Authority);
+            reader.UseLocationSource(catalogue.ResolveLocation);
+
+            var wider = await RestoreMetadata.OpenedWiderAsync(plan, SharingWithUsers(here), _ => here, reader, CancellationToken.None);
+
+            Assert.IsNotNull(wider);
+            Assert.AreEqual(1, wider.Files);
+            Assert.AreEqual(here, Assert.ContainsSingle(wider.Folders));
+            CollectionAssert.AreEquivalent(new[] { Users, Administrators }, wider.Accounts.ToArray());
+        }
+    }
+
+    [TestMethod]
+    public async Task OpenedWider_ForARun_ReadsNothing_WhereNoFolderItWritesToSaysWhatAFileTakes()
+    {
+        // Off Windows no folder says, so a run there reads nothing more than
+        // it did.
+        var (store, keys, catalogue) = await PublishAsync(KeptToAStranger(), 0xE1);
+        using (keys)
+        using (catalogue)
+        {
+            var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xE1, 16).ToArray(), string.Empty, Posix);
+            var counting = new CountingObjectStore(store);
+            using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+            reader.UseLocationSource(catalogue.ResolveLocation);
+
+            var wider = await RestoreMetadata.OpenedWiderAsync(
+                plan, SharingWithUsers(Path.Combine(SpoolDirectory, "restored-here")), _ => SpoolDirectory, reader, CancellationToken.None);
+
+            Assert.IsNull(wider);
+            Assert.AreEqual(0, counting.Reads);
+        }
+    }
+
+    [TestMethod]
+    public async Task OpenedWider_ForARun_ReadsTheManifestsTogether_NotOneRequestAFile()
+    {
+        // A metadata blob holds many files' manifests, and a run that asked
+        // for each alone would cost a request a file before writing one.
+        var source = new FakeFileSystemSource();
+        for (var index = 0; index < 24; index++)
+        {
+            source.AddFile($"docs/file-{index:00}.bin", Deterministic(300, (byte)index)).Metadata = KeptTo(Stranger);
+        }
+
+        var (store, keys, catalogue) = await PublishAsync(source, 0xE2);
+        using (keys)
+        using (catalogue)
+        {
+            var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xE2, 16).ToArray(), string.Empty, Posix);
+            var files = plan.Items.Where(item => item.Kind == EntryKind.File).ToList();
+            var blobs = files.Select(item => catalogue.ResolveLocation(item.ObjectId)!.BlobId).Distinct().Count();
+            Assert.IsLessThan(files.Count, blobs, "the fixture must put several manifests in one blob");
+            var here = Path.Combine(SpoolDirectory, "restored-here");
+            var counting = new CountingObjectStore(store);
+            using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+            reader.UseLocationSource(catalogue.ResolveLocation);
+
+            var wider = await RestoreMetadata.OpenedWiderAsync(plan, SharingWithUsers(here), _ => here, reader, CancellationToken.None);
+
+            Assert.IsNotNull(wider);
+            Assert.AreEqual(files.Count, wider.Files);
+            Assert.AreEqual(here, Assert.ContainsSingle(wider.Folders), "each folder said once");
+            CollectionAssert.AreEquivalent(new[] { Users, Administrators }, wider.Accounts.ToArray(), "and each account");
+            Assert.IsLessThanOrEqualTo((int)Math.Ceiling(blobs * 1.2), counting.Reads, "NFR-PERF-009's budget, a blob at a time");
+        }
     }
 
     [TestMethod]
@@ -936,6 +1015,67 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         Assert.AreEqual("ana", known.Owner);
         Assert.AreEqual("staff", known.Group);
     }
+
+    /// <summary>
+    /// Three files and their folder: one kept to an unknown account and the
+    /// system, one that also gave Users and Administrators what a shared
+    /// folder gives, and one kept to a known account (ADR-0178).
+    /// </summary>
+    private static FakeFileSystemSource KeptToAStranger()
+    {
+        var source = new FakeFileSystemSource();
+        var strangers = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Stranger, FullControl);
+        var system = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, LocalSystem, FullControl);
+        source.AddFile("docs/private.bin", Deterministic(700, 60)).Metadata = KeptTo(Stranger, strangers, system);
+        source.AddFile("docs/shared.bin", Deterministic(700, 61)).Metadata = KeptTo(
+            Stranger,
+            strangers,
+            system,
+            SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Users, ReadAndExecute),
+            SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Administrators, FullControl));
+        source.AddFile("docs/known.bin", Deterministic(700, 62)).Metadata = new EntryMetadata
+        {
+            ModifiedAt = Modified,
+            WindowsSecurityDescriptor = SecurityDescriptors.Build(
+                Ana, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Ana, FullControl))),
+        };
+
+        // A folder the restore makes takes what passes to folders, not to
+        // files, so its own is not judged.
+        source.Folders["docs"] = KeptTo(Stranger, strangers, system);
+        return source;
+    }
+
+    /// <summary>A protected descriptor owned by <paramref name="owner"/>, its DACL <paramref name="aces"/>, or the owner and the system alone.</summary>
+    private static EntryMetadata KeptTo(string owner, params byte[][] aces) => new()
+    {
+        ModifiedAt = Modified,
+        WindowsSecurityDescriptor = SecurityDescriptors.Build(
+            owner,
+            null,
+            SecurityDescriptors.Acl(aces.Length > 0
+                ? aces
+                :
+                [
+                    SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, owner, FullControl),
+                    SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, LocalSystem, FullControl),
+                ]),
+            SecurityDescriptors.Protected),
+    };
+
+    /// <summary>
+    /// A target that writes descriptors, knows every account but the
+    /// stranger, and reads <paramref name="here"/> as a folder giving files
+    /// the system, Users and Administrators; any other folder does not read.
+    /// </summary>
+    private static RestoreTargetProfile SharingWithUsers(string here) => Posix with
+    {
+        SupportsSecurityDescriptors = true,
+        KnowsAccount = account => account != Stranger,
+        InheritedAccessAt = folder => folder == here
+            ? new Dictionary<string, uint> { [LocalSystem] = FullControl, [Users] = ReadAndExecute, [Administrators] = FullControl }
+            : null,
+    };
 
     private static byte[] Deterministic(int length, byte seed)
     {
