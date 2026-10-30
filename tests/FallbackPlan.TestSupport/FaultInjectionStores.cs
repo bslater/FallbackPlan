@@ -997,3 +997,61 @@ public sealed class UnreadableObjectStore(IObjectStore inner, Func<string, bool>
         ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
         inner.DeleteAsync(key, conditions, cancellationToken);
 }
+
+/// <summary>
+/// Serves a matching object's first reads, then deletes it from the inner
+/// store before the read after them: a collector's sweep or a staging trim
+/// landing while a restore that already read from the blob is still reading
+/// it.
+/// </summary>
+/// <param name="inner">The store that holds the bytes.</param>
+/// <param name="swept">Which key goes.</param>
+/// <param name="servedReads">How many reads of it are served before it goes.</param>
+public sealed class SweptAfterReadObjectStore(IObjectStore inner, Func<string, bool> swept, int servedReads)
+    : IObjectStore
+{
+    private int _reads;
+
+    /// <summary>How many reads of it were asked for.</summary>
+    public int Reads => Volatile.Read(ref _reads);
+
+    /// <summary>Whether the object has gone.</summary>
+    public bool Swept => Reads > servedReads;
+
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities => inner.Capabilities;
+
+    /// <inheritdoc />
+    public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+        inner.GetMetadataAsync(key, cancellationToken);
+
+    /// <inheritdoc />
+    public async ValueTask<OpenReadResult> OpenReadAsync(
+        ObjectKey key, ObjectRange? range, CancellationToken cancellationToken)
+    {
+        if (swept(key.Value) && Interlocked.Increment(ref _reads) == servedReads + 1)
+        {
+            await inner.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await inner.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<PutResult> PutAsync(
+        ObjectKey key,
+        Func<CancellationToken, ValueTask<Stream>> openContent,
+        PutConditions conditions,
+        CancellationToken cancellationToken) =>
+        inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<ObjectEntry> ListAsync(
+        ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+        inner.ListAsync(prefix, options, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<DeleteResult> DeleteAsync(
+        ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+        inner.DeleteAsync(key, conditions, cancellationToken);
+}

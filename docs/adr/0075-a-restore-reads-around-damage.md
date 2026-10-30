@@ -138,6 +138,13 @@ named, in its own turn.
 With every copy failed, the record fails as it did (FR-RST-005), and the failure
 names each copy tried.
 
+> **Gone-during-the-run note (2026-10).** "Not held" now covers a blob that
+> goes from the own store while the run reads it: the collector's sweep or
+> the staging trim landing after the reader had located and framed it. The
+> reader asks the store when such a read fails as damage fails, and passes
+> the own store over as not holding the blob, never as damaged — see
+> [ADR-0172](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md).
+
 ### 6. What is said
 
 - **The receipt (schema 5).** Each item says which copies its content came from
@@ -261,3 +268,4 @@ reason: it would condemn a drive for being unplugged.
 | 2026-09 | Accepted | Built tests first (the reader, the receipt, the service, the contract, the CLI and the console), with each rule's removal confirmed to turn exactly its tests red: a named source read around, the findings dropped, the plan blind to the copies, and a failed location taken for damage at a copy or at the own store. Amends ADR-0034 §6 |
 | 2026-09 | Accepted (related) | [ADR-0076](0076-damage-is-traced-to-what-needs-it.md): the notice a restore raises for damage it found names the files and snapshots the damage reaches, and the pair it fails is failed for that damage alone. `Agent/ServiceCommandHandler` |
 | 2026-10 | Amended | [ADR-0095](0095-the-staging-archive-heals.md) amends §7: damage a restore reads around in the staging archive is recorded for the staging archive's sweep, which repairs it from the set's destinations on the next pass. `Agent/ServiceCommandHandler`, `Application/StagingSweepStore`; `Hosts.Tests/RestoreReadAroundTests` |
+| 2026-10 | Amended (§5) | A blob that goes from the own store while the run reads it is passed over as not held, not damaged, and no longer ends the run ([ADR-0172](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md)). `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |

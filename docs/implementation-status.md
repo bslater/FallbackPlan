@@ -196,6 +196,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0169](adr/0169-the-console-lets-go-by-age-what-began-or-ended-longer-ago.md) | The console lets go by age: the dialogs that let every run left unfinished and every kept receipt go take optional days, let go only what began or ended longer ago, say how many stay, and name a receipt that does not say when its run ended | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0169--the-console-lets-go-by-age-what-began-or-ended-longer-ago) |
 | [0170](adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) | A restore plan judges names by the target's naming rules: a name no target restores, and for a Windows target a name Windows would refuse or alter, is a conflict before any byte moves; a restore that runs on Windows refuses such a name rather than letting Windows write it under another | **Built** | `Domain/RestorePaths` · `Restore/RestorePlan` · `Domain.Tests/WindowsNamesTests` · `Repository.Tests/EndToEnd/RestorePlanTests` · [notes](#0170--a-restore-plan-judges-names-by-the-targets-naming-rules) |
 | [0171](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) | A destination that refuses a delete keeps what it reaches, and the sync goes on: a delete the store refuses, or answers "not found" for an object still listed, is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync | **Built** | `Replication/StoreToStoreCopier` · `Agent/FanOut` · `Replication.Tests/ConvergeRefusalTests` · `Hosts.Tests/ObjectStoreDestinationTests` · [notes](#0171--a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on) |
+| [0172](adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) | A blob that goes while a restore reads it is one the store no longer holds: a read that fails as damage fails asks the store, and a blob it no longer holds is forgotten, read around as not held or failed, and never ends the run | **Built** | `Repository/RepositoryReader` · `Repository.Tests/RestoreBesideCollectionTests` · [notes](#0172--a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds) |
 
 ---
 
@@ -4543,3 +4544,32 @@ What remains is recorded rather than done:
 - the staging sweep does not total what it could not reclaim;
 - a versioned bucket's delete marker is taken for a delete;
 - a direct-ship sink reports a delete done when any one destination did.
+
+### 0172 — a blob that goes while a restore reads it is one the store no longer holds
+
+The prior-art review's T-4 asked for compaction run while a restore
+reads. That held already: a restore resolves each record through the
+live catalogue when it reads it, and a compaction publishes the move
+before the drained blob can go.
+
+What a reader keeps for the run is about blobs: where each is, how it
+is framed, and its footer. The collector's sweep and the staging trim
+do not wait for a restore, so a blob could go after the reader learned
+those things. The next read of it failed as damage fails:
+
+- at format 2, and under a reader that loaded every footer, as a
+  `BlobFormatException` that nothing caught, so the run ended with no
+  receipt, even where another copy held the blob;
+- at later formats, as a blob the reader then filed as damaged.
+
+A read that fails that way now asks the store. A blob it no longer
+holds is forgotten, and its records are read from another copy, with
+the own store passed over as not holding it, or they fail and the run
+goes on. A blob it still holds is damage, as before.
+
+What remains is recorded rather than done:
+
+- the collector is not held off a restore, so a snapshot swept while it
+  is restored loses the files whose blobs went;
+- such a failure still reads as a format violation, not "not held";
+- at another copy, a blob that went is still passed over as damaged.

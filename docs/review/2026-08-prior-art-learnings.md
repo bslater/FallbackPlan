@@ -151,6 +151,11 @@ Three things the surveyed history says those criteria are missing:
 - `Compaction_RunsWhileARestoreIsReading_NeverRemovesAnObjectTheRestoreNeeds`
 - `Compaction_Completed_LeavesEveryManifestUnmodified` (the roadmap already promises "compaction modifies no manifest"; this makes it a test)
 
+> **Partly resolved (2026-10).** Compaction was built since this was written ([ADR-0067](../adr/0067-the-keyless-compactor.md)), and two of the three tests now stand.
+> - **A restore reading beside compaction.** `Repository.Tests/RestoreBesideCollectionTests` holds it verbatim-named, at formats 3 and 5. A restore resolves each record when it reads it, and the move is published before the drained blob can go, so it passed as it stood. The case beside it did not: a blob the collector's sweep or the staging trim removed after the reader had framed it ended the run at format 2, and read as damage later. [ADR-0172](../adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) fixes both.
+> - **No manifest modified.** `InterruptionTests/CompactionInterruptionTests` holds it as `ACompactionOfEveryDataBlob_ChangesNoSnapshotOrManifestByte`.
+> - **Double interruption stays open.** A compaction cut at each step, and the next pass finishing it, are tested; one cut twice and then recovered is not.
+
 ---
 
 ### T-5 — A well-formed index that lies
@@ -423,6 +428,8 @@ There is a new surface, created this week. [C2](../adr/0031-exception-messages-a
 > **2026-10.** T-5 is resolved, without the forger it was waiting on.
 >
 > **2026-10.** T-12 is partly resolved ahead of its phase: a destination that refuses a delete no longer fails its sync. Its note says what stays open.
+>
+> **2026-10.** T-4 is partly resolved: two of its three tests stand, and the double interruption is open.
 
 **Phase-gated, recorded as exit criteria now:** T-4 (three), T-11 (one), T-12 (one).
 
