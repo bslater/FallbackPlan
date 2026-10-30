@@ -38,6 +38,8 @@ The run reads each folder's tree when it reaches the folder, makes the folder, a
 
 The run keeps only what the rule can apply, plus which attributes were captured. A tree of many folders holds no security descriptors or extended attributes the run will not write.
 
+> **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A folder's security descriptor is now kept where the target writes one, and written after the folder's times and before its attribute bits.
+
 > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** A folder's extended attributes are now written back by the file's rule, so the run keeps them with the rest. A folder's default ACL goes on with them, after the files restored into it are made, so none of them inherits from it.
 
 ### 3. A folder already there keeps its own
@@ -63,6 +65,9 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 - The receipt names, per folder, what was not applied. On Windows that now includes each folder's attribute bits, so the service and CLI tests count three items where they counted two.
 
   > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** A folder's attribute bits now come back on Windows with the files', so there those tests list none.
+
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** So does a folder's security descriptor, so there those tests list neither.
+
 - The run reads one more record per folder. A folder's tree sits in the metadata blobs beside its files' manifests, and the read-ahead fetches them together, so the read budget is unchanged (NFR-PERF-009).
 - A folder's metadata goes on later than a file's. The check in §4 narrows the window in which a link can redirect it to the one between the check and the write. That window, and the one each file's writes already had between its containment check and its landing, are a restore writing by path into a tree another account can change. [The threat model](../threat-model.md) now says so, and advises restoring in place only into a folder no other account can write to.
 
@@ -73,6 +78,8 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
   > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's alternate streams are now written back on Windows, where the volume keeps them. A folder is captured with none.
 
   > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** A file's and a folder's Windows attribute bits are now written back on Windows: read-only, hidden, system, archive and not-content-indexed, as the last write. A bit no restore sets, as compressed or encrypted, is named.
+
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A file's and a folder's Windows security descriptor is now written back on Windows, after the times and before the attribute bits, where the machine knows every account it names. One that names an account it does not know is named, and the file keeps its folder's access.
 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back, for folders as for files. The rest of this item remains owed.
 
@@ -104,3 +111,4 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool gives each folder it made its own metadata by this record's rule, last and deepest first, never through a link; a folder already in the output and the output itself keep their own. |
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows; a folder carries none. |
 | 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): a file's and a folder's Windows attribute bits are written back on Windows. |
+| 2026-10 | Accepted | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): a file's and a folder's Windows security descriptor is written back on Windows where the machine knows every account it names. |

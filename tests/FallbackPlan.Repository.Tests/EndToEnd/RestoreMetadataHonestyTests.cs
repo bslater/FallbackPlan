@@ -33,8 +33,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// keeps a file as its own and gives it a group it is in. The plan
 /// predicts that per file. Extended attributes are written back where the
 /// target writes them (ADR-0087). A symlink gets its own back by the same
-/// rule, onto the link itself (ADR-0101). Security descriptors and file
-/// attributes are captured and recorded, not yet written back.
+/// rule, onto the link itself (ADR-0101). On Windows a file's attribute
+/// bits are written back (ADR-0175), and its security descriptor where the
+/// target knows every account it names (ADR-0176), which the plan predicts
+/// per file.
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -354,6 +356,39 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         var (plan, facts) = await PublishAndProbeAsync(EmptyDescriptor(), 0xD4);
 
         Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptors", RestoreMetadata.Declare(plan, facts, Posix));
+    }
+
+    [TestMethod]
+    public async Task Plan_ASecurityDescriptor_IsDeclaredWhereItNamesAnAccountTheTargetDoesNotKnow_OrDoesNotRead()
+    {
+        const string Ana = "S-1-5-21-1-2-3-1001";
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        var source = new FakeFileSystemSource();
+        void Add(string name, byte[] descriptor, byte seed) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata =
+                new EntryMetadata { ModifiedAt = Modified, WindowsSecurityDescriptor = descriptor };
+        Add("known.bin", Granting(Ana), 30);
+        Add("stranger.bin", Granting(Stranger), 31);
+        Add("another-stranger.bin", Granting(Stranger), 32);
+        Add("unread.bin", [1, 2, 3], 33);
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xD5);
+        var keeps = Posix with { SupportsSecurityDescriptors = true, KnowsAccount = account => account != Stranger };
+        var declared = RestoreMetadata.Declare(plan, facts, keeps);
+
+        var strangers = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "security-descriptor-accounts"));
+        Assert.Contains("2 file(s)", strangers.Detail, StringComparison.Ordinal);
+        Assert.Contains("does not know", strangers.Detail, StringComparison.Ordinal);
+        var unread = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "security-descriptors"));
+        Assert.Contains("1 file(s)", unread.Detail, StringComparison.Ordinal);
+
+        // Where the target keeps none, every descriptor is declared as before.
+        var none = RestoreMetadata.Declare(plan, facts, Posix);
+        Assert.Contains("4 file(s)", Assert.ContainsSingle(none.Where(degradation => degradation.Capability == "security-descriptors")).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptor-accounts", none);
+
+        static byte[] Granting(string account) => SecurityDescriptors.Build(
+            Ana, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, account)));
     }
 
     private static FakeFileSystemSource EmptyDescriptor()

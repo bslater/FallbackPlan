@@ -984,7 +984,11 @@ public sealed class RestoreExecutor(
                 folders.Add(new Folder(
                     items.Count - 1, item, destination, found,
                     captured is null ? CapturedMetadata.None : MetadataRules.Captured(captured),
-                    captured is null ? null : captured with { WindowsSecurityDescriptor = null, AlternateStreams = [] },
+                    captured is null ? null : captured with
+                    {
+                        WindowsSecurityDescriptor = target.SupportsSecurityDescriptors ? captured.WindowsSecurityDescriptor : null,
+                        AlternateStreams = [],
+                    },
                     unread));
                 continue;
             }

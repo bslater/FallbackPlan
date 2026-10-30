@@ -29,6 +29,19 @@ public sealed record MetadataTarget
     public bool SupportsFileAttributes { get; init; }
 
     /// <summary>
+    /// Whether a file's and a folder's Windows security descriptor is written
+    /// back: Windows keeps one, and nothing else does (ADR-0176).
+    /// </summary>
+    public bool SupportsSecurityDescriptors { get; init; }
+
+    /// <summary>
+    /// Whether this machine knows an account a captured descriptor names, by
+    /// its SID: a descriptor is written back only where it knows every one
+    /// (<see cref="WindowsAccounts.Knows"/>; ADR-0176).
+    /// </summary>
+    public Func<string, bool> KnowsAccount { get; init; } = WindowsAccounts.Knows;
+
+    /// <summary>
     /// Whether this installation captured what is restored, so that a Linux
     /// ACL naming accounts by number names the accounts it meant (ADR-0087).
     /// False unless a caller that knows who captured it says so.
@@ -49,6 +62,7 @@ public sealed record MetadataTarget
         SupportsCreationTimes = FileTimes.CanSetCreationTime,
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
         SupportsFileAttributes = OperatingSystem.IsWindows(),
+        SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
         Account = RestoreAccount.OfThisProcess(),
     };
 }

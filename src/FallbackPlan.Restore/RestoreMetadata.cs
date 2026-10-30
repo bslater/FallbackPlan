@@ -25,6 +25,11 @@ namespace FallbackPlan.Restore;
 /// it kept proves (<see cref="RestoreSpace.HeldBytes"/>; ADR-0132,
 /// ADR-0136). None for a plan of a run afresh.
 /// </param>
+/// <param name="Accounts">
+/// The SIDs its captured Windows security descriptor names, which the plan
+/// asks the target whether it knows (ADR-0176), or null where it carries none
+/// or one that does not read.
+/// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -34,7 +39,8 @@ public sealed record RestoreItemFacts(
     uint? Mode = null,
     ExtendedAttributeKinds Attributes = ExtendedAttributeKinds.None,
     string? HardLink = null,
-    ulong HeldBytes = 0);
+    ulong HeldBytes = 0,
+    IReadOnlyList<string>? Accounts = null);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
@@ -52,8 +58,11 @@ public sealed record RestoreItemFacts(
 /// decided item by item. A set-user-id or set-group-id bit is kept only
 /// where the owner or group it goes with was given back. Extended
 /// attributes come back where the target writes them, each alone, with the
-/// exceptions <c>MetadataRules.Withheld</c> names. Nothing else is written back
-/// yet. A symlink the run makes is held to the same rule, onto the link
+/// exceptions <c>MetadataRules.Withheld</c> names. On Windows a file's and a
+/// folder's attribute bits come back (ADR-0175), and their security
+/// descriptor where the target knows every account it names (ADR-0176),
+/// which is decided item by item too. Nothing else is written back yet. A
+/// symlink the run makes is held to the same rule, onto the link
 /// itself, where the platform has a call that does not follow it: its
 /// permissions only where the platform keeps a link's own, and on Linux,
 /// which gives every link the same ones, a link's captured permissions land
@@ -120,6 +129,11 @@ public static class RestoreMetadata
         if (target.SupportsFileAttributes)
         {
             applied |= CapturedMetadata.FileAttributes;
+        }
+
+        if (target.SupportsSecurityDescriptors)
+        {
+            applied |= CapturedMetadata.SecurityDescriptor;
         }
 
         return applied;
@@ -204,6 +218,12 @@ public static class RestoreMetadata
     /// (<c>MetadataRules.WithoutAcl</c>).
     /// </para>
     /// <para>
+    /// On a target that writes security descriptors, one is declared where it
+    /// names an account the target does not know, on a line of its own,
+    /// because no privilege mends that, and with the rest where it does not
+    /// read as a descriptor at all (ADR-0176).
+    /// </para>
+    /// <para>
     /// What the planner already says is not said twice. On a target that
     /// applies no POSIX metadata, its line covers permissions and ownership.
     /// Its alternate-streams line covers streams. Symlinks on a target that
@@ -234,6 +254,7 @@ public static class RestoreMetadata
         var privileged = new Tally();
         var linkPermissions = new Tally();
         var linkAttributes = new Tally();
+        var strangers = new Tally();
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -299,7 +320,22 @@ public static class RestoreMetadata
                 }
             }
 
-            var missing = known.Captured & ~(applied | given);
+            var apart = CapturedMetadata.None;
+            if ((applied & known.Captured & CapturedMetadata.SecurityDescriptor) != 0)
+            {
+                if (known.Accounts is not { } accounts)
+                {
+                    applied &= ~CapturedMetadata.SecurityDescriptor;
+                }
+                else if (accounts.Any(account => !names.Knows(account, target.KnowsAccount)))
+                {
+                    applied &= ~CapturedMetadata.SecurityDescriptor;
+                    apart |= CapturedMetadata.SecurityDescriptor;
+                    strangers.Add(item.Kind);
+                }
+            }
+
+            var missing = known.Captured & ~(applied | given | apart);
             if (missing == CapturedMetadata.None)
             {
                 continue;
@@ -356,6 +392,9 @@ public static class RestoreMetadata
         Add("security-descriptors", descriptors, string.Create(CultureInfo.InvariantCulture,
             $"Security descriptors captured on {descriptors} will not be applied; they will take the "
             + $"permissions of the folder they land in."));
+        Add("security-descriptor-accounts", strangers, string.Create(CultureInfo.InvariantCulture,
+            $"Security descriptors captured on {strangers} name accounts this machine does not know, so they will "
+            + $"not be applied; they will take the permissions of the folder they land in."));
 
         var extended = attributes.GetValueOrDefault(CapturedMetadata.ExtendedAttributes);
         Add("extended-attributes", extended, string.Create(CultureInfo.InvariantCulture,
@@ -519,10 +558,21 @@ public static class RestoreMetadata
     {
         private readonly Dictionary<string, uint?> _users = new(StringComparer.Ordinal);
         private readonly Dictionary<string, uint?> _groups = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, bool> _accounts = new(StringComparer.Ordinal);
 
         public uint? User(string name, RestoreAccount account) => Resolved(_users, name, account.ResolveUser);
 
         public uint? Group(string name, RestoreAccount account) => Resolved(_groups, name, account.ResolveGroup);
+
+        public bool Knows(string account, Func<string, bool> knows)
+        {
+            if (!_accounts.TryGetValue(account, out var known))
+            {
+                _accounts[account] = known = knows(account);
+            }
+
+            return known;
+        }
 
         private static uint? Resolved(Dictionary<string, uint?> known, string name, Func<string, uint?> resolve)
         {

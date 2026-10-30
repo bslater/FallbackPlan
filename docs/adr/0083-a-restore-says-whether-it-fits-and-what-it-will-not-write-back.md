@@ -97,10 +97,16 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back on Linux and macOS where the account and the volume allow them. Security descriptors and attribute bits remain owed.
 
   > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** A file's and a folder's Windows attribute bits are now written back on Windows: read-only, hidden, system, archive and not-content-indexed, as the last write. A bit no restore sets, as compressed or encrypted, is named.
+
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A file's and a folder's Windows security descriptor is now written back on Windows, after the times and before the attribute bits, where the machine knows every account it names. One that names an account it does not know is named, and the file keeps its folder's access.
+
 - It does not recreate hard links. A hard-link group restores as separate files, as it did, and neither the plan nor the receipt says so yet.
 
   > **2026-10 ([ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md)).** Built: a group's later names are links to the file its first name landed as, where they agree with it, and a name restored as a file of its own says why. The plan measures a group once, and the receipt moves to schema 7 for `linked_to`.
 - It does not refuse for a security descriptor that cannot be applied. Architecture 06 §3 reserves that refusal for a descriptor whose absence would grant broader access, and that needs a descriptor to apply first.
+
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A descriptor is now applied where the machine knows every account it names. One that is not is declared and degraded; the refusal is still not made.
+
 - It does not estimate the physical transfer size, which differs from the logical size when a store lacks range reads. It does not export a plan or resume one. And it does not report an object held only in an archival tier. All three are architecture 08 §2's, and all three stay owed.
 
   > **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--a-plan-says-what-its-run-reads)).** The physical transfer size is estimated: a plan says what its run will read. Export, resume and archival-tier reporting stay owed.
@@ -199,3 +205,4 @@ A restore of part of a tree can meet the first, and a tree larger than the read 
 | 2026-10 | Accepted | [ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md): §2's working directory, for a resume, needs only what the run's parts do not yet hold of each file. The folder a file lands in still needs all of it. |
 | 2026-10 | Accepted | [ADR-0138](0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md): §2's working-directory need is said as room to assemble the run's files one at a time, not for its largest file. The figure is as it was. |
 | 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): a file's and a folder's Windows attribute bits are written back on Windows. |
+| 2026-10 | Accepted | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): a file's and a folder's Windows security descriptor is written back on Windows where the machine knows every account it names. |

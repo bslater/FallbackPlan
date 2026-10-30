@@ -182,6 +182,20 @@ public static class MetadataRules
         SymlinkMetadata.CanSetPermissions
         || (OperatingSystem.IsLinux() && (mode & ModeBits) == SymlinkMetadata.LinuxPermissions);
 
+    /// <summary>
+    /// The SIDs the Windows security descriptor captured with
+    /// <paramref name="metadata"/> names (<see cref="WindowsSecurityDescriptor.Accounts"/>),
+    /// or null where it carries none or one that does not read.
+    /// </summary>
+    public static IReadOnlyList<string>? AccountsOf(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        return metadata.WindowsSecurityDescriptor is { IsEmpty: false } descriptor
+            ? WindowsSecurityDescriptor.Read(descriptor.Span)?.Accounts
+            : null;
+    }
+
     /// <summary>The kinds of extended attribute <paramref name="metadata"/> carries that are not written back everywhere.</summary>
     public static ExtendedAttributeKinds KindsOf(EntryMetadata metadata)
     {

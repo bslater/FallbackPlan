@@ -52,6 +52,22 @@ public sealed record RestoreTargetProfile
     public bool SupportsFileAttributes { get; init; }
 
     /// <summary>
+    /// Whether the executor writes a file's and a folder's Windows security
+    /// descriptor back on this target: Windows keeps one, and nothing else
+    /// does (ADR-0176). It is what the plan predicts by, with
+    /// <see cref="KnowsAccount"/>.
+    /// </summary>
+    public bool SupportsSecurityDescriptors { get; init; }
+
+    /// <summary>
+    /// Whether this machine knows an account a captured descriptor names, by
+    /// its SID. A descriptor is written back only where every account it
+    /// names is known, and the plan predicts by the same answer
+    /// (<see cref="WindowsAccounts.Knows"/>; ADR-0176).
+    /// </summary>
+    public Func<string, bool> KnowsAccount { get; init; } = WindowsAccounts.Knows;
+
+    /// <summary>
     /// Whether this installation captured the snapshot being restored: its
     /// device is the one the snapshot names. A Linux ACL names accounts by
     /// number, and a number names the account it meant only on the machine
@@ -106,6 +122,8 @@ public sealed record RestoreTargetProfile
         SupportsCreationTimes = SupportsCreationTimes,
         SupportsExtendedAttributes = SupportsExtendedAttributes,
         SupportsFileAttributes = SupportsFileAttributes,
+        SupportsSecurityDescriptors = SupportsSecurityDescriptors,
+        KnowsAccount = KnowsAccount,
         CapturedHere = CapturedHere,
         Account = Account,
     };
@@ -124,6 +142,7 @@ public sealed record RestoreTargetProfile
         SupportsCreationTimes = FileTimes.CanSetCreationTime,
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
         SupportsFileAttributes = OperatingSystem.IsWindows(),
+        SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         Account = RestoreAccount.OfThisProcess(),
     };

@@ -200,6 +200,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: both writers spool beside a file under 33 characters made from its name, so a file whose name is as long as its target holds restores; `restore-file` lands its file the same way, so one that fails leaves its output as it was (Amendment 1); under rename, a copy written beside keeps as much of its stem as fits (Amendment 2); `restore-file` assembles its file where it lands, needing no room in the temporary folder (Amendment 3) | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Repository/RestoreEngine` · `Domain.Tests/RestoreSpoolTests` · `Repository.Tests/RestoreLongNameTests` · `Repository.Tests/RecoveryContainmentTests` · `Repository.Tests/SparseRestoreTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets) |
 | [0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) | A restore writes a file's alternate streams back where the target keeps them: on Windows, each read and proved like a segment, written after the content and before the times, and judged by name before it is joined to the path; a stream standing as captured is left, and one that does not land degrades the file, named; the recovery tool writes them by the same rule, noting one that does not land (Amendment 1), and so does `restore-file`, through one helper the two share (Amendment 2) | **Built** | `Domain/AlternateStreams` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Domain.Tests/AlternateStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · `Repository.Tests/RecoveryAlternateStreamsTests` · [notes](#0174--a-files-alternate-streams) |
 | [0175](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) | A restore writes back the Windows attribute bits it may: a file's and a folder's read-only, hidden, system, archive and not-content-indexed bits, as captured and as the last write, by the writer every way of restoring shares; a bit no restore sets, as compressed or encrypted, is named; a read-only file a restore replaces is replaced | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Domain/RestorePaths` · `Restore/RestoreMetadata` · `Domain.Tests/FileAttributesWriteBackTests` · `Repository.Tests/RestoreFileAttributesTests` · [notes](#0175--windows-attribute-bits) |
+| [0176](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) | A restore writes back a Windows security descriptor whose accounts the machine knows: a file's and a folder's owner, group and DACL, as captured, protected as they were, after the times and before the attribute bits, by the writer every way of restoring shares; one that names an account the machine does not know, or does not read, is not written and is named, and the plan predicts it per item; where the owner is refused the DACL lands alone | **Built** | `Domain/WindowsSecurityDescriptor` · `Domain/WindowsSecurity` · `Domain/MetadataWriter` · `Domain/MetadataTarget` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Domain.Tests/WindowsSecurityDescriptorTests` · `Domain.Tests/SecurityDescriptorWriteBackTests` · `Repository.Tests/RestoreSecurityDescriptorTests` · [notes](#0176--windows-security-descriptors) |
 
 ---
 
@@ -2545,7 +2546,8 @@ directory's children had landed, and has since landed too
 ([0086](#0086--a-folders-own)). Windows attribute bits, security
 descriptors and alternate streams are still listed; extended attributes have
 since landed ([0087](#0087--extended-attributes)), and so has a symlink's own
-metadata ([0101](#0101--a-links-own)), and the attribute bits ([0175](#0175--windows-attribute-bits)). The recovery tool and the CLI's
+metadata ([0101](#0101--a-links-own)), the attribute bits ([0175](#0175--windows-attribute-bits)) and the
+security descriptors ([0176](#0176--windows-security-descriptors)). The recovery tool and the CLI's
 `restore-file` write no metadata at all; the CLI's `restore-file` has since
 ([0149](#0149--the-single-file-restore-writes-back-a-files-metadata)), and
 so has the recovery tool ([0150](#0150--the-recovery-tool-writes-back-metadata)).
@@ -2590,7 +2592,7 @@ What remains is recorded rather than done. A directory's ownership was owed
 with the rest of a directory's metadata, which has since landed
 ([0086](#0086--a-folders-own)), and a symlink's is owed with the rest of a
 symlink's. A Windows file's owner lives in the security descriptor, which is
-captured and not applied. A restore running as root into the default
+captured, and has since been given back with it where the account may ([0176](#0176--windows-security-descriptors)). A restore running as root into the default
 quarantine folder still recreates a root-owned set-user-id program
 faithfully, in a folder other accounts may reach. Whether a quarantine restore
 should keep set-id bits at all was left for a later decision. It is now
@@ -2644,7 +2646,8 @@ a write in the moment between a check and the write it guards. The threat
 model now says so. Windows attribute bits, security descriptors and alternate
 streams are still listed, for folders as for files; extended attributes have
 since landed ([0087](#0087--extended-attributes)), and so has a symlink's own
-metadata ([0101](#0101--a-links-own)), and the attribute bits ([0175](#0175--windows-attribute-bits)).
+metadata ([0101](#0101--a-links-own)), the attribute bits ([0175](#0175--windows-attribute-bits)) and the
+security descriptors ([0176](#0176--windows-security-descriptors)).
 
 ### 0087 — extended attributes
 
@@ -2688,7 +2691,7 @@ test fail.
 What remains is recorded rather than done. An ACL's entries are captured as
 numbers; capturing their names would let one come back on any machine where
 the names resolve, and is owed. macOS's own access lists are not captured,
-Windows security descriptors are not applied, and Windows keeps no extended
+Windows security descriptors were not applied until [0176](#0176--windows-security-descriptors), and Windows keeps no extended
 attributes a restore writes. A symlink's own metadata has since landed
 ([0101](#0101--a-links-own)), and the recovery tool and the CLI's
 `restore-file` still write no metadata; the CLI's `restore-file` has since
@@ -3274,7 +3277,7 @@ the CLI's `restore-file` still write no metadata. Both have since written a
 file's metadata ([0149](#0149--the-single-file-restore-writes-back-a-files-metadata),
 [0150](#0150--the-recovery-tool-writes-back-metadata)), and neither makes a link.
 A file's alternate streams have since been written back on Windows ([0174](#0174--a-files-alternate-streams)),
-and its attribute bits ([0175](#0175--windows-attribute-bits)).
+its attribute bits ([0175](#0175--windows-attribute-bits)) and its security descriptor ([0176](#0176--windows-security-descriptors)).
 
 ### 0102 — one file, every name
 
@@ -4777,3 +4780,33 @@ What remains is recorded rather than done:
 
 - compression and encryption are named, not set;
 - the plan cannot say beforehand which files carry a bit no restore sets.
+
+### 0176 — Windows security descriptors
+
+Capture records each entry's Windows security descriptor, owner, group and
+DACL, and no restore wrote any back, so a file kept private came back as
+open as its new folder and every restore on Windows listed the descriptor.
+The writer every way of restoring shares now writes it back as captured,
+in one call with the DACL's protection said outright, on Windows alone,
+after the streams and times, since its DACL may take from the restoring
+account the access they need, and before the attribute bits, since writing
+a descriptor sets the archive bit. It does so only where the machine knows every
+account the descriptor names: a local account's SID names nobody on
+another machine, or on the same one rebuilt, so a descriptor naming one is
+not written, the file keeps its folder's access, and the SID is named.
+Where the account may not give the owner, the DACL lands alone. The plan
+predicts by the same rule, from the SIDs each item's facts carry, and
+declares on a line of its own the items whose descriptor names an account
+the machine does not know.
+
+What remains is recorded rather than done:
+
+- SeRestorePrivilege is not enabled, so an owner the account is not lands
+  only where its token already has it enabled;
+- the SACL is not captured;
+- a SID the machine does not know is not mapped to one it does;
+- architecture 06 §3's refusal, where a descriptor not written leaves a
+  file more open than it was, is still not made;
+- the plan does not predict a refused owner;
+- the DACL's mark that its inherited entries came by automatic
+  inheritance is not kept, as the call it is written with does not keep it.

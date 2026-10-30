@@ -55,8 +55,9 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
         var restore = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"));
 
-        // On Windows the attribute bits of both files and of the folder one of
-        // them is in come back (ADR-0175), so none is listed. On a POSIX host the
+        // On Windows the attribute bits and the security descriptors of both
+        // files and of the folder one of them is in come back (ADR-0175,
+        // ADR-0176), so neither is listed. On a POSIX host the
         // files, their folder and the link are the account's own and get
         // their owner back (ADR-0085, ADR-0086, ADR-0101), and the link its
         // own times, so neither is listed. Metadata alone does not fail the
@@ -65,6 +66,7 @@ public sealed class RestoreHonestyCommandTests : IDisposable
         if (OperatingSystem.IsWindows())
         {
             Assert.DoesNotContain("file_attributes not applied", restore.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("security_descriptor not applied", restore.Output, StringComparison.Ordinal);
         }
         else
         {

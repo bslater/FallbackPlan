@@ -70,6 +70,9 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 - The service and CLI tests anchored on access times as the attribute every file carries and no target applied. That is no longer true. They now anchor on an attribute still not written back, the owner on a POSIX host and the attribute bits on Windows, and they assert that access times are gone.
 
   > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** The attribute bits now come back on Windows, so there those tests assert that the bits are not listed either.
+
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** So do the security descriptors there, which name only accounts the machine knows, so those tests assert that neither is listed.
+
 - Capture already reads atime and excludes it from the metadata digest ([architecture 06 §4.3](../architecture/06-filesystem-capture.md)). An unchanged file therefore keeps the access time from the version that first captured it, and a restore puts back that one.
 
 ## What this does not do
@@ -85,6 +88,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
   > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's alternate streams are now written back on Windows, where the volume keeps them, each read and proved like a segment and written before the file's times. One that does not land is named, and the file is degraded.
 
   > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** A file's and a folder's Windows attribute bits are now written back on Windows: read-only, hidden, system, archive and not-content-indexed, as the last write. A bit no restore sets, as compressed or encrypted, is named.
+
+  > **2026-10 ([ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md)).** A file's and a folder's Windows security descriptor is now written back on Windows, after the times and before the attribute bits, where the machine knows every account it names. One that names an account it does not know is named, and the file keeps its folder's access.
 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back on Linux and macOS, after ownership and before the permissions in §1's order. The rest of this item remains owed.
 
@@ -113,3 +118,4 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's times back by this record's rule, through the writer the executor uses. |
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows, before the times this record writes, since writing a stream moves the modification time. |
 | 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): a file's and a folder's Windows attribute bits are written back on Windows. |
+| 2026-10 | Accepted | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): a file's and a folder's Windows security descriptor is written back on Windows where the machine knows every account it names. |
