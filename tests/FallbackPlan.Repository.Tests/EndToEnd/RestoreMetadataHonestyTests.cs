@@ -391,6 +391,35 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             Ana, null, SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, account)));
     }
 
+    [TestMethod]
+    public async Task Plan_AnAttributeBitNoRestoreSets_IsDeclaredOnItsOwnLine_AndNamed_WhereTheTargetWritesTheRest()
+    {
+        const uint Archive = 0x20;
+        const uint Compressed = 0x800;
+        const uint Encrypted = 0x4000;
+        var source = new FakeFileSystemSource();
+        void Add(string name, uint bits, byte seed) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata =
+                new EntryMetadata { ModifiedAt = Modified, FileAttributes = bits };
+        Add("plain.bin", Archive, 40);
+        Add("packed.bin", Archive | Compressed, 41);
+        Add("sealed.bin", Encrypted, 42);
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xD7);
+        var declared = RestoreMetadata.Declare(plan, facts, Posix with { SupportsFileAttributes = true });
+
+        var unset = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "unset-file-attributes"));
+        Assert.Contains("2 file(s)", unset.Detail, StringComparison.Ordinal);
+        Assert.Contains("Compressed, Encrypted", unset.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "file-attributes", declared);
+
+        // Where the target writes no bits, every file that carries some is
+        // declared as before, and no bit is singled out.
+        var none = RestoreMetadata.Declare(plan, facts, Posix);
+        Assert.Contains("3 file(s)", Assert.ContainsSingle(none.Where(degradation => degradation.Capability == "file-attributes")).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "unset-file-attributes", none);
+    }
+
     private static FakeFileSystemSource EmptyDescriptor()
     {
         var source = new FakeFileSystemSource();
