@@ -205,6 +205,32 @@ public sealed class RestoreResumeTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Resume_UnderRename_BesideAFileWhoseNameCarriesAMark_TheCopyIsFoundByItsLastMark()
+    {
+        // A copy restored earlier can itself be the file in the way, so its
+        // own name carries a mark. Its copy's mark is the one at the name's
+        // end, where the restore writes it.
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/alpha (restored 2024-07-01).bin", Alpha, fileId: 9_011).Metadata =
+            new EntryMetadata { ModifiedAt = Captured };
+        var (plan, target, store, keys, catalogue) = await PublishAsync("beside-marked", 0xE4, source);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, "beside-marked-out");
+        Land(output, "data/alpha (restored 2024-07-01).bin", Deterministic(9_000, 99));
+        var earlier = Land(output, "data/alpha (restored 2024-07-01) (restored 2024-08-02).bin", Alpha);
+        var before = FileIdOf(earlier);
+
+        var receipt = await ExecuteAsync(
+            store, keys, catalogue, target, plan, output, Resumed("beside-marked-run") with { ExistingDestination = ExistingDestinationPolicy.WriteBeside });
+
+        var found = receipt.Items.Single(item => item.Path == "data/alpha (restored 2024-07-01).bin");
+        Assert.IsTrue(found.FoundInPlace);
+        Assert.AreEqual("data/alpha (restored 2024-07-01) (restored 2024-08-02).bin", found.WrittenAs);
+        Assert.AreEqual(before, FileIdOf(earlier));
+    }
+
+    [TestMethod]
     public async Task Resume_UnderRename_ACopyBesideWhoseContentDiffers_IsLeft_AndTheRestoredCopyIsWrittenBesideToo()
     {
         var (plan, target, store, keys, catalogue) = await PublishAsync("beside-differs", 0xDD);
