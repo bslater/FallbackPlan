@@ -407,6 +407,15 @@ What compacts is [0067](#0067--the-rewrite-that-holds-no-key)'s keyless rewrite 
 
 **Amendment 2's twelve exit criteria are answered**, each by a named case: 1, 2, 3, 5, 6, 8, 9, 10 and 11 in `Repository.Tests/Index/CompactionIndexTests`; 4 and 12 in `InterruptionTests/CompactionInterruptionTests`; 7 in `Repository.Tests/EndToEnd/CompactedRestoreTests` and `Retention.Tests/CompactionCollectionTests`. Criterion 9 was not a formality — it caught `ForensicRebuilder` filing one delta per record against a ledger unique on `(writer, sequence)`, which dropped every record after a blob's first.
 
+Four of those cases asked less than their criterion, and [Amendment 5](adr/0025-compaction-reseals-records.md#amendment-5-2026-10--the-criteria-held-as-written) holds each as written:
+
+- 3 and 9 restore through an index rebuilt from the index plane, with no location fallback (`Repository.Tests/EndToEnd/CompactedRestoreTests`);
+- 4 verifies every blob at every cut (`InterruptionTests/CompactionInterruptionTests`);
+- 8 and 9 rebuild the index plane before and after the sweep (`Repository.Tests/Index/CompactionIndexTests`);
+- 10 holds each delta to the budget it was given.
+
+All passed as the code stood.
+
 ### 0026 — the shapes are captured, the POSIX traversal is handle-relative, and one gap is left
 
 All ten shapes are built and tested: hardlink groups, the diagnostics vocabulary, capture-status triggers, special files, alternate streams, directory entries, the filesystem capability record, and the catalogue casefold key.
