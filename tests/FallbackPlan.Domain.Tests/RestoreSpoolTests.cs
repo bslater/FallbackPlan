@@ -6,7 +6,9 @@ namespace FallbackPlan.Domain.Tests;
 /// Where a file is written whole before it is moved to its name (FR-RST-005,
 /// ADR-0173): beside it, so the move is one rename, and under a name no
 /// longer than any target holds, so a file whose own name is as long as the
-/// target allows is not failed for the name of its spool.
+/// target allows is not failed for the name of its spool. The name follows
+/// from the file's own alone, so the planner and the recovery tool can tell
+/// an entry a snapshot names there (ADR-0152 Amendment 4).
 /// </summary>
 [TestClass]
 public sealed class RestoreSpoolTests
@@ -47,6 +49,14 @@ public sealed class RestoreSpoolTests
             RestorePaths.SpoolBeside(Path.Combine(Folder, "One.bin"), "restore"),
             "names that differ only in case keep apart on a target that folds case");
     }
+
+    [TestMethod]
+    [DataRow("one.bin", "restore")]
+    [DataRow("語.bi", "recover")]
+    public void ASpoolsName_IsTheNameSpoolBesideGivesBesideTheFile(string file, string owner) =>
+        Assert.AreEqual(
+            Path.GetFileName(RestorePaths.SpoolBeside(Path.Combine(Folder, file), owner)),
+            RestorePaths.SpoolName(file, owner));
 
     [TestMethod]
     public void TheExecutorsSpool_AndTheRecoveryToolsSpool_AreApart()

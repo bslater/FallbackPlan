@@ -21,7 +21,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// the executor holds to (ADR-0152). An output that is itself a link is
 /// where the person chose, and takes everything below it (ADR-0159). A
 /// file's spool is named by that rule too, so a name as long as a target
-/// holds is restored (ADR-0173).
+/// holds is restored (ADR-0173), and an entry a snapshot names at a file's
+/// spool is refused, by name (ADR-0152 Amendment 4).
 /// </summary>
 [TestClass]
 public sealed class RecoveryContainmentTests : IDisposable
@@ -168,6 +169,36 @@ public sealed class RecoveryContainmentTests : IDisposable
         CollectionAssert.AreEqual(new byte[] { 9, 9, 9 }, File.ReadAllBytes(target), "the spool was written through a link");
         SequenceAssert.AreEqual(new byte[] { 4, 5, 6 }, File.ReadAllBytes(Path.Combine(output, "good.txt")));
         Assert.AreEqual(0, report.Failed);
+    }
+
+    [TestMethod]
+    [DataRow(false, DisplayName = "named as the spool is")]
+    [DataRow(true, DisplayName = "named so in another case")]
+    public async Task RecoveryRestore_AnEntryTheSnapshotNamesAtAFilesSpool_IsRefused_AndTheFileIsRestored(bool otherCase)
+    {
+        // A file's spool is named from the file's own name alone, so a
+        // snapshot can name an entry there. It would be removed when the file
+        // spools, after the report had counted it restored. A target that
+        // folds case takes the name in another case for the same one.
+        var spool = RestorePaths.SpoolName("good.txt", "recover");
+        spool = otherCase ? spool.ToUpperInvariant() : spool;
+        var source = new FakeFileSystemSource();
+        source.AddFile(spool, [1, 1, 1]);
+        source.AddFile("good.txt", [4, 5, 6]);
+        var store = await PublishAsync(source);
+        var output = Directory.CreateDirectory(Path.Combine(_root, otherCase ? "spool-entry-case-out" : "spool-entry-out")).FullName;
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var session = await RecoverySession.OpenAsync(passphrase, store, CancellationToken.None);
+        await session.LoadBlobsAsync(CancellationToken.None);
+        var snapshot = Assert.ContainsSingle(await session.ListSnapshotsAsync(CancellationToken.None));
+        var report = await session.RestoreTreeAsync(snapshot.Manifest.RootTree, output, CancellationToken.None);
+
+        Assert.AreEqual(1, report.Failed);
+        Assert.Contains(note => note.Kind == RecoveryNoteKind.Refused && note.Path == spool
+            && note.Reason is { } reason && reason.Contains("good.txt", StringComparison.Ordinal), report.Notes);
+        SequenceAssert.AreEqual(new byte[] { 4, 5, 6 }, File.ReadAllBytes(Path.Combine(output, "good.txt")));
+        Assert.ContainsSingle(Directory.GetFileSystemEntries(output), "nothing stands at the spool's name");
     }
 
     [TestMethod]
