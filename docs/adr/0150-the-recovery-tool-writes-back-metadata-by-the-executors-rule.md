@@ -83,6 +83,8 @@ The exit code is unchanged. Metadata does not fail a recovery.
 
   > **2026-10 ([ADR-0174 Amendment 1](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md#amendment-1-2026-10--the-recovery-tool-writes-a-files-streams-back-by-the-same-rule)).** The tool now writes a file's alternate streams back on Windows by the executor's rule. One that does not land is noted, and counted not applied.
 
+  > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** The tool now writes a file's and a folder's Windows attribute bits back through the shared writer, and replaces a read-only file it wrote before.
+
 ## Alternatives considered
 
 - **A note per entry whose metadata did not wholly land.** Rejected. On a machine that is not the one that captured it, every file can miss the same owner, and the notes that say what failed would drown. The bundle already caps its notes, and a count says the same thing at every size.
@@ -98,3 +100,4 @@ The exit code is unchanged. Metadata does not fail a recovery.
 | 2026-10 | Accepted | [ADR-0156](0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md): the tool gives a hard-link group back as one file under each of its names, by the rule the executor holds to. |
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): the executor writes a file's alternate streams back on Windows; this tool still writes none. |
 | 2026-10 | Accepted | [ADR-0174 Amendment 1](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md#amendment-1-2026-10--the-recovery-tool-writes-a-files-streams-back-by-the-same-rule): the tool writes a file's alternate streams back on Windows by the executor's rule. |
+| 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): the tool writes a file's and a folder's Windows attribute bits back through the shared writer. |
