@@ -24,9 +24,25 @@ internal sealed class FakeServiceClient : IFallbackPlanClient
 {
     private readonly Channel<JobProgressEvent> _progress = Channel.CreateUnbounded<JobProgressEvent>();
 
+    private readonly List<ServiceCommand> _received = [];
+
     private long _sequence;
 
-    public List<ServiceCommand> Received { get; } = [];
+    /// <summary>
+    /// The commands the console has sent, in order, as a copy taken under the
+    /// lock each is recorded under. The page keeps polling while a test reads
+    /// this, so the list itself is never handed out to be enumerated.
+    /// </summary>
+    public IReadOnlyList<ServiceCommand> Received
+    {
+        get
+        {
+            lock (_received)
+            {
+                return [.. _received];
+            }
+        }
+    }
 
     public Func<ServiceCommand, ServiceResult> Respond { get; set; } = _ => new AcknowledgedResult();
 
@@ -34,9 +50,9 @@ internal sealed class FakeServiceClient : IFallbackPlanClient
 
     public ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
-        lock (Received)
+        lock (_received)
         {
-            Received.Add(command);
+            _received.Add(command);
         }
 
         return ValueTask.FromResult(Respond(command));
@@ -123,14 +139,11 @@ internal sealed class DomHarness : IAsyncDisposable
         var deadline = Environment.TickCount64 + timeoutMilliseconds;
         while (Environment.TickCount64 < deadline)
         {
-            lock (Clients.Client.Received)
+            var found = Clients.Client.Received.OfType<TCommand>()
+                .FirstOrDefault(command => matches is null || matches(command));
+            if (found is not null)
             {
-                var found = Clients.Client.Received.OfType<TCommand>()
-                    .FirstOrDefault(command => matches is null || matches(command));
-                if (found is not null)
-                {
-                    return found;
-                }
+                return found;
             }
 
             await Task.Delay(50);
