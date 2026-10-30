@@ -1037,7 +1037,7 @@ public sealed class RestoreExecutor(
                         break;
                     }
 
-                    var spool = destination + ".fbp-restore-tmp";
+                    var spool = RestorePaths.SpoolBeside(destination, "restore");
                     RestoreResult result;
                     try
                     {

@@ -715,7 +715,7 @@ public sealed class RecoverySession : IDisposable
         // it did not land.
         async ValueTask<CapturedMetadata?> RestoreFileAsync(FileVersionManifest manifest, string path, string destination)
         {
-            var spool = destination + ".fbp-recover-tmp";
+            var spool = RestorePaths.SpoolBeside(destination, "recover");
 
             try
             {

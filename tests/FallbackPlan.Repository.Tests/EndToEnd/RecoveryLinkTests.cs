@@ -151,7 +151,7 @@ public sealed class RecoveryLinkTests : IDisposable
         Assert.AreEqual((RecoveryNoteKind.WriteFailed, "a.txt"), (note.Kind, note.Path));
         Assert.StartsWith("FAILED a.txt: the output would not take it", note.ToString(), StringComparison.Ordinal);
         CollectionAssert.AreEqual(new byte[] { 2 }, File.ReadAllBytes(Path.Combine(output, "b.txt")));
-        Assert.IsFalse(File.Exists(Path.Combine(output, "a.txt.fbp-recover-tmp")), "the spool outlived the entry");
+        Assert.IsFalse(File.Exists(RestorePaths.SpoolBeside(Path.Combine(output, "a.txt"), "recover")), "the spool outlived the entry");
     }
 
     [TestMethod]

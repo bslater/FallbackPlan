@@ -19,7 +19,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// write beside the chosen output. Nor may a link the output already holds
 /// carry a write out of it, at a folder or at a file's spool, by the rule
 /// the executor holds to (ADR-0152). An output that is itself a link is
-/// where the person chose, and takes everything below it (ADR-0159).
+/// where the person chose, and takes everything below it (ADR-0159). A
+/// file's spool is named by that rule too, so a name as long as a target
+/// holds is restored (ADR-0173).
 /// </summary>
 [TestClass]
 public sealed class RecoveryContainmentTests : IDisposable
@@ -155,7 +157,7 @@ public sealed class RecoveryContainmentTests : IDisposable
         var target = Path.Combine(outside, "target.txt");
         File.WriteAllBytes(target, [9, 9, 9]);
         var output = Directory.CreateDirectory(Path.Combine(_root, "spool-out")).FullName;
-        File.CreateSymbolicLink(Path.Combine(output, "good.txt.fbp-recover-tmp"), target);
+        File.CreateSymbolicLink(RestorePaths.SpoolBeside(Path.Combine(output, "good.txt"), "recover"), target);
 
         using var passphrase = Passphrase.Create(PassphraseText);
         using var session = await RecoverySession.OpenAsync(passphrase, store, CancellationToken.None);
@@ -193,6 +195,29 @@ public sealed class RecoveryContainmentTests : IDisposable
 
         Assert.AreEqual(0, report.Failed, string.Join("; ", report.Notes.Select(note => note.ToString())));
         SequenceAssert.AreEqual(new byte[] { 1, 2, 3 }, File.ReadAllBytes(Path.Combine(real, "docs", "a.bin")));
+    }
+
+    [TestMethod]
+    public async Task RecoveryRestore_AFileWhoseNameIsAsLongAsATargetHolds_IsRestored()
+    {
+        // 255 ASCII characters: the longest name the common Linux
+        // filesystems and NTFS both hold. Its spool needs no longer a name
+        // (ADR-0173).
+        var name = new string('n', 251) + ".bin";
+        var source = new FakeFileSystemSource();
+        source.AddFile(name, [7, 8, 9]);
+        var store = await PublishAsync(source);
+        var output = Directory.CreateDirectory(Path.Combine(_root, "long-out")).FullName;
+
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var session = await RecoverySession.OpenAsync(passphrase, store, CancellationToken.None);
+        await session.LoadBlobsAsync(CancellationToken.None);
+        var snapshot = Assert.ContainsSingle(await session.ListSnapshotsAsync(CancellationToken.None));
+        var report = await session.RestoreTreeAsync(snapshot.Manifest.RootTree, output, CancellationToken.None);
+
+        Assert.AreEqual(0, report.Failed, string.Join("; ", report.Notes.Select(note => note.ToString())));
+        SequenceAssert.AreEqual(new byte[] { 7, 8, 9 }, File.ReadAllBytes(Path.Combine(output, name)));
+        Assert.ContainsSingle(Directory.GetFiles(output), "no spool is left beside it");
     }
 
     /// <summary>Publishes <paramref name="source"/> into a repository made from the passphrase.</summary>
