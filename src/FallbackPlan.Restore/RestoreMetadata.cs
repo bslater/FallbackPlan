@@ -117,6 +117,11 @@ public static class RestoreMetadata
             applied |= CapturedMetadata.AlternateStreams;
         }
 
+        if (target.SupportsFileAttributes)
+        {
+            applied |= CapturedMetadata.FileAttributes;
+        }
+
         return applied;
     }
 

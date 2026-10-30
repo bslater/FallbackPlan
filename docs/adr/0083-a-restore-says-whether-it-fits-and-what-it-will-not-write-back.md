@@ -95,6 +95,8 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
   > **2026-10 ([ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md)).** Ownership is now written back where the names resolve and the restoring account may give them. The rest remains owed.
 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back on Linux and macOS where the account and the volume allow them. Security descriptors and attribute bits remain owed.
+
+  > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** A file's and a folder's Windows attribute bits are now written back on Windows: read-only, hidden, system, archive and not-content-indexed, as the last write. A bit no restore sets, as compressed or encrypted, is named.
 - It does not recreate hard links. A hard-link group restores as separate files, as it did, and neither the plan nor the receipt says so yet.
 
   > **2026-10 ([ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md)).** Built: a group's later names are links to the file its first name landed as, where they agree with it, and a name restored as a file of its own says why. The plan measures a group once, and the receipt moves to schema 7 for `linked_to`.
@@ -196,3 +198,4 @@ A restore of part of a tree can meet the first, and a tree larger than the read 
 | 2026-10 | Accepted | [ADR-0132](0132-a-resumes-plan-counts-only-what-it-still-reads.md): Amendment 2's figure, for a plan of a resume, counts only what the resume still reads: nothing of a file its run landed but the manifest, and through the service nothing a part its run kept proves. |
 | 2026-10 | Accepted | [ADR-0136](0136-a-resumes-working-space-credits-what-its-parts-hold.md): §2's working directory, for a resume, needs only what the run's parts do not yet hold of each file. The folder a file lands in still needs all of it. |
 | 2026-10 | Accepted | [ADR-0138](0138-the-working-space-is-said-as-room-to-assemble-files-one-at-a-time.md): §2's working-directory need is said as room to assemble the run's files one at a time, not for its largest file. The figure is as it was. |
+| 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): a file's and a folder's Windows attribute bits are written back on Windows. |

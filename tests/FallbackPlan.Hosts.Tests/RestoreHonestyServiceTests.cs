@@ -203,8 +203,8 @@ public sealed class RestoreHonestyServiceTests : IDisposable
 
         Assert.AreEqual("complete", restored.Outcome, "metadata alone does not change what a restore achieved");
 
-        // What no target here writes back: on Windows the attribute bits of
-        // every file and of the folder they share. On a POSIX host every item
+        // On Windows the attribute bits of every file and of the folder they
+        // share come back (ADR-0175), so none is listed. On a POSIX host every item
         // is the account's own and gets its owner back, the link included,
         // and every item its access time, the link onto itself (ADR-0101).
         // Linux sets no creation time, so where the volume recorded one,
@@ -217,8 +217,8 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         Assert.DoesNotContain("accessed_at", notes);
         if (OperatingSystem.IsWindows())
         {
-            Assert.Contains(line => line.StartsWith("file_attributes not applied to 3 item(s)", StringComparison.Ordinal), summary);
-            Assert.Contains("file_attributes", notes);
+            Assert.DoesNotContain(line => line.StartsWith("file_attributes", StringComparison.Ordinal), summary);
+            Assert.DoesNotContain("file_attributes", notes);
         }
         else
         {
@@ -301,12 +301,14 @@ public sealed class RestoreHonestyServiceTests : IDisposable
             out var plan);
 
         // On macOS every file, folder and link here gets all it carries back,
-        // so the plan may declare nothing at all.
+        // so the plan may declare nothing at all. On Windows the attribute
+        // bits come back (ADR-0175), and the security descriptors do not.
         var declared = plan.Degradations ?? [];
         if (OperatingSystem.IsWindows())
         {
+            Assert.DoesNotContain(line => line.Contains("File attributes", StringComparison.Ordinal), declared);
             Assert.Contains(
-                line => line.Contains("File attributes", StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
+                line => line.Contains("Security descriptors", StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
                 declared);
         }
         else

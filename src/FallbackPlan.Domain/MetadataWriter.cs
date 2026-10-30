@@ -179,13 +179,39 @@ public sealed class MetadataWriter(MetadataTarget target)
             applied |= CapturedMetadata.CreatedAt;
         }
 
+        // Last, because a read-only file refuses the writes before it. Off
+        // Windows .NET maps these bits onto permissions and flags of its own,
+        // so none is written there whatever a target says.
+        string? unsetDetail = null;
+        if (target.SupportsFileAttributes && OperatingSystem.IsWindows() && !link && metadata.FileAttributes is { } bits)
+        {
+            var unset = MetadataRules.UnsetFileAttributes(bits);
+            if (Wrote(() => File.SetAttributes(destination, (FileAttributes)MetadataRules.FileAttributesToSet(
+                    (uint)File.GetAttributes(destination), bits)))
+                && unset.Count == 0)
+            {
+                applied |= CapturedMetadata.FileAttributes;
+            }
+
+            if (unset.Count > 0)
+            {
+                unsetDetail = $"file attribute(s) not applied: {string.Join(", ", unset)} (not set by a restore)";
+            }
+        }
+
+        var attributesDetail = left.Count == 0
+            ? null
+            : "extended attribute(s) not applied: " + string.Join("; ", left
+                .GroupBy(entry => entry.Why, StringComparer.Ordinal)
+                .Select(reason => $"{string.Join(", ", reason.Select(entry => entry.Name))} ({reason.Key})"));
         return new MetadataWritten(
             applied,
-            left.Count == 0
-                ? null
-                : "extended attribute(s) not applied: " + string.Join("; ", left
-                    .GroupBy(entry => entry.Why, StringComparer.Ordinal)
-                    .Select(reason => $"{string.Join(", ", reason.Select(entry => entry.Name))} ({reason.Key})")));
+            (attributesDetail, unsetDetail) switch
+            {
+                (null, var only) => only,
+                (var only, null) => only,
+                var (first, second) => $"{first}; {second}",
+            });
 
         static bool Wrote(Action write)
         {

@@ -95,6 +95,31 @@ public static class RestorePaths
     }
 
     /// <summary>
+    /// Moves a verified <paramref name="spool"/> over whatever file stands at
+    /// <paramref name="destination"/>, which a restore replaces whole. Windows
+    /// refuses to replace a read-only file, and one an earlier restore gave
+    /// its captured bits is one (ADR-0175), so the bit is cleared first; the
+    /// file that lands takes its own bits back with the rest of its metadata.
+    /// </summary>
+    /// <param name="spool">The verified file, beside the destination.</param>
+    /// <param name="destination">Where it lands.</param>
+    public static void MoveOver(string spool, string destination)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(spool);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(destination);
+
+        if (OperatingSystem.IsWindows()
+            && File.Exists(destination)
+            && File.GetAttributes(destination) is var standing
+            && standing.HasFlag(FileAttributes.ReadOnly))
+        {
+            File.SetAttributes(destination, standing & ~FileAttributes.ReadOnly);
+        }
+
+        File.Move(spool, destination, overwrite: true);
+    }
+
+    /// <summary>
     /// Where a file that lands at <paramref name="destination"/> is written
     /// whole before it is moved there (ADR-0173): beside it, so the move is one
     /// rename, under a name of 33 characters whatever the destination's. The

@@ -199,6 +199,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0172](adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) | A blob that goes while a restore reads it is one the store no longer holds: a read that fails as damage fails asks the store, and a blob it no longer holds is forgotten, read around as not held or failed, and never ends the run; a copy that stops holding a blob while the run reads around to it is passed over as not held (Amendment 1); with no copy, a record whose blob the store does not hold fails as not held, not as a format violation (Amendment 2) | **Built** | `Repository/RepositoryReader` · `Repository.Packing/RecordReadResult` · `Repository.Tests/RestoreBesideCollectionTests` · [notes](#0172--a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds) |
 | [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: both writers spool beside a file under 33 characters made from its name, so a file whose name is as long as its target holds restores; `restore-file` lands its file the same way, so one that fails leaves its output as it was (Amendment 1); under rename, a copy written beside keeps as much of its stem as fits (Amendment 2); `restore-file` assembles its file where it lands, needing no room in the temporary folder (Amendment 3) | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Repository/RestoreEngine` · `Domain.Tests/RestoreSpoolTests` · `Repository.Tests/RestoreLongNameTests` · `Repository.Tests/RecoveryContainmentTests` · `Repository.Tests/SparseRestoreTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets) |
 | [0174](adr/0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) | A restore writes a file's alternate streams back where the target keeps them: on Windows, each read and proved like a segment, written after the content and before the times, and judged by name before it is joined to the path; a stream standing as captured is left, and one that does not land degrades the file, named; the recovery tool writes them by the same rule, noting one that does not land (Amendment 1), and so does `restore-file`, through one helper the two share (Amendment 2) | **Built** | `Domain/AlternateStreams` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Domain.Tests/AlternateStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · `Repository.Tests/RecoveryAlternateStreamsTests` · [notes](#0174--a-files-alternate-streams) |
+| [0175](adr/0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) | A restore writes back the Windows attribute bits it may: a file's and a folder's read-only, hidden, system, archive and not-content-indexed bits, as captured and as the last write, by the writer every way of restoring shares; a bit no restore sets, as compressed or encrypted, is named; a read-only file a restore replaces is replaced | **Built** | `Domain/MetadataWriter` · `Domain/MetadataRules` · `Domain/MetadataTarget` · `Domain/RestorePaths` · `Restore/RestoreMetadata` · `Domain.Tests/FileAttributesWriteBackTests` · `Repository.Tests/RestoreFileAttributesTests` · [notes](#0175--windows-attribute-bits) |
 
 ---
 
@@ -2544,7 +2545,7 @@ directory's children had landed, and has since landed too
 ([0086](#0086--a-folders-own)). Windows attribute bits, security
 descriptors and alternate streams are still listed; extended attributes have
 since landed ([0087](#0087--extended-attributes)), and so has a symlink's own
-metadata ([0101](#0101--a-links-own)). The recovery tool and the CLI's
+metadata ([0101](#0101--a-links-own)), and the attribute bits ([0175](#0175--windows-attribute-bits)). The recovery tool and the CLI's
 `restore-file` write no metadata at all; the CLI's `restore-file` has since
 ([0149](#0149--the-single-file-restore-writes-back-a-files-metadata)), and
 so has the recovery tool ([0150](#0150--the-recovery-tool-writes-back-metadata)).
@@ -2643,7 +2644,7 @@ a write in the moment between a check and the write it guards. The threat
 model now says so. Windows attribute bits, security descriptors and alternate
 streams are still listed, for folders as for files; extended attributes have
 since landed ([0087](#0087--extended-attributes)), and so has a symlink's own
-metadata ([0101](#0101--a-links-own)).
+metadata ([0101](#0101--a-links-own)), and the attribute bits ([0175](#0175--windows-attribute-bits)).
 
 ### 0087 — extended attributes
 
@@ -3272,7 +3273,8 @@ descriptors and alternate streams are not applied, and the recovery tool and
 the CLI's `restore-file` still write no metadata. Both have since written a
 file's metadata ([0149](#0149--the-single-file-restore-writes-back-a-files-metadata),
 [0150](#0150--the-recovery-tool-writes-back-metadata)), and neither makes a link.
-A file's alternate streams have since been written back on Windows ([0174](#0174--a-files-alternate-streams)).
+A file's alternate streams have since been written back on Windows ([0174](#0174--a-files-alternate-streams)),
+and its attribute bits ([0175](#0175--windows-attribute-bits)).
 
 ### 0102 — one file, every name
 
@@ -4757,3 +4759,21 @@ that did not land did not; `restore-file` calls it once the file has
 landed and before the times, and says each in its output. The executor
 keeps its own write, which also leaves a stream already standing for a
 resume.
+
+### 0175 — Windows attribute bits
+
+Capture records each entry's Windows attribute bits, and no restore wrote
+any back, so a read-only or hidden file came back writable and visible and
+every restore on Windows listed the bits. The writer every way of
+restoring shares now writes read-only, hidden, system, archive and
+not-content-indexed back as captured, on Windows alone and as the last
+write, since a read-only file refuses its own streams. A bit no restore
+sets, as compressed or encrypted, is named, and leaves the attributes not
+applied. A read-only file an earlier restore wrote would refuse to be
+replaced, so the three writers move a verified file over one through a
+call that clears its read-only bit first.
+
+What remains is recorded rather than done:
+
+- compression and encryption are named, not set;
+- the plan cannot say beforehand which files carry a bit no restore sets.

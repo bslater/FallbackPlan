@@ -68,6 +68,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 - A restored file's times match the captured file's on every platform, apart from the creation time on Linux. The plan says so before the run, and the receipt says so after.
 - A restore no longer fails a file, or a drill, because a volume refused an attribute. Nor does a damaged manifest's impossible time end a run.
 - The service and CLI tests anchored on access times as the attribute every file carries and no target applied. That is no longer true. They now anchor on an attribute still not written back, the owner on a POSIX host and the attribute bits on Windows, and they assert that access times are gone.
+
+  > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** The attribute bits now come back on Windows, so there those tests assert that the bits are not listed either.
 - Capture already reads atime and excludes it from the metadata digest ([architecture 06 §4.3](../architecture/06-filesystem-capture.md)). An unchanged file therefore keeps the access time from the version that first captured it, and a restore puts back that one.
 
 ## What this does not do
@@ -81,6 +83,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 - **A symlink's own metadata, extended attributes, Windows attribute bits, security descriptors and alternate streams.** These are still captured, declared and listed as before ([ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).
 
   > **2026-10 ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md)).** A file's alternate streams are now written back on Windows, where the volume keeps them, each read and proved like a segment and written before the file's times. One that does not land is named, and the file is degraded.
+
+  > **2026-10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).** A file's and a folder's Windows attribute bits are now written back on Windows: read-only, hidden, system, archive and not-content-indexed, as the last write. A bit no restore sets, as compressed or encrypted, is named.
 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back on Linux and macOS, after ownership and before the permissions in §1's order. The rest of this item remains owed.
 
@@ -108,3 +112,4 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's times back by this record's rule, through the writer the executor uses; the recovery tool still writes none. |
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's times back by this record's rule, through the writer the executor uses. |
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows, before the times this record writes, since writing a stream moves the modification time. |
+| 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): a file's and a folder's Windows attribute bits are written back on Windows. |

@@ -880,7 +880,7 @@ public sealed class RecoverySession : IDisposable
                     return null;
                 }
 
-                if (!Placed(path, () => File.Move(spool, destination, overwrite: true)))
+                if (!Placed(path, () => RestorePaths.MoveOver(spool, destination)))
                 {
                     return null;
                 }
