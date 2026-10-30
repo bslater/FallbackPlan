@@ -70,7 +70,13 @@ public enum CopyScope
 /// and so still holds (ADR-0171). The objects they may reach were left with
 /// them, uncounted.
 /// </param>
-public sealed record ConvergeOutcome(long Copied, long AlreadyHeld, long Deleted, long Spared = 0, long Refused = 0);
+/// <param name="RefusedBytes">
+/// How many bytes the refused objects hold, as the destination sized them
+/// once it had refused (ADR-0171 Amendment 1): the space its policy released
+/// that is not reclaimed. What they reach is held too and is not in it.
+/// </param>
+public sealed record ConvergeOutcome(
+    long Copied, long AlreadyHeld, long Deleted, long Spared = 0, long Refused = 0, long RefusedBytes = 0);
 
 /// <summary>
 /// Copies one repository archive's missing objects from any object store to
@@ -396,6 +402,7 @@ public static class StoreToStoreCopier
         var deleted = 0L;
         var spared = 0L;
         var refused = 0L;
+        var refusedBytes = 0L;
         foreach (var phase in PhasePrefixes.Reverse())
         {
             if (Skip(phase, scope))
@@ -447,6 +454,7 @@ public static class StoreToStoreCopier
                 catch (Exception exception) when (IsRefusal(exception))
                 {
                     refused++;
+                    refusedBytes += await HeldLengthAsync(destination, key, cancellationToken).ConfigureAwait(false);
                     Log.ConvergeDeleteRefusedByStore(log, new LogLabel(name), ObjectKey.Parse(key), exception);
                     continue;
                 }
@@ -461,6 +469,7 @@ public static class StoreToStoreCopier
                     // nothing has not shown the object gone, and it is
                     // counted with the refusals.
                     refused++;
+                    refusedBytes += await HeldLengthAsync(destination, key, cancellationToken).ConfigureAwait(false);
                     Log.ConvergeDeleteRefused(log, new LogLabel(name), ObjectKey.Parse(key), outcome.Outcome);
                 }
             }
@@ -473,7 +482,26 @@ public static class StoreToStoreCopier
 
         Log.ReplicationComplete(log, new LogLabel(name), new LogLabel("converge"), copied, alreadyHeld, deleted);
 
-        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared, refused);
+        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared, refused, refusedBytes);
+    }
+
+    /// <summary>
+    /// How long an object a destination refused to delete is, by its own
+    /// answer, or nothing where it will not say: a store that refuses a
+    /// delete still answers a read, and the figure is what the refusal holds.
+    /// </summary>
+    private static async ValueTask<long> HeldLengthAsync(
+        IObjectStore destination, string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await destination.GetMetadataAsync(ObjectKey.Parse(key), cancellationToken).ConfigureAwait(false))
+                .Metadata?.Length ?? 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
     }
 
     /// <summary>

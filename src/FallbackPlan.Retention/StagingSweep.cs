@@ -41,6 +41,21 @@ public sealed record SweepOutcome(
     /// (ADR-0009 Amendment 8). Their tombstones stand for the next pass.
     /// </summary>
     public int HeldBlobs { get; init; }
+
+    /// <summary>
+    /// Snapshots and blobs this pass tried to delete and the store would not,
+    /// so they stand (the prior-art review's T-12): a write-once policy, a
+    /// permission, a sharing violation. Their tombstones stand for the next
+    /// pass.
+    /// </summary>
+    public int Deferred { get; init; }
+
+    /// <summary>
+    /// How many bytes <see cref="Deferred"/> holds, as the store sized each
+    /// once it had refused: the space this pass could not reclaim. The blobs
+    /// held behind a standing snapshot are not in it.
+    /// </summary>
+    public long DeferredBytes { get; init; }
 }
 
 /// <summary>
@@ -222,6 +237,7 @@ public static class StagingSweep
         var notYet = 0;
         var cleared = 0;
         var findings = new List<string>();
+        var deferrals = new Deferrals();
         var deletedSnapshots = new List<SnapshotFact>();
 
         // Blob tombstones wait until every snapshot has been tried, so the
@@ -290,7 +306,8 @@ public static class StagingSweep
                 }
 
                 switch (await TryDeleteAsync(
-                    store, snapshot.StoreKey, $"snapshot {snapshot.Fact.SnapshotId[..12]}…", findings, cancellationToken)
+                    store, snapshot.StoreKey, $"snapshot {snapshot.Fact.SnapshotId[..12]}…", findings, cancellationToken,
+                    deferrals)
                     .ConfigureAwait(false))
                 {
                     case Removal.Deleted:
@@ -376,7 +393,7 @@ public static class StagingSweep
                 continue;
             }
 
-            if (await TryDeleteAsync(store, present.Value, $"blob {blobId}", findings, cancellationToken)
+            if (await TryDeleteAsync(store, present.Value, $"blob {blobId}", findings, cancellationToken, deferrals)
                 .ConfigureAwait(false) == Removal.Deleted)
             {
                 deleted++;
@@ -394,6 +411,8 @@ public static class StagingSweep
         {
             DeletedSnapshots = deletedSnapshots,
             HeldBlobs = held + heldForStanding,
+            Deferred = deferrals.Count,
+            DeferredBytes = deferrals.Bytes,
         };
     }
 
@@ -424,6 +443,33 @@ public static class StagingSweep
                 .Select(blob => blob.BlobId)
                 .ToHashSet(),
             false);
+    }
+
+    /// <summary>What the deletes a pass made and the store would not held, counted as they stand.</summary>
+    private sealed class Deferrals
+    {
+        public int Count { get; private set; }
+
+        public long Bytes { get; private set; }
+
+        /// <summary>
+        /// Counts one object that stands, at the length the store gives it
+        /// now, or none where it will not say: a store that refuses a delete
+        /// still answers a read.
+        /// </summary>
+        public async ValueTask CountAsync(IObjectStore store, ObjectKey key, CancellationToken cancellationToken)
+        {
+            Count++;
+            try
+            {
+                Bytes += (await store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false)).Metadata?.Length ?? 0;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Sized where the store will say, as the refusal before it
+                // was reported rather than propagated.
+            }
+        }
     }
 
     /// <summary>What a delete left behind it.</summary>
@@ -463,6 +509,23 @@ public static class StagingSweep
     /// </para>
     /// </remarks>
     private static async ValueTask<Removal> TryDeleteAsync(
+        IObjectStore store,
+        ObjectKey key,
+        string what,
+        List<string> findings,
+        CancellationToken cancellationToken,
+        Deferrals? deferrals = null)
+    {
+        var removal = await DeleteAsync(store, key, what, findings, cancellationToken).ConfigureAwait(false);
+        if (removal == Removal.Stands && deferrals is not null)
+        {
+            await deferrals.CountAsync(store, key, cancellationToken).ConfigureAwait(false);
+        }
+
+        return removal;
+    }
+
+    private static async ValueTask<Removal> DeleteAsync(
         IObjectStore store,
         ObjectKey key,
         string what,

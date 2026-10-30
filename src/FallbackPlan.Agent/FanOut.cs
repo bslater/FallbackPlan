@@ -1,3 +1,4 @@
+using System.Globalization;
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Diagnostics;
@@ -1433,7 +1434,7 @@ public static class FanOut
                         spares, counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
                     copied = converged.Copied;
                     alreadyHeld = converged.AlreadyHeld;
-                    ReportRefusedDeletes(runtime, set, destination.Name, converged.Refused, nowMs);
+                    ReportRefusedDeletes(runtime, set, destination.Name, converged.Refused, converged.RefusedBytes, nowMs);
                 }
                 else
                 {
@@ -1781,7 +1782,8 @@ public static class FanOut
     /// (ADR-0171), and stops saying so after a pass in which it refused none.
     /// </summary>
     private static void ReportRefusedDeletes(
-        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, long refused, ulong nowMs)
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, long refused, long refusedBytes,
+        ulong nowMs)
     {
         var key = $"destination-deletes-refused:{set.Id}:{destinationName}";
         if (refused == 0)
@@ -1792,9 +1794,10 @@ public static class FanOut
 
         runtime.Notices.Raise(
             key,
-            $"destination '{destinationName}' of set '{set.Name}' refused {refused} delete(s) its retention asked for. "
+            $"destination '{destinationName}' of set '{set.Name}' refused {refused} delete(s) its retention asked for, "
+            + $"holding {refusedBytes.ToString("N0", CultureInfo.InvariantCulture)} byte(s) its policy released. "
             + "It still holds what it refused, and everything those reach, so every snapshot it lists still "
-            + "restores, but the space its policy released is not reclaimed. A store under a write-once or "
+            + "restores, and what they reach is held on top of that figure. A store under a write-once or "
             + "object-lock policy, or a credential without the right to delete, answers this way; each sync "
             + "tries again.",
             nowMs);
