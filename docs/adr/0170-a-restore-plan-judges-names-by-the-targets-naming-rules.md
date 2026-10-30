@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another)
+**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the executor's rule for where a repository's path is written, which the recovery tool shares), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-7
 
 **Built:**
@@ -61,6 +61,8 @@ On Windows, `TryResolve` refuses such a component with a reason that names Windo
 
 - **Restore the refused names under others.** A mapped name, such as an escaped character or a suffix, would restore the bytes under a name the source never had, and needs an operator's choice and a receipt that says so. Not built.
 - **Judge a POSIX target by its own limits.** A POSIX volume's 255-byte component limit, and macOS's composed-name rules, are not judged. The plan's whole-path byte limit (`MaxPathBytes`) is unchanged.
+
+  > **Built 2026-10 for Linux ([Amendment 1](#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds)).** A target that counts a name in bytes states how many it holds, and the local profile states 255 on Linux. A name longer than that is a conflict. macOS's limit and its composed-name rules are still not judged.
 - **Judge a destination by its volume rather than its platform.** A FAT or SMB volume mounted on POSIX may name by stricter rules than its host. The flag says what the platform does, and a caller that knows better can set it.
 
 ## Alternatives considered
@@ -69,8 +71,31 @@ On Windows, `TryResolve` refuses such a component with a reason that names Windo
 - **Judge in the planner only, and leave the executor as it was.** Rejected. A plan is the operator's to approve, and a restore run without one, or past one, would still write `notes.` over `notes` on Windows.
 - **Read the rules from the running platform.** Rejected, as for case sensitivity. A plan for another target could not be made, and the tests could judge only the host they ran on.
 
+## Amendment 1 (2026-10) — a name longer than a Linux target holds
+
+Windows counts a name in UTF-16 units, and Linux in bytes. A name in UTF-8 is never fewer bytes than units, and a character outside ASCII is two to four bytes, so a name Windows holds can be one Linux does not. Eighty-six three-byte characters are 86 units and 258 bytes. A snapshot of Windows names restored to Linux met that at execution: the platform refused the name, and the executor failed the file, named, with the platform's "too long". The plan, which promises to name before any byte moves each name the target cannot make, said nothing.
+
+**Decision.**
+
+- **The target profile gains `MaxNameBytes`:** the most bytes the target holds in one name, counted in UTF-8, or null where that is not known. Like the profile's other facts it is stated, so a plan for such a target can be made, and tested, anywhere.
+- **The local profile states 255 on Linux,** the limit of the filesystems Linux commonly creates. On macOS it states nothing. A macOS volume's limit is not one this code can state for every volume, so a name there is not judged by one, rather than by a guess. On Windows the limit stays as §1 judges it, in UTF-16 units.
+- **The plan judges each item's own name by it,** after the rule every target shares and Windows' rules. A name over it is a conflict whose reason gives the limit and the name's length. As §3 has it, the conflict is the operator's call, and the plan drops and renames nothing.
+- **Execution is unchanged.** Linux refuses such a name itself, and the executor fails that file alone, named, while the rest restores.
+
+**Built:** `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests`:
+
+- against a target that holds 255 bytes, a name of 86 three-byte characters is a conflict, and its reason gives 255 bytes and 258;
+- one of 85 such characters, and one of 255 ASCII characters, is not;
+- a target with no stated limit, or one that names by Windows' rules, judges none of them by bytes;
+- the local profile states 255 on Linux and nothing elsewhere.
+
+`Repository.Tests/RestoreLongNameTests`, on Linux: such a file is named in the plan. The run then fails it alone, restores the file beside it and leaves no spool.
+
+**Not done.** A name on a volume mounted on Linux that holds fewer bytes, or more, is judged by Linux's common limit, since the profile states the platform's and not the volume's (the third bullet of "What this does not do"). The whole path is still not judged against the platform's path limit.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A restore plan names every name the target cannot make, by a stated Windows naming rule, and a restore on Windows refuses one rather than writing it under another. No contract or format change. |
+| 2026-10 | Amended | Amendment 1: a target that counts a name in bytes states how many it holds, 255 for the local profile on Linux, and the plan names a name longer than that before any byte moves. `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests`; `Repository.Tests/RestoreLongNameTests` |

@@ -27,7 +27,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// judged by the target's naming rules, stated rather than taken from the
 /// running platform: names a POSIX source wrote that Windows would refuse or
 /// alter are each named before any byte moves, and Windows' own names plan
-/// clean on a POSIX target (ADR-0170). The three
+/// clean on a POSIX target (ADR-0170), save one longer in bytes than a
+/// target that counts in bytes holds (ADR-0170 Amendment 1). The three
 /// selectors that exist — snapshot, path, destination — are exercised end to
 /// end; device, time and file-version selection is phase-2 work that has not
 /// been built, so FR-RST-001 is covered in part and says so.
@@ -209,6 +210,45 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var windows = RestorePlanner.Plan(
             catalogue, snapshotId, string.Empty, PosixTarget() with { CaseSensitive = false, WindowsNamingRules = true });
         Assert.IsEmpty(windows.Conflicts);
+    }
+
+    [TestMethod]
+    public async Task RestorePlan_WindowsNamesTargetingABytesLimit_NamesEveryNameLongerThanTheTargetHolds()
+    {
+        // Windows counts a name in UTF-16 units and Linux in bytes, so a
+        // name Windows holds can be one Linux does not: 86 three-byte
+        // characters are 86 units and 258 bytes (ADR-0170 Amendment 1).
+        var tooLong = "names/" + new string('語', 86);
+        var longest = "names/" + new string('語', 85);
+        var ascii = "names/" + new string('n', 255);
+        var source = new FakeFileSystemSource();
+        source.AddFile(tooLong, Deterministic(64, 1));
+        source.AddFile(longest, Deterministic(64, 2));
+        source.AddFile(ascii, Deterministic(64, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA6), CancellationToken.None);
+        var snapshotId = Enumerable.Repeat((byte)0xA6, 16).ToArray();
+
+        var bytes = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, PosixTarget() with { MaxNameBytes = 255 });
+        var conflict = Assert.ContainsSingle(bytes.Conflicts);
+        Assert.AreEqual(tooLong, conflict.Path);
+        Assert.Contains("255 bytes", conflict.Reason, StringComparison.Ordinal);
+        Assert.Contains("258", conflict.Reason, StringComparison.Ordinal);
+
+        // A target that does not count in bytes, or whose limit is not
+        // known, is not judged by one.
+        Assert.IsEmpty(RestorePlanner.Plan(catalogue, snapshotId, string.Empty, PosixTarget()).Conflicts);
+        Assert.IsEmpty(RestorePlanner.Plan(
+            catalogue, snapshotId, string.Empty, PosixTarget() with { CaseSensitive = false, WindowsNamingRules = true }).Conflicts);
+
+        // The platform the restore runs on states its limit where it is
+        // Linux, whose filesystems commonly hold 255 bytes in a name.
+        uint? stated = OperatingSystem.IsLinux() ? 255u : null;
+        Assert.AreEqual(stated, RestoreTargetProfile.ForLocalPlatform().MaxNameBytes);
     }
 
     /// <summary>A case-sensitive target that keeps POSIX metadata and links, stated rather than taken from the running platform.</summary>

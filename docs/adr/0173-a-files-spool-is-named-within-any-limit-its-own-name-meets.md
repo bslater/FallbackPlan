@@ -41,6 +41,8 @@ The digits come from the file's name, so a destination's spool is the same on ev
 - **Name a copy written beside under rename.** Under the rename policy, a file in the way keeps its name, and the restored one lands as the name with " (restored" and the date before its extension, 22 characters more, and more after the first such copy. A name that close to its limit fails there, named, as before.
 - **Judge a target's limit in the plan.** A POSIX target's limit in bytes is still not judged (ADR-0170). A name longer than the target holds, captured on Windows, fails at execution, named, rather than in the plan.
 
+  > **Built 2026-10 for Linux ([ADR-0170 Amendment 1](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds)).** The plan names such a name on a Linux target before any byte moves. It still fails at execution, named, as before.
+
 ## Alternatives considered
 
 - **Keep the old name where it fits, and shorten it only where it does not.** Rejected. Whether it fits depends on the volume's limit, which neither writer knows, and two forms of one spool is one more thing to look for in a folder.
@@ -52,3 +54,4 @@ The digits come from the file's name, so a destination's spool is the same on ev
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A file's spool is named in 33 characters, so a file whose name is as long as its target holds restores through the executor and the recovery tool. No contract or format change. |
+| 2026-10 | Accepted (related) | [ADR-0170 Amendment 1](0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds): a name longer than a Linux target holds is named in the plan. `Restore/RestorePlan` |

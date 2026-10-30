@@ -82,6 +82,15 @@ public sealed record RestoreTargetProfile
     /// </summary>
     public bool WindowsNamingRules { get; init; }
 
+    /// <summary>
+    /// The most bytes the target holds in one name, counted in UTF-8, or null
+    /// where that is not known (ADR-0170 Amendment 1). Windows counts a name
+    /// in UTF-16 units instead, which <see cref="WindowsNamingRules"/> judges,
+    /// and a name is never fewer bytes than units, so one Windows holds may
+    /// be one a target that counts bytes does not.
+    /// </summary>
+    public uint? MaxNameBytes { get; init; }
+
     /// <summary>What this target lets a <see cref="MetadataWriter"/> write back.</summary>
     public MetadataTarget Metadata => new()
     {
@@ -99,6 +108,10 @@ public sealed record RestoreTargetProfile
         SupportsPosixMetadata = !OperatingSystem.IsWindows(),
         SupportsSymlinks = !OperatingSystem.IsWindows(),
         WindowsNamingRules = OperatingSystem.IsWindows(),
+
+        // The filesystems Linux commonly creates hold 255 bytes in a name.
+        // macOS's limit is not stated, so a name there is not judged by one.
+        MaxNameBytes = OperatingSystem.IsLinux() ? 255u : null,
         SupportsCreationTimes = FileTimes.CanSetCreationTime,
         SupportsExtendedAttributes = ExtendedAttributes.CanSet,
         Account = RestoreAccount.OfThisProcess(),
@@ -285,6 +298,12 @@ public static class RestorePlanner
             else if (target.WindowsNamingRules && !RestorePaths.IsWindowsName(name, out why))
             {
                 conflicts.Add(new RestoreConflict(item.Path, $"A Windows target cannot make this name: {why}."));
+            }
+            else if (target.MaxNameBytes is { } maxName
+                && System.Text.Encoding.UTF8.GetByteCount(name) is var nameBytes && nameBytes > maxName)
+            {
+                conflicts.Add(new RestoreConflict(
+                    item.Path, $"The target holds at most {maxName} bytes in one name, and this name is {nameBytes}."));
             }
         }
 
