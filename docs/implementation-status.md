@@ -197,6 +197,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0170](adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md) | A restore plan judges names by the target's naming rules: a name no target restores, and for a Windows target a name Windows would refuse or alter, is a conflict before any byte moves; a restore that runs on Windows refuses such a name rather than letting Windows write it under another | **Built** | `Domain/RestorePaths` · `Restore/RestorePlan` · `Domain.Tests/WindowsNamesTests` · `Repository.Tests/EndToEnd/RestorePlanTests` · [notes](#0170--a-restore-plan-judges-names-by-the-targets-naming-rules) |
 | [0171](adr/0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md) | A destination that refuses a delete keeps what it reaches, and the sync goes on: a delete the store refuses, or answers "not found" for an object still listed, is counted, logged and noticed, holds back every deeper phase that pass, and does not fail the sync | **Built** | `Replication/StoreToStoreCopier` · `Agent/FanOut` · `Storage.Abstractions/StoreResults` · `Storage.S3/S3ObjectStore` · `Storage.AzureBlob/AzureBlobObjectStore` · `Replication.Tests/ConvergeRefusalTests` · `Hosts.Tests/ObjectStoreDestinationTests` · `Hosts.Tests/S3DestinationTests` · `Hosts.Tests/AzureBlobDestinationTests` · [notes](#0171--a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on) |
 | [0172](adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) | A blob that goes while a restore reads it is one the store no longer holds: a read that fails as damage fails asks the store, and a blob it no longer holds is forgotten, read around as not held or failed, and never ends the run; a copy that stops holding a blob while the run reads around to it is passed over as not held (Amendment 1); with no copy, a record whose blob the store does not hold fails as not held, not as a format violation (Amendment 2) | **Built** | `Repository/RepositoryReader` · `Repository.Packing/RecordReadResult` · `Repository.Tests/RestoreBesideCollectionTests` · [notes](#0172--a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds) |
+| [0173](adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md) | A file's spool is named within any limit its own name meets: both writers spool beside a file under 33 characters made from its name, so a file whose name is as long as its target holds restores | **Built** | `Domain/RestorePaths` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Domain.Tests/RestoreSpoolTests` · `Repository.Tests/RestoreLongNameTests` · `Repository.Tests/RecoveryContainmentTests` · [notes](#0173--a-files-spool-is-named-within-any-limit-its-own-name-meets) |
 
 ---
 
@@ -4622,3 +4623,24 @@ the store still holds that will not frame is still damage. A reader
 that loaded every footer, reading around, had filed the own store as
 damaged for such a blob. No caller in the product builds that reader
 with copies, and it now passes the own store over as not held.
+
+### 0173 — a file's spool is named within any limit its own name meets
+
+Both writers write a file whole beside its destination and rename it
+into place. The executor named that spool by adding `.fbp-restore-tmp`
+to the file's name, and the recovery tool `.fbp-recover-tmp`, sixteen
+characters more. A volume holds 255 bytes in one name on the common
+Linux filesystems, and 255 UTF-16 units on NTFS, so a file whose name
+was within sixteen of that failed though its target held its name.
+From Linux to Linux, a file named with 250 bytes could not be restored.
+
+Each spool is now named by one rule in `Domain/RestorePaths`: the
+writer's prefix, sixteen hex digits of a hash of the file's name, and
+`.tmp`, 33 characters in all. A file has the same spool on every run,
+so one a killed run left is written over by the next.
+
+What remains is recorded rather than done:
+
+- a copy written beside under rename adds 22 characters, so a name
+  that close to its limit still fails there, named;
+- a POSIX target's byte limit is still not judged in the plan.

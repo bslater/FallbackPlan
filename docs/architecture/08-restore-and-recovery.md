@@ -120,6 +120,8 @@ The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a f
 
 > **2026-10 ([ADR-0159](../adr/0159-a-restore-into-a-folder-that-is-itself-a-link-restores-what-lies-below-it.md)).** A path is followed through every link it passes, the root's own included, and refused at the first folder that leads out of where the root really is. A restore into a folder that is a link restores what lies below it.
 
+> **2026-10 ([ADR-0173](../adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md)).** A file is written whole beside its destination before it is moved there, in a spool named in 33 characters from the file's own name, by the executor and the recovery tool alike. A file whose name is as long as its target holds restores. Its spool's name had been the file's with sixteen characters more, which such a target would not hold.
+
 ### 3.1 Quarantine by default
 
 Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006
