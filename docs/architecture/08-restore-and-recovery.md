@@ -124,6 +124,8 @@ The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a f
 
 > **2026-10 ([ADR-0173](../adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md)).** A file is written whole beside its destination before it is moved there, in a spool named in 33 characters from the file's own name, by the executor and the recovery tool alike. A file whose name is as long as its target holds restores. Its spool's name had been the file's with sixteen characters more, which such a target would not hold.
 
+> **2026-10 ([ADR-0173 Amendment 1](../adr/0173-a-files-spool-is-named-within-any-limit-its-own-name-meets.md#amendment-1-2026-10--the-single-file-restore-lands-its-file-the-same-way)).** The command line's `restore-file` lands its file the same way. It had written straight into its output and deleted it when the restore failed, so a failure destroyed whatever stood there. Now a restore that fails leaves the output as it was.
+
 ### 3.1 Quarantine by default
 
 Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006
