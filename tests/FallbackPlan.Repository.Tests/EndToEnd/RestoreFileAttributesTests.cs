@@ -69,11 +69,13 @@ public sealed class RestoreFileAttributesTests : ArchiveTestHarness
             Assert.AreEqual(FileAttributes.Directory | FileAttributes.Hidden, File.GetAttributes(Path.Combine(output, "data")));
             Assert.AreEqual(modified, File.GetLastWriteTimeUtc(landed));
             Assert.AreEqual("kept read-only and hidden", File.ReadAllText(landed));
-            foreach (var receipt in new[] { first, again })
-            {
-                Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
-                Assert.IsTrue(receipt.Items.All(item => !(item.NotApplied?.Contains("file_attributes") ?? false)));
-            }
+            Assert.AreEqual(RestoreOutcome.Complete, first.Outcome);
+            Assert.AreEqual(RestoreOutcome.Complete, again.Outcome);
+            Assert.IsTrue(first.Items.All(item => !(item.NotApplied?.Contains("file_attributes") ?? false)));
+
+            // By the second run the folder stands, and keeps its own (ADR-0086).
+            var replaced = Assert.ContainsSingle(again.Items.Where(item => item.Path.EndsWith("flags.bin", StringComparison.Ordinal)));
+            Assert.DoesNotContain("file_attributes", replaced.NotApplied ?? []);
         }
         finally
         {
