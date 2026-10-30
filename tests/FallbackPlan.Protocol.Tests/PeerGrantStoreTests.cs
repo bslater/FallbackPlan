@@ -1,5 +1,6 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Protocol;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Protocol.Tests;
 
@@ -165,6 +166,29 @@ public sealed class PeerGrantStoreTests : IDisposable
 
         Assert.ThrowsExactly<ClientStateException>(
             () => Open().ApplyTerms(stranger.Identity, PeerTerms.None));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows,
+        "a rename holds the file it renamed open for deletion until it returns, and only Windows refuses "
+        + "a reader that does not share deletion with that handle")]
+    public void Open_WhileASaveHoldsTheFileForDeletion_ReadsTheGrants()
+    {
+        using var keypair = PeerKeypair.Generate();
+        Open().Pin(Grant(keypair.Identity));
+
+        // Every peer session saves the terms its peer announced, so a dial
+        // can open the store while a save is renaming peers.json into place.
+        // The handle below is that moment held still, as the rename's own
+        // is: opened for deletion and sharing everything. Delete-on-close is
+        // how .NET asks for deletion access, so the file goes when it closes,
+        // after the open this test is about.
+        var path = Path.Combine(_stateDirectory, "peers.json");
+        using (File.OpenHandle(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.DeleteOnClose))
+        {
+            Assert.IsNotNull(Open().Find(keypair.Identity));
+        }
     }
 
     public void Dispose()
