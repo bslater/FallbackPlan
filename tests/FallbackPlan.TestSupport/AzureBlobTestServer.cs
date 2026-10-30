@@ -40,6 +40,8 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
     public const string ApiVersion = "2024-11-04";
 
     private readonly ConcurrentDictionary<string, IssuedSignature> _signatures = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _softDeleting = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _softDeletedBytes = new(StringComparer.Ordinal);
 
     /// <summary>Starts a server on an ephemeral loopback port.</summary>
     /// <param name="account">The one storage account it serves.</param>
@@ -65,6 +67,40 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
     /// <summary>Declares an empty container.</summary>
     /// <param name="name">The container's name.</param>
     public void CreateContainer(string name) => AddNamespace(name);
+
+    /// <summary>
+    /// Puts a container's account under soft delete, as a new account is by
+    /// default: a delete hides the blob, answers that it was not permanent,
+    /// and the account keeps the bytes until its retention period ends.
+    /// </summary>
+    /// <param name="name">The container's name.</param>
+    public void SoftDelete(string name)
+    {
+        lock (_softDeleting)
+        {
+            _softDeleting.Add(name);
+        }
+    }
+
+    /// <summary>Takes a container's account off soft delete; what it kept stays kept.</summary>
+    /// <param name="name">The container's name.</param>
+    public void DeletePermanently(string name)
+    {
+        lock (_softDeleting)
+        {
+            _softDeleting.Remove(name);
+        }
+    }
+
+    /// <summary>The bytes a container's deletes have soft-deleted since its account began keeping them.</summary>
+    /// <param name="name">The container's name.</param>
+    public long SoftDeletedBytesIn(string name)
+    {
+        lock (_softDeleting)
+        {
+            return _softDeletedBytes.GetValueOrDefault(name);
+        }
+    }
 
     /// <summary>
     /// Issues a shared access signature for one container, as a person would
@@ -141,7 +177,7 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
                 "PUT" => Put(request, objects, blob),
                 "GET" => Get(request, objects, blob, head: false),
                 "HEAD" => Get(request, objects, blob, head: true),
-                "DELETE" => Delete(objects, blob),
+                "DELETE" => Delete(containerName, objects, blob),
                 _ => Error(405, "UnsupportedHttpVerb", "The resource doesn't support the specified HTTP verb."),
             };
         }
@@ -265,10 +301,34 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
         };
     }
 
-    private static Response Delete(SortedDictionary<string, StoredObject> objects, string blob) =>
-        objects.Remove(blob)
-            ? new Response(202)
-            : Error(404, "BlobNotFound", "The specified blob does not exist.");
+    private Response Delete(string containerName, SortedDictionary<string, StoredObject> objects, string blob)
+    {
+        if (!objects.Remove(blob, out var removed))
+        {
+            return Error(404, "BlobNotFound", "The specified blob does not exist.");
+        }
+
+        // The API says on every delete whether it was permanent, and under
+        // soft delete it was not: the account keeps the bytes for its period.
+        bool soft;
+        lock (_softDeleting)
+        {
+            soft = _softDeleting.Contains(containerName);
+            if (soft)
+            {
+                _softDeletedBytes[containerName] =
+                    _softDeletedBytes.GetValueOrDefault(containerName) + removed.Bytes.LongLength;
+            }
+        }
+
+        return new Response(202)
+        {
+            Headers = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["x-ms-delete-type-permanent"] = soft ? "false" : "true",
+            },
+        };
+    }
 
     private Response List(
         string containerName, SortedDictionary<string, StoredObject> objects, IReadOnlyDictionary<string, string> query)

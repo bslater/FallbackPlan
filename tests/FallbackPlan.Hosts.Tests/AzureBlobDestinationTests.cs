@@ -18,8 +18,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// signature carried in each request as issued, whose expiry the service
 /// reads, reports and holds to before a request is sent, and names in a
 /// notice from two weeks before it lapses until a new one is stored (ADR-0093
-/// Amendment 1); and an address the configuration and the provider must agree
-/// on.
+/// Amendment 1); an address the configuration and the provider must agree
+/// on; and an account under soft delete, whose deletes the sync counts and
+/// raises no notice for, since the account releases what it keeps by itself
+/// (FR-GC-010, ADR-0171 Amendment 4).
 /// </summary>
 /// <remarks>
 /// Either credential reaches the service only as an envelope sealed to its
@@ -595,6 +597,39 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
         return await handler.ExecuteAsync(
             new SetDestinationCredentialsCommand("cloud", null, Convert.ToHexStringLower(envelope), Kind: "sas"),
             Timeout);
+    }
+
+    [TestMethod]
+    public async Task Sync_ToAContainerUnderSoftDelete_StaysInSync_AndRaisesNoNotice()
+    {
+        // Soft delete is on by default for a new account. Each delete the
+        // store's retention asks for is answered, and the account keeps the
+        // bytes until its retention period ends, then releases them itself.
+        // The replica is whole. A notice would stand on every default
+        // account for space that comes back on its own, so none is raised;
+        // the sync's log says what was kept.
+        WriteConfiguration(directShip: false, retention: new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 });
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var now = DateTimeOffset.Now;
+        await BackUpAsync(runtime, now);
+
+        Azure.SoftDelete(Namespace);
+        Harness.WriteSourceFile("docs/c.txt", "written after the first backup, so held by the second snapshot alone");
+        await BackUpAsync(runtime, now.AddHours(1));
+
+        Assert.IsGreaterThan(
+            0L, Azure.SoftDeletedBytesIn(Namespace),
+            "the premise: the store's retention deleted something, and the account kept it");
+        var synced = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, synced.State, synced.LastError);
+        Assert.DoesNotContain("damaged", await VerifyAsync(runtime), StringComparison.Ordinal);
+        Assert.IsFalse(
+            runtime.Notices.Unacknowledged.Any(notice => notice.Key.StartsWith("destination-deletes-", StringComparison.Ordinal)),
+            "space the account releases by itself raises no notice: "
+                + string.Join("; ", runtime.Notices.Unacknowledged.Select(notice => notice.Key)));
     }
 
     private static AzureBlobTestServer StartStore()
