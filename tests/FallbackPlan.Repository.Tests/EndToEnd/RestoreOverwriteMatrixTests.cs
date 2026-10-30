@@ -237,7 +237,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
         Assert.IsTrue(receipt.Items.Count < plan.Items.Count, "a cancelled run reports fewer items than planned");
         SequenceAssert.AreEqual(alpha, File.ReadAllBytes(Path.Combine(output, "data", "alpha.bin")));
         Assert.IsFalse(File.Exists(Path.Combine(output, "data", "beta.bin")), "the interrupted item must not land");
-        Assert.IsFalse(File.Exists(Path.Combine(output, "data", "beta.bin.fbp-restore-tmp")), "no spool debris either");
+        Assert.IsFalse(File.Exists(RestorePaths.SpoolBeside(Path.Combine(output, "data", "beta.bin"), "restore")), "no spool debris either");
     }
 
     [TestMethod]
