@@ -33,6 +33,13 @@ public enum RecordReadOutcome
 
     /// <summary>The record uses a profile this implementation does not support; refused, not guessed.</summary>
     UnsupportedProfile,
+
+    /// <summary>
+    /// The store does not hold the blob the record is in: it went during the
+    /// run, swept or trimmed, or before it (ADR-0172 Amendment 2). Nothing is
+    /// damaged, and nothing was read.
+    /// </summary>
+    NotHeld,
 }
 
 /// <summary>

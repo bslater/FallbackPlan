@@ -382,6 +382,7 @@ public sealed class RepositoryReader : IDisposable
     private async ValueTask<OwnRead> ReadOwnAsync(ObjectId objectId, CancellationToken cancellationToken)
     {
         RecordReadResult? fast = null;
+        BlobId? notHeld = null;
         if (_locations is not null && _locations(objectId) is { } location)
         {
             fast = await ReadFromLocationAsync(location, objectId, cancellationToken).ConfigureAwait(false);
@@ -397,7 +398,10 @@ public sealed class RepositoryReader : IDisposable
             // diagnosed by the reader that knows how to describe it, and a
             // stale offset costs one wasted read rather than a lost file.
             LocationFallbacks++;
-            await OpenForFallbackAsync(location, cancellationToken).ConfigureAwait(false);
+            if (!await OpenForFallbackAsync(location, cancellationToken).ConfigureAwait(false))
+            {
+                notHeld = location.BlobId;
+            }
         }
 
         if (_records.TryGetValue(objectId, out var located))
@@ -414,13 +418,19 @@ public sealed class RepositoryReader : IDisposable
                 {
                     throw;
                 }
+
+                notHeld = located.Reader.Envelope.BlobId;
             }
         }
 
         return new OwnRead(
-            RecordReadResult.Failure(
-                RecordReadOutcome.FormatViolation,
-                $"No loaded blob carries a record for object {objectId}."),
+            notHeld is { } gone
+                ? RecordReadResult.Failure(
+                    RecordReadOutcome.NotHeld,
+                    $"The store does not hold blob {gone}, which carries a record for object {objectId}.")
+                : RecordReadResult.Failure(
+                    RecordReadOutcome.FormatViolation,
+                    $"No loaded blob carries a record for object {objectId}."),
             fast);
     }
 
@@ -577,7 +587,7 @@ public sealed class RepositoryReader : IDisposable
         }
 
         var read = own!.Value.Read;
-        if (key is not { } held)
+        if (key is not { } held || read.Outcome == RecordReadOutcome.NotHeld)
         {
             return new CopyRefusal(name, null, CopyFault.NotHeld, "it does not hold the blob the record is in");
         }
@@ -818,16 +828,17 @@ public sealed class RepositoryReader : IDisposable
     /// fallback. A reader using a location source loads nothing up front,
     /// so without this there would be nothing to fall back <em>to</em>.
     /// </summary>
-    private async ValueTask OpenForFallbackAsync(ResolvedLocation location, CancellationToken cancellationToken)
+    /// <returns>Whether the store holds the blob, whatever its footer said.</returns>
+    private async ValueTask<bool> OpenForFallbackAsync(ResolvedLocation location, CancellationToken cancellationToken)
     {
         if (await LocateBlobAsync(location, cancellationToken).ConfigureAwait(false) is not { } blob)
         {
-            return;
+            return false;
         }
 
         if (_blobReaders.Any(open => open.StoreKey == blob.Key))
         {
-            return;
+            return true;
         }
 
         BlobReader reader;
@@ -841,7 +852,7 @@ public sealed class RepositoryReader : IDisposable
         {
             if (await ForgetIfGoneAsync(location.BlobId, blob.Key, cancellationToken).ConfigureAwait(false))
             {
-                return;
+                return false;
             }
 
             // Damage, scoped to the blob it is in — the same posture the
@@ -849,7 +860,7 @@ public sealed class RepositoryReader : IDisposable
             // into a failed restore of everything else.
             Log.BlobSkipped(_logger, blob.Key, exception.Message);
             _skipped.Add(new SkippedBlob(blob.Key, exception.Message));
-            return;
+            return true;
         }
 
         _blobReaders.Add(reader);
@@ -857,6 +868,8 @@ public sealed class RepositoryReader : IDisposable
         {
             _records.TryAdd(record.ObjectId, (reader, record));
         }
+
+        return true;
     }
 
     /// <summary>
