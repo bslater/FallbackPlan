@@ -570,10 +570,31 @@ public sealed class RecoverySession : IDisposable
                         own with { WindowsSecurityDescriptor = null, AlternateStreams = [] }));
                 }
 
+                // The name each file here is first written under is the
+                // tool's own (ADR-0173). An entry there would be removed when
+                // that file spools, after the report had counted it restored
+                // (ADR-0152 Amendment 4). Held without regard to case, as a
+                // target that folds case holds a name.
+                var spools = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var file in tree.Entries.Where(entry => entry.EntryKind == EntryKind.File))
+                {
+                    var fileName = Encoding.UTF8.GetString(file.Name.Span);
+                    spools.TryAdd(
+                        RestorePaths.SpoolName(fileName, "recover"), prefix.Length == 0 ? fileName : prefix + "/" + fileName);
+                }
+
                 foreach (var entry in tree.Entries)
                 {
                     var name = Encoding.UTF8.GetString(entry.Name.Span);
                     var path = prefix.Length == 0 ? name : prefix + "/" + name;
+
+                    if (spools.TryGetValue(name, out var spooled))
+                    {
+                        failed++;
+                        notes.Add(new RecoveryNote(
+                            RecoveryNoteKind.Refused, path, Reason: $"the tool writes {spooled} under this name first"));
+                        continue;
+                    }
 
                     // A tree entry's name is repository text, and this session
                     // exists precisely for repositories in the worst state to

@@ -307,6 +307,20 @@ public static class RestorePlanner
             }
         }
 
+        // The name each file is first written under, beside it (ADR-0173),
+        // is the run's own: an entry the snapshot names there, or below it,
+        // would be removed when that file spools, after the receipt had
+        // counted it restored (ADR-0152 Amendment 4).
+        var spools = SpoolsOf(items);
+        foreach (var item in items)
+        {
+            if (SpooledThere(item.Path, spools) is { } spooled)
+            {
+                conflicts.Add(new RestoreConflict(
+                    item.Path, $"The restore writes {spooled} under this name first, so it cannot be restored here."));
+            }
+        }
+
         if (target.MaxPathBytes is { } maxPath)
         {
             foreach (var item in items.Where(item =>
@@ -360,6 +374,41 @@ public static class RestorePlanner
     /// removed; a whole-snapshot request (an empty entry) collapses the list
     /// to "everything".
     /// </summary>
+    /// <summary>
+    /// The paths the executor first writes <paramref name="items"/>' files
+    /// under, each beside its file, mapped to the file's own path. Held
+    /// without regard to case, since a target that folds case takes every
+    /// spelling of a name for one.
+    /// </summary>
+    internal static Dictionary<string, string> SpoolsOf(IEnumerable<RestorePlanItem> items)
+    {
+        var spools = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items.Where(item => item.Kind == EntryKind.File))
+        {
+            var folder = item.Path.LastIndexOf('/') + 1;
+            spools.TryAdd(item.Path[..folder] + RestorePaths.SpoolName(item.Path[folder..], "restore"), item.Path);
+        }
+
+        return spools;
+    }
+
+    /// <summary>
+    /// The file whose spool <paramref name="path"/> stands at, or below, among
+    /// <paramref name="spools"/>; null where it stands at none.
+    /// </summary>
+    internal static string? SpooledThere(string path, Dictionary<string, string> spools)
+    {
+        for (var end = path.Length; end > 0; end = path.LastIndexOf('/', end - 1))
+        {
+            if (spools.TryGetValue(path[..end], out var file))
+            {
+                return file;
+            }
+        }
+
+        return null;
+    }
+
     private static List<string> Normalise(IReadOnlyList<string> pathPrefixes)
     {
         if (pathPrefixes.Any(prefix => prefix.Length == 0))

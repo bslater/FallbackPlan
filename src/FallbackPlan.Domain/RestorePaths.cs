@@ -117,11 +117,26 @@ public static class RestorePaths
         ThrowHelper.ThrowIfNull(destination);
         ThrowHelper.ThrowIfNull(owner);
 
+        return Path.Combine(Path.GetDirectoryName(destination)!, SpoolName(Path.GetFileName(destination), owner));
+    }
+
+    /// <summary>
+    /// The name <see cref="SpoolBeside"/> gives the spool of a file named
+    /// <paramref name="name"/>, in the file's own folder. It follows from the
+    /// file's name alone, so an entry a snapshot names there is known before
+    /// anything is written (ADR-0152 Amendment 4).
+    /// </summary>
+    /// <param name="name">The file's own name, one component.</param>
+    /// <param name="owner">The writer, as <see cref="SpoolBeside"/> takes it.</param>
+    /// <returns>The spool's name.</returns>
+    public static string SpoolName(string name, string owner)
+    {
+        ThrowHelper.ThrowIfNull(name);
+        ThrowHelper.ThrowIfNull(owner);
+
         Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
-        SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFileName(destination)), digest);
-        return Path.Combine(
-            Path.GetDirectoryName(destination)!,
-            $".fbp-{owner}-{Convert.ToHexStringLower(digest[..8])}.tmp");
+        SHA256.HashData(Encoding.UTF8.GetBytes(name), digest);
+        return $".fbp-{owner}-{Convert.ToHexStringLower(digest[..8])}.tmp";
     }
 
     /// <summary>
