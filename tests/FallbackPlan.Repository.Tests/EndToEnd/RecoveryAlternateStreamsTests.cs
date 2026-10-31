@@ -20,12 +20,17 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// before its times, each read and verified like a segment, and each name
 /// judged before it is joined to the file's path. A stream that does not land
 /// is noted, saying why, and counted not applied; the file still restores.
+/// On Linux and macOS, which keep no streams and write extended attributes,
+/// the tool keeps a file's streams as attributes of the same names, as the
+/// executor does: Linux takes only those in its user namespace, and a
+/// stream the file's own captured attribute names is left to it (FR-RST-005;
+/// ADR-0179 Amendment 1).
 /// </summary>
 /// <remarks>
-/// Only Windows keeps alternate streams, and off Windows the tool asks the
-/// platform for none, counting them not applied as before. The cases that
-/// judge what it asks for run everywhere against calls that hold streams in
-/// memory; one runs the platform's calls end to end on Windows.
+/// Only Windows keeps alternate streams. The cases that judge what the tool
+/// asks for run everywhere against calls that hold streams in memory; one
+/// runs the platform's calls end to end on Windows, and the rest keep
+/// streams as attributes on Linux and macOS.
 /// </remarks>
 [TestClass]
 public sealed class RecoveryAlternateStreamsTests : IDisposable
@@ -129,15 +134,69 @@ public sealed class RecoveryAlternateStreamsTests : IDisposable
     }
 
     [TestMethod]
-    [PlatformCondition(TestPlatforms.Posix, "POSIX keeps no alternate data streams, and a colon is a name's own character there")]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task RecoveryRestore_OnPosix_AsksThePlatformForNoStream_AndCountsThemNotApplied()
+    public async Task RecoveryRestore_OnPosix_AFilesStreamInTheUserNamespace_IsKeptAsItsAttribute_AndNotCountedNotApplied()
     {
-        var (report, output) = await RestoreAsync(Carrier(Deterministic(4_096, 6), ("Zone.Identifier", Zone)), streams: null);
+        var (report, output) = await RestoreAsync(Carrier(Deterministic(4_096, 6), ("user.origin", Notes)), streams: null);
 
+        var landed = Path.Combine(output, "data", "streams.bin");
         Assert.AreEqual("streams.bin", Path.GetFileName(Assert.ContainsSingle(Directory.GetFiles(Path.Combine(output, "data")))));
-        Assert.AreEqual(1, NotApplied(report));
+        SequenceAssert.AreEqual(Notes, Xattr.Get(landed, "user.origin"));
+        Assert.AreEqual(1, report.Restored);
+        Assert.AreEqual(0, NotApplied(report));
         Assert.DoesNotContain(note => note.Kind == RecoveryNoteKind.StreamNotWritten, report.Notes);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux takes a file's own attribute only in its user namespace")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task RecoveryRestore_OnLinux_AStreamOutsideTheUserNamespace_IsNoted_AndCountedNotApplied_WhileTheRestAreKept()
+    {
+        var (report, output) = await RestoreAsync(
+            Carrier(Deterministic(4_096, 8), ("Zone.Identifier", Zone), ("user.origin", Notes)), streams: null);
+
+        var landed = Path.Combine(output, "data", "streams.bin");
+        Assert.AreEqual("streams.bin", Path.GetFileName(Assert.ContainsSingle(Directory.GetFiles(Path.Combine(output, "data")))));
+        SequenceAssert.AreEqual(Notes, Xattr.Get(landed, "user.origin"));
+        Assert.AreEqual(1, report.Restored);
+        Assert.AreEqual(1, NotApplied(report));
+        var note = Assert.ContainsSingle(report.Notes.Where(candidate => candidate.Kind == RecoveryNoteKind.StreamNotWritten));
+        Assert.Contains("Zone.Identifier", note.Reason!, StringComparison.Ordinal);
+        Assert.Contains("user namespace", note.Reason!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.MacOs, "macOS takes an attribute of any name")]
+    [PlatformTrait(TestPlatforms.MacOs)]
+    public async Task RecoveryRestore_OnMacOs_AStreamOfAnyName_IsKeptAsAnAttribute()
+    {
+        var (report, output) = await RestoreAsync(Carrier(Deterministic(4_096, 9), ("Zone.Identifier", Zone)), streams: null);
+
+        SequenceAssert.AreEqual(Zone, Xattr.Get(Path.Combine(output, "data", "streams.bin"), "Zone.Identifier"));
+        Assert.AreEqual(0, NotApplied(report));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task RecoveryRestore_OnPosix_AStreamWhoseNameTheFilesOwnAttributeHas_IsNotWrittenOverIt_AndIsNoted()
+    {
+        var source = new FakeFileSystemSource();
+        var carrier = source.AddFile(CarrierPath, Deterministic(4_096, 10), fileId: 9_302);
+        carrier.Metadata = new EntryMetadata
+        {
+            ModifiedAt = CapturedModifiedAt,
+            ExtendedAttributes = [new ExtendedAttributeEntry("user.tag"u8.ToArray(), "own"u8.ToArray())],
+        };
+        carrier.AlternateStreams["user.tag"] = Notes;
+
+        var (report, output) = await RestoreAsync(source, streams: null);
+
+        SequenceAssert.AreEqual("own"u8.ToArray(), Xattr.Get(Path.Combine(output, "data", "streams.bin"), "user.tag"));
+        Assert.AreEqual(1, NotApplied(report));
+        var note = Assert.ContainsSingle(report.Notes.Where(candidate => candidate.Kind == RecoveryNoteKind.StreamNotWritten));
+        Assert.Contains("'user.tag'", note.Reason!, StringComparison.Ordinal);
     }
 
     [TestMethod]

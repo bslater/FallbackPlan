@@ -32,6 +32,13 @@ public static unsafe partial class ExtendedAttributes
     /// <summary>Whether this platform has a call that writes an extended attribute: Linux and macOS do, Windows does not.</summary>
     public static bool CanSet { get; } = OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
 
+    /// <summary>
+    /// Whether this platform takes an attribute's name only in a namespace,
+    /// and a file's own only in its user namespace: Linux does, macOS takes
+    /// any name (ADR-0179).
+    /// </summary>
+    public static bool TakesNamespaces { get; } = OperatingSystem.IsLinux();
+
     /// <summary>Gives the file or folder at <paramref name="path"/> the attribute <paramref name="name"/>.</summary>
     /// <param name="path">The file or folder; a link is never followed.</param>
     /// <param name="name">The attribute's name.</param>

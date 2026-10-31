@@ -1556,7 +1556,14 @@ public sealed class RestoreExecutor(
     private async ValueTask<string?> WriteStreamsAsync(
         string landing, FileVersionManifest manifest, CancellationToken cancellationToken)
     {
-        if (!target.SupportsAlternateStreams && !_streamsAsAttributes)
+        if (_streamsAsAttributes)
+        {
+            var unkept = await AlternateStreams.WriteBackAsAttributesAsync(
+                landing, manifest.Metadata, ReadStreamAsync, target.AttributesTakeNamespaces, cancellationToken).ConfigureAwait(false);
+            return unkept.Count == 0 ? null : string.Join("; ", unkept.Select(why => $"alternate stream {why}"));
+        }
+
+        if (!target.SupportsAlternateStreams)
         {
             return null;
         }
@@ -1564,10 +1571,7 @@ public sealed class RestoreExecutor(
         List<string>? left = null;
         foreach (var stream in manifest.Metadata.AlternateStreams)
         {
-            var why = target.SupportsAlternateStreams
-                ? await WriteStreamAsync(landing, stream, cancellationToken).ConfigureAwait(false)
-                : await WriteStreamAsAttributeAsync(landing, manifest.Metadata, stream, cancellationToken).ConfigureAwait(false);
-            if (why is not null)
+            if (await WriteStreamAsync(landing, stream, cancellationToken).ConfigureAwait(false) is { } why)
             {
                 (left ??= []).Add(why);
             }
@@ -1576,41 +1580,14 @@ public sealed class RestoreExecutor(
         return left is null ? null : string.Join("; ", left);
     }
 
-    /// <summary>
-    /// Writes <paramref name="stream"/> onto the file at
-    /// <paramref name="landing"/> as the extended attribute of its name; null
-    /// when it lands, or why it does not. One whose name the file's own
-    /// captured attribute has is left to that attribute, which the writer
-    /// gives the file after it.
-    /// </summary>
-    private async ValueTask<string?> WriteStreamAsAttributeAsync(
-        string landing, EntryMetadata metadata, AlternateStreamEntry stream, CancellationToken cancellationToken)
-    {
-        var name = System.Text.Encoding.UTF8.GetString(stream.Name.Span);
-        if (MetadataRules.RefusedStreamAsAttribute(stream.Name.Span, target.AttributesTakeNamespaces) is { } refused)
-        {
-            return $"alternate stream '{name}' was not kept as an attribute: {refused}";
-        }
-
-        if (metadata.ExtendedAttributes.Any(attribute => attribute.Name.Span.SequenceEqual(stream.Name.Span)))
-        {
-            return $"alternate stream '{name}' was not kept as an attribute: the file's own captured attribute has its name";
-        }
-
-        var (content, why) = await ReadStreamAsync(stream, cancellationToken).ConfigureAwait(false);
-        return content is null ? $"alternate stream '{name}' was not kept as an attribute: {why}"
-            : ExtendedAttributes.TrySet(landing, stream.Name.Span, content) ? null
-            : $"alternate stream '{name}' was not kept as an attribute: the volume refused it";
-    }
-
-    /// <summary>The content of <paramref name="stream"/>'s record, or null and why it would not read.</summary>
-    private async ValueTask<(byte[]? Content, string? Why)> ReadStreamAsync(
-        AlternateStreamEntry stream, CancellationToken cancellationToken)
+    /// <summary>The content of the stream record <paramref name="objectId"/>, or null and why it would not read.</summary>
+    private async ValueTask<(byte[]? Content, string? Unread)> ReadStreamAsync(
+        ObjectId objectId, CancellationToken cancellationToken)
     {
         RecordReadResult read;
         try
         {
-            read = await reader.ReadSegmentAsync(stream.ObjectId, cancellationToken).ConfigureAwait(false);
+            read = await reader.ReadSegmentAsync(objectId, cancellationToken).ConfigureAwait(false);
         }
         catch (IOException exception)
         {
@@ -1641,7 +1618,7 @@ public sealed class RestoreExecutor(
             return null;
         }
 
-        var (content, unread) = await ReadStreamAsync(stream, cancellationToken).ConfigureAwait(false);
+        var (content, unread) = await ReadStreamAsync(stream.ObjectId, cancellationToken).ConfigureAwait(false);
         if (content is null)
         {
             return $"alternate stream '{name}' was not written back: {unread}";

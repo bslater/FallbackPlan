@@ -481,9 +481,11 @@ public sealed class RecoverySession : IDisposable
     /// <param name="outputDirectory">Where the tree is restored.</param>
     /// <param name="makeLink">Gives an existing file a further name: <see cref="HardLinks.TryCreate"/> where null.</param>
     /// <param name="streams">
-    /// Writes a file's alternate streams: where null, the platform's calls
-    /// where it keeps streams, and none elsewhere, so each is counted not
-    /// applied. A test stands in for a platform that keeps them.
+    /// Writes a file's alternate streams: where null, in the form the
+    /// platform keeps them in, as streams on Windows and as attributes of
+    /// the same names on Linux and macOS
+    /// (<see cref="AlternateStreams.WriteBackOnThisPlatformAsync"/>). A test
+    /// stands in for a platform that keeps streams.
     /// </param>
     /// <param name="cancellationToken">Stops the run.</param>
     public async ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
@@ -506,7 +508,6 @@ public sealed class RecoverySession : IDisposable
         var folders = new List<Folder>();
         var notApplied = new Dictionary<string, int>(StringComparer.Ordinal);
         var link = makeLink ?? HardLinks.TryCreate;
-        var streamCalls = streams ?? (AlternateStreams.CanWrite ? AlternateStreams.OfThisPlatform : null);
 
         // Each hard-link group's first name landed: what a later name must
         // agree on, where it landed, and what it got (ADR-0156).
@@ -762,19 +763,19 @@ public sealed class RecoverySession : IDisposable
             return true;
         }
 
-        // Each stream a landed file carries, written onto it where the
-        // platform keeps streams, by the executor's rule (ADR-0174 Amendment
-        // 1); whether every one landed. One that did not is noted, and the
-        // file still restores.
+        // Each stream a landed file carries, written onto it in the form the
+        // platform keeps streams in, by the executor's rule (ADR-0174
+        // Amendment 1; ADR-0179 Amendment 1); whether every one landed. One
+        // that did not is noted, and the file still restores.
         async ValueTask<bool> WriteStreamsAsync(FileVersionManifest manifest, string path, string destination)
         {
-            if (streamCalls is null || manifest.Metadata.AlternateStreams.Count == 0)
+            if (manifest.Metadata.AlternateStreams.Count == 0
+                || await AlternateStreams.WriteBackOnThisPlatformAsync(
+                    destination, manifest.Metadata, ReadStreamAsync, streams, cancellationToken).ConfigureAwait(false) is not { } left)
             {
                 return false;
             }
 
-            var left = await AlternateStreams.WriteBackAsync(
-                destination, manifest.Metadata.AlternateStreams, ReadStreamAsync, streamCalls, cancellationToken).ConfigureAwait(false);
             foreach (var why in left)
             {
                 notes.Add(new RecoveryNote(RecoveryNoteKind.StreamNotWritten, path, Reason: why));
