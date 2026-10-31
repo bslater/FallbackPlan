@@ -90,7 +90,10 @@ public sealed class SchedulerStarvationTests : IDisposable
         // ADR-0027 §1: one run per set at a time. Structural before only
         // because the serial pass never looked while a capture ran; a pass
         // that ticks during long captures needs the rule stated.
-        await using var runtime = await StartAsync();
+        // One backup worker, so the occupied lane holds the manual run
+        // queued: a second worker, as the default pool has, would run it
+        // and let it settle before the pass looks.
+        await using var runtime = await StartAsync(maxConcurrentBackups: 1);
         var t0 = new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero);
 
         var (done, release) = Occupy(runtime, JobLane.Writer);
@@ -144,7 +147,7 @@ public sealed class SchedulerStarvationTests : IDisposable
         return (done.Task, () => release.TrySetResult());
     }
 
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(int? maxConcurrentBackups = null)
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -157,6 +160,7 @@ public sealed class SchedulerStarvationTests : IDisposable
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                MaxConcurrentBackupsOverride = maxConcurrentBackups,
             },
             Timeout);
     }
