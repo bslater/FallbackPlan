@@ -622,7 +622,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
         var attributes = info.Attributes;
 
         // Only a reparse point's tag says whether it is a link or a file a
-        // filter keeps, as deduplication and compression do; read as a link,
+        // filter keeps, as deduplication does; read as a link,
         // such a file's content was never captured.
         var mode = ReparsePoints.ModeOf(
             attributes, (attributes & FileAttributes.ReparsePoint) != 0 ? WindowsInterop.ReparseTagOf(path) : null);

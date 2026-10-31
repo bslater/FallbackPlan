@@ -5178,10 +5178,11 @@ still judges files and folders alone.
 
 Windows capture took every entry carrying the reparse-point bit for a
 link. The bit marks a symbolic link and a junction, but also a file a
-filter keeps: one deduplicated on a Windows Server volume, or
-compressed with `compact /exe`. Such a file was captured as a link with
-no target and none of its content, and a restore skipped it. A folder a
-filter keeps was not descended into.
+filter keeps, as one deduplicated on a Windows Server volume is. Such
+a file was captured as a link with no target and none of its content,
+and a restore skipped it. A folder a filter keeps was not descended
+into. A file compressed with `compact /exe` was never among them: the
+filter it compresses through hides its reparse point.
 
 The tag now decides, read through a handle on the reparse point where
 the bit is set. A symbolic link or a mount point is a link, never

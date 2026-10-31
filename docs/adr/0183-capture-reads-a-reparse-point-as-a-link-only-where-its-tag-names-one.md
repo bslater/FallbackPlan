@@ -10,7 +10,7 @@
 - The read: `Filesystem.Local/WindowsInterop` reads a reparse point's tag through a handle opened on the reparse point itself, and `Filesystem.Local/LocalFileSystemSource` asks for it only where an entry carries the reparse bit.
 - The tests:
   - `Filesystem.Tests/ReparsePointTests` — on every platform: a symbolic link to a file or a folder and a mount point are links; a compressed file and a deduplicated sparse file are files, and a cloud-kept folder a folder; a reparse point whose tag was not read is a link; an entry without the reparse bit is what its directory bit says, whatever tag is given.
-  - `Filesystem.Tests/LocalScanTests` — on Windows a file compressed with `compact /exe` on the system volume, which always offers compression, sits behind a reparse point and is scanned as a file with no link target, its full length, and its content read back whole.
+  - `Filesystem.Tests/LocalScanTests` — on Windows a file carrying a reparse point whose tag names no other path, and which no filter on the machine keeps, is scanned as a file with no link target and its full length; its content, which no filter gives, does not open, where a link would have kept nothing.
 
 ---
 
@@ -21,7 +21,7 @@ Architecture 06 §4.1 has a link classified before it is traversed: an entry car
 The bit says only that the entry has a reparse point. Its tag says what kind:
 
 - **A symbolic link or a mount point names another path.** A junction is a mount point. These are what §4.1 is about, and .NET reads their targets.
-- **Every other tag is a filter's.** Windows Server's data deduplication keeps a file's chunks in a store and leaves a reparse point. Compression with `compact /exe` (the Windows Overlay Filter) does the same. A cloud provider's placeholders can show one. Read through the filter, each is the file or the folder it always was.
+- **Every other tag is a filter's.** Windows Server's data deduplication keeps a file's chunks in a store and leaves a reparse point, which capture sees. A cloud provider's placeholders can show one. Read through the filter, each is the file or the folder it always was. The overlay filter that `compact /exe` compresses through leaves one too, but hides it: a file it compresses shows no reparse bit, so capture always took it for the file it is.
 
 Taken for a link, such a file was captured with no target and none of its content. A restore then skipped it as a link it could not make. On a deduplicated volume that is most of the files, and nothing said so. A folder kept by such a filter was not descended into.
 
@@ -44,8 +44,9 @@ The tag is read only where the bit is set, so an entry without a reparse point c
 
 ## Consequences
 
-- A deduplicated or compressed file is backed up with its content, and restores as an ordinary file. The reparse point, the filter's, is not restored. The file's attribute bits treat it as one of the bits that say what an entry is, which a restore gives only by what it makes ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).
+- A deduplicated file is backed up with its content, and restores as an ordinary file. The reparse point, the filter's, is not restored. The file's attribute bits treat it as one of the bits that say what an entry is, which a restore gives only by what it makes ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).
 - A folder a filter keeps is descended into, and what it holds is backed up.
+- A file whose tag no filter on the machine keeps does not open. Its read fails and is reported as any unreadable file's is, where it was kept as a link with nothing in it.
 - Reading a file a cloud provider keeps only as a placeholder may make the provider fetch it, as any program reading it would.
 - A backup taken before this record holds such a file as a link with no target. The next backup after it captures the file's content, as a file it had not held.
 

@@ -17,8 +17,8 @@ namespace FallbackPlan.Filesystem.Tests;
 /// holds SeSecurityPrivilege (FR-RST-004, ADR-0176 Amendment 3), and a link
 /// is captured as a link, never followed, with its own security descriptor
 /// read through a handle opened on the link itself (FR-MAN-003, ADR-0182).
-/// A reparse point that names no other path, as a compressed file's does,
-/// is captured as the file it is, content and all (ADR-0183).
+/// A reparse point whose tag names no other path, as a deduplicated file's
+/// does, is captured as the file it is, never as a link (ADR-0183).
 /// </summary>
 [TestClass]
 public sealed partial class LocalScanTests : IDisposable
@@ -268,57 +268,27 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
-    [PlatformCondition(TestPlatforms.Windows, "only Windows compresses a file behind a reparse point")]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps reparse points")]
     [PlatformTrait(TestPlatforms.Windows)]
     [SupportedOSPlatform("windows")]
-    public async Task Scan_OnWindows_AFileCompressedBehindAReparsePoint_IsCapturedAsTheFileItIs_ContentAndAll()
+    public async Task Scan_OnWindows_AReparsePointWhoseTagNamesNoPath_IsCapturedAsTheFileItIs_NotAsALink()
     {
-        // Only a volume that offers compression can hold such a file, and the
-        // temp directory may sit on one that does not, as CI's does. The
-        // system volume always offers it: Windows compresses its own files there.
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Temp", "fbp-scan-tests", Guid.NewGuid().ToString("n"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            var content = string.Concat(Enumerable.Repeat("a file Windows compresses behind a reparse point. ", 6000));
-            var path = Path.Combine(root, "compressed.txt");
-            await File.WriteAllTextAsync(path, content);
-            using (var compact = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                "compact.exe", $"/c /exe:xpress4k \"{path}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }))
-            {
-                Assert.IsNotNull(compact);
-                var said = await compact.StandardOutput.ReadToEndAsync();
-                await compact.WaitForExitAsync();
-                Assert.AreEqual(0, compact.ExitCode, said);
-            }
+        const string content = "the content a filter keeps";
+        var path = Write("kept-by-a-filter.bin", content);
+        ForeignReparsePoint.Set(path);
+        Assert.IsTrue(
+            (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0,
+            "the premise: the file carries the reparse bit");
 
-            Assert.IsTrue(
-                (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0,
-                "the premise: Windows keeps the compressed file behind a reparse point");
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
 
-            var leaves = new List<ScanEntry>();
-            await foreach (var scanEvent in _source.ScanAsync(root, new ScanOptions(), CancellationToken.None))
-            {
-                if (scanEvent is ScanEvent.Leaf leaf)
-                {
-                    leaves.Add(leaf.Entry);
-                }
-            }
+        Assert.AreEqual(ScanEntryKind.File, entry.Kind);
+        Assert.IsNull(entry.LinkTarget);
+        Assert.AreEqual(content.Length, entry.Length);
 
-            var entry = Assert.ContainsSingle(leaves);
-            Assert.AreEqual(ScanEntryKind.File, entry.Kind);
-            Assert.IsNull(entry.LinkTarget);
-            Assert.AreEqual(content.Length, entry.Length);
-            using var read = _source.OpenRead(entry);
-            using var reader = new StreamReader(read);
-            Assert.AreEqual(content, await reader.ReadToEndAsync());
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        // No filter on this machine keeps the tag, so its content does not
+        // open, and the read says so where a link would have kept nothing.
+        Assert.Throws<IOException>(() => _source.OpenRead(entry));
     }
 
     [TestMethod]

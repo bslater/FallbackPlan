@@ -7,7 +7,7 @@ namespace FallbackPlan.Filesystem.Tests;
 /// ADR-0183): a symbolic link and a mount point, a junction among them,
 /// which name another path, and one whose tag could not be read, which is
 /// never followed. Any other reparse point is a file or a folder whose
-/// content a filter keeps, as a deduplicated or a compressed file is, and
+/// content a filter keeps, as a deduplicated file is, and
 /// is read as one.
 /// </summary>
 [TestClass]

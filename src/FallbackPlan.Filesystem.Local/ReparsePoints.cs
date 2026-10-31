@@ -5,8 +5,8 @@ namespace FallbackPlan.Filesystem.Local;
 /// symbolic link and a mount point, a junction among them, name another
 /// path, and capture keeps that path and never goes through it. Every other
 /// reparse point is how a filter keeps a file's or a folder's content, as
-/// deduplication and compression do, and is read as the file or the folder
-/// it is, through the filter.
+/// deduplication does, and is read as the file or the folder it is, through
+/// the filter.
 /// </summary>
 internal static class ReparsePoints
 {
