@@ -27,6 +27,14 @@ public sealed record RestoreTargetProfile
     public bool SupportsAlternateStreams { get; init; }
 
     /// <summary>
+    /// Whether this target takes an extended attribute's name only in a
+    /// namespace, as Linux does, so a file's alternate stream kept as an
+    /// attribute is kept only where its name is in the user namespace
+    /// (<see cref="MetadataRules.RefusedStreamAsAttribute"/>; ADR-0179).
+    /// </summary>
+    public bool AttributesTakeNamespaces { get; init; }
+
+    /// <summary>
     /// Whether the executor writes a file's creation time back on this
     /// target: Windows and macOS have a call that sets one, Linux does not
     /// (<see cref="FileTimes"/>). It is what the plan predicts by. The
@@ -204,6 +212,7 @@ public sealed record RestoreTargetProfile
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         HoldsSecurityPrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Security),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
+        AttributesTakeNamespaces = OperatingSystem.IsLinux(),
         SupportsCompression = FileCompression.CanSet,
         InheritedAccessAt = WindowsAccess.InheritedByAFileAt,
         InheritedFolderAccessAt = WindowsAccess.InheritedByAFolderAt,
@@ -445,7 +454,10 @@ public static class RestorePlanner
         // Presence-gated like the symlink one: declared only when this tree
         // actually carries streams (RR-6 — the captured streams exist in the
         // repository; what cannot happen yet is writing them back).
-        if (!target.SupportsAlternateStreams && items.Any(item => item.HasAlternateStreams))
+        if (!target.SupportsAlternateStreams
+            && !MetadataRules.KeepsStreamsAsAttributes(
+                EntryKind.File, target.SupportsAlternateStreams, target.SupportsExtendedAttributes && ExtendedAttributes.CanSet)
+            && items.Any(item => item.HasAlternateStreams))
         {
             degradations.Add(new MetadataDegradation(
                 "alternate-streams",

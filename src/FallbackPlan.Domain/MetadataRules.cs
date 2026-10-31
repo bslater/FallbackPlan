@@ -365,6 +365,42 @@ public static class MetadataRules
         kind is EntryKind.File or EntryKind.DirectoryPlaceholder && supportsAlternateStreams && !writesAttributes;
 
     /// <summary>
+    /// Whether a target keeps a file's alternate streams as extended
+    /// attributes of the same names: where it writes attributes of its own
+    /// and keeps no streams, as Linux and macOS do (ADR-0179).
+    /// </summary>
+    /// <param name="kind">The entry's kind. A folder is captured with no streams, and a link has none.</param>
+    /// <param name="supportsAlternateStreams">Whether the target keeps alternate streams.</param>
+    /// <param name="writesAttributes">Whether it writes extended attributes of its own.</param>
+    public static bool KeepsStreamsAsAttributes(EntryKind kind, bool supportsAlternateStreams, bool writesAttributes) =>
+        kind == EntryKind.File && !supportsAlternateStreams && writesAttributes;
+
+    /// <summary>
+    /// Why a stream named <paramref name="name"/> is not kept as an attribute,
+    /// or null where it is: where a target takes an attribute's name only in
+    /// a namespace, as Linux does, one with no name in its user namespace,
+    /// the only one a file's own attributes are given (ADR-0179).
+    /// </summary>
+    /// <param name="name">The stream's name, as captured.</param>
+    /// <param name="namespaced">Whether the target takes names only in a namespace.</param>
+    public static string? RefusedStreamAsAttribute(ReadOnlySpan<byte> name, bool namespaced) =>
+        namespaced && !(name.Length > "user."u8.Length && IsUser(name))
+            ? "it has no name in the user namespace, the only one Linux gives a file's own attributes"
+            : null;
+
+    /// <summary>
+    /// How many of the streams captured with <paramref name="metadata"/> have
+    /// no name in the user namespace (<see cref="RefusedStreamAsAttribute"/>),
+    /// which a target that takes names only in a namespace does not keep.
+    /// </summary>
+    public static int StreamsOutsideUserNamespace(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        return metadata.AlternateStreams.Count(stream => RefusedStreamAsAttribute(stream.Name.Span, namespaced: true) is not null);
+    }
+
+    /// <summary>
     /// Why <paramref name="attribute"/> is not kept as a stream, or null where
     /// it is: one in Linux's security or trusted namespace, or a POSIX ACL,
     /// means something to Linux's kernel alone (ADR-0177).

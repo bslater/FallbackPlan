@@ -253,8 +253,12 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
     /// <summary>A case-sensitive target that keeps POSIX metadata and links, stated rather than taken from the running platform.</summary>
     /// <summary>This machine's target, as one that writes no alternate stream back, as only Windows does (ADR-0174).</summary>
+    /// <summary>
+    /// This machine's target, keeping a file's streams in no form: neither as
+    /// streams nor as attributes of their names (ADR-0179).
+    /// </summary>
     private static RestoreTargetProfile WritesNoStreams() =>
-        RestoreTargetProfile.ForLocalPlatform() with { SupportsAlternateStreams = false };
+        RestoreTargetProfile.ForLocalPlatform() with { SupportsAlternateStreams = false, SupportsExtendedAttributes = false };
 
     private static RestoreTargetProfile PosixTarget() => new()
     {

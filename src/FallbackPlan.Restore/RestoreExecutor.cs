@@ -608,6 +608,13 @@ public sealed class RestoreExecutor(
     private readonly MetadataWriter _metadata = new(target.Metadata with { Streams = streams ?? AlternateStreams.OfThisPlatform });
 
     /// <summary>
+    /// Whether this target keeps a file's streams as extended attributes of
+    /// the same names, as Linux and macOS do (ADR-0179).
+    /// </summary>
+    private readonly bool _streamsAsAttributes = MetadataRules.KeepsStreamsAsAttributes(
+        EntryKind.File, target.SupportsAlternateStreams, target.SupportsExtendedAttributes && ExtendedAttributes.CanSet);
+
+    /// <summary>
     /// Reads ahead of the restore loop so a blob costs one GET rather than
     /// one a file (NFR-PERF-009). A wave prefetches the manifests of a
     /// bounded run of upcoming items, reads them, and prefetches every
@@ -869,7 +876,7 @@ public sealed class RestoreExecutor(
             Directory.CreateDirectory(parts);
         }
 
-        var wave = new PrefetchWave(reader, plan, LandedAsync, TakesUpAPart, target.SupportsAlternateStreams);
+        var wave = new PrefetchWave(reader, plan, LandedAsync, TakesUpAPart, target.SupportsAlternateStreams || _streamsAsAttributes);
 
         bool TakesUpAPart(FileVersionManifest manifest) =>
             options.Resume && PartOf(manifest) is { } part && File.Exists(part);
@@ -1447,7 +1454,7 @@ public sealed class RestoreExecutor(
         // not applied; it does not undo content that landed and verified
         // (ADR-0084).
         var written = _metadata.Write(landing, manifest.Metadata);
-        var streamsWritten = target.SupportsAlternateStreams && streamsLeft is null;
+        var streamsWritten = (target.SupportsAlternateStreams || _streamsAsAttributes) && streamsLeft is null;
         var notApplied = MetadataRules.NotApplied(
             MetadataRules.Captured(manifest.Metadata),
             written.Applied | (streamsWritten ? CapturedMetadata.AlternateStreams : CapturedMetadata.None));
@@ -1467,7 +1474,7 @@ public sealed class RestoreExecutor(
             }), notApplied, true);
         }
 
-        if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
+        if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams && !_streamsAsAttributes)
         {
             return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
             {
@@ -1535,18 +1542,21 @@ public sealed class RestoreExecutor(
     /// Writes each alternate stream <paramref name="manifest"/> carries onto
     /// the file at <paramref name="landing"/> where the target keeps them,
     /// read and proved like a segment; one that already stands there as
-    /// captured is left, and read from nowhere. Null when every one stands as
-    /// captured, or the target keeps none; otherwise which do not, and why.
+    /// captured is left, and read from nowhere. Where the target keeps them
+    /// as attributes instead, each is written as the attribute of its name
+    /// (ADR-0179). Null when every one stands as captured, or the target
+    /// keeps none; otherwise which do not, and why.
     /// </summary>
     /// <remarks>
     /// Before the file's times, which writing a stream moves, and after its
     /// content landed, so a run cut short between the two leaves a whole file
-    /// a resume finds in place and gives its streams.
+    /// a resume finds in place and gives its streams. Before the file's own
+    /// attributes and permissions too, which may forbid the write.
     /// </remarks>
     private async ValueTask<string?> WriteStreamsAsync(
         string landing, FileVersionManifest manifest, CancellationToken cancellationToken)
     {
-        if (!target.SupportsAlternateStreams)
+        if (!target.SupportsAlternateStreams && !_streamsAsAttributes)
         {
             return null;
         }
@@ -1554,13 +1564,66 @@ public sealed class RestoreExecutor(
         List<string>? left = null;
         foreach (var stream in manifest.Metadata.AlternateStreams)
         {
-            if (await WriteStreamAsync(landing, stream, cancellationToken).ConfigureAwait(false) is { } why)
+            var why = target.SupportsAlternateStreams
+                ? await WriteStreamAsync(landing, stream, cancellationToken).ConfigureAwait(false)
+                : await WriteStreamAsAttributeAsync(landing, manifest.Metadata, stream, cancellationToken).ConfigureAwait(false);
+            if (why is not null)
             {
                 (left ??= []).Add(why);
             }
         }
 
         return left is null ? null : string.Join("; ", left);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="stream"/> onto the file at
+    /// <paramref name="landing"/> as the extended attribute of its name; null
+    /// when it lands, or why it does not. One whose name the file's own
+    /// captured attribute has is left to that attribute, which the writer
+    /// gives the file after it.
+    /// </summary>
+    private async ValueTask<string?> WriteStreamAsAttributeAsync(
+        string landing, EntryMetadata metadata, AlternateStreamEntry stream, CancellationToken cancellationToken)
+    {
+        var name = System.Text.Encoding.UTF8.GetString(stream.Name.Span);
+        if (MetadataRules.RefusedStreamAsAttribute(stream.Name.Span, target.AttributesTakeNamespaces) is { } refused)
+        {
+            return $"alternate stream '{name}' was not kept as an attribute: {refused}";
+        }
+
+        if (metadata.ExtendedAttributes.Any(attribute => attribute.Name.Span.SequenceEqual(stream.Name.Span)))
+        {
+            return $"alternate stream '{name}' was not kept as an attribute: the file's own captured attribute has its name";
+        }
+
+        var (content, why) = await ReadStreamAsync(stream, cancellationToken).ConfigureAwait(false);
+        return content is null ? $"alternate stream '{name}' was not kept as an attribute: {why}"
+            : ExtendedAttributes.TrySet(landing, stream.Name.Span, content) ? null
+            : $"alternate stream '{name}' was not kept as an attribute: the volume refused it";
+    }
+
+    /// <summary>The content of <paramref name="stream"/>'s record, or null and why it would not read.</summary>
+    private async ValueTask<(byte[]? Content, string? Why)> ReadStreamAsync(
+        AlternateStreamEntry stream, CancellationToken cancellationToken)
+    {
+        RecordReadResult read;
+        try
+        {
+            read = await reader.ReadSegmentAsync(stream.ObjectId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException exception)
+        {
+            return (null, exception.Message);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The file has landed, so it is still accounted for; the loop's
+            // own check ends the run.
+            return (null, "the restore was cancelled");
+        }
+
+        return read.Outcome == RecordReadOutcome.Ok ? (read.Plaintext!, null) : (null, $"its record read {read.Outcome}");
     }
 
     /// <summary>Writes <paramref name="stream"/> onto the file at <paramref name="landing"/>; null when it stands as captured, or why it does not.</summary>
@@ -1578,28 +1641,13 @@ public sealed class RestoreExecutor(
             return null;
         }
 
-        RecordReadResult read;
-        try
+        var (content, unread) = await ReadStreamAsync(stream, cancellationToken).ConfigureAwait(false);
+        if (content is null)
         {
-            read = await reader.ReadSegmentAsync(stream.ObjectId, cancellationToken).ConfigureAwait(false);
-        }
-        catch (IOException exception)
-        {
-            return $"alternate stream '{name}' was not written back: {exception.Message}";
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // The file has landed, so it is still accounted for; the loop's
-            // own check ends the run.
-            return $"alternate stream '{name}' was not written back: the restore was cancelled";
+            return $"alternate stream '{name}' was not written back: {unread}";
         }
 
-        if (read.Outcome != RecordReadOutcome.Ok)
-        {
-            return $"alternate stream '{name}' was not written back: its record read {read.Outcome}";
-        }
-
-        return _streams.Write(landing, name, read.Plaintext!) is { } why
+        return _streams.Write(landing, name, content) is { } why
             ? $"alternate stream '{name}' was not written back: {why}"
             : null;
     }

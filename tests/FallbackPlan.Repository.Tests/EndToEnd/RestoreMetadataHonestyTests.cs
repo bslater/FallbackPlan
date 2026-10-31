@@ -50,7 +50,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// Each file is judged by the folder it lands in, and the line names the
 /// folder its access comes from (ADR-0178 Amendment 3). A folder the restore
 /// makes is judged by what passes to it, and counted apart, and a run reads
-/// its own record to do so (ADR-0178 Amendment 4).
+/// its own record to do so (ADR-0178 Amendment 4). Where streams are kept as
+/// attributes and names take a namespace, a stream outside the user
+/// namespace is named (ADR-0179).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -938,6 +940,35 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         // Where the target writes no streams, the planner's own line speaks
         // for every stream, and no name is judged.
         Assert.DoesNotContain(degradation => degradation.Capability == "alternate-stream-names", RestoreMetadata.Declare(plan, facts, Posix));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Plan_AStreamOutsideTheUserNamespace_IsDeclaredOnItsOwnLine_WhereStreamsAreKeptAsAttributesThatTakeNamespaces()
+    {
+        // ADR-0179: on such a target a file's streams are kept as attributes,
+        // and Linux takes a file's own only in its user namespace.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/downloaded.bin", Deterministic(700, 53)).AlternateStreams["Zone.Identifier"] = "[ZoneTransfer]"u8.ToArray();
+        source.AddFile("docs/tagged.bin", Deterministic(700, 54)).AlternateStreams["user.origin"] = "kept"u8.ToArray();
+        source.AddFile("docs/slashed.bin", Deterministic(700, 55)).AlternateStreams["user.a/b"] = "kept"u8.ToArray();
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xE8);
+        var keeps = Posix with { SupportsExtendedAttributes = true, AttributesTakeNamespaces = true };
+        var declared = RestoreMetadata.Declare(plan, facts, keeps);
+
+        var refused = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "alternate-stream-attribute-names"));
+        Assert.Contains("1 file(s)", refused.Detail, StringComparison.Ordinal);
+        Assert.Contains("user namespace", refused.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "alternate-streams", declared);
+        Assert.DoesNotContain(
+            degradation => degradation.Capability == "alternate-stream-names", declared,
+            "a name no stream may have is an attribute's like any other");
+
+        // Where names take no namespace, as on macOS, every stream is kept.
+        var anyName = RestoreMetadata.Declare(plan, facts, keeps with { AttributesTakeNamespaces = false });
+        Assert.DoesNotContain(degradation => degradation.Capability.StartsWith("alternate-stream", StringComparison.Ordinal), anyName);
     }
 
     private static FakeFileSystemSource EmptyDescriptor()
