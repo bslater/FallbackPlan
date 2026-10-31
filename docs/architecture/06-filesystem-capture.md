@@ -85,6 +85,8 @@ For each metadata class and target platform: **preserve** it, **degrade** it and
 
 > **2026-10 ([ADR-0178 Amendment 4](../adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-4-2026-10--a-folder-the-restore-makes-is-judged-too)).** A folder the restore makes is judged too: one whose descriptor is not applied, and which what passes to it would open wider, is named and counted apart, and its run refused unless acknowledged.
 
+> **2026-10 ([ADR-0178 Amendment 5](../adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-5-2026-10--the-console-asks-for-folders-too)).** The console asks for the acknowledgement where folders are counted too.
+
 > **2026-10 ([ADR-0178 Amendment 2](../adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-2-2026-10--the-console-asks-for-the-acknowledgement)).** The console asks too: its restore wizard says how many files a folder would open wider, and runs only once the person acknowledges it.
 
 **Refuse** is reserved for cases where restoring would produce a file that is wrong in a way the user could not detect — for example, restoring a file whose security descriptor cannot be applied into a location where the default descriptor would grant broader access than the original. These are enumerated in the restore plan and require explicit acknowledgement.
