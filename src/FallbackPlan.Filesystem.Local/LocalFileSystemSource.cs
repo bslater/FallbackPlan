@@ -573,7 +573,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             // allow, and every entry captured where none was read carried one.
             WindowsSecurityDescriptor =
                 OperatingSystem.IsWindows() && options.CaptureSecurityDescriptors
-                    && WindowsInterop.GetSecurityDescriptor(fullPath) is { Length: > 0 } securityDescriptor
+                    && WindowsInterop.GetSecurityDescriptor(fullPath, link: stat.IsSymlink) is { Length: > 0 } securityDescriptor
                     ? securityDescriptor
                     : (ReadOnlyMemory<byte>?)null,
             ExtendedAttributes = xattrs,

@@ -19,7 +19,10 @@
 
 ## Context
 
-Capture records each entry's Windows security descriptor as `GetFileSecurityW` gives it: owner, primary group and DACL, self-relative (specification 06 §4.1 key 7). No restore wrote any back. The plan said, of every file and folder on Windows, that its descriptor would not be applied and it would take the permissions of the folder it landed in, and every receipt listed `security_descriptor` for every item. A file kept private came back as open as its new folder, and a file shared came back as closed. Architecture 06 §3 has Windows ACLs preserved on Windows.
+Capture records each entry's Windows security descriptor as `GetFileSecurityW` gives it: owner, primary group and DACL, self-relative (specification 06 §4.1 key 7).
+
+> **2026-10 ([ADR-0182](0182-capture-reads-a-links-own-security-descriptor-on-windows.md)).** A link's is read through a handle opened on the link itself, since `GetFileSecurityW` opens what a link points at. A file's and a folder's are read as this says.
+ No restore wrote any back. The plan said, of every file and folder on Windows, that its descriptor would not be applied and it would take the permissions of the folder it landed in, and every receipt listed `security_descriptor` for every item. A file kept private came back as open as its new folder, and a file shared came back as closed. Architecture 06 §3 has Windows ACLs preserved on Windows.
 
 A descriptor names accounts by SID. A SID is the number a machine or its domain gave an account, and it names that account only where that machine or domain is the one asked. A domain account's SID means the same on every machine in the domain. A local account's means nothing on another machine, nor on the same machine rebuilt, where the person's new account has a new SID. This is the problem [ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) meets for a POSIX owner, which is captured by name and resolved on the target, and [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) meets for a Linux ACL, which names accounts by number and is written only where this installation captured it. A SID, unlike a number, can be asked about: the machine says whether it knows it.
 
@@ -89,6 +92,8 @@ The plan's facts carry the SIDs each item's descriptor names. A target that writ
 - **A link's descriptor.** No restore on Windows makes a symlink.
 
   > **2026-10 ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).** A restore on Windows now makes a link where the account may; its descriptor is still not written onto it, and is declared and listed as not applied.
+
+  > **2026-10 ([ADR-0182](0182-capture-reads-a-links-own-security-descriptor-on-windows.md)).** Capture now records a link's own descriptor, read through a handle on the link, rather than its target's. It is still not written back.
 
 ## Alternatives considered
 
@@ -209,3 +214,4 @@ The privileged cases need an elevated process, and run where one runs, as on CI'
 | 2026-10 | Accepted (related) | [ADR-0178](0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md): the plan names a file whose descriptor is not written and whose folder would open it wider, with the accounts that gain; the refusal is still not made. |
 | 2026-10 | Accepted (related) | [ADR-0178 Amendment 1](0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such a file is refused before anything is written, unless it acknowledges wider access. |
 | 2026-10 | Accepted (related) | [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md): a restore on Windows makes a link where the account may; its descriptor is still not written onto it, and is declared and listed as not applied. |
+| 2026-10 | Accepted (related) | [ADR-0182](0182-capture-reads-a-links-own-security-descriptor-on-windows.md): capture reads a link's own descriptor through a handle opened on the link, rather than its target's; a restore still writes none onto a link. |

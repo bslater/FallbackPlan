@@ -75,6 +75,8 @@ internal static partial class WindowsInterop
     private const uint GroupSecurityInformation = 0x2;
     private const uint DaclSecurityInformation = 0x4;
     private const uint SaclSecurityInformation = 0x8;
+    private const uint ReadControl = 0x0002_0000;
+    private const uint AccessSystemSecurity = 0x0100_0000;
 
     /// <summary>Whether this process may read a file's audit list, asked once.</summary>
     private static readonly bool ReadsAuditLists = WindowsPrivileges.Holds(WindowsPrivileges.Security);
@@ -103,6 +105,11 @@ internal static partial class WindowsInterop
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetFileSecurity(
         string fileName, uint requestedInformation, byte[]? descriptor, uint length, out uint lengthNeeded);
+
+    [LibraryImport("advapi32", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetKernelObjectSecurity(
+        SafeFileHandle handle, uint requestedInformation, byte[]? descriptor, uint length, out uint lengthNeeded);
 
     /// <summary>Identity via volume serial + file index; false when the handle cannot open.</summary>
     public static bool TryGetIdentity(string path, out ulong device, out ulong fileId, out uint linkCount)
@@ -167,20 +174,31 @@ internal static partial class WindowsInterop
     /// that read alone; ADR-0176 Amendment 3); null when unreadable — degrade,
     /// never abort.
     /// </summary>
-    public static byte[]? GetSecurityDescriptor(string path)
+    /// <param name="path">The entry.</param>
+    /// <param name="link">
+    /// Whether the entry is a link, whose own descriptor is read through a
+    /// handle opened on it (ADR-0182): <c>GetFileSecurityW</c> opens what a
+    /// link points at, which may be outside the tree, or nothing.
+    /// </param>
+    public static byte[]? GetSecurityDescriptor(string path, bool link = false)
     {
         const uint requested = OwnerSecurityInformation | GroupSecurityInformation | DaclSecurityInformation;
 
         byte[]? audited = null;
         return ReadsAuditLists
             && WindowsPrivileges.RunWith(
-                WindowsPrivileges.Security, () => (audited = GetSecurityDescriptor(path, requested | SaclSecurityInformation)) is not null)
+                WindowsPrivileges.Security, () => (audited = GetSecurityDescriptor(path, requested | SaclSecurityInformation, link)) is not null)
             ? audited
-            : GetSecurityDescriptor(path, requested);
+            : GetSecurityDescriptor(path, requested, link);
     }
 
-    private static byte[]? GetSecurityDescriptor(string path, uint requested)
+    private static byte[]? GetSecurityDescriptor(string path, uint requested, bool link)
     {
+        if (link)
+        {
+            return GetLinkSecurityDescriptor(path, requested);
+        }
+
         if (GetFileSecurity(path, requested, null, 0, out var needed) || needed == 0)
         {
             return null;
@@ -188,5 +206,25 @@ internal static partial class WindowsInterop
 
         var descriptor = new byte[needed];
         return GetFileSecurity(path, requested, descriptor, needed, out _) ? descriptor : null;
+    }
+
+    /// <summary>
+    /// A link's own descriptor, through a handle on the reparse point itself,
+    /// opened for no more than reading it: its audit list asks the right to
+    /// read one, which SeSecurityPrivilege grants only while enabled.
+    /// </summary>
+    private static byte[]? GetLinkSecurityDescriptor(string path, uint requested)
+    {
+        var access = ReadControl | ((requested & SaclSecurityInformation) != 0 ? AccessSystemSecurity : 0);
+        using var link = CreateFile(
+            path, access, 7 /* read|write|delete share */, 0, 3 /* OPEN_EXISTING */,
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint, 0);
+        if (link.IsInvalid || GetKernelObjectSecurity(link, requested, null, 0, out var needed) || needed == 0)
+        {
+            return null;
+        }
+
+        var descriptor = new byte[needed];
+        return GetKernelObjectSecurity(link, requested, descriptor, needed, out _) ? descriptor : null;
     }
 }

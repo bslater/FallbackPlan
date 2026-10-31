@@ -14,7 +14,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// followed, hardlink identity, and the revalidation stat. Platform-specific
 /// behaviour is skipped where the platform lacks it, never faked. On Windows
 /// a file's audit list is captured with its descriptor where the account
-/// holds SeSecurityPrivilege (FR-RST-004, ADR-0176 Amendment 3).
+/// holds SeSecurityPrivilege (FR-RST-004, ADR-0176 Amendment 3), and a link
+/// is captured as a link, never followed, with its own security descriptor
+/// read through a handle opened on the link itself (FR-MAN-003, ADR-0182).
 /// </summary>
 [TestClass]
 public sealed partial class LocalScanTests : IDisposable
@@ -43,6 +45,18 @@ public sealed partial class LocalScanTests : IDisposable
         }
 
         return events;
+    }
+
+    /// <summary>The Guests group, which no case's account is: an account only a file's own DACL names.</summary>
+    private const string Guests = "S-1-5-32-546";
+
+    /// <summary>What <paramref name="entry"/>'s captured security descriptor says.</summary>
+    private static WindowsSecurityDescriptor Described(ScanEntry entry)
+    {
+        Assert.IsNotNull(entry.Metadata.WindowsSecurityDescriptor, $"{entry.RelativePath} carries a descriptor");
+        var read = WindowsSecurityDescriptor.Read(entry.Metadata.WindowsSecurityDescriptor.Value.Span);
+        Assert.IsNotNull(read, $"{entry.RelativePath}'s descriptor reads as one");
+        return read;
     }
 
     private static IEnumerable<string> Paths(IEnumerable<ScanEvent> events) => events.Select(scanEvent => scanEvent switch
@@ -157,6 +171,96 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.IsNotNull(descriptor);
         var read = WindowsSecurityDescriptor.Read(descriptor.Value.Span);
         Assert.IsNotNull(read);
+        Assert.IsTrue(read.SaclPresent);
+        Assert.Contains("S-1-1-0", read.AuditedAccounts);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own descriptor is read through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_ALink_CarriesItsOwnSecurityDescriptor_NotWhatItPointsAts()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var target = Write("target/kept.txt");
+        WindowsAcls.KeepTo(target, Guests);
+        SymbolicLinks.Create(Path.Combine(_root, "link"), target, folder: false);
+
+        var leaves = (await ScanAsync()).OfType<ScanEvent.Leaf>().ToList();
+
+        var kept = Described(leaves.Single(leaf => leaf.Entry.RelativePath == "target/kept.txt").Entry);
+        Assert.IsTrue(kept.DaclProtected);
+        Assert.Contains(Guests, kept.Accounts);
+        var link = leaves.Single(leaf => leaf.Entry.RelativePath == "link").Entry;
+        Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        var own = Described(link);
+        Assert.IsFalse(own.DaclProtected, "a link takes its DACL from its folder; the file it points at keeps its own");
+        Assert.DoesNotContain(Guests, own.Accounts);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own descriptor is read through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_AFoldersLink_IsCapturedAsALink_NeverFollowed_WithItsOwnSecurityDescriptor()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        Write("target/secret.txt");
+        WindowsAcls.KeepFolderTo(Path.Combine(_root, "target"), Guests);
+        SymbolicLinks.Create(Path.Combine(_root, "link"), Path.Combine(_root, "target"), folder: true);
+
+        var events = await ScanAsync();
+        var leaves = events.OfType<ScanEvent.Leaf>().ToList();
+
+        var link = leaves.Single(leaf => leaf.Entry.RelativePath == "link").Entry;
+        Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        Assert.ContainsSingle(leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal), leaves);
+        Assert.DoesNotContain(Guests, Described(link).Accounts, "the folder it points at keeps its own");
+        Assert.Contains(
+            Guests,
+            Described(events.OfType<ScanEvent.EnterDirectory>().Single(enter => enter.Entry.RelativePath == "target").Entry).Accounts);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own descriptor is read through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_ALinkToNothing_StillCarriesItsOwnSecurityDescriptor()
+    {
+        // A read that followed the link would find nothing there.
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        SymbolicLinks.Create(Path.Combine(_root, "dangling"), Path.Combine(_root, "not-there.txt"), folder: false);
+
+        var link = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        Assert.IsTrue(Described(link).DaclPresent);
+    }
+
+    [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process holds the privilege an audit list is read with")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_ALinkTakingAnAuditListFromItsFolder_IsCapturedWithIt()
+    {
+        // The link's handle asks the right to read an audit list only where
+        // the read asks for one; without it the read falls back to none.
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var folder = new DirectoryInfo(_root);
+        var security = folder.GetAccessControl(System.Security.AccessControl.AccessControlSections.Audit);
+        security.AddAuditRule(new System.Security.AccessControl.FileSystemAuditRule(
+            new System.Security.Principal.SecurityIdentifier("S-1-1-0"),
+            System.Security.AccessControl.FileSystemRights.Delete,
+            System.Security.AccessControl.InheritanceFlags.ObjectInherit,
+            System.Security.AccessControl.PropagationFlags.None,
+            System.Security.AccessControl.AuditFlags.Success));
+        folder.SetAccessControl(security);
+        SymbolicLinks.Create(Path.Combine(_root, "audited-link"), Path.Combine(_root, "not-there.txt"), folder: false);
+
+        var link = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        var read = Described(link);
         Assert.IsTrue(read.SaclPresent);
         Assert.Contains("S-1-1-0", read.AuditedAccounts);
     }

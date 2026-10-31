@@ -206,6 +206,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0179](adr/0179-a-restore-on-linux-and-macos-keeps-a-files-alternate-streams-as-extended-attributes.md) | A restore on Linux and macOS keeps a file's alternate streams as extended attributes: on a target that writes attributes and keeps no streams, the executor writes each of a file's streams as the attribute of its name, read ahead with its segments, before the file's own attributes and permissions; on Linux one outside the user namespace is named and not written, and one whose name the file's own attribute has is left to it; the plan counts them applied, and declares on a line of its own the files with a stream Linux keeps no attribute of; the recovery tool and `restore-file` keep them so too, through one Domain helper that picks the platform's form (Amendment 1); a stream past the platform's attribute ceilings is named before it is read, and the plan names its file (Amendment 2) | **Built** | `Domain/MetadataRules` · `Domain/AlternateStreams` · `Domain/ExtendedAttributes` · `Domain/AttributeLimits` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Restore/RestoreBlobSet` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Domain.Tests/StreamsAsAttributesTests` · `Domain.Tests/AlternateStreamsTests` · `Repository.Tests/RestoreAlternateStreamsTests` · `Repository.Tests/RestoreMetadataHonestyTests` · `Repository.Tests/RecoveryAlternateStreamsTests` · [notes](#0179--streams-as-attributes) |
 | [0180](adr/0180-capture-names-the-file-flags-it-does-not-keep.md) | Capture names the file flags it does not keep: Linux's flags as `statx` reports them, only where the volume reports each, and macOS's from its stat, named among a file's capture diagnostics in one order and read back by the rule, and counted in the digest an incremental compares, so a change of flags alone is a change; no format key keeps them, so a restore gives none back. Amendment 1: the restore's plan names the files and links captured with flags on every target, and its receipt names them beside each such item, which is still restored. Amendment 2: the recovery tool notes them for each file, link and later hard-link name, and `restore-file` says so | **Built** | `Domain/FileFlagBits` · `Domain/MetadataRules` · `Filesystem.Local/LocalFileSystemSource` · `Repository.Format/FileVersionManifestCodec` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Domain.Tests/FileFlagsTests` · `Filesystem.Tests/LocalScanTests` · `Repository.Tests/FileFlagsCaptureTests` · `Repository.Tests/MetadataOnlyChangeTests` · `Repository.Tests/RestoreMetadataHonestyTests` · `Repository.Tests/RestoreHardLinkTests` · `Repository.Tests/RecoveryMetadataTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0180--file-flags) |
 | [0181](adr/0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md) | A restore on Windows makes a symlink where the account may: whether it may is asked once by making one, each link is a folder's or a file's as its captured attribute bits say, or as what it names says where none were captured, and its target is written with Windows' separators; the plan declares links skipped only where they will be. Amendment 1: the recovery tool makes links there too, judging a folder's link by its tree or what stands. Amendment 2: a link made there gets its own times back through a handle opened on the link itself. Amendment 3: and its attribute bits, through the same handle | **Built** | `Domain/SymbolicLinks` · `Domain/SymlinkMetadata` · `Domain/MetadataWriter` · `Domain/MetadataRules` · `Restore/RestorePlan` · `Restore/RestoreMetadata` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Domain.Tests/SymbolicLinksTests` · `Domain.Tests/SymlinkMetadataOnWindowsTests` · `Repository.Tests/RestoreWindowsLinkTests` · `Repository.Tests/RecoveryLinkTests` · [notes](#0181--windows-links) |
+| [0182](adr/0182-capture-reads-a-links-own-security-descriptor-on-windows.md) | Capture reads a link's own security descriptor on Windows: through a handle opened on the reparse point, with the audit list's right asked only where SeSecurityPrivilege is enabled for the read; files and folders are read by their path as before | **Built** | `Filesystem.Local/WindowsInterop` · `Filesystem.Local/LocalFileSystemSource` · `Filesystem.Tests/LocalScanTests` · [notes](#0182--a-links-descriptor) |
 
 ---
 
@@ -5139,3 +5140,24 @@ own bits too. The bits that make it a link, and a folder's, stay as
 making it left them. A bit no restore sets is named, a link's
 compressed bit among them, since nothing compresses a link. Its
 security descriptor is still written only onto files and folders.
+
+### 0182 — a link's descriptor
+
+Capture read every entry's security descriptor on Windows with
+`GetFileSecurityW`, which opens what a link points at. A link's manifest
+could carry its target's descriptor, from inside the tree or out of it,
+and a link to nothing carried none. Everything else capture reads of a
+link there was already the link's own.
+
+A link's descriptor is now read through a handle opened on the reparse
+point itself, with `GetKernelObjectSecurity`, which gives the same
+self-relative form. The handle asks only the right to read it, and the
+audit list's right where SeSecurityPrivilege is enabled for that read
+alone. A file's and a folder's descriptor is read as before. The
+metadata digest counts the descriptor, so a link whose descriptor now
+reads differently gets a new manifest at its next backup.
+
+What remains is recorded rather than done:
+
+- a restore still writes a descriptor only onto files and folders, and a
+  link's is declared and listed as not applied.
