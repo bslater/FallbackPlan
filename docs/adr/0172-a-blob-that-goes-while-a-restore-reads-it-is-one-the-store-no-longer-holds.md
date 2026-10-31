@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way), FR-GC-010 (amended by Amendment 4: a destination keeps its blobs through a sync while the service has a restore of the set under way; by Amendment 5, a peer is instructed by no granted run while one is)
+**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way; by Amendment 6, while a restore in direct mode of the set's repository is too), FR-GC-010 (amended by Amendment 4: a destination keeps its blobs through a sync while the service has a restore of the set under way; by Amendment 5, a peer is instructed by no granted run while one is; by Amendment 6, both hold beside a restore in direct mode too)
 **Related:** [ADR-0075](0075-a-restore-reads-around-damage.md) §5 (what a copy passed over is called), [ADR-0068](0068-the-catalogue-directed-restore-read.md) (the catalogue-directed read), [ADR-0009](0009-garbage-collection-safety.md) (the collector), [ADR-0034](0034-hub-and-spoke-destinations.md) §6 (the staging trim), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-4
 
 **Built:**
@@ -73,6 +73,8 @@ Damage stays damage. The blob reader is unchanged. Its other callers, the loader
   > **Built 2026-10 for the set's own pass ([Amendment 3](#amendment-3-2026-10--a-retention-pass-holds-its-blobs-beside-a-restore-of-the-set)).** A retention pass, and a person's deletion, hold every blob while the service has a restore of the set under way, and say so. A sync's convergence at the destinations, and a restore run in direct mode, are not held for.
 
   > **2026-10 ([Amendment 4](#amendment-4-2026-10--a-sync-keeps-a-destinations-blobs-beside-a-restore-of-the-set)).** A sync's convergence is held too: a destination keeps its blobs while the service has a restore of the set under way. A restore in direct mode is still not held for.
+
+  > **2026-10 ([Amendment 6](#amendment-6-2026-10--a-restore-in-direct-mode-says-it-is-under-way-where-the-service-looks)).** It is now. A restore in direct mode holds a marker of its repository where the service looks, and every hold reads it.
 - **Say "not held" in the failure.** A record no loaded blob carries is reported as a format violation, as it was for a blob missing before the run began.
 
   > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-record-no-store-holds-fails-as-not-held)).** A record whose blob the store does not hold fails as not held, whether the blob went during the run or before it, and the receipt says so. A record nothing places at all is still a format violation.
@@ -164,6 +166,8 @@ A pass already holds every blob beside a backup in flight, on the journal's word
   > **2026-10: taken up by [Amendment 4](#amendment-4-2026-10--a-sync-keeps-a-destinations-blobs-beside-a-restore-of-the-set).**
 - **A restore in direct mode.** The command line restores outside the service, and nothing tells a pass it is running.
 
+  > **2026-10: taken up by [Amendment 6](#amendment-6-2026-10--a-restore-in-direct-mode-says-it-is-under-way-where-the-service-looks).**
+
 ## Amendment 4 (2026-10) — a sync keeps a destination's blobs beside a restore of the set
 
 Amendment 3 held the set's own pass and left a sync's convergence alone. A destination whose own policy keeps less than staging drops, on every sync, the blobs of the snapshots its policy no longer keeps. A restore under way may read around to that copy, and under direct-ship the destinations hold the only copies there are.
@@ -179,6 +183,8 @@ Amendment 3 held the set's own pass and left a sync's convergence alone. A desti
 
 > **2026-10: the peer is taken up by [Amendment 5](#amendment-5-2026-10--a-granted-run-instructs-no-peer-beside-a-restore-of-the-set).** A restore in direct mode is still held for by nothing.
 
+> **2026-10: the restore in direct mode is taken up by [Amendment 6](#amendment-6-2026-10--a-restore-in-direct-mode-says-it-is-under-way-where-the-service-looks).**
+
 ## Amendment 5 (2026-10) — a granted run instructs no peer beside a restore of the set
 
 Amendment 4 left a peer as it was. A restore reads around to a peer's copy: the set's other copies include each peer, dialled for the run. A peer drops what an instruction signed under a person's grant tells it to, and a granted run, whether a retention apply or a person's deletion, instructs every peer under rules ([ADR-0055](0055-reclaim-authority.md) §6).
@@ -193,6 +199,51 @@ Amendment 4 left a peer as it was. A restore reads around to a peer's copy: the 
 
 **Not done.** A restore in direct mode is still held for by nothing.
 
+> **2026-10: taken up by [Amendment 6](#amendment-6-2026-10--a-restore-in-direct-mode-says-it-is-under-way-where-the-service-looks).**
+
+## Amendment 6 (2026-10) — a restore in direct mode says it is under way where the service looks
+
+Amendments 3 to 5 hold beside a restore the service runs, on the word of its run journal. The command line restores in direct mode outside the service. It reads the repository itself, takes no writer role, and by default keeps its state in a folder for the repository that no service reads. A retention pass, a sync or a granted run beside one could take a blob it was about to read.
+
+**Decision.**
+
+- **A restore in direct mode holds a marker while it runs.** It holds it from just before it writes until it ends, however it ends, as the service names its own runs ([ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md)). The marker is a file named by the run under `restores-under-way/<repository>/` in a state directory, held open with no sharing. It is kept by repository, not by set: the command line restores a repository, and may know no set by name.
+- **Where it is held.** In the state directory the command works in. Where the command named none, also in the one the installation's service keeps (FR-SVC-016), found as every path-less process finds it. That directory is never made: a restore makes no installation. A command that names a state directory names the installation it works with.
+- **The handle is the truth,** as the writer role's is ([ADR-0028](0028-service-boundary-and-deployment-topologies.md) §4). A run that dies lets go with its process, so no clock decides when a marker is stale.
+  - A marker nobody holds says nothing, and the first look that finds it so clears it.
+  - A handle deletes its file before it lets it go.
+  - A run that opened a file just as a look cleared it finds the file gone once it holds it, and takes it again.
+
+  So a look never clears a marker a run still holds.
+- **The service holds on either word.** It asks whether it has a restore of the set under way, or whether any marker for the set's repository is held in its state directory. It asks before each retention apply, each person's deletion, each sync's convergence and each peer instruction. The lines say "held beside a restore", as before.
+- **A marker that cannot be held is passed over, and said.** The restore goes ahead, and a warning names the state directory where it could not say it was under way. The likely case is a command line that may not write the service's state directory. Refusing the restore would keep the operator from their own files for the sake of what a later pass might take.
+
+**Built:** `Application/RestoresUnderWay`, `Cli/OperationGateway`, `Agent/ServiceRuntime`, `Agent/FanOut`, `Agent/ServiceCommandHandler`:
+
+- `Application.Tests/RestoresUnderWayTests`:
+  - a run held says its repository is being restored, and no other;
+  - one let go says nothing and leaves no file;
+  - two runs of one repository hold it until both end;
+  - a marker nobody holds says nothing and is cleared;
+  - a run not named by lowercase hex digits is refused and marks nothing.
+- `Cli.Tests/DirectRestoreUnderWayTests`:
+  - a restore holds its repository under way in its state directory while it runs, and not after;
+  - a run cut short lets its marker go;
+  - a state directory that cannot hold one still restores, and the console warns;
+  - the installation's state directory is added only where none was named and it exists, and is never made.
+- `Hosts.Tests/RetentionBesideARestoreTests`:
+  - through the service, an apply and a person's deletion beside a marker of the set's repository say they held;
+  - one of another repository holds nothing;
+  - once it is let go, nothing is held.
+- `Hosts.Tests/ConvergenceBesideARestoreTests` — a sync beside a marker keeps the blobs the destination's policy drops, and the next sync drops them.
+- `Hosts.Tests/PeerConvergenceBesideARestoreTests` — a granted apply beside a marker instructs no peer.
+
+**Not done.**
+
+- **A service and a command line that do not meet.** A service started on a state directory of its own naming is held only by a command line that names that same directory.
+- **A command line that may not write the service's state directory** restores unheld. It warns as it does.
+- **A restore on another machine.** A marker is seen only by a service whose state directory holds it, so a restore from a destination elsewhere is not held for at the service that keeps its source.
+
 ## Status history
 
 | Date | Status | Note |
@@ -203,3 +254,4 @@ Amendment 4 left a peer as it was. A restore reads around to a peer's copy: the 
 | 2026-10 | Amended | Amendment 3: a retention pass and a person's deletion hold every blob while the service has a restore of the set under way, and say so on a line of their own; snapshots still expire. `Application/RestoreRunJournal`, `Retention/RetentionRunner`, `Agent/ServiceCommandHandler`; `Application.Tests/RestoreRunJournalTests`, `Retention.Tests/CollectionBesideABackupTests`, `Hosts.Tests/RetentionBesideARestoreTests` |
 | 2026-10 | Amended | Amendment 4: a sync drops no blob at a destination while the service has a restore of the set under way, and the hold moves the keep fingerprint so the first sync after it converges. `Agent/FanOut`; `Hosts.Tests/ConvergenceBesideARestoreTests`, `Hosts.Tests/DirectShipConvergeSpareTests` |
 | 2026-10 | Amended | Amendment 5: a granted run, a retention apply or a person's deletion, instructs no peer while the service has a restore of the set under way, and says so; the next granted run converges it. `Agent/FanOut`; `Hosts.Tests/PeerConvergenceBesideARestoreTests` |
+| 2026-10 | Amended | Amendment 6: a restore in direct mode holds a marker of its repository in its state directory and, where it named none, in the installation's; the service holds a retention pass, a deletion, a sync's convergence and a peer instruction on such a marker as on its own runs. `Application/RestoresUnderWay`, `Cli/OperationGateway`, `Agent/ServiceRuntime`; `Application.Tests/RestoresUnderWayTests`, `Cli.Tests/DirectRestoreUnderWayTests`, `Hosts.Tests/RetentionBesideARestoreTests`, `Hosts.Tests/ConvergenceBesideARestoreTests`, `Hosts.Tests/PeerConvergenceBesideARestoreTests` |
