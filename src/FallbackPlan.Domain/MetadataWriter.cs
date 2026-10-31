@@ -72,8 +72,8 @@ public sealed class MetadataWriter(MetadataTarget target)
     /// through <see cref="SymlinkMetadata"/>, as does its creation time, on
     /// macOS and Windows, the platforms with a call for it. Its owner, group
     /// and extended attributes are written by calls that never follow one.
-    /// On Windows a link takes its times and its attribute bits, the bits
-    /// through the same handle on the link. Linux gives
+    /// On Windows a link takes its times, its security descriptor and its
+    /// attribute bits, each through a handle on the link. Linux gives
     /// every link the same permissions and has no call to change them, so
     /// there a link's captured ones are written by nothing and land only where
     /// they are those (<see cref="MetadataRules.LinkPermissionsLand"/>).
@@ -222,7 +222,7 @@ public sealed class MetadataWriter(MetadataTarget target)
         // audits; otherwise the rest lands and the audit list is named. It
         // grants nothing, so it holds back nothing else.
         string? descriptorDetail = null;
-        if (target.SupportsSecurityDescriptors && OperatingSystem.IsWindows() && !link
+        if (target.SupportsSecurityDescriptors && OperatingSystem.IsWindows()
             && metadata.WindowsSecurityDescriptor is { IsEmpty: false } descriptor)
         {
             var read = WindowsSecurityDescriptor.Read(descriptor.Span);
@@ -237,10 +237,10 @@ public sealed class MetadataWriter(MetadataTarget target)
             {
                 descriptorDetail = $"security descriptor not applied: it names {string.Join(", ", strangers)}, which this machine does not know";
             }
-            else if (WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true, withAuditList: audit)
+            else if (WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true, withAuditList: audit, link: link)
                 || (target.HoldsRestorePrivilege
                     && WindowsSecurity.TryWrite(
-                        destination, descriptor.Span, read, withOwner: true, withRestorePrivilege: true, withAuditList: audit)))
+                        destination, descriptor.Span, read, withOwner: true, withRestorePrivilege: true, withAuditList: audit, link: link)))
             {
                 if (read.SaclPresent && !audit)
                 {
@@ -257,7 +257,7 @@ public sealed class MetadataWriter(MetadataTarget target)
             }
             else
             {
-                descriptorDetail = read.DaclPresent && WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: false)
+                descriptorDetail = read.DaclPresent && WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: false, link: link)
                     ? "security descriptor's owner and group not applied (refused by the target)"
                         + (read.SaclPresent ? ", nor its audit list" : "") + "; its access control list was"
                     : "security descriptor not applied (refused by the target)";

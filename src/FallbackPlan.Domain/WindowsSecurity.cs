@@ -1,4 +1,5 @@
 using Bodu;
+using Microsoft.Win32.SafeHandles;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -79,6 +80,12 @@ public static partial class WindowsSecurity
     private const uint UnprotectedDaclInformation = 0x2000_0000;
     private const uint ProtectedSaclInformation = 0x4000_0000;
     private const uint ProtectedDaclInformation = 0x8000_0000;
+    private const uint WriteDac = 0x0004_0000;
+    private const uint WriteOwner = 0x0008_0000;
+    private const uint AccessSystemSecurity = 0x0100_0000;
+    private const uint OpenExisting = 3;
+    private const uint OpenReparsePoint = 0x0020_0000;
+    private const uint BackupSemantics = 0x0200_0000;
 
     /// <summary>
     /// Writes <paramref name="descriptor"/> onto <paramref name="path"/>: its
@@ -99,6 +106,11 @@ public static partial class WindowsSecurity
     /// enabled for the write alone (ADR-0176 Amendment 3). False where the
     /// account does not hold it.
     /// </param>
+    /// <param name="link">
+    /// Whether <paramref name="path"/> is a link, whose own descriptor is
+    /// written through a handle opened on it (ADR-0182 Amendment 1):
+    /// <c>SetFileSecurityW</c> opens what a link points at.
+    /// </param>
     /// <returns>Whether the platform took it: false wherever it refuses.</returns>
     [SupportedOSPlatform("windows")]
     public static bool TryWrite(
@@ -107,7 +119,8 @@ public static partial class WindowsSecurity
         WindowsSecurityDescriptor read,
         bool withOwner,
         bool withRestorePrivilege = false,
-        bool withAuditList = false)
+        bool withAuditList = false,
+        bool link = false)
     {
         ThrowHelper.ThrowIfNullOrEmpty(path);
         ThrowHelper.ThrowIfNull(read);
@@ -138,9 +151,40 @@ public static partial class WindowsSecurity
         var bytes = descriptor.ToArray();
         return information == 0
             || (privileges.Count > 0
-                ? WindowsPrivileges.RunWith(privileges, () => SetFileSecurity(path, information, bytes))
-                : SetFileSecurity(path, information, bytes));
+                ? WindowsPrivileges.RunWith(privileges, Set)
+                : Set());
+
+        bool Set() => link ? SetOnTheLink(path, information, bytes) : SetFileSecurity(path, information, bytes);
     }
+
+    /// <summary>
+    /// Writes a descriptor onto the link at <paramref name="path"/> itself,
+    /// through a handle on the reparse point opened for no more than the
+    /// write asks: the owner's right for an owner or a group, the DACL's for
+    /// a DACL, and the audit list's, which SeSecurityPrivilege grants only
+    /// while enabled, for an audit list. The privileges a write runs with are
+    /// enabled while the handle is opened, which is when they are asked for.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static bool SetOnTheLink(string path, uint information, byte[] descriptor)
+    {
+        var access = ((information & (OwnerInformation | GroupInformation)) != 0 ? WriteOwner : 0)
+            | ((information & DaclInformation) != 0 ? WriteDac : 0)
+            | ((information & SaclInformation) != 0 ? AccessSystemSecurity : 0);
+        using var link = CreateFile(
+            path, access, FileShare.ReadWrite | FileShare.Delete, 0, OpenExisting, OpenReparsePoint | BackupSemantics, 0);
+        return !link.IsInvalid && SetKernelObjectSecurity(link, information, descriptor);
+    }
+
+    [SupportedOSPlatform("windows")]
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial SafeFileHandle CreateFile(
+        string path, uint access, FileShare share, nint security, uint disposition, uint flags, nint template);
+
+    [SupportedOSPlatform("windows")]
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetKernelObjectSecurity(SafeFileHandle handle, uint information, byte[] descriptor);
 
     [SupportedOSPlatform("windows")]
     [LibraryImport("advapi32.dll", EntryPoint = "SetFileSecurityW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]

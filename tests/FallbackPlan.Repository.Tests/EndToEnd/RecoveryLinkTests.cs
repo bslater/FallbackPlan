@@ -21,7 +21,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a link where the account may, a folder's or a file's as the executor
 /// makes it, with Windows' separators, and skips it with a note where it
 /// may not (ADR-0181 Amendment 1), and gives it its own times back there too
-/// (ADR-0181 Amendment 2), and its own attribute bits (ADR-0181 Amendment 3).
+/// (ADR-0181 Amendment 2), its own attribute bits (ADR-0181 Amendment 3),
+/// and its own security descriptor (ADR-0182 Amendment 1).
 /// </summary>
 /// <remarks>
 /// Whatever the output holds at a file's or a link's name and will not give
@@ -302,6 +303,48 @@ public sealed class RecoveryLinkTests : IDisposable
             File.GetAttributes(Path.Combine(output, "data", "target.bin")) & (FileAttributes.Hidden | FileAttributes.Archive),
             "a link's bits went through it");
     }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own descriptor is written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task RecoveryRestore_OnWindows_ALink_GetsItsOwnSecurityDescriptorBack_AndWhatItPointsAtKeepsItsOwn()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        const string guests = "S-1-5-32-546";
+        var kept = Path.Combine(Directory.CreateDirectory(Path.Combine(_root, "kept")).FullName, "kept.bin");
+        File.WriteAllBytes(kept, [1]);
+        WindowsAcls.KeepTo(kept, guests);
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", [1, 2, 3]);
+        source.AddNode(Link("z-kept", "data/target.bin") with
+        {
+            Metadata = new EntryMetadata
+            {
+                ModifiedAt = LinkModified,
+                WindowsSecurityDescriptor = new FileInfo(kept).GetAccessControl().GetSecurityDescriptorBinaryForm(),
+            },
+        });
+        var output = Path.Combine(_root, "restored");
+
+        var report = await RestoreIntoAsync(source, output);
+
+        Assert.AreEqual((2, 0), (report.Restored, report.Failed));
+        var own = LinkSecurity.Of(Path.Combine(output, "z-kept"));
+        Assert.IsTrue(own.AreAccessRulesProtected);
+        Assert.Contains(guests, Accounts(own));
+        Assert.DoesNotContain(
+            guests,
+            Accounts(new FileInfo(Path.Combine(output, "data", "target.bin")).GetAccessControl()),
+            "a link's descriptor went through it");
+    }
+
+    /// <summary>The accounts a DACL's entries name.</summary>
+    [SupportedOSPlatform("windows")]
+    private static List<string> Accounts(System.Security.AccessControl.FileSystemSecurity security) =>
+        [.. security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(System.Security.Principal.SecurityIdentifier))
+            .Cast<System.Security.AccessControl.FileSystemAccessRule>()
+            .Select(rule => rule.IdentityReference.Value)];
 
     /// <inheritdoc />
     public void Dispose()

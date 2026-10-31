@@ -28,7 +28,8 @@ namespace FallbackPlan.Domain;
 /// (<see cref="FileTimes"/>) are written by calls that already never follow
 /// one. A link a restore makes on Windows (ADR-0181) is given its times and
 /// its attribute bits (ADR-0181 Amendment 3), both through the handle on the
-/// link: its descriptor is written only onto files and folders.
+/// link, and its security descriptor through a handle of the same kind
+/// (<see cref="WindowsSecurity"/>; ADR-0182 Amendment 1).
 /// </para>
 /// <para>
 /// The timespec Linux and macOS take is two 64-bit words, so a 32-bit
@@ -50,6 +51,14 @@ public static partial class SymlinkMetadata
     /// <summary>Whether this platform keeps a link's own attribute bits and has a call that sets them: Windows does.</summary>
     [SupportedOSPlatformGuard("windows")]
     public static bool CanSetAttributes { get; } = OperatingSystem.IsWindows();
+
+    /// <summary>
+    /// Whether this platform keeps a link's own security descriptor and has a
+    /// call that writes it onto the link: Windows does
+    /// (<see cref="WindowsSecurity.TryWrite"/>, ADR-0182 Amendment 1).
+    /// </summary>
+    [SupportedOSPlatformGuard("windows")]
+    public static bool CanSetSecurityDescriptor { get; } = OperatingSystem.IsWindows();
 
     /// <summary>Whether this platform keeps a link's own permissions and has a call that sets them: macOS does.</summary>
     [SupportedOSPlatformGuard("macos")]

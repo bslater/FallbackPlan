@@ -1,3 +1,6 @@
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using FallbackPlan.Domain;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
@@ -21,7 +24,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// receipt hold a link to grants on every platform what that platform sets
 /// on one (ADR-0181 Amendment 2). A link Windows captured gets its attribute
 /// bits back the same way, and a bit no restore sets is named as a file's
-/// is (ADR-0181 Amendment 3).
+/// is (ADR-0181 Amendment 3), and its own security descriptor (ADR-0182
+/// Amendment 1).
 /// </summary>
 /// <remarks>
 /// Windows makes a link only for an account that holds the privilege to, or
@@ -58,7 +62,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         Assert.AreEqual(SymbolicLinks.CanCreate, RestoreTargetProfile.ForLocalPlatform().SupportsSymlinks);
 
     [TestMethod]
-    public void TheRule_ForALink_GrantsWhatThisPlatformSetsOnALink_AndNeverItsDescriptorOrStreams()
+    public void TheRule_ForALink_GrantsWhatThisPlatformSetsOnALink_AndNeverItsStreams()
     {
         // A target that keeps everything, so the platform alone decides.
         var everything = RestoreTargetProfile.ForLocalPlatform() with
@@ -77,10 +81,8 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         Assert.AreEqual(SymlinkMetadata.CanSetCreationTime, applied.HasFlag(CapturedMetadata.CreatedAt));
         Assert.AreEqual(!OperatingSystem.IsWindows(), applied.HasFlag(CapturedMetadata.PosixMode), "Windows writes no permissions");
         Assert.AreEqual(SymlinkMetadata.CanSetAttributes, applied.HasFlag(CapturedMetadata.FileAttributes));
-        Assert.AreEqual(
-            CapturedMetadata.None,
-            applied & (CapturedMetadata.SecurityDescriptor | CapturedMetadata.AlternateStreams),
-            "a link's descriptor and streams are written onto nothing");
+        Assert.AreEqual(SymlinkMetadata.CanSetSecurityDescriptor, applied.HasFlag(CapturedMetadata.SecurityDescriptor));
+        Assert.IsFalse(applied.HasFlag(CapturedMetadata.AlternateStreams), "a link's streams are written onto nothing");
     }
 
     [TestMethod]
@@ -223,6 +225,72 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         Assert.AreEqual(FileAttributes.Archive, File.GetAttributes(Path.Combine(output, "data", "target.bin")) & Watched, "a link's bits went through it");
         Assert.AreEqual(FileAttributes.Directory, File.GetAttributes(Path.Combine(output, "data")) & Watched, "a folder's link's bits went through it");
     }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own descriptor is written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task OnWindows_ALink_GetsItsOwnSecurityDescriptorBack_AndWhatItPointsAtKeepsItsOwn()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var kept = KeptDescriptor();
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", Deterministic(300, 6)).Metadata = new EntryMetadata { ModifiedAt = Modified };
+        AddLink(source, "z-kept", "data/target.bin", new EntryMetadata { ModifiedAt = Modified, WindowsSecurityDescriptor = kept });
+        AddLink(source, "z-kept-nothing", "not-there.bin", new EntryMetadata { ModifiedAt = Modified, WindowsSecurityDescriptor = kept });
+
+        var (_, declared, receipt, output) = await PublishAndRestoreAsync(source, 0xB5);
+
+        Assert.DoesNotContain(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal), declared);
+        var expected = Dacl(Security(kept));
+        foreach (var name in new[] { "z-kept", "z-kept-nothing" })
+        {
+            var item = receipt.Items.Single(item => item.Path == name);
+            Assert.AreEqual("restored", item.Outcome, name);
+            Assert.IsNull(item.NotApplied, $"{name}: {item.Detail}");
+            Assert.AreEqual(expected, Dacl(LinkSecurity.Of(Path.Combine(output, name))), name);
+        }
+
+        Assert.AreNotEqual(
+            expected,
+            Dacl(new FileInfo(Path.Combine(output, "data", "target.bin")).GetAccessControl()),
+            "a link's descriptor went through it");
+    }
+
+    /// <summary>
+    /// A descriptor kept to this account and Everyone, read from a real file:
+    /// a protected DACL no folder of the restore gives what is made in it.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private byte[] KeptDescriptor()
+    {
+        var file = Path.Combine(Directory.CreateDirectory(Path.Combine(SpoolDirectory, "kept")).FullName, "kept.bin");
+        File.WriteAllBytes(file, [1]);
+        var security = new FileInfo(file).GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.WorldSid, null), FileSystemRights.ReadAndExecute, AccessControlType.Allow));
+        new FileInfo(file).SetAccessControl(security);
+        return new FileInfo(file).GetAccessControl().GetSecurityDescriptorBinaryForm();
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static FileSecurity Security(byte[] descriptor)
+    {
+        var security = new FileSecurity();
+        security.SetSecurityDescriptorBinaryForm(descriptor);
+        return security;
+    }
+
+    /// <summary>A DACL's protection and its entries, in order, each with whether its folder gave it.</summary>
+    [SupportedOSPlatform("windows")]
+    private static string Dacl(FileSystemSecurity security) =>
+        (security.AreAccessRulesProtected ? "protected: " : "inheriting: ")
+        + string.Join("; ", security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>()
+            .Select(rule => $"{rule.AccessControlType} {rule.IdentityReference} {rule.FileSystemRights}"
+                + $"{(rule.IsInherited ? " inherited" : string.Empty)}"));
 
     private static void AddLink(FakeFileSystemSource source, string path, string target, uint? fileAttributes) =>
         AddLink(source, path, target, new EntryMetadata { ModifiedAt = Modified, FileAttributes = fileAttributes });

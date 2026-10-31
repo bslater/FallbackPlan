@@ -19,7 +19,9 @@ namespace FallbackPlan.Domain.Tests;
 /// Amendment 1). A descriptor's audit list (SACL) lands with it where the
 /// account holds SeSecurityPrivilege, enabled for that write alone; where it
 /// does not, the audit list is named and the rest still lands (ADR-0176
-/// Amendment 3).
+/// Amendment 3). A link's descriptor is written onto the link itself,
+/// through a handle opened on it, and never onto what it points at
+/// (ADR-0182 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class SecurityDescriptorWriteBackTests : IDisposable
@@ -344,6 +346,45 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
         Assert.IsFalse(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor));
     }
 
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own descriptor is written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Write_OnWindows_GivesALinkItsOwnDacl_AndWhatItPointsAtKeepsItsOwn()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var source = Kept("source.bin");
+        var target = Landed("pointed.bin");
+        var before = Dacl(target);
+        var link = Path.Combine(_root, "link");
+        SymbolicLinks.Create(link, target, folder: false);
+
+        var written = Writer().Write(link, new EntryMetadata { WindowsSecurityDescriptor = Captured(source) }, EntryKind.Symlink);
+
+        Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor), written.Detail);
+        Assert.AreEqual(Dacl(source), Dacl(LinkSecurity.Of(link)));
+        Assert.AreEqual(before, Dacl(target), "a link's descriptor went through it");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own descriptor is written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Write_OnWindows_GivesALinkToNothingItsOwnDacl()
+    {
+        // A write that followed the link would find nothing there.
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var source = Kept("source.bin");
+        var link = Path.Combine(_root, "dangling");
+        SymbolicLinks.Create(link, Path.Combine(_root, "not-there.bin"), folder: false);
+
+        var written = Writer().Write(link, new EntryMetadata { WindowsSecurityDescriptor = Captured(source) }, EntryKind.Symlink);
+
+        Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor), written.Detail);
+        Assert.AreEqual(Dacl(source), Dacl(LinkSecurity.Of(link)));
+        Assert.IsFalse(File.Exists(Path.Combine(_root, "not-there.bin")));
+    }
+
     public void Dispose()
     {
         try
@@ -416,6 +457,20 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
         }
 
         return (source, captured.GetSecurityDescriptorBinaryForm());
+    }
+
+    /// <summary>A file whose protected DACL grants this account everything and Everyone reading it.</summary>
+    [SupportedOSPlatform("windows")]
+    private string Kept(string name)
+    {
+        var path = Landed(name);
+        var security = new FileInfo(path).GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.WorldSid, null), FileSystemRights.ReadAndExecute, AccessControlType.Allow));
+        new FileInfo(path).SetAccessControl(security);
+        return path;
     }
 
     [SupportedOSPlatform("windows")]
