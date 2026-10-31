@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way)
+**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way), FR-GC-010 (amended by Amendment 4: a destination keeps its blobs through a sync while the service has a restore of the set under way)
 **Related:** [ADR-0075](0075-a-restore-reads-around-damage.md) §5 (what a copy passed over is called), [ADR-0068](0068-the-catalogue-directed-restore-read.md) (the catalogue-directed read), [ADR-0009](0009-garbage-collection-safety.md) (the collector), [ADR-0034](0034-hub-and-spoke-destinations.md) §6 (the staging trim), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-4
 
 **Built:**
@@ -71,6 +71,8 @@ Damage stays damage. The blob reader is unchanged. Its other callers, the loader
 - **Hold the collector off a restore.** A snapshot that expires and is swept while it is being restored loses the files whose blobs went, with no copy to read them from: destinations converge to the same policy. They fail, named, and the receipt says so. The sweep's grace spans two retention applies and a publication between them, and a person runs an apply, so the window is a restore that outlives all three.
 
   > **Built 2026-10 for the set's own pass ([Amendment 3](#amendment-3-2026-10--a-retention-pass-holds-its-blobs-beside-a-restore-of-the-set)).** A retention pass, and a person's deletion, hold every blob while the service has a restore of the set under way, and say so. A sync's convergence at the destinations, and a restore run in direct mode, are not held for.
+
+  > **2026-10 ([Amendment 4](#amendment-4-2026-10--a-sync-keeps-a-destinations-blobs-beside-a-restore-of-the-set)).** A sync's convergence is held too: a destination keeps its blobs while the service has a restore of the set under way. A restore in direct mode is still not held for.
 - **Say "not held" in the failure.** A record no loaded blob carries is reported as a format violation, as it was for a blob missing before the run began.
 
   > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-record-no-store-holds-fails-as-not-held)).** A record whose blob the store does not hold fails as not held, whether the blob went during the run or before it, and the receipt says so. A record nothing places at all is still a format violation.
@@ -158,7 +160,22 @@ A pass already holds every blob beside a backup in flight, on the journal's word
 **Not done.**
 
 - **A sync's convergence.** A destination still drops what its policy no longer keeps while a restore of the set is under way. Under direct-ship the destinations are the only holders, and a restore reads around to them.
+
+  > **2026-10: taken up by [Amendment 4](#amendment-4-2026-10--a-sync-keeps-a-destinations-blobs-beside-a-restore-of-the-set).**
 - **A restore in direct mode.** The command line restores outside the service, and nothing tells a pass it is running.
+
+## Amendment 4 (2026-10) — a sync keeps a destination's blobs beside a restore of the set
+
+Amendment 3 held the set's own pass and left a sync's convergence alone. A destination whose own policy keeps less than staging drops, on every sync, the blobs of the snapshots its policy no longer keeps. A restore under way may read around to that copy, and under direct-ship the destinations hold the only copies there are.
+
+**Decision.**
+
+- **While the service has a restore of the set under way, a sync drops no blob at a destination.** Every blob joins the convergence's spares, beside the closure a sibling is still owed ([ADR-0046](0046-direct-to-destination-publication.md), FR-GC-009). Snapshots still go, as they do from staging. A blob a dropped snapshot leaves unnamed waits for the next pass.
+- **The hold moves the keep fingerprint** the reconciliation gate compares ([ADR-0056](0056-incremental-reconciliation.md)). The first sync after the restore, with nothing published since and a keep-set that has not moved, would otherwise find the pair level and skip, and keep for good what only the restore held. With it, that pass sees the fingerprint move and converges.
+
+**Built:** `Agent/FanOut`; `Hosts.Tests/ConvergenceBesideARestoreTests` — through the service, a staging set whose destination keeps only the newest of the day's snapshots takes two backups. A sync beside a run of the set under way drops the first snapshot at the destination but none of its blobs. Once the run has ended, the next sync drops them, with nothing published between.
+
+**Not done.** A restore in direct mode is still held for by nothing. A peer converges on the retention apply's signed instruction rather than on a sync, and is not held for.
 
 ## Status history
 
@@ -168,3 +185,4 @@ A pass already holds every blob beside a backup in flight, on the journal's word
 | 2026-10 | Amended | Amendment 1: a blob that goes from another copy while the run reads around to it is passed over there as not held, and a read through that copy's footer no longer ends the run. `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |
 | 2026-10 | Amended | Amendment 2: with no copy to read it from, a record whose blob the store does not hold fails as not held, not as a format violation, whether the blob went during the run or before it. `Repository.Packing/RecordReadResult`, `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |
 | 2026-10 | Amended | Amendment 3: a retention pass and a person's deletion hold every blob while the service has a restore of the set under way, and say so on a line of their own; snapshots still expire. `Application/RestoreRunJournal`, `Retention/RetentionRunner`, `Agent/ServiceCommandHandler`; `Application.Tests/RestoreRunJournalTests`, `Retention.Tests/CollectionBesideABackupTests`, `Hosts.Tests/RetentionBesideARestoreTests` |
+| 2026-10 | Amended | Amendment 4: a sync drops no blob at a destination while the service has a restore of the set under way, and the hold moves the keep fingerprint so the first sync after it converges. `Agent/FanOut`; `Hosts.Tests/ConvergenceBesideARestoreTests` |
