@@ -891,6 +891,9 @@ public static class FanOut
     /// </remarks>
     private const string KeepsEverything = "keeps-all";
 
+    /// <summary>What a pass held beside a restore folds into its keep fingerprint (ADR-0172 Amendment 4).</summary>
+    private const string HeldBesideARestore = "held-beside-a-restore";
+
     /// <summary>
     /// Whether a person's deletion is pending in the set's archive
     /// (FR-GC-013), and if so the archive's journal head now: the point a
@@ -1386,6 +1389,19 @@ public static class FanOut
             // holding copies whose only reason to exist had been
             // delivered (ADR-0056).
             keepFingerprint = $"{keepFingerprint}/{sparePlan.Fingerprint}";
+        }
+
+        // A restore of the set under way reads the blobs of the snapshot it
+        // restores, and may read around to this copy's: no blob is dropped
+        // here while one is, as none is collected from staging (ADR-0172
+        // Amendments 3 and 4). Folded into the fingerprint the gate compares,
+        // or the first pass after the restore would find the pair level and
+        // skip, keeping for good what only the restore held.
+        if (keeps is not null && runtime.RestoreRuns.IsUnderWayFor(set.Name))
+        {
+            var spared = spares;
+            spares = key => key.StartsWith("blobs/", StringComparison.Ordinal) || (spared?.Invoke(key) ?? false);
+            keepFingerprint = $"{keepFingerprint}/{HeldBesideARestore}";
         }
 
         // Held against owed, in bytes, as the copy discovers it. Kept
