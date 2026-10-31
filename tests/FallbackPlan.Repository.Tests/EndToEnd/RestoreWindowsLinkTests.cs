@@ -94,7 +94,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         source.AddFile("data/target.bin", content).Metadata = new EntryMetadata { ModifiedAt = Modified };
         AddLink(source, "link", "data/target.bin", fileAttributes: null);
 
-        var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB1);
+        var (plan, _, receipt, output) = await PublishAndRestoreAsync(source, 0xB1);
 
         Assert.DoesNotContain(degradation => degradation.Capability == "symlinks", plan.Degradations);
         Assert.AreEqual("restored", receipt.Items.Single(item => item.Path == "link").Outcome);
@@ -120,7 +120,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         AddLink(source, "a-windows-folder", "notes.txt", fileAttributes: FolderBit | ReparsePointBit);
         AddLink(source, "a-windows-file", "docs", fileAttributes: ReparsePointBit);
 
-        var (_, receipt, output) = await PublishAndRestoreAsync(source, 0xB2);
+        var (_, _, receipt, output) = await PublishAndRestoreAsync(source, 0xB2);
 
         Assert.IsTrue(receipt.Items.Where(item => item.Path.StartsWith("a-", StringComparison.Ordinal)).All(item => item.Outcome == "restored"));
         Assert.IsTrue(Directory.Exists(Path.Combine(output, "a-docs")), "a link naming a folder the restore makes is a folder's link");
@@ -153,9 +153,9 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         AddLink(source, "z-folder", "data", times);
         AddLink(source, "z-nothing", "not-there.bin", times);
 
-        var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB3);
+        var (_, declared, receipt, output) = await PublishAndRestoreAsync(source, 0xB3);
 
-        Assert.DoesNotContain(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal), plan.Degradations);
+        Assert.DoesNotContain(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal), declared);
         foreach (var name in new[] { "z-file", "z-folder", "z-nothing" })
         {
             var item = receipt.Items.Single(item => item.Path == name);
@@ -192,10 +192,10 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         // This target compresses files and folders, and nothing compresses a link.
         AddLink(source, "z-compressed", "data/target.bin", fileAttributes: ReparsePointBit | CompressedBit);
 
-        var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB4);
+        var (_, declared, receipt, output) = await PublishAndRestoreAsync(source, 0xB4);
 
         Assert.IsTrue(RestoreTargetProfile.ForLocalPlatform().SupportsCompression, "the premise: this target compresses");
-        var unset = Assert.ContainsSingle(plan.Degradations.Where(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal)));
+        var unset = Assert.ContainsSingle(declared.Where(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal)));
         Assert.AreEqual("unset-file-attributes", unset.Capability);
         Assert.Contains("2 symlink(s) include bits no restore sets: Compressed, Encrypted.", unset.Detail, StringComparison.Ordinal);
         foreach (var name in new[] { "z-hidden", "z-hidden-folder" })
@@ -264,7 +264,12 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         ClientVersion = "restore-windows-link-tests/1.0",
     };
 
-    private async Task<(RestorePlan Plan, RestoreReceipt Receipt, string Output)> PublishAndRestoreAsync(
+    /// <summary>
+    /// Backs <paramref name="source"/> up, plans its restore here, and runs
+    /// it, answering the plan, the metadata lines the plan declares over the
+    /// items' facts, the receipt, and where it landed.
+    /// </summary>
+    private async Task<(RestorePlan Plan, IReadOnlyList<MetadataDegradation> Declared, RestoreReceipt Receipt, string Output)> PublishAndRestoreAsync(
         FakeFileSystemSource source, byte seed)
     {
         var store = CreateStore();
@@ -282,6 +287,8 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"links-{seed:x2}.db"), Repo);
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, SnapshotOf(seed), string.Empty, target);
+        var declared = RestoreMetadata.Declare(
+            plan, (await RestoreBlobSet.ResolveAsync(catalogue, plan, store, Repo, keys, CancellationToken.None)).Facts, target);
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var output = Path.Combine(SpoolDirectory, $"restored-{seed:x2}");
@@ -294,6 +301,6 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
                 NowUnixMilliseconds = 1_722_700_000_000,
             },
             CancellationToken.None);
-        return (plan, receipt, output);
+        return (plan, declared, receipt, output);
     }
 }
