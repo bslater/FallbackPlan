@@ -2307,6 +2307,16 @@ public static class FanOut
         Repository.Crypto.ReclaimAuthority reclaim, ulong nowMs, CancellationToken cancellationToken,
         IReadOnlyCollection<string>? retire = null)
     {
+        // A restore of the set under way may read around to this peer's copy,
+        // and an instruction has the peer drop what its keep-set does not
+        // name. None is sent while one is; the next granted run converges it
+        // (ADR-0172 Amendment 5).
+        if (runtime.RestoreRuns.IsUnderWayFor(set.Name))
+        {
+            return $"peer '{destination.Name}' held beside a restore: not instructed while a restore of the set is "
+                + "under way; the next granted run converges it";
+        }
+
         byte[] Sign(byte[] signed)
         {
             var generation = archive.Repository.CurrentMetadataGeneration;
