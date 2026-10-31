@@ -35,6 +35,22 @@ public sealed record RestoreTargetProfile
     public bool AttributesTakeNamespaces { get; init; }
 
     /// <summary>
+    /// The most bytes this target takes in an extended attribute's name, its
+    /// namespace with it, or null where none is known: a file's stream kept
+    /// as an attribute with a longer name is not kept
+    /// (<see cref="MetadataRules.StreamTooLargeForAttribute"/>; ADR-0179
+    /// Amendment 2).
+    /// </summary>
+    public uint? MaxAttributeNameBytes { get; init; }
+
+    /// <summary>
+    /// The most bytes this target holds in an extended attribute's value on
+    /// any volume, or null where none is known: a file's stream kept as an
+    /// attribute that is larger is not kept (ADR-0179 Amendment 2).
+    /// </summary>
+    public uint? MaxAttributeValueBytes { get; init; }
+
+    /// <summary>
     /// Whether the executor writes a file's creation time back on this
     /// target: Windows and macOS have a call that sets one, Linux does not
     /// (<see cref="FileTimes"/>). It is what the plan predicts by. The
@@ -213,6 +229,8 @@ public sealed record RestoreTargetProfile
         HoldsSecurityPrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Security),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         AttributesTakeNamespaces = ExtendedAttributes.TakesNamespaces,
+        MaxAttributeNameBytes = ExtendedAttributes.MaxNameBytes,
+        MaxAttributeValueBytes = ExtendedAttributes.MaxValueBytes,
         SupportsCompression = FileCompression.CanSet,
         InheritedAccessAt = WindowsAccess.InheritedByAFileAt,
         InheritedFolderAccessAt = WindowsAccess.InheritedByAFolderAt,

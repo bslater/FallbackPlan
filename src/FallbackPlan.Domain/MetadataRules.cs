@@ -389,6 +389,41 @@ public static class MetadataRules
             : null;
 
     /// <summary>
+    /// Why a stream whose name has <paramref name="nameBytes"/> bytes and
+    /// whose content <paramref name="length"/> is not kept as an attribute
+    /// where the platform takes names of at most
+    /// <paramref name="maxNameBytes"/> and values of at most
+    /// <paramref name="maxValueBytes"/>, or null where it fits
+    /// (ADR-0179 Amendment 2).
+    /// </summary>
+    /// <param name="nameBytes">The stream's name, in bytes.</param>
+    /// <param name="length">Its content's length.</param>
+    /// <param name="maxNameBytes">The most bytes a name may have; null where none is known.</param>
+    /// <param name="maxValueBytes">The most bytes a value may hold; null where none is known.</param>
+    public static string? StreamTooLargeForAttribute(int nameBytes, ulong length, uint? maxNameBytes, uint? maxValueBytes) =>
+        maxNameBytes is { } maxName && nameBytes > maxName
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"its name is longer than the {maxName} bytes an attribute's name may have here")
+            : maxValueBytes is { } maxValue && length > maxValue
+                ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"it is larger than the {maxValue} bytes an attribute may hold here")
+                : null;
+
+    /// <summary>The bytes in the longest name of the streams captured with <paramref name="metadata"/>; 0 where it has none.</summary>
+    public static int LongestStreamName(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        return metadata.AlternateStreams.Count == 0 ? 0 : metadata.AlternateStreams.Max(stream => stream.Name.Length);
+    }
+
+    /// <summary>The length of the largest stream captured with <paramref name="metadata"/>; 0 where it has none.</summary>
+    public static ulong LargestStream(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        return metadata.AlternateStreams.Count == 0 ? 0 : metadata.AlternateStreams.Max(stream => stream.Length);
+    }
+
+    /// <summary>
     /// How many of the streams captured with <paramref name="metadata"/> have
     /// no name in the user namespace (<see cref="RefusedStreamAsAttribute"/>),
     /// which a target that takes names only in a namespace does not keep.

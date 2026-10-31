@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
@@ -52,7 +53,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// makes is judged by what passes to it, and counted apart, and a run reads
 /// its own record to do so (ADR-0178 Amendment 4). Where streams are kept as
 /// attributes and names take a namespace, a stream outside the user
-/// namespace is named (ADR-0179).
+/// namespace is named (ADR-0179), and so is one larger than the target
+/// takes in an attribute's name or value (ADR-0179 Amendment 2).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -971,6 +973,44 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         Assert.DoesNotContain(degradation => degradation.Capability.StartsWith("alternate-stream", StringComparison.Ordinal), anyName);
     }
 
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Plan_AStreamLargerThanTheTargetTakesInAnAttribute_IsDeclaredOnItsOwnLine()
+    {
+        // ADR-0179 Amendment 2: Linux takes no attribute name over 255 bytes
+        // and no value over 64 KiB, on any volume.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/big.bin", Deterministic(700, 56)).AlternateStreams["user.big"] = Deterministic(70_000, 57);
+        source.AddFile("docs/long.bin", Deterministic(700, 58)).AlternateStreams["user." + new string('n', 300)] = "kept"u8.ToArray();
+        source.AddFile("docs/fits.bin", Deterministic(700, 59)).AlternateStreams["user.origin"] = "kept"u8.ToArray();
+
+        // Segments larger than the stream, as a stream is captured whole in one.
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xE9, SmallBlobPolicy with { SegmentSize = SegmentSize.Create(128 * 1024) });
+        var keeps = Posix with { SupportsExtendedAttributes = true, MaxAttributeNameBytes = 255, MaxAttributeValueBytes = 65_536 };
+        var declared = RestoreMetadata.Declare(plan, facts, keeps);
+
+        var refused = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "alternate-stream-attribute-sizes"));
+        Assert.Contains("2 file(s)", refused.Detail, StringComparison.Ordinal);
+        Assert.Contains("255 bytes", refused.Detail, StringComparison.Ordinal);
+        Assert.Contains("65536 bytes", refused.Detail, StringComparison.Ordinal);
+
+        // macOS judges a name alone; a target stating no limit judges none.
+        var namesOnly = Assert.ContainsSingle(
+            RestoreMetadata.Declare(plan, facts, keeps with { MaxAttributeNameBytes = 127, MaxAttributeValueBytes = null })
+                .Where(degradation => degradation.Capability == "alternate-stream-attribute-sizes"));
+        Assert.Contains("1 file(s)", namesOnly.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("65536", namesOnly.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            degradation => degradation.Capability == "alternate-stream-attribute-sizes",
+            RestoreMetadata.Declare(plan, facts, keeps with { MaxAttributeNameBytes = null, MaxAttributeValueBytes = null }));
+
+        // A target that keeps streams as streams judges them by no attribute's limits.
+        Assert.DoesNotContain(
+            degradation => degradation.Capability == "alternate-stream-attribute-sizes",
+            RestoreMetadata.Declare(plan, facts, keeps with { SupportsAlternateStreams = true }));
+    }
+
     private static FakeFileSystemSource EmptyDescriptor()
     {
         var source = new FakeFileSystemSource();
@@ -1359,7 +1399,7 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     };
 
     private async Task<(LocalFileSystemObjectStore Store, RepositoryKeySet Keys, CatalogueDb Catalogue)> PublishAsync(
-        FakeFileSystemSource source, byte seed)
+        FakeFileSystemSource source, byte seed, CapturePolicy? policy = null)
     {
         var store = CreateStore();
         var keys = CreateKeys();
@@ -1367,7 +1407,7 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"metadata-{seed:x2}.db"), Repo);
 
         await new PublicationOrchestrator(
-                SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
+                policy ?? SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
                 new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, $"sequence-{seed:x2}.txt"))),
                 SpoolDirectory, FormatVersions.SealedDataPlane, observer: null, catalogue)
             .PublishAsync(Job(source, seed), CancellationToken.None);
@@ -1402,9 +1442,9 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     private async Task<(RestorePlan Plan, IReadOnlyDictionary<ObjectId, RestoreItemFacts> Facts)> PublishAndProbeAsync(
-        FakeFileSystemSource source, byte seed)
+        FakeFileSystemSource source, byte seed, CapturePolicy? policy = null)
     {
-        var (store, keys, catalogue) = await PublishAsync(source, seed);
+        var (store, keys, catalogue) = await PublishAsync(source, seed, policy);
         using (keys)
         using (catalogue)
         {

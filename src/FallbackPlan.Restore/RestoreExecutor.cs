@@ -1559,7 +1559,11 @@ public sealed class RestoreExecutor(
         if (_streamsAsAttributes)
         {
             var unkept = await AlternateStreams.WriteBackAsAttributesAsync(
-                landing, manifest.Metadata, ReadStreamAsync, target.AttributesTakeNamespaces, cancellationToken).ConfigureAwait(false);
+                landing,
+                manifest.Metadata,
+                ReadStreamAsync,
+                new AttributeLimits(target.AttributesTakeNamespaces, target.MaxAttributeNameBytes, target.MaxAttributeValueBytes),
+                cancellationToken).ConfigureAwait(false);
             return unkept.Count == 0 ? null : string.Join("; ", unkept.Select(why => $"alternate stream {why}"));
         }
 

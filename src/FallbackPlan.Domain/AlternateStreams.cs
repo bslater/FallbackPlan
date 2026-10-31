@@ -183,32 +183,37 @@ public static class AlternateStreams
     /// <paramref name="file"/> as the extended attribute of its name, holding
     /// its content as <paramref name="read"/> gives it: the form a platform
     /// that keeps no streams and writes attributes keeps them in (ADR-0179).
-    /// A stream with no name in the user namespace where names take one, or
-    /// whose name the file's own captured attribute has, is neither read nor
-    /// written; that attribute is the file's own here, and is written after.
+    /// A stream with no name in the user namespace where names take one, one
+    /// larger than the platform takes in an attribute's name or value
+    /// (ADR-0179 Amendment 2), or one whose name the file's own captured
+    /// attribute has, is neither read nor written; that attribute is the
+    /// file's own here, and is written after.
     /// </summary>
     /// <param name="file">A file whose content has landed and verified.</param>
     /// <param name="metadata">What it was captured with: its streams, and its own attributes.</param>
     /// <param name="read">A stream's verified content by its object identifier, or why it will not read.</param>
-    /// <param name="namespaced">Whether the platform takes an attribute's name only in a namespace.</param>
+    /// <param name="limits">What the platform takes in a file's own attributes.</param>
     /// <param name="cancellationToken">Stops the reads.</param>
     /// <returns>Why each stream that was not kept was not, in order; empty where every one was.</returns>
     public static async ValueTask<IReadOnlyList<string>> WriteBackAsAttributesAsync(
         string file,
         EntryMetadata metadata,
         Func<ObjectId, CancellationToken, ValueTask<(byte[]? Content, string? Unread)>> read,
-        bool namespaced,
+        AttributeLimits limits,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(file);
         ThrowHelper.ThrowIfNull(metadata);
         ThrowHelper.ThrowIfNull(read);
+        ThrowHelper.ThrowIfNull(limits);
 
         List<string> left = [];
         foreach (var stream in metadata.AlternateStreams)
         {
             var name = Encoding.UTF8.GetString(stream.Name.Span);
-            if (MetadataRules.RefusedStreamAsAttribute(stream.Name.Span, namespaced) is { } refused)
+            if ((MetadataRules.RefusedStreamAsAttribute(stream.Name.Span, limits.TakesNamespaces)
+                ?? MetadataRules.StreamTooLargeForAttribute(stream.Name.Length, stream.Length, limits.MaxNameBytes, limits.MaxValueBytes))
+                is { } refused)
             {
                 left.Add($"'{name}' was not kept as an attribute: {refused}");
                 continue;
@@ -271,7 +276,7 @@ public static class AlternateStreams
         }
 
         return MetadataRules.KeepsStreamsAsAttributes(EntryKind.File, CanWrite, ExtendedAttributes.CanSet)
-            ? await WriteBackAsAttributesAsync(file, metadata, read, ExtendedAttributes.TakesNamespaces, cancellationToken)
+            ? await WriteBackAsAttributesAsync(file, metadata, read, AttributeLimits.OfThisPlatform, cancellationToken)
                 .ConfigureAwait(false)
             : null;
     }
