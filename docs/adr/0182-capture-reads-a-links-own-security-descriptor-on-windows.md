@@ -66,6 +66,7 @@ The record captured a link's own descriptor and left a restore writing one only 
 
 **Built:** `Domain/WindowsSecurity`; `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`:
 
+- `Domain.Tests/SymlinkMetadataTests`: only Windows writes a link's descriptor;
 - `Domain.Tests/SecurityDescriptorWriteBackTests`: on Windows a link to a file and a link to nothing are given the protected DACL captured, read back through a handle on the link, and the file the link names keeps its own;
 - `Repository.Tests/RestoreWindowsLinkTests`: on Windows two links come back with the DACL captured, nothing declared or listed, and the file one names keeps its own; on every platform the rule grants a link's descriptor exactly where the platform writes one;
 - `Repository.Tests/RecoveryLinkTests`: on Windows the recovery tool gives a link a DACL kept to an account, and the file it names names no such account;
@@ -76,4 +77,4 @@ The record captured a link's own descriptor and left a restore writing one only 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice. On Windows a link's security descriptor is read through a handle opened on the link itself, never what it points at. `Filesystem.Local/WindowsInterop`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Tests/LocalScanTests` |
-| 2026-10 | Accepted (Amendment 1) | A restore on Windows writes a link's own descriptor back through a handle on the link, by ADR-0176's rule, by the executor and the recovery tool alike. `Domain/WindowsSecurity`; `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreWindowsLinkTests`; `Repository.Tests/RecoveryLinkTests`; `TestSupport/LinkSecurity` |
+| 2026-10 | Accepted (Amendment 1) | A restore on Windows writes a link's own descriptor back through a handle on the link, by ADR-0176's rule, by the executor and the recovery tool alike. `Domain/WindowsSecurity`; `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/SymlinkMetadataTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreWindowsLinkTests`; `Repository.Tests/RecoveryLinkTests`; `TestSupport/LinkSecurity` |
