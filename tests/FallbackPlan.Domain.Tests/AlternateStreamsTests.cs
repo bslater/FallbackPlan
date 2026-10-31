@@ -11,6 +11,10 @@ namespace FallbackPlan.Domain.Tests;
 /// the file's path, because a name that is not a stream's could reach
 /// another file: <c>file:..\..\x</c> names <c>x</c> beside the file, and a
 /// trailing period is stripped, so <c>file:..</c> names the file itself.
+/// Where the platform writes extended attributes instead, as Linux and macOS
+/// do, a file's streams are kept as attributes of the same names: Linux
+/// takes only those in its user namespace, and a stream the file's own
+/// captured attribute names is left to it (ADR-0179 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class AlternateStreamsTests : IDisposable
@@ -194,6 +198,163 @@ public sealed class AlternateStreamsTests : IDisposable
         Assert.IsEmpty(calls.Streams);
     }
 
+    [TestMethod]
+    public void TakesNamespaces_OnlyOnLinux() =>
+        Assert.AreEqual(OperatingSystem.IsLinux(), ExtendedAttributes.TakesNamespaces);
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task WriteBackAsAttributesAsync_OnPosix_KeepsEachStreamAsTheAttributeOfItsName_AsItReads()
+    {
+        var file = Carrier();
+        var read = new List<ObjectId>();
+
+        var left = await AlternateStreams.WriteBackAsAttributesAsync(
+            file, Streams(Stream("user.origin", 1), Stream("user.notes", 2)), Reads(read), namespaced: true, CancellationToken.None);
+
+        Assert.IsEmpty(left);
+        CollectionAssert.AreEqual(new[] { IdOf(1), IdOf(2) }, read);
+        SequenceAssert.AreEqual(ContentOf(1), Xattr.Get(file, "user.origin"));
+        SequenceAssert.AreEqual(ContentOf(2), Xattr.Get(file, "user.notes"));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task WriteBackAsAttributesAsync_AStreamOutsideTheUserNamespace_IsNeitherReadNorWritten_WhereNamesTakeNamespaces_AndIsNamed()
+    {
+        var file = Carrier();
+        var read = new List<ObjectId>();
+
+        var left = await AlternateStreams.WriteBackAsAttributesAsync(
+            file, Streams(Stream("Zone.Identifier", 1), Stream("user.notes", 2)), Reads(read), namespaced: true, CancellationToken.None);
+
+        var why = Assert.ContainsSingle(left);
+        Assert.Contains("'Zone.Identifier'", why, StringComparison.Ordinal);
+        Assert.Contains("user namespace", why, StringComparison.Ordinal);
+        CollectionAssert.AreEqual(new[] { IdOf(2) }, read);
+        SequenceAssert.AreEqual(ContentOf(2), Xattr.Get(file, "user.notes"));
+    }
+
+    [TestMethod]
+    public async Task WriteBackAsAttributesAsync_AStreamWhoseNameTheFilesOwnAttributeHas_IsNeitherReadNorWritten_AndIsNamed()
+    {
+        var file = Carrier();
+        var read = new List<ObjectId>();
+        var metadata = Streams(Stream("user.tag", 1)) with
+        {
+            ExtendedAttributes = [new ExtendedAttributeEntry("user.tag"u8.ToArray(), "own"u8.ToArray())],
+        };
+
+        var left = await AlternateStreams.WriteBackAsAttributesAsync(file, metadata, Reads(read), namespaced: true, CancellationToken.None);
+
+        var why = Assert.ContainsSingle(left);
+        Assert.Contains("'user.tag'", why, StringComparison.Ordinal);
+        Assert.Contains("own captured attribute", why, StringComparison.Ordinal);
+        Assert.IsEmpty(read);
+    }
+
+    [TestMethod]
+    public async Task WriteBackAsAttributesAsync_AStreamWhoseContentWillNotRead_IsNotWritten_AndSaysWhy()
+    {
+        var left = await AlternateStreams.WriteBackAsAttributesAsync(
+            Carrier(),
+            Streams(Stream("user.origin", 1)),
+            (_, _) => ValueTask.FromResult<(byte[]?, string?)>((null, "its record read AuthenticationFailed")),
+            namespaced: true,
+            CancellationToken.None);
+
+        var why = Assert.ContainsSingle(left);
+        Assert.Contains("'user.origin'", why, StringComparison.Ordinal);
+        Assert.Contains("its record read AuthenticationFailed", why, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux refuses an attribute named in no namespace")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task WriteBackAsAttributesAsync_OnLinux_AnAttributeTheVolumeRefuses_SaysSo()
+    {
+        var left = await AlternateStreams.WriteBackAsAttributesAsync(
+            Carrier(), Streams(Stream("Zone.Identifier", 1)), Reads([]), namespaced: false, CancellationToken.None);
+
+        var why = Assert.ContainsSingle(left);
+        Assert.Contains("'Zone.Identifier'", why, StringComparison.Ordinal);
+        Assert.Contains("the volume refused it", why, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task WriteBackOnThisPlatformAsync_CallsStoodInForThePlatforms_AreGivenEveryStream()
+    {
+        var calls = new Held();
+
+        var left = await AlternateStreams.WriteBackOnThisPlatformAsync(
+            "carrier.bin", Streams(Stream("Zone.Identifier", 1), Stream("notes", 2)), Reads([]), calls, CancellationToken.None);
+
+        Assert.IsNotNull(left);
+        Assert.IsEmpty(left);
+        SequenceAssert.AreEqual(ContentOf(1), calls.Streams[("carrier.bin", "Zone.Identifier")]);
+        SequenceAssert.AreEqual(ContentOf(2), calls.Streams[("carrier.bin", "notes")]);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps alternate data streams")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task WriteBackOnThisPlatformAsync_OnWindows_WritesEachStreamOntoTheFile()
+    {
+        var file = Carrier();
+
+        var left = await AlternateStreams.WriteBackOnThisPlatformAsync(
+            file, Streams(Stream("notes", 2)), Reads([]), calls: null, CancellationToken.None);
+
+        Assert.IsNotNull(left);
+        Assert.IsEmpty(left);
+        SequenceAssert.AreEqual(ContentOf(2), File.ReadAllBytes(file + ":notes"));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task WriteBackOnThisPlatformAsync_OnPosix_KeepsAStreamInTheUserNamespaceAsItsAttribute_AndMakesNoFileBeside()
+    {
+        var file = Carrier();
+
+        var left = await AlternateStreams.WriteBackOnThisPlatformAsync(
+            file, Streams(Stream("user.origin", 1)), Reads([]), calls: null, CancellationToken.None);
+
+        Assert.IsNotNull(left);
+        Assert.IsEmpty(left);
+        SequenceAssert.AreEqual(ContentOf(1), Xattr.Get(file, "user.origin"));
+        Assert.AreEqual("carrier.bin", Path.GetFileName(Assert.ContainsSingle(Directory.GetFiles(_root))));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux takes a file's own attribute only in its user namespace")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task WriteBackOnThisPlatformAsync_OnLinux_NamesAStreamOutsideTheUserNamespace()
+    {
+        var left = await AlternateStreams.WriteBackOnThisPlatformAsync(
+            Carrier(), Streams(Stream("Zone.Identifier", 1)), Reads([]), calls: null, CancellationToken.None);
+
+        Assert.IsNotNull(left);
+        Assert.Contains("user namespace", Assert.ContainsSingle(left), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.MacOs, "macOS takes an attribute of any name")]
+    [PlatformTrait(TestPlatforms.MacOs)]
+    public async Task WriteBackOnThisPlatformAsync_OnMacOs_KeepsAStreamOfAnyNameAsAnAttribute()
+    {
+        var file = Carrier();
+
+        var left = await AlternateStreams.WriteBackOnThisPlatformAsync(
+            file, Streams(Stream("Zone.Identifier", 1)), Reads([]), calls: null, CancellationToken.None);
+
+        Assert.IsNotNull(left);
+        Assert.IsEmpty(left);
+        SequenceAssert.AreEqual(ContentOf(1), Xattr.Get(file, "Zone.Identifier"));
+    }
+
     public void Dispose()
     {
         try
@@ -209,6 +370,15 @@ public sealed class AlternateStreamsTests : IDisposable
     private static ObjectId IdOf(byte seed) => ObjectId.FromBytes(Enumerable.Repeat(seed, 32).ToArray());
 
     private static byte[] ContentOf(byte seed) => Enumerable.Repeat((byte)(seed + 0x40), 17).ToArray();
+
+    private static EntryMetadata Streams(params AlternateStreamEntry[] streams) => new() { AlternateStreams = streams };
+
+    private string Carrier()
+    {
+        var file = Path.Combine(_root, "carrier.bin");
+        File.WriteAllText(file, "main");
+        return file;
+    }
 
     private static AlternateStreamEntry Stream(string name, byte seed) =>
         new(Encoding.UTF8.GetBytes(name), IdOf(seed), (ulong)ContentOf(seed).Length);

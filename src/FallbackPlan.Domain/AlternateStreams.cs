@@ -178,6 +178,104 @@ public static class AlternateStreams
         return left;
     }
 
+    /// <summary>
+    /// Writes each stream <paramref name="metadata"/> carries onto
+    /// <paramref name="file"/> as the extended attribute of its name, holding
+    /// its content as <paramref name="read"/> gives it: the form a platform
+    /// that keeps no streams and writes attributes keeps them in (ADR-0179).
+    /// A stream with no name in the user namespace where names take one, or
+    /// whose name the file's own captured attribute has, is neither read nor
+    /// written; that attribute is the file's own here, and is written after.
+    /// </summary>
+    /// <param name="file">A file whose content has landed and verified.</param>
+    /// <param name="metadata">What it was captured with: its streams, and its own attributes.</param>
+    /// <param name="read">A stream's verified content by its object identifier, or why it will not read.</param>
+    /// <param name="namespaced">Whether the platform takes an attribute's name only in a namespace.</param>
+    /// <param name="cancellationToken">Stops the reads.</param>
+    /// <returns>Why each stream that was not kept was not, in order; empty where every one was.</returns>
+    public static async ValueTask<IReadOnlyList<string>> WriteBackAsAttributesAsync(
+        string file,
+        EntryMetadata metadata,
+        Func<ObjectId, CancellationToken, ValueTask<(byte[]? Content, string? Unread)>> read,
+        bool namespaced,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(file);
+        ThrowHelper.ThrowIfNull(metadata);
+        ThrowHelper.ThrowIfNull(read);
+
+        List<string> left = [];
+        foreach (var stream in metadata.AlternateStreams)
+        {
+            var name = Encoding.UTF8.GetString(stream.Name.Span);
+            if (MetadataRules.RefusedStreamAsAttribute(stream.Name.Span, namespaced) is { } refused)
+            {
+                left.Add($"'{name}' was not kept as an attribute: {refused}");
+                continue;
+            }
+
+            if (metadata.ExtendedAttributes.Any(attribute => attribute.Name.Span.SequenceEqual(stream.Name.Span)))
+            {
+                left.Add($"'{name}' was not kept as an attribute: the file's own captured attribute has its name");
+                continue;
+            }
+
+            var (content, unread) = await read(stream.ObjectId, cancellationToken).ConfigureAwait(false);
+            if (content is null)
+            {
+                left.Add($"'{name}' was not kept as an attribute: {unread}");
+                continue;
+            }
+
+            if (!ExtendedAttributes.TrySet(file, stream.Name.Span, content))
+            {
+                left.Add($"'{name}' was not kept as an attribute: the volume refused it");
+            }
+        }
+
+        return left;
+    }
+
+    /// <summary>
+    /// Writes each stream <paramref name="metadata"/> carries onto
+    /// <paramref name="file"/> in the form this platform keeps them in: as
+    /// streams through <paramref name="calls"/> or Windows' own
+    /// (<see cref="WriteBackAsync"/>), or as attributes of the same names on
+    /// Linux and macOS (<see cref="WriteBackAsAttributesAsync"/>). The rule
+    /// the recovery tool and the single-file restore write a file's streams
+    /// by (ADR-0179 Amendment 1).
+    /// </summary>
+    /// <param name="file">A file whose content has landed and verified.</param>
+    /// <param name="metadata">What it was captured with.</param>
+    /// <param name="read">A stream's verified content by its object identifier, or why it will not read.</param>
+    /// <param name="calls">Calls a case stands in for a platform that keeps streams, or null for this platform's own.</param>
+    /// <param name="cancellationToken">Stops the reads.</param>
+    /// <returns>
+    /// Why each stream that did not land did not, in order; empty where every
+    /// one did; null where this platform keeps them in no form, and none was
+    /// asked for.
+    /// </returns>
+    public static async ValueTask<IReadOnlyList<string>?> WriteBackOnThisPlatformAsync(
+        string file,
+        EntryMetadata metadata,
+        Func<ObjectId, CancellationToken, ValueTask<(byte[]? Content, string? Unread)>> read,
+        IAlternateStreams? calls,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        if (calls is not null || CanWrite)
+        {
+            return await WriteBackAsync(file, metadata.AlternateStreams, read, calls ?? OfThisPlatform, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return MetadataRules.KeepsStreamsAsAttributes(EntryKind.File, CanWrite, ExtendedAttributes.CanSet)
+            ? await WriteBackAsAttributesAsync(file, metadata, read, ExtendedAttributes.TakesNamespaces, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
+    }
+
     private sealed class Platform : IAlternateStreams
     {
         public byte[]? Read(string file, string name, ulong length)

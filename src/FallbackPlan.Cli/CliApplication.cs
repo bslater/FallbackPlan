@@ -1022,29 +1022,30 @@ public static class CliApplication
             }
 
             // A file's alternate streams, by the rule the recovery tool writes
-            // them by, and before the times, which writing one moves
-            // (ADR-0174 Amendment 2). Where the platform keeps none, none is
+            // them by, in the form the platform keeps them in, and before the
+            // times, which writing one moves (ADR-0174 Amendment 2; ADR-0179
+            // Amendment 1). Where the platform keeps them in no form, none is
             // asked for, and they are listed not applied.
             async ValueTask<bool> WriteBackStreamsAsync(
                 RepositoryReader reader, string outputPath, EntryMetadata metadata, CancellationToken cancellationToken)
             {
-                if (!AlternateStreams.CanWrite || metadata.AlternateStreams.Count == 0)
+                if (metadata.AlternateStreams.Count == 0
+                    || await AlternateStreams.WriteBackOnThisPlatformAsync(
+                        outputPath,
+                        metadata,
+                        async (objectId, token) =>
+                        {
+                            var read = await reader.ReadSegmentAsync(objectId, token).ConfigureAwait(false);
+                            return read.Outcome == RecordReadOutcome.Ok
+                                ? (read.Plaintext, null)
+                                : ((byte[]?)null, $"its record read {read.Outcome}");
+                        },
+                        calls: null,
+                        cancellationToken).ConfigureAwait(false) is not { } left)
                 {
                     return false;
                 }
 
-                var left = await AlternateStreams.WriteBackAsync(
-                    outputPath,
-                    metadata.AlternateStreams,
-                    async (objectId, token) =>
-                    {
-                        var read = await reader.ReadSegmentAsync(objectId, token).ConfigureAwait(false);
-                        return read.Outcome == RecordReadOutcome.Ok
-                            ? (read.Plaintext, null)
-                            : ((byte[]?)null, $"its record read {read.Outcome}");
-                    },
-                    AlternateStreams.OfThisPlatform,
-                    cancellationToken).ConfigureAwait(false);
                 foreach (var why in left)
                 {
                     output.WriteLine($"alternate stream {why}");

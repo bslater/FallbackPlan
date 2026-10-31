@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: on a target that writes extended attributes and keeps no alternate streams, a file's streams come back as attributes of the same names, and each that does not is named), FR-RST-003 (amended: the plan names the files with a stream Linux keeps no attribute of)
+**Requirements:** FR-RST-004 (amended: on a target that writes extended attributes and keeps no alternate streams, a file's streams come back as attributes of the same names, and each that does not is named), FR-RST-003 (amended: the plan names the files with a stream Linux keeps no attribute of), FR-RST-004 (amended by Amendment 1: so do the recovery tool and the single-file restore)
 **Related:** [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) (a file's streams where the target keeps them, read and proved like a segment, after the content and before the times), [ADR-0177](0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md) (the other way: a file's attributes as streams of their names on Windows, which left this undone), [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) (the attributes a restore writes where the target writes them, and which namespaces Linux gives whom), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (alternate data streams degraded on Linux and macOS)
 
 **Built:**
@@ -56,6 +56,8 @@ On such a target a file's streams count applied, and the planner no longer decla
 ## What this does not do
 
 - **The recovery tool and `restore-file`.** They write a file's streams back by the shared write-back where the target keeps streams, and note them as not written elsewhere. Keeping them as attributes there is the next record's.
+
+  > **2026-10 ([Amendment 1](#amendment-1-2026-10--the-recovery-tool-and-the-single-file-restore-keep-streams-as-attributes-too)).** Taken up: both keep them as attributes by this rule, through one Domain helper the executor shares.
 - **Rename a stream into the user namespace.** A stream named outside it is named, not given a `user.` name it never had: that name would not round-trip.
 - **Judge a value's size in the plan.** A volume that takes no attribute that large refuses it at the write, which the receipt names.
 
@@ -64,8 +66,27 @@ On such a target a file's streams count applied, and the planner no longer decla
 - **Prefix every stream's name with `user.` on Linux.** Rejected. It would keep `Zone.Identifier`, but under a name it never had. An attribute ADR-0177 kept as a stream would come back as `user.user.tag`.
 - **Keep a stream as a file beside the restored one.** Rejected. It writes a name the snapshot never had, which a later backup would capture as a file of its own.
 
+## Amendment 1 (2026-10) — the recovery tool and the single-file restore keep streams as attributes too
+
+The record left the standalone recovery tool and the command line's `restore-file` writing a file's streams only where the platform keeps streams ([ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) Amendments 1 and 2). On Linux and macOS each counted every stream not applied, so a file recovered there lost what the engine's restore of the same snapshot gives back.
+
+**Decision.** The rule of §§1–4 moves into Domain, and all three writers keep streams as attributes by it:
+
+- **`Domain/AlternateStreams` writes a file's streams as attributes of their names,** holding the content the caller reads. Where names take a namespace, one outside the user namespace is neither read nor written, and is named (§2); so is one whose name the file's own captured attribute has (§3). A volume that refuses one is named too (§4);
+- **it picks the form this platform keeps streams in:** streams on Windows, through ADR-0174's helper, attributes on Linux and macOS, and none on a platform that keeps neither, where the streams are counted not applied as before. `Domain/ExtendedAttributes` says Linux is the platform whose names take a namespace, and the restore profile reads it from there;
+- **the recovery tool and `restore-file` call it** once the file has landed and before its times, and say each stream that did not land in their notes and output, as for a stream;
+- **the executor writes its attributes through the same helper,** feeding it the reader that proves a stream like a segment. Its streams form stays its own, since it also leaves a stream a resume finds standing.
+
+**Built:** `Domain/AlternateStreams`; `Domain/ExtendedAttributes`; `Recovery/RecoverySession`; `Cli/CliApplication`; `Restore/RestoreExecutor`:
+
+- `Domain.Tests/AlternateStreamsTests`: Linux alone takes names in a namespace. On Linux and macOS each stream is kept as the attribute of its name as it reads. One outside the user namespace is neither read nor written where names take one, and is named, while the next lands. One the file's own attribute names is neither read nor written, and is named. One that will not read says why, and on Linux one the volume refuses says so. The platform's form gives calls stood in for it every stream; on Windows it writes streams; on Linux and macOS it keeps a stream in the user namespace as its attribute, making no file beside; on Linux it names one outside, and on macOS it keeps one of any name;
+- `Repository.Tests/RecoveryAlternateStreamsTests`, on Linux and macOS: a stream in the user namespace lands as its attribute and is not counted; on Linux one outside it is noted and counted while the rest land; on macOS one of any name lands; a stream the file's own attribute names leaves that attribute in place, noted.
+
+Off Windows no capture carries a stream, so `restore-file`'s own path reaches the attribute form only through a snapshot captured on Windows, which its suite cannot make there. The Domain cases hold the form it calls; its Windows case still runs on CI.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. On a target that writes extended attributes and keeps no alternate streams, the executor keeps each of a file's streams as the attribute of its name, before the file's own attributes and permissions; on Linux one outside the user namespace is named and not written, and one whose name the file's own attribute has is left to it; the plan counts them applied, and declares on a line of its own the files with a stream Linux keeps no attribute of. `Domain/MetadataRules`; `Restore/RestoreExecutor`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Domain.Tests/StreamsAsAttributesTests`; `Repository.Tests/RestoreAlternateStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
+| 2026-10 | Amended | Amendment 1: the recovery tool and `restore-file` keep a file's streams as attributes on Linux and macOS by this rule, through one Domain helper that picks the platform's form and that the executor's attribute write now shares. `Domain/AlternateStreams`; `Domain/ExtendedAttributes`; `Recovery/RecoverySession`; `Cli/CliApplication`; `Domain.Tests/AlternateStreamsTests`; `Repository.Tests/RecoveryAlternateStreamsTests` |

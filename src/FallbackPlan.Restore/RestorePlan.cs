@@ -212,7 +212,7 @@ public sealed record RestoreTargetProfile
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         HoldsSecurityPrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Security),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
-        AttributesTakeNamespaces = OperatingSystem.IsLinux(),
+        AttributesTakeNamespaces = ExtendedAttributes.TakesNamespaces,
         SupportsCompression = FileCompression.CanSet,
         InheritedAccessAt = WindowsAccess.InheritedByAFileAt,
         InheritedFolderAccessAt = WindowsAccess.InheritedByAFolderAt,
