@@ -73,9 +73,18 @@ public sealed record MetadataTarget
     /// Whether the account the restore runs as holds SeRestorePrivilege,
     /// which lets it give a file an owner it is not. A descriptor whose owner
     /// is refused without it is written again with it enabled, for that write
-    /// alone (<see cref="WindowsPrivileges.RunWith"/>; ADR-0176 Amendment 1).
+    /// alone (<see cref="WindowsPrivileges.RunWith(string, Func{bool})"/>; ADR-0176 Amendment 1).
     /// </summary>
     public bool HoldsRestorePrivilege { get; init; }
+
+    /// <summary>
+    /// Whether the account the restore runs as holds SeSecurityPrivilege,
+    /// which lets it write a file's audit list (SACL). A descriptor's audit
+    /// list is written with it enabled, for that write alone; without it the
+    /// rest of the descriptor lands and the audit list is named (ADR-0176
+    /// Amendment 3).
+    /// </summary>
+    public bool HoldsSecurityPrivilege { get; init; }
 
     /// <summary>
     /// Whether this installation captured what is restored, so that a Linux
@@ -102,6 +111,7 @@ public sealed record MetadataTarget
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         SupportsCompression = FileCompression.CanSet,
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
+        HoldsSecurityPrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Security),
         Account = RestoreAccount.OfThisProcess(),
     };
 }

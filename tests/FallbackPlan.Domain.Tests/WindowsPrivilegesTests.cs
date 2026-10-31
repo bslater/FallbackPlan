@@ -11,7 +11,8 @@ namespace FallbackPlan.Domain.Tests;
 /// the process's own token and every other thread are as they were. A
 /// privilege the account does not hold is not enabled, and the call is not
 /// made, nor is it on a thread already impersonating, which reverting would
-/// end.
+/// end. Several are enabled together for one call the same way (ADR-0176
+/// Amendment 3).
 /// </summary>
 [TestClass]
 public sealed class WindowsPrivilegesTests
@@ -118,5 +119,39 @@ public sealed class WindowsPrivilegesTests
         Assert.IsFalse(answer);
         Assert.IsFalse(made);
         Assert.IsTrue(impersonatingAfter);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "only Windows grants an account privileges by name")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public void OffWindows_SeveralPrivileges_AreHeldByNoOne_AndNothingIsMadeUnderThem()
+    {
+        var made = false;
+
+        Assert.IsFalse(WindowsPrivileges.Holds(WindowsPrivileges.Security));
+        Assert.IsFalse(WindowsPrivileges.RunWith([WindowsPrivileges.Restore, WindowsPrivileges.Security], () => made = true));
+        Assert.IsFalse(made);
+    }
+
+    [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process holds the privileges a restore writes an owner and an audit list with")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void OnWindows_SeveralPrivileges_AreEachEnabledForTheCallAlone()
+    {
+        var before = (WindowsPrivileges.IsEnabled(WindowsPrivileges.Restore), WindowsPrivileges.IsEnabled(WindowsPrivileges.Security));
+        var inside = (false, false);
+
+        var answer = WindowsPrivileges.RunWith([WindowsPrivileges.Restore, WindowsPrivileges.Security], () =>
+        {
+            inside = (WindowsPrivileges.IsEnabled(WindowsPrivileges.Restore), WindowsPrivileges.IsEnabled(WindowsPrivileges.Security));
+            return true;
+        });
+
+        Assert.IsTrue(WindowsPrivileges.Holds(WindowsPrivileges.Security));
+        Assert.IsTrue(answer);
+        Assert.AreEqual((true, true), inside);
+        Assert.IsNull(WindowsIdentity.GetCurrent(ifImpersonating: true));
+        Assert.AreEqual(before, (WindowsPrivileges.IsEnabled(WindowsPrivileges.Restore), WindowsPrivileges.IsEnabled(WindowsPrivileges.Security)));
     }
 }

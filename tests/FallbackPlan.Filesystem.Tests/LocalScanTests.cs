@@ -12,7 +12,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// byte-sorted traversal, correct classification, metadata capture,
 /// rules-v1 pruning with excluded-is-not-failed semantics, symlinks never
 /// followed, hardlink identity, and the revalidation stat. Platform-specific
-/// behaviour is skipped where the platform lacks it, never faked.
+/// behaviour is skipped where the platform lacks it, never faked. On Windows
+/// a file's audit list is captured with its descriptor where the account
+/// holds SeSecurityPrivilege (FR-RST-004, ADR-0176 Amendment 3).
 /// </summary>
 [TestClass]
 public sealed partial class LocalScanTests : IDisposable
@@ -129,6 +131,34 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.IsNull(events.OfType<ScanEvent.Leaf>().Single().Entry.Metadata.WindowsSecurityDescriptor);
         Assert.IsNull(
             events.OfType<ScanEvent.EnterDirectory>().Single(enter => enter.Entry.RelativePath == "docs").Entry.Metadata.WindowsSecurityDescriptor);
+    }
+
+    [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process holds the privilege an audit list is read with")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_CapturesAFilesAuditList_WhereTheAccountHoldsTheSecurityPrivilege()
+    {
+        // The audit list is read with SeSecurityPrivilege enabled for that
+        // read alone (ADR-0176 Amendment 3); an account without the privilege
+        // captures the descriptor as before, without it.
+        var path = Write("docs/audited.txt");
+        var info = new FileInfo(path);
+        var security = info.GetAccessControl(System.Security.AccessControl.AccessControlSections.Audit);
+        security.AddAuditRule(new System.Security.AccessControl.FileSystemAuditRule(
+            new System.Security.Principal.SecurityIdentifier("S-1-1-0"),
+            System.Security.AccessControl.FileSystemRights.Delete,
+            System.Security.AccessControl.AuditFlags.Success));
+        info.SetAccessControl(security);
+
+        var events = await ScanAsync();
+
+        var descriptor = events.OfType<ScanEvent.Leaf>().Single().Entry.Metadata.WindowsSecurityDescriptor;
+        Assert.IsNotNull(descriptor);
+        var read = WindowsSecurityDescriptor.Read(descriptor.Value.Span);
+        Assert.IsNotNull(read);
+        Assert.IsTrue(read.SaclPresent);
+        Assert.Contains("S-1-1-0", read.AuditedAccounts);
     }
 
     [TestMethod]

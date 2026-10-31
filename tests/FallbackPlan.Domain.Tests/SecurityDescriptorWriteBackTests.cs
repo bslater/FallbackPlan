@@ -16,12 +16,16 @@ namespace FallbackPlan.Domain.Tests;
 /// handed to a stranger's access. Where the account may not give the owner,
 /// the DACL still lands. Where it holds SeRestorePrivilege, it gives an owner
 /// it is not, with the privilege enabled for that write alone (ADR-0176
-/// Amendment 1).
+/// Amendment 1). A descriptor's audit list (SACL) lands with it where the
+/// account holds SeSecurityPrivilege, enabled for that write alone; where it
+/// does not, the audit list is named and the rest still lands (ADR-0176
+/// Amendment 3).
 /// </summary>
 [TestClass]
 public sealed class SecurityDescriptorWriteBackTests : IDisposable
 {
     private const string Stranger = "S-1-5-21-1-2-3-4242";
+    private const string Everyone = "S-1-1-0";
 
     private static readonly DateTime Modified = new(2024, 8, 2, 11, 15, 30, 250, DateTimeKind.Utc);
 
@@ -41,6 +45,77 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
         {
             Assert.IsFalse(MetadataTarget.ForLocalPlatform().HoldsRestorePrivilege);
         }
+    }
+
+    [TestMethod]
+    public void ThisPlatform_HoldsTheSecurityPrivilege_OnlyWhereItsAccountDoes()
+    {
+        Assert.AreEqual(WindowsPrivileges.Holds(WindowsPrivileges.Security), MetadataTarget.ForLocalPlatform().HoldsSecurityPrivilege);
+        Assert.IsFalse(new MetadataTarget { SupportsPosixMetadata = false }.HoldsSecurityPrivilege);
+    }
+
+    [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process holds the privilege an audit list is written with")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Write_OnWindows_ADescriptorWithAnAuditList_LandsWithIt_WhereTheAccountHoldsTheSecurityPrivilege()
+    {
+        var source = Audited("audited.bin");
+        var file = Landed("restored.bin");
+
+        var written = WriterHoldingSecurity(true).Write(file, new EntryMetadata { WindowsSecurityDescriptor = CapturedWithAudit(source) });
+
+        Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor), written.Detail);
+        Assert.AreEqual(Dacl(source), Dacl(file));
+        Assert.AreEqual(Audits(source), Audits(file));
+        Assert.Contains(Everyone, Audits(file), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process can give a file an audit list to capture")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Write_OnWindows_AnAuditList_IsNamed_AndTheRestLands_WhereTheAccountHoldsNoSecurityPrivilege()
+    {
+        var source = Audited("audited.bin");
+        var file = Landed("restored.bin");
+
+        var written = WriterHoldingSecurity(false).Write(file, new EntryMetadata { WindowsSecurityDescriptor = CapturedWithAudit(source) });
+
+        Assert.IsFalse(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor));
+        Assert.IsNotNull(written.Detail);
+        Assert.Contains("audit list", written.Detail, StringComparison.Ordinal);
+        Assert.Contains("SeSecurityPrivilege", written.Detail, StringComparison.Ordinal);
+        Assert.AreEqual(Dacl(source), Dacl(file));
+        Assert.DoesNotContain(Everyone, Audits(file), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's security descriptor")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Write_OnWindows_AnAuditListNamingAnAccountThisMachineDoesNotKnow_IsNamed_AndTheRestLands()
+    {
+        // Said to hold the privilege, so only the stranger keeps the audit
+        // list back: were it tried, a process that does not hold it would
+        // be refused the whole write.
+        var source = Landed("source.bin");
+        var security = new FileInfo(source).GetAccessControl();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl, AccessControlType.Allow));
+        new FileInfo(source).SetAccessControl(security);
+        var captured = new FileInfo(source).GetAccessControl();
+        captured.AddAuditRule(new FileSystemAuditRule(new SecurityIdentifier(Stranger), FileSystemRights.Delete, AuditFlags.Success));
+        var file = Landed("restored.bin");
+
+        var written = WriterHoldingSecurity(true).Write(
+            file, new EntryMetadata { WindowsSecurityDescriptor = captured.GetSecurityDescriptorBinaryForm() });
+
+        Assert.IsFalse(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor));
+        Assert.IsNotNull(written.Detail);
+        Assert.Contains("audit list not applied", written.Detail, StringComparison.Ordinal);
+        Assert.Contains(Stranger, written.Detail, StringComparison.Ordinal);
+        Assert.AreEqual(Dacl(source), Dacl(file));
     }
 
     [TestMethod]
@@ -194,6 +269,28 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a file's security descriptor")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void Write_OnWindows_AnOwnerTheAccountMayNotGive_WithAnAuditList_LeavesTheDaclLanded_AndSaysNeitherLanded()
+    {
+        var (source, descriptor) = GivenAway("given-away.bin", audited: true);
+        var file = Landed("restored.bin");
+        var writer = new MetadataWriter(MetadataTarget.ForLocalPlatform() with
+        {
+            SupportsSecurityDescriptors = true, HoldsRestorePrivilege = false, HoldsSecurityPrivilege = false,
+        });
+
+        var written = writer.Write(file, new EntryMetadata { WindowsSecurityDescriptor = descriptor });
+
+        Assert.IsFalse(written.Applied.HasFlag(CapturedMetadata.SecurityDescriptor));
+        Assert.IsNotNull(written.Detail);
+        Assert.Contains("owner and group not applied", written.Detail, StringComparison.Ordinal);
+        Assert.Contains("nor its audit list", written.Detail, StringComparison.Ordinal);
+        Assert.AreEqual(Dacl(source), Dacl(file));
+    }
+
+    [TestMethod]
     [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process holds the privilege a restore gives an owner with")]
     [PlatformTrait(TestPlatforms.Windows)]
     [SupportedOSPlatform("windows")]
@@ -264,13 +361,47 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
     private static MetadataWriter Writer(bool holdsRestorePrivilege) =>
         new(MetadataTarget.ForLocalPlatform() with { SupportsSecurityDescriptors = true, HoldsRestorePrivilege = holdsRestorePrivilege });
 
+    private static MetadataWriter WriterHoldingSecurity(bool holdsSecurityPrivilege) =>
+        new(MetadataTarget.ForLocalPlatform() with { SupportsSecurityDescriptors = true, HoldsSecurityPrivilege = holdsSecurityPrivilege });
+
+    /// <summary>
+    /// A file whose protected DACL grants this account everything, and whose
+    /// audit list records Everyone deleting it. .NET reads and writes an
+    /// audit list with SeSecurityPrivilege enabled for the call.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private string Audited(string name)
+    {
+        var path = Landed(name);
+        var security = new FileInfo(path).GetAccessControl(AccessControlSections.Access | AccessControlSections.Audit);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.AddAuditRule(new FileSystemAuditRule(new SecurityIdentifier(Everyone), FileSystemRights.Delete, AuditFlags.Success));
+        new FileInfo(path).SetAccessControl(security);
+        return path;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static byte[] CapturedWithAudit(string path) =>
+        new FileInfo(path).GetAccessControl(AccessControlSections.All).GetSecurityDescriptorBinaryForm();
+
+    /// <summary>A file's audit entries, each with its account, rights and flags.</summary>
+    [SupportedOSPlatform("windows")]
+    private static string Audits(string path) =>
+        string.Join("; ", new FileInfo(path).GetAccessControl(AccessControlSections.Audit)
+            .GetAuditRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+            .Cast<FileSystemAuditRule>()
+            .Select(rule => $"{rule.IdentityReference} {rule.FileSystemRights} {rule.AuditFlags}"));
+
     /// <summary>
     /// A file whose protected DACL grants this account everything, and a
     /// descriptor captured from it that names Local Service as its owner,
-    /// though the file itself stays this account's.
+    /// though the file itself stays this account's, and, where
+    /// <paramref name="audited"/> says so, carries an audit list built in
+    /// memory, which needs no privilege.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    private (string Source, byte[] Descriptor) GivenAway(string name)
+    private (string Source, byte[] Descriptor) GivenAway(string name, bool audited = false)
     {
         var source = Landed(name);
         var security = new FileInfo(source).GetAccessControl();
@@ -279,6 +410,11 @@ public sealed class SecurityDescriptorWriteBackTests : IDisposable
         new FileInfo(source).SetAccessControl(security);
         var captured = new FileInfo(source).GetAccessControl();
         captured.SetOwner(new SecurityIdentifier(WellKnownSidType.LocalServiceSid, null));
+        if (audited)
+        {
+            captured.AddAuditRule(new FileSystemAuditRule(new SecurityIdentifier(Everyone), FileSystemRights.Delete, AuditFlags.Success));
+        }
+
         return (source, captured.GetSecurityDescriptorBinaryForm());
     }
 

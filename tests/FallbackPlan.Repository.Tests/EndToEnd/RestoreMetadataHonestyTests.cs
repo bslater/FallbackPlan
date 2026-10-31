@@ -612,6 +612,76 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Plan_AnAuditListTheAccountMayNotWrite_IsDeclaredOnItsOwnLine_WhereItHoldsNoSecurityPrivilege()
+    {
+        // ADR-0176 Amendment 3: the rest of each descriptor is judged as before.
+        const string Everyone = "S-1-1-0";
+        var source = new FakeFileSystemSource();
+        var dacl = SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Ana, FullControl));
+        source.AddFile("docs/audited.bin", Deterministic(700, 66)).Metadata = new EntryMetadata
+        {
+            ModifiedAt = Modified,
+            WindowsSecurityDescriptor = SecurityDescriptors.Build(
+                Ana, null, dacl, sacl: SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Audit, SecurityDescriptors.AuditSuccess, Everyone))),
+        };
+        source.AddFile("docs/plain.bin", Deterministic(700, 67)).Metadata = new EntryMetadata
+        {
+            ModifiedAt = Modified,
+            WindowsSecurityDescriptor = SecurityDescriptors.Build(Ana, null, dacl),
+        };
+        source.Folders["docs"] = new EntryMetadata
+        {
+            ModifiedAt = Modified,
+            WindowsSecurityDescriptor = SecurityDescriptors.Build(
+                Ana, null, dacl, sacl: SecurityDescriptors.Acl(SecurityDescriptors.Ace(SecurityDescriptors.Audit, SecurityDescriptors.AuditSuccess, Everyone))),
+        };
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xE4);
+        var keeps = Posix with { SupportsSecurityDescriptors = true, KnowsAccount = _ => true, MayOwnBy = _ => true };
+        var declared = RestoreMetadata.Declare(plan, facts, keeps);
+
+        var audits = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "security-descriptor-audit-lists"));
+        Assert.Contains("1 file(s)", audits.Detail, StringComparison.Ordinal);
+        Assert.Contains("1 folder(s)", audits.Detail, StringComparison.Ordinal);
+        Assert.Contains("SeSecurityPrivilege", audits.Detail, StringComparison.Ordinal);
+        Assert.Contains("Their audit lists will not be applied", audits.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptors", declared);
+
+        // An owner the account may not give is declared on its own line too:
+        // each line says what of the descriptor will not land.
+        var refused = RestoreMetadata.Declare(plan, facts, keeps with { MayOwnBy = account => account == Stranger });
+        Assert.Contains("2 file(s)", Assert.ContainsSingle(
+            refused.Where(degradation => degradation.Capability == "security-descriptor-owners")).Detail, StringComparison.Ordinal);
+        Assert.Contains("1 file(s)", Assert.ContainsSingle(
+            refused.Where(degradation => degradation.Capability == "security-descriptor-audit-lists")).Detail, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            degradation => degradation.Capability.StartsWith("security-descriptor", StringComparison.Ordinal),
+            RestoreMetadata.Declare(plan, facts, keeps with { HoldsSecurityPrivilege = true }));
+
+        // An audit list naming an account the target does not know is not
+        // written whatever the privilege, and the rest of its descriptor
+        // still is: it grants nothing, so it holds back nothing else.
+        foreach (var holds in new[] { false, true })
+        {
+            var unknown = RestoreMetadata.Declare(
+                plan, facts, keeps with { KnowsAccount = account => account != Everyone, HoldsSecurityPrivilege = holds });
+            var strangers = Assert.ContainsSingle(unknown.Where(degradation => degradation.Capability == "security-descriptor-audit-accounts"));
+            Assert.Contains("1 file(s)", strangers.Detail, StringComparison.Ordinal);
+            Assert.Contains("1 folder(s)", strangers.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptor-accounts", unknown);
+            Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptor-audit-lists", unknown);
+        }
+
+        // A descriptor not written at all, for an account the rest of it
+        // names, is declared on that line alone.
+        var unwritten = RestoreMetadata.Declare(plan, facts, keeps with { KnowsAccount = account => account != Ana });
+        Assert.Contains("2 file(s)", Assert.ContainsSingle(
+            unwritten.Where(degradation => degradation.Capability == "security-descriptor-accounts")).Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability.StartsWith("security-descriptor-audit", StringComparison.Ordinal), unwritten);
+    }
+
+    [TestMethod]
     public async Task Plan_AnAttributeOnlyLinuxsKernelReads_IsDeclaredOnItsOwnLine_WhereAttributesAreKeptAsStreams()
     {
         var source = new FakeFileSystemSource();

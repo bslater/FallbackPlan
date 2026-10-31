@@ -37,6 +37,15 @@ public static class SecurityDescriptors
     /// <summary>The control bit of a DACL that takes nothing from its folder.</summary>
     public const ushort Protected = 0x1000;
 
+    /// <summary>The control bit of a SACL that takes nothing from its folder.</summary>
+    public const ushort AuditProtected = 0x2000;
+
+    /// <summary>An ACE that audits.</summary>
+    public const byte Audit = 0x02;
+
+    /// <summary>The flag of an audit ACE that records an access granted.</summary>
+    public const byte AuditSuccess = 0x40;
+
     /// <summary>The SID <paramref name="text"/> names, as <c>S-1-5-21-1-2-3-1001</c>, in its binary form.</summary>
     public static byte[] Sid(string text)
     {
@@ -119,23 +128,26 @@ public static class SecurityDescriptors
 
     /// <summary>
     /// A self-relative descriptor of <paramref name="owner"/>,
-    /// <paramref name="group"/> and <paramref name="dacl"/>, laid out in that
-    /// order after its header. A DACL said present but given as null is a
-    /// null DACL, which grants everyone everything.
+    /// <paramref name="group"/>, <paramref name="dacl"/> and
+    /// <paramref name="sacl"/>, laid out in that order after its header. A
+    /// DACL said present but given as null is a null DACL, which grants
+    /// everyone everything; a SACL given as null is none.
     /// </summary>
-    public static byte[] Build(string? owner, string? group, byte[]? dacl, ushort control = 0, bool daclPresent = true)
+    public static byte[] Build(string? owner, string? group, byte[]? dacl, ushort control = 0, bool daclPresent = true, byte[]? sacl = null)
     {
         var ownerSid = owner is null ? [] : Sid(owner);
         var groupSid = group is null ? [] : Sid(group);
         dacl ??= [];
-        var descriptor = new byte[20 + ownerSid.Length + groupSid.Length + dacl.Length];
+        var audit = sacl ?? [];
+        var descriptor = new byte[20 + ownerSid.Length + groupSid.Length + dacl.Length + audit.Length];
         descriptor[0] = 1;
         BinaryPrimitives.WriteUInt16LittleEndian(
-            descriptor.AsSpan(2), (ushort)(0x8000 | (daclPresent ? 0x0004 : 0) | control));
+            descriptor.AsSpan(2), (ushort)(0x8000 | (daclPresent ? 0x0004 : 0) | (sacl is null ? 0 : 0x0010) | control));
         var at = 20;
         at = Place(ownerSid, 4);
         at = Place(groupSid, 8);
-        Place(dacl, 16);
+        at = Place(dacl, 16);
+        Place(audit, 12);
         return descriptor;
 
         int Place(byte[] part, int offsetField)

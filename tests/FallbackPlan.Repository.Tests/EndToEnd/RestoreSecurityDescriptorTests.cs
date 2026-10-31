@@ -48,6 +48,16 @@ public sealed class RestoreSecurityDescriptorTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public void Profile_ForThisPlatform_HoldsTheSecurityPrivilege_OnlyWhereItsAccountDoes_AndPassesItToTheWriter()
+    {
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        Assert.AreEqual(WindowsPrivileges.Holds(WindowsPrivileges.Security), target.HoldsSecurityPrivilege);
+        Assert.IsTrue((target with { HoldsSecurityPrivilege = true }).Metadata.HoldsSecurityPrivilege);
+        Assert.IsFalse((target with { HoldsSecurityPrivilege = false }).Metadata.HoldsSecurityPrivilege);
+    }
+
+    [TestMethod]
     public void Profile_ForThisPlatform_HoldsTheRestorePrivilege_OnlyWhereItsAccountDoes_AndPassesItToTheWriter()
     {
         var target = RestoreTargetProfile.ForLocalPlatform();

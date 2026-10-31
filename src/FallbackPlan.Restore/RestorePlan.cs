@@ -94,6 +94,14 @@ public sealed record RestoreTargetProfile
     public bool HoldsRestorePrivilege { get; init; }
 
     /// <summary>
+    /// Whether the account the restore runs as holds SeSecurityPrivilege,
+    /// which the writer enables, for one write at a time, to write a file's
+    /// audit list (ADR-0176 Amendment 3). Where it does not, the plan names
+    /// the descriptors whose audit lists will not land.
+    /// </summary>
+    public bool HoldsSecurityPrivilege { get; init; }
+
+    /// <summary>
     /// Whether the account the restore runs as may make a SID a file's owner
     /// without SeRestorePrivilege: its own account, or a group its token
     /// marks as one it may own by. Where it holds no such privilege, the plan
@@ -162,6 +170,7 @@ public sealed record RestoreTargetProfile
         SupportsCompression = SupportsCompression,
         KnowsAccount = KnowsAccount,
         HoldsRestorePrivilege = HoldsRestorePrivilege,
+        HoldsSecurityPrivilege = HoldsSecurityPrivilege,
         CapturedHere = CapturedHere,
         Account = Account,
     };
@@ -182,6 +191,7 @@ public sealed record RestoreTargetProfile
         SupportsFileAttributes = OperatingSystem.IsWindows(),
         SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
+        HoldsSecurityPrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Security),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         SupportsCompression = FileCompression.CanSet,
         InheritedAccessAt = WindowsAccess.InheritedByAFileAt,

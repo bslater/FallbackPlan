@@ -74,12 +74,16 @@ public static partial class WindowsSecurity
     private const uint OwnerInformation = 0x1;
     private const uint GroupInformation = 0x2;
     private const uint DaclInformation = 0x4;
+    private const uint SaclInformation = 0x8;
+    private const uint UnprotectedSaclInformation = 0x1000_0000;
     private const uint UnprotectedDaclInformation = 0x2000_0000;
+    private const uint ProtectedSaclInformation = 0x4000_0000;
     private const uint ProtectedDaclInformation = 0x8000_0000;
 
     /// <summary>
     /// Writes <paramref name="descriptor"/> onto <paramref name="path"/>: its
-    /// DACL, and its owner and group where <paramref name="withOwner"/> says so.
+    /// DACL, its owner and group where <paramref name="withOwner"/> says so,
+    /// and its audit list where <paramref name="withAuditList"/> does.
     /// </summary>
     /// <param name="path">A file or a folder.</param>
     /// <param name="descriptor">The descriptor as captured, self-relative.</param>
@@ -87,13 +91,23 @@ public static partial class WindowsSecurity
     /// <param name="withOwner">Whether its owner and group are written too.</param>
     /// <param name="withRestorePrivilege">
     /// Whether the write is made with SeRestorePrivilege enabled, for it alone
-    /// (<see cref="WindowsPrivileges.RunWith"/>), so an owner the account is
+    /// (<see cref="WindowsPrivileges.RunWith(string, Func{bool})"/>), so an owner the account is
     /// not may be given. False where the account does not hold it.
+    /// </param>
+    /// <param name="withAuditList">
+    /// Whether its audit list (SACL) is written too, with SeSecurityPrivilege
+    /// enabled for the write alone (ADR-0176 Amendment 3). False where the
+    /// account does not hold it.
     /// </param>
     /// <returns>Whether the platform took it: false wherever it refuses.</returns>
     [SupportedOSPlatform("windows")]
     public static bool TryWrite(
-        string path, ReadOnlySpan<byte> descriptor, WindowsSecurityDescriptor read, bool withOwner, bool withRestorePrivilege = false)
+        string path,
+        ReadOnlySpan<byte> descriptor,
+        WindowsSecurityDescriptor read,
+        bool withOwner,
+        bool withRestorePrivilege = false,
+        bool withAuditList = false)
     {
         ThrowHelper.ThrowIfNullOrEmpty(path);
         ThrowHelper.ThrowIfNull(read);
@@ -114,10 +128,17 @@ public static partial class WindowsSecurity
             information |= DaclInformation | (read.DaclProtected ? ProtectedDaclInformation : UnprotectedDaclInformation);
         }
 
+        List<string> privileges = withRestorePrivilege ? [WindowsPrivileges.Restore] : [];
+        if (withAuditList && read.SaclPresent)
+        {
+            information |= SaclInformation | (read.SaclProtected ? ProtectedSaclInformation : UnprotectedSaclInformation);
+            privileges.Add(WindowsPrivileges.Security);
+        }
+
         var bytes = descriptor.ToArray();
         return information == 0
-            || (withRestorePrivilege
-                ? WindowsPrivileges.RunWith(WindowsPrivileges.Restore, () => SetFileSecurity(path, information, bytes))
+            || (privileges.Count > 0
+                ? WindowsPrivileges.RunWith(privileges, () => SetFileSecurity(path, information, bytes))
                 : SetFileSecurity(path, information, bytes));
     }
 
