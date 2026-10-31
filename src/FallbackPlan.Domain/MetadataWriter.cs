@@ -105,8 +105,9 @@ public sealed class MetadataWriter(MetadataTarget target)
 
         // Each alone, so a refusal leaves the rest. The access ACL is
         // remembered, because the permissions depend on whether it landed.
-        // Where the target keeps streams and no attributes, a file's go on
-        // as streams of the same names, before the times a stream moves.
+        // Where the target keeps streams and no attributes, a file's and a
+        // folder's go on as streams of the same names, before the times a
+        // stream moves.
         var native = target.SupportsExtendedAttributes && ExtendedAttributes.CanSet;
         var asStreams = MetadataRules.KeepsAttributesAsStreams(kind, target.SupportsAlternateStreams, native);
         var writes = native || asStreams;

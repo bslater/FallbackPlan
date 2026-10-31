@@ -334,14 +334,18 @@ public static class MetadataRules
 
     /// <summary>
     /// Whether a target keeps an entry's extended attributes as alternate
-    /// streams of the same names: a file's, where the target keeps streams
-    /// and writes no attributes of its own (ADR-0177).
+    /// streams of the same names: a file's (ADR-0177) or a folder's (ADR-0177
+    /// Amendment 2), where the target keeps streams and writes no attributes
+    /// of its own.
     /// </summary>
-    /// <param name="kind">The entry's kind; only a file carries streams.</param>
-    /// <param name="supportsAlternateStreams">Whether the target keeps a file's alternate streams.</param>
+    /// <param name="kind">
+    /// The entry's kind. A symlink keeps none: a stream joined to its path
+    /// would be written through it.
+    /// </param>
+    /// <param name="supportsAlternateStreams">Whether the target keeps alternate streams.</param>
     /// <param name="writesAttributes">Whether it writes extended attributes of its own.</param>
     public static bool KeepsAttributesAsStreams(EntryKind kind, bool supportsAlternateStreams, bool writesAttributes) =>
-        kind == EntryKind.File && supportsAlternateStreams && !writesAttributes;
+        kind is EntryKind.File or EntryKind.DirectoryPlaceholder && supportsAlternateStreams && !writesAttributes;
 
     /// <summary>
     /// Why <paramref name="attribute"/> is not kept as a stream, or null where

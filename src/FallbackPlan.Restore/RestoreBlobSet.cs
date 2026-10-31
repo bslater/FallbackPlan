@@ -275,7 +275,8 @@ public static class RestoreBlobSet
                         EntryKind.DirectoryPlaceholder, 0, MetadataRules.Captured(own),
                         own.OwnerName, own.GroupName, own.PosixMode, MetadataRules.KindsOf(own),
                         Accounts: MetadataRules.AccountsOf(own), FileAttributes: own.FileAttributes,
-                        DescriptorOwner: MetadataRules.DescriptorOwnerOf(own), Access: MetadataRules.AccessOf(own));
+                        DescriptorOwner: MetadataRules.DescriptorOwnerOf(own),
+                        RefusedAttributeNames: MetadataRules.RefusedAttributeNames(own), Access: MetadataRules.AccessOf(own));
                 }
 
                 continue;
