@@ -31,6 +31,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// the output keeps its own, and so does the output folder itself. Nor is a
 /// folder given its metadata through a link that has taken its place.
 /// </para>
+/// <para>
+/// A file's flags, which capture names and no format key keeps, are set by
+/// no restore: the tool notes each file that carried them, in the receipt's
+/// words, and the file still restores (FR-RST-004; ADR-0180 Amendment 2).
+/// </para>
 /// </remarks>
 [TestClass]
 public sealed class RecoveryMetadataTests : IDisposable
@@ -259,6 +264,24 @@ public sealed class RecoveryMetadataTests : IDisposable
         Assert.AreEqual(
             "metadata not applied: owner to 2 item(s), group to 1 item(s)",
             report.DescribeNotApplied());
+    }
+
+    [TestMethod]
+    public async Task RecoveryRestore_AFilesFlags_AreNoted_AndTheFileStillRestores()
+    {
+        var source = new FakeFileSystemSource();
+        var flagged = source.AddFile("locked.bin", Deterministic(700, 11));
+        flagged.Metadata = new EntryMetadata { ModifiedAt = FileModified };
+        flagged.Diagnostics = ["file-flags: immutable, no-dump"];
+        source.AddFile("plain.bin", Deterministic(700, 12)).Metadata = new EntryMetadata { ModifiedAt = FileModified };
+
+        var (report, _) = await RestoreAsync(source);
+
+        Assert.AreEqual((2, 0), (report.Restored, report.Failed));
+        var note = Assert.ContainsSingle(report.Notes);
+        Assert.AreEqual((RecoveryNoteKind.FlagsNotApplied, "locked.bin"), (note.Kind, note.Path));
+        Assert.AreEqual("locked.bin: file flag(s) not applied: immutable, no-dump (not set by a restore)", note.ToString());
+        Assert.IsNull(report.DescribeNotApplied(), "no metadata key holds a flag, so none is counted among them");
     }
 
     [TestMethod]

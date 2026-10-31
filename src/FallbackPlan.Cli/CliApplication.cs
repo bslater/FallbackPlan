@@ -1003,6 +1003,11 @@ public static class CliApplication
                 var streamsWritten = await WriteBackStreamsAsync(reader, outputPath, manifest.Metadata, cancellationToken)
                     .ConfigureAwait(false);
                 WriteBackMetadata(outputPath, manifest.Metadata, capturedHere, streamsWritten);
+                if (MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.CaptureDiagnostics)) is { } flags)
+                {
+                    output.WriteLine(flags);
+                }
+
                 return 0;
             }));
 

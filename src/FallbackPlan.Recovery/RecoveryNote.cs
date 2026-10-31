@@ -38,6 +38,9 @@ public enum RecoveryNoteKind
 
     /// <summary>A file's alternate stream not written back, and why; the file still restored (ADR-0174 Amendment 1).</summary>
     StreamNotWritten = 10,
+
+    /// <summary>The flags a file or a link was captured with, which no restore sets; the item still restored (ADR-0180 Amendment 2).</summary>
+    FlagsNotApplied = 11,
 }
 
 /// <summary>
@@ -82,6 +85,7 @@ public sealed record RecoveryNote(
         RecoveryNoteKind.WriteFailed => $"FAILED {Path}: the output would not take it — {Detail}",
         RecoveryNoteKind.NotLinked => $"{Path}: restored as a file of its own, not linked to its group — {Reason}",
         RecoveryNoteKind.StreamNotWritten => $"{Path}: alternate stream {Reason}",
+        RecoveryNoteKind.FlagsNotApplied => $"{Path}: {Reason}",
         _ => Kind.ToString(),
     };
 }

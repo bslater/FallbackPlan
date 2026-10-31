@@ -16,7 +16,9 @@ namespace FallbackPlan.Cli.Tests;
 /// moved there once verified, so one that fails leaves what stood at the
 /// output as it was (FR-RST-002; ADR-0173 Amendment 1). It is assembled in
 /// that spool itself, so it needs no room in the temporary folder
-/// (FR-RST-002; ADR-0173 Amendment 3).
+/// (FR-RST-002; ADR-0173 Amendment 3). It says which of a file's flags it
+/// did not give back, as the executor's receipt does (FR-RST-004; ADR-0180
+/// Amendment 2).
 /// </summary>
 [TestClass]
 public sealed class InspectionCommandTests : IDisposable
@@ -276,6 +278,28 @@ public sealed class InspectionCommandTests : IDisposable
                 File.GetUnixFileMode(destination),
                 restore.All);
         }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux keeps a file's inode flags")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task RestoreFile_AFileCapturedWithFlags_SaysItDidNotGiveThemBack()
+    {
+        await _cli.InitAsync();
+        var source = _cli.WriteFile("flags/a.txt", "restore-file flags");
+        DiskFlags.AddOnLinux(source, DiskFlags.LinuxNoDump);
+
+        var backup = await _cli.RunAsync("backup", Path.GetDirectoryName(source)!);
+        Assert.IsTrue(backup.ExitCode == 0, backup.All);
+        var snapshots = await _cli.RunAsync("snapshots");
+        var snapshot = Regex.Match(snapshots.Output, @"\b[0-9a-f]{32}\b");
+        Assert.IsTrue(snapshot.Success, snapshots.All);
+        var destination = Path.Combine(_cli.WorkPath, "restored-with-flags.txt");
+
+        var restore = await _cli.RunAsync("restore-file", "--snapshot", snapshot.Value, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        Assert.Contains("file flag(s) not applied: no-dump (not set by a restore)", restore.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
