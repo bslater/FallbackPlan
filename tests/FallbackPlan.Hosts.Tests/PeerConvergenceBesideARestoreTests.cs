@@ -13,7 +13,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// peer drops what an instruction signed under a grant tells it to. While
 /// the service has a restore of the set under way, no peer is instructed:
 /// the run says so, the peer keeps its whole copy, and the next granted run
-/// converges it.
+/// converges it. A restore in direct mode, which holds a marker of its
+/// repository in the service's state directory, is held for the same way
+/// (ADR-0172 Amendment 6).
 /// </summary>
 [TestClass]
 public sealed class PeerConvergenceBesideARestoreTests : IDisposable
@@ -36,8 +38,23 @@ public sealed class PeerConvergenceBesideARestoreTests : IDisposable
     private PeerKeypair? _listenerKeypair;
     private Protocol.PeerIdentity? _destinationIdentity;
 
+    /// <summary>What has a restore of the set under way beside a granted run.</summary>
+    public enum Beside
+    {
+        /// <summary>Nothing.</summary>
+        Nothing,
+
+        /// <summary>A run of the set the service holds under way.</summary>
+        AServiceRun,
+
+        /// <summary>A restore in direct mode, by its marker in the service's state directory.</summary>
+        ARunInDirectMode,
+    }
+
     [TestMethod]
-    public async Task ARetentionApply_WhileARestoreOfTheSetIsUnderWay_InstructsNoPeer_AndTheNextApplyDoes()
+    [DataRow(Beside.AServiceRun)]
+    [DataRow(Beside.ARunInDirectMode)]
+    public async Task ARetentionApply_WhileARestoreOfTheSetIsUnderWay_InstructsNoPeer_AndTheNextApplyDoes(Beside restoring)
     {
         StartDestination();
         await _source.SetupAsync();
@@ -54,7 +71,7 @@ public sealed class PeerConvergenceBesideARestoreTests : IDisposable
         var whole = StoredKeys(replica);
         Assert.HasCount(3, whole.Where(key => key.StartsWith("snapshots/", StringComparison.Ordinal)));
 
-        var held = await ApplyRetentionAsync(restoring: true);
+        var held = await ApplyRetentionAsync(restoring);
         Assert.Contains(
             line => line.Contains("peer 'friend' held beside a restore", StringComparison.Ordinal),
             held,
@@ -64,7 +81,7 @@ public sealed class PeerConvergenceBesideARestoreTests : IDisposable
             string.Join(" | ", held));
         SequenceAssert.AreEqual(whole, StoredKeys(replica));
 
-        var converged = await ApplyRetentionAsync(restoring: false);
+        var converged = await ApplyRetentionAsync(Beside.Nothing);
         Assert.Contains(
             line => line.Contains("peer 'friend' converged under the grant", StringComparison.Ordinal),
             converged,
@@ -76,14 +93,23 @@ public sealed class PeerConvergenceBesideARestoreTests : IDisposable
     /// The granted collection run a console sends, which is what instructs a
     /// peer (ADR-0055 §6), with a restore of the set under way beside it or not.
     /// </summary>
-    private async Task<IReadOnlyList<string>> ApplyRetentionAsync(bool restoring)
+    private async Task<IReadOnlyList<string>> ApplyRetentionAsync(Beside restoring)
     {
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions { ArchivesRoot = _source.ArchivesRoot, StateDirectory = _source.StateDirectory },
             Timeout);
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         var grant = await _source.ReclaimGrantAsync(handler, Timeout);
-        if (restoring)
+        IDisposable? direct = null;
+        if (restoring == Beside.ARunInDirectMode)
+        {
+            direct = RestoresUnderWay.Hold(
+                _source.StateDirectory,
+                (await runtime.ExistingArchiveAsync(_source.DocsSetId, Timeout))!.Repository.RepositoryId,
+                Run);
+        }
+
+        if (restoring == Beside.AServiceRun)
         {
             runtime.RestoreRuns.Begin(new RestoreRunRecord
             {
@@ -97,10 +123,12 @@ public sealed class PeerConvergenceBesideARestoreTests : IDisposable
 
         var applied = await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout);
         Assert.IsInstanceOfType<RetentionResult>(applied, out var result, (applied as ServiceError)?.Message ?? applied.GetType().Name);
-        if (restoring)
+        if (restoring == Beside.AServiceRun)
         {
             runtime.RestoreRuns.Leave(Run);
         }
+
+        direct?.Dispose();
 
         return result.Lines;
     }

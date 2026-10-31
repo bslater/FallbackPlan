@@ -10,7 +10,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// it, and a restore under way may read around to that copy. While the
 /// service has one under way, the destination keeps its blobs, and the
 /// first sync after the restore ends drops them, though nothing was
-/// published between.
+/// published between. A restore in direct mode, which holds a marker of its
+/// repository in the service's state directory, is held for the same way
+/// (ADR-0172 Amendment 6).
 /// </summary>
 [TestClass]
 public sealed class ConvergenceBesideARestoreTests : IDisposable
@@ -31,7 +33,31 @@ public sealed class ConvergenceBesideARestoreTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Sync_WhileARestoreOfTheSetIsUnderWay_KeepsTheBlobsItsPolicyDrops_AndTheNextSyncDropsThem()
+    public Task Sync_WhileARestoreOfTheSetIsUnderWay_KeepsTheBlobsItsPolicyDrops_AndTheNextSyncDropsThem() =>
+        SyncBesideARestoreAsync((runtime, set) =>
+        {
+            runtime.RestoreRuns.Begin(new RestoreRunRecord
+            {
+                Run = Run,
+                SetName = set.Name,
+                SnapshotId = new string('e', 32),
+                OutputDirectory = "/srv/restored",
+                BeganAt = 1_000,
+            });
+            return Task.FromResult<IDisposable>(new Ended(() => runtime.RestoreRuns.Leave(Run)));
+        });
+
+    [TestMethod]
+    public Task Sync_WhileARestoreInDirectModeOfTheSetsRepositoryIsUnderWay_KeepsTheBlobsItsPolicyDrops_AndTheNextSyncDropsThem() =>
+        SyncBesideARestoreAsync(async (runtime, set) => RestoresUnderWay.Hold(
+            _harness.StateDirectory, (await runtime.ExistingArchiveAsync(set.Id, Timeout))!.Repository.RepositoryId, Run));
+
+    private sealed class Ended(Action end) : IDisposable
+    {
+        public void Dispose() => end();
+    }
+
+    private async Task SyncBesideARestoreAsync(Func<ServiceRuntime, BackupSetConfiguration, Task<IDisposable>> underWay)
     {
         Directory.CreateDirectory(Vault);
         WriteConfiguration();
@@ -51,14 +77,7 @@ public sealed class ConvergenceBesideARestoreTests : IDisposable
         _harness.WriteSourceFile("docs/a.txt", "second content");
         await BackUpAsync(runtime);
 
-        runtime.RestoreRuns.Begin(new RestoreRunRecord
-        {
-            Run = Run,
-            SetName = set.Name,
-            SnapshotId = new string('e', 32),
-            OutputDirectory = "/srv/restored",
-            BeganAt = 1_000,
-        });
+        var restore = await underWay(runtime, set);
         await SyncAsync(runtime, set.Id);
 
         Assert.ContainsSingle(Objects(replica, "snapshots"));
@@ -68,7 +87,7 @@ public sealed class ConvergenceBesideARestoreTests : IDisposable
 
         // With the run ended, the next sync drops them, though nothing was
         // published since and its keep-set has not moved.
-        runtime.RestoreRuns.Leave(Run);
+        restore.Dispose();
         await SyncAsync(runtime, set.Id);
 
         Assert.IsNotEmpty(

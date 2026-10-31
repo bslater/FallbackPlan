@@ -1393,11 +1393,12 @@ public static class FanOut
 
         // A restore of the set under way reads the blobs of the snapshot it
         // restores, and may read around to this copy's: no blob is dropped
-        // here while one is, as none is collected from staging (ADR-0172
-        // Amendments 3 and 4). Folded into the fingerprint the gate compares,
+        // here while one is, as none is collected from staging, whether the
+        // service runs it or the command line does (ADR-0172 Amendments 3, 4
+        // and 6). Folded into the fingerprint the gate compares,
         // or the first pass after the restore would find the pair level and
         // skip, keeping for good what only the restore held.
-        if (keeps is not null && runtime.RestoreRuns.IsUnderWayFor(set.Name))
+        if (keeps is not null && runtime.RestoreUnderWayOf(set, archive))
         {
             var spared = spares;
             spares = key => key.StartsWith("blobs/", StringComparison.Ordinal) || (spared?.Invoke(key) ?? false);
@@ -2309,9 +2310,9 @@ public static class FanOut
     {
         // A restore of the set under way may read around to this peer's copy,
         // and an instruction has the peer drop what its keep-set does not
-        // name. None is sent while one is; the next granted run converges it
-        // (ADR-0172 Amendment 5).
-        if (runtime.RestoreRuns.IsUnderWayFor(set.Name))
+        // name. None is sent while one is, whoever runs it; the next granted
+        // run converges it (ADR-0172 Amendments 5 and 6).
+        if (runtime.RestoreUnderWayOf(set, archive))
         {
             return $"peer '{destination.Name}' held beside a restore: not instructed while a restore of the set is "
                 + "under way; the next granted run converges it";

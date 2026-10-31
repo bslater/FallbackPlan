@@ -11,7 +11,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// goes, and a snapshot that expires, or that a person deletes, while it runs
 /// would have them swept from under it. The service holds each restore it
 /// runs under way from before it writes until it ends, and the pass holds
-/// its blobs on that word, as it does beside a backup.
+/// its blobs on that word, as it does beside a backup. A restore in direct
+/// mode runs outside the service, and holds a marker of its repository in the
+/// service's state directory while it runs; the pass holds on that too
+/// (ADR-0172 Amendment 6).
 /// </summary>
 [TestClass]
 public sealed class RetentionBesideARestoreTests : IDisposable
@@ -94,6 +97,71 @@ public sealed class RetentionBesideARestoreTests : IDisposable
             line => line.Contains("held beside a restore:", StringComparison.Ordinal),
             deleted.Lines,
             "a deletion beside the set's restore held nothing: " + string.Join(" | ", deleted.Lines));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_WhileARestoreInDirectModeOfTheSetsRepositoryIsUnderWay_HoldsItsBlobsAndSaysSo()
+    {
+        var (runtime, handler, grant, set) = await StartWithABackupAsync();
+        await using var _ = runtime;
+        var repository = (await runtime.ExistingArchiveAsync(set.Id, Timeout))!.Repository.RepositoryId;
+
+        using (RestoresUnderWay.Hold(_harness.StateDirectory, repository, Run))
+        {
+            Assert.IsInstanceOfType<RetentionResult>(
+                await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
+                out var beside);
+            Assert.Contains(
+                line => line.Contains("held beside a restore:", StringComparison.Ordinal),
+                beside.Lines,
+                "an apply beside a restore in direct mode held nothing: " + string.Join(" | ", beside.Lines));
+        }
+
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
+            out var after);
+        Assert.IsFalse(
+            after.Lines.Any(line => line.Contains("held beside a restore:", StringComparison.Ordinal)),
+            string.Join(" | ", after.Lines));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_WhileARestoreInDirectModeOfAnotherRepositoryIsUnderWay_HoldsNothing()
+    {
+        var (runtime, handler, grant, _) = await StartWithABackupAsync();
+        await using var __ = runtime;
+
+        using var other = RestoresUnderWay.Hold(
+            _harness.StateDirectory, Domain.Identifiers.RepositoryId.FromBytes(new byte[16]), Run);
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
+            out var report);
+        Assert.IsFalse(
+            report.Lines.Any(line => line.Contains("held beside a restore:", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
+    public async Task DeleteSnapshots_WhileARestoreInDirectModeOfTheSetsRepositoryIsUnderWay_HoldsItsBlobsAndSaysSo()
+    {
+        var (runtime, handler, grant, set) = await StartWithABackupAsync();
+        await using var _ = runtime;
+        _harness.WriteSourceFile("docs/a.txt", "changed before the second backup");
+        Assert.AreEqual("ran", (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true)).Outcome);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        var restored = listed.Snapshots.OrderBy(snapshot => snapshot.CapturedAt).First().SnapshotId;
+        var repository = (await runtime.ExistingArchiveAsync(set.Id, Timeout))!.Repository.RepositoryId;
+
+        using var underWay = RestoresUnderWay.Hold(_harness.StateDirectory, repository, Run);
+        Assert.IsInstanceOfType<DeleteSnapshotsResult>(
+            await handler.ExecuteAsync(
+                new DeleteSnapshotsCommand(set.Id, [restored], Apply: true, ReclaimGrant: grant), Timeout),
+            out var deleted);
+        Assert.Contains(
+            line => line.Contains("held beside a restore:", StringComparison.Ordinal),
+            deleted.Lines,
+            "a deletion beside a restore in direct mode held nothing: " + string.Join(" | ", deleted.Lines));
     }
 
     /// <summary>A run of the set the service holds under way, as it holds a restore through it.</summary>

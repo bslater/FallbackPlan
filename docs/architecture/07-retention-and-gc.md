@@ -227,6 +227,8 @@ The cost is a pass's worth of latency on blob space, and on a dead backup the de
 
 > **2026-10 ([ADR-0172 Amendment 5](../adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-5-2026-10--a-granted-run-instructs-no-peer-beside-a-restore-of-the-set)).** A granted run instructs no peer while one is either, and says so; the next granted run converges it.
 
+> **2026-10 ([ADR-0172 Amendment 6](../adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-6-2026-10--a-restore-in-direct-mode-says-it-is-under-way-where-the-service-looks)).** A restore in direct mode is held for too. The command line holds a marker of the repository it restores in its state directory while it runs, and in the installation's where it named none. The service holds on a marker of the set's repository in its own state directory as on a run of its own. A marker no process holds says nothing.
+
 ## 4. Why leases are not load-bearing
 
 Leases exist. They are advisory, and their only job is stopping two collectors from doing the same work at the same time. Losing one costs efficiency and nothing else.

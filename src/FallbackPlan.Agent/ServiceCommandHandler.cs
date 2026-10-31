@@ -415,9 +415,10 @@ public sealed partial class ServiceCommandHandler(
                     // (ADR-0017 Amendment 2).
                     relocationStands: Repository.CompactionPass.RelocationStands(
                         archive.Repository, runtime.Writer, catalogue),
-                    // A restore of the set under way reads the blobs of the
-                    // snapshot it restores as it goes (ADR-0172 Amendment 3).
-                    restoreInFlight: runtime.RestoreRuns.IsUnderWayFor(set.Name)).ConfigureAwait(false);
+                    // A restore of the set under way, here or in direct mode,
+                    // reads the blobs of the snapshot it restores as it goes
+                    // (ADR-0172 Amendments 3 and 6).
+                    restoreInFlight: runtime.RestoreUnderWayOf(set, archive)).ConfigureAwait(false);
 
                 // A set's peers converge here and nowhere else (ADR-0055 §6):
                 // the scheduled sync holds no authority to delete, so it

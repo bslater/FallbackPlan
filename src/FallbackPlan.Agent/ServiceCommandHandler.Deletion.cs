@@ -259,7 +259,7 @@ public sealed partial class ServiceCommandHandler
             clockSkewMargin: runtime.Configuration.EffectiveClockSkewMargin,
             requestsOnly: true,
             backupInFlight: Scheduler.LiveBackupOf(runtime, set.Id) is not null,
-            restoreInFlight: runtime.RestoreRuns.IsUnderWayFor(set.Name)).ConfigureAwait(false);
+            restoreInFlight: runtime.RestoreUnderWayOf(set, archive)).ConfigureAwait(false);
 
     /// <summary>
     /// The destinations a deletion of <paramref name="snapshot"/> waits on:
