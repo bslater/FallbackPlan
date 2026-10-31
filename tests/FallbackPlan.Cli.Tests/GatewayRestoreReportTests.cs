@@ -23,7 +23,8 @@ namespace FallbackPlan.Cli.Tests;
 /// continues, or for a run left unfinished by its name alone, saying how many
 /// files the run already landed. And a restore that goes past a file its
 /// folder would open wider, only when told, with a plan that counts such
-/// files failing and saying how to go on (FR-RST-003, ADR-0178 Amendment 1).
+/// files failing and saying how to go on (FR-RST-003, ADR-0178 Amendment 1),
+/// as one that counts only such folders does (ADR-0178 Amendment 4).
 /// </summary>
 [TestClass]
 public sealed class GatewayRestoreReportTests
@@ -440,6 +441,25 @@ public sealed class GatewayRestoreReportTests
         Assert.IsFalse(report.Ok);
         Assert.IsTrue(
             report.Lines.Any(line => line.Contains("1 file(s)", StringComparison.Ordinal)
+                && line.Contains("--acknowledge-wider-access", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
+    public async Task APlanWhoseParentWouldOpenAFolderWider_IsNotOk_AndSaysHowToGoOn()
+    {
+        // ADR-0178 Amendment 4: a folder the run would make is refused for as
+        // a file is, though no file is.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 9_000, [], OpenedWiderFolders: 1));
+
+        var report = await PlanAsync(client, timeout.Token);
+
+        Assert.IsFalse(report.Ok);
+        Assert.IsTrue(
+            report.Lines.Any(line => line.Contains("1 folder(s)", StringComparison.Ordinal)
                 && line.Contains("--acknowledge-wider-access", StringComparison.Ordinal)),
             string.Join(" | ", report.Lines));
     }

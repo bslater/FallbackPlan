@@ -23,7 +23,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// (FR-RST-003, ADR-0131). On Windows a plan counts the files a folder would
 /// open wider than they were, and a run of them is refused before anything
 /// is written, leaving no run to resume, unless it acknowledges wider access
-/// (FR-RST-003, ADR-0178 Amendment 1).
+/// (FR-RST-003, ADR-0178 Amendment 1). It counts a folder the run would make
+/// apart, and refuses for it alike (ADR-0178 Amendment 4).
 /// </summary>
 [TestClass]
 public sealed class RestoreHonestyServiceTests : IDisposable
@@ -420,6 +421,52 @@ public sealed class RestoreHonestyServiceTests : IDisposable
 
         Assert.AreEqual(1L, restored.Restored);
         Assert.AreEqual("kept to two accounts", await File.ReadAllTextAsync(Path.Combine(destination, "private.txt"), _timeout.Token));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a folder's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Plan_OnWindows_CountsAFolderItsParentWouldOpenWider_AndItsRunIsRefused_UnlessAcknowledged()
+    {
+        // ADR-0178 Amendment 4: the folder is kept to an account the machine
+        // does not know; the file in it to the account running the case alone.
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        const string Users = "S-1-5-32-545";
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("private/notes.txt", "kept to the account");
+        WindowsAcls.KeepFolderTo(Path.Combine(_harness.SourceRoot, "private"), Stranger);
+        WindowsAcls.KeepTo(Path.Combine(_harness.SourceRoot, "private", "notes.txt"));
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        var destination = WindowsAcls.Sharing(Path.Combine(_harness.WorkPath, "shared"), Users);
+        await using var runtime = await StartAsync(availableBytes: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            await handler.ExecuteAsync(new PlanRestoreCommand(snapshotId, null, OutputDirectory: destination, Source: source.SourceId), _timeout.Token),
+            out var plan);
+        Assert.AreEqual(1L, plan.OpenedWiderFolders);
+        Assert.IsNull(plan.OpenedWider, "no file is opened wider");
+        Assert.Contains("1 folder(s)", Assert.ContainsSingle(
+            (plan.Degradations ?? []).Where(line => line.Contains("access their own did not", StringComparison.Ordinal))), StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new RunRestoreCommand(snapshotId, null, destination, Source: source.SourceId, InPlace: true), _timeout.Token),
+            out var refused);
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains(Users, refused.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(Directory.EnumerateFileSystemEntries(destination), "a refused run writes nothing");
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, destination, Source: source.SourceId, InPlace: true, AcknowledgeWiderAccess: true),
+                _timeout.Token),
+            out var restored);
+        Assert.AreEqual(1L, restored.Restored);
+        Assert.AreEqual("kept to the account", await File.ReadAllTextAsync(Path.Combine(destination, "private", "notes.txt"), _timeout.Token));
     }
 
     [TestMethod]

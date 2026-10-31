@@ -48,7 +48,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// file's manifest to count them as its plan does, a blob at a time, and
 /// nothing where no folder says what a file takes (ADR-0178 Amendment 1).
 /// Each file is judged by the folder it lands in, and the line names the
-/// folder its access comes from (ADR-0178 Amendment 3).
+/// folder its access comes from (ADR-0178 Amendment 3). A folder the restore
+/// makes is judged by what passes to it, and counted apart, and a run reads
+/// its own record to do so (ADR-0178 Amendment 4).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -543,6 +545,55 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             Assert.AreEqual(here, Assert.ContainsSingle(wider.Folders), "each folder said once");
             CollectionAssert.AreEquivalent(new[] { Users, Administrators }, wider.Accounts.ToArray(), "and each account");
             Assert.IsLessThanOrEqualTo((int)Math.Ceiling(blobs * 1.2), counting.Reads, "NFR-PERF-009's budget, a blob at a time");
+        }
+    }
+
+    [TestMethod]
+    public async Task OpenedWider_CountsAFolderTheRestoreMakes_WhereWhatPassesToItGivesMoreThanItsOwn()
+    {
+        // ADR-0178 Amendment 4: two folders kept to an unknown account are
+        // made where their parent passes Users access. One gave Users as much
+        // itself; the other did not.
+        var (source, root, keeps) = FoldersKeptToAStranger();
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xE6);
+        var destinationOf = RestoreMetadata.DestinationsOf([new RestoreSlice(plan, root)]);
+
+        var wider = RestoreMetadata.OpenedWider(plan, facts, keeps, destinationOf);
+
+        Assert.IsNotNull(wider);
+        Assert.AreEqual(0, wider.Files);
+        Assert.AreEqual(1, wider.OpenedFolders);
+        Assert.AreEqual(root, Assert.ContainsSingle(wider.Folders));
+        Assert.AreEqual(Users, Assert.ContainsSingle(wider.Accounts));
+        var line = Assert.ContainsSingle(
+            RestoreMetadata.Declare(plan, facts, keeps, destinationOf).Where(degradation => degradation.Capability == "wider-access")).Detail;
+        Assert.AreEqual(wider.Describe(), line, "the plan's line says what the count says");
+        Assert.Contains("1 folder(s)", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("file(s)", line, StringComparison.Ordinal);
+
+        // A folder the target says stands is not made: it keeps its own.
+        Assert.IsNull(RestoreMetadata.OpenedWider(plan, facts, keeps with { InheritedFolderAccessAt = _ => null }, destinationOf));
+    }
+
+    [TestMethod]
+    public async Task OpenedWider_ForARun_ReadsAFoldersOwnRecord_AndSaysWhatItsPlanSays()
+    {
+        var (source, root, keeps) = FoldersKeptToAStranger();
+        var (store, keys, catalogue) = await PublishAsync(source, 0xE7);
+        using (keys)
+        using (catalogue)
+        {
+            var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat((byte)0xE7, 16).ToArray(), string.Empty, Posix);
+            using var reader = new RepositoryReader(Repo, keys, store, Authority);
+            reader.UseLocationSource(catalogue.ResolveLocation);
+
+            var wider = await RestoreMetadata.OpenedWiderAsync(
+                plan, keeps, RestoreMetadata.DestinationsOf([new RestoreSlice(plan, root)]), reader, CancellationToken.None);
+
+            Assert.IsNotNull(wider);
+            Assert.AreEqual(0, wider.Files);
+            Assert.AreEqual(1, wider.OpenedFolders);
+            Assert.AreEqual(Users, Assert.ContainsSingle(wider.Accounts));
         }
     }
 
@@ -1149,6 +1200,35 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         var known = facts[Assert.ContainsSingle(plan.Items).ObjectId];
         Assert.AreEqual("ana", known.Owner);
         Assert.AreEqual("staff", known.Group);
+    }
+
+    /// <summary>
+    /// Two folders kept to an unknown account and the system, one of which
+    /// also gave Users what its new parent passes to a folder; a file in
+    /// each that carries no descriptor; and a target that says both folders
+    /// would be made below a root that passes Users access (ADR-0178
+    /// Amendment 4).
+    /// </summary>
+    private (FakeFileSystemSource Source, string Root, RestoreTargetProfile Keeps) FoldersKeptToAStranger()
+    {
+        var source = new FakeFileSystemSource();
+        var strangers = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Stranger, FullControl);
+        var system = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, LocalSystem, FullControl);
+        source.AddFile("private/a.bin", Deterministic(700, 74));
+        source.AddFile("open/b.bin", Deterministic(700, 75));
+        source.Folders["private"] = KeptTo(Stranger, strangers, system);
+        source.Folders["open"] = KeptTo(
+            Stranger, strangers, system, SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Users, ReadAndExecute));
+        var root = Path.Combine(SpoolDirectory, "restored-here");
+        var keeps = Posix with
+        {
+            SupportsSecurityDescriptors = true,
+            KnowsAccount = account => account != Stranger,
+            InheritedFolderAccessAt = folder => folder == Path.Combine(root, "private") || folder == Path.Combine(root, "open")
+                ? new InheritedAccess(root, new Dictionary<string, uint> { [LocalSystem] = FullControl, [Users] = ReadAndExecute })
+                : null,
+        };
+        return (source, root, keeps);
     }
 
     /// <summary>

@@ -10,7 +10,8 @@ namespace FallbackPlan.Cli.Tests;
 /// that will not fit before it writes anything, and the CLI that says what
 /// was not applied once it ends. On Windows it is the CLI, too, that refuses
 /// a run whose folder would open a file wider than it was, unless told to go
-/// on (ADR-0178 Amendment 1).
+/// on (ADR-0178 Amendment 1), and that counts a folder the run would make
+/// apart (ADR-0178 Amendment 4).
 /// </summary>
 /// <remarks>
 /// The disk is the flow's own: <c>DirectGateway.AvailableBytesInFlow</c>
@@ -49,6 +50,29 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         Assert.AreEqual("first", await File.ReadAllTextAsync(Path.Combine(destination, "one.txt")));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a folder's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Plan_OnWindows_CountsAFolderItsParentWouldOpenWider_ApartFromFiles()
+    {
+        const string Stranger = "S-1-5-21-9-9-9-4242";
+        const string Users = "S-1-5-32-545";
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/private/notes.txt", "kept to the account");
+        WindowsAcls.KeepFolderTo(Path.Combine(_cli.WorkPath, "tree", "private"), Stranger);
+        WindowsAcls.KeepTo(Path.Combine(_cli.WorkPath, "tree", "private", "notes.txt"));
+        var snapshot = await BackUpTreeAsync();
+        var destination = WindowsAcls.Sharing(Path.Combine(_cli.WorkPath, "shared"), Users);
+
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+
+        Assert.AreNotEqual(0, plan.ExitCode, plan.All);
+        Assert.Contains("wider access: 1 folder(s)", plan.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("file(s) would be opened wider", plan.Output, StringComparison.Ordinal);
+        Assert.Contains("--acknowledge-wider-access", plan.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]

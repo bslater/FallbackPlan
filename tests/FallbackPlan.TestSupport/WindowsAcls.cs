@@ -33,6 +33,28 @@ public static class WindowsAcls
     }
 
     /// <summary>
+    /// Keeps <paramref name="folder"/> to the account running the case and
+    /// <paramref name="accounts"/>, each given full control of it and of what
+    /// is made in it, its DACL taking nothing from its own folder.
+    /// </summary>
+    public static void KeepFolderTo(string folder, params string[] accounts)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(folder);
+        ArgumentNullException.ThrowIfNull(accounts);
+
+        const InheritanceFlags Everything = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (var account in accounts.Select(sid => new SecurityIdentifier(sid)).Prepend(Me()))
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                account, FileSystemRights.FullControl, Everything, PropagationFlags.None, AccessControlType.Allow));
+        }
+
+        new DirectoryInfo(folder).SetAccessControl(security);
+    }
+
+    /// <summary>
     /// Makes <paramref name="folder"/> one that gives each file made in it to
     /// the account running the case, with full control, and to
     /// <paramref name="reader"/>, to read and run, taking nothing from its

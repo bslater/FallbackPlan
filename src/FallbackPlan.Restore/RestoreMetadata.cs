@@ -83,24 +83,31 @@ public sealed record RestoreItemFacts(
     IReadOnlyList<string>? AuditedAccounts = null);
 
 /// <summary>
-/// The files a restore would open wider than they were (ADR-0178): their
-/// descriptors will not be written, and what they take where they land gives
-/// some account access their own did not. A run is refused for them unless a
-/// person acknowledges it (ADR-0178 Amendment 1; architecture 06 §3).
+/// The files and the folders a restore would open wider than they were
+/// (ADR-0178): their descriptors will not be written, and what they take where
+/// they are made gives some account access their own did not. A run is
+/// refused for them unless a person acknowledges it (ADR-0178 Amendment 1;
+/// architecture 06 §3).
 /// </summary>
 /// <param name="Files">How many files.</param>
 /// <param name="Folders">
-/// The folders their access comes from, each once: for each file the nearest
-/// that stands at or above where it lands (ADR-0178 Amendment 3).
+/// The folders their access comes from, each once: for each the nearest that
+/// stands above where it is made (ADR-0178 Amendment 3).
 /// </param>
 /// <param name="Accounts">Every account that gains, by SID, each once.</param>
-public sealed record WiderAccess(int Files, IReadOnlyList<string> Folders, IReadOnlyList<string> Accounts)
+/// <param name="OpenedFolders">How many folders the restore makes (ADR-0178 Amendment 4).</param>
+public sealed record WiderAccess(int Files, IReadOnlyList<string> Folders, IReadOnlyList<string> Accounts, int OpenedFolders = 0)
 {
     /// <summary>The plan's <c>wider-access</c> line, which the run's refusal says too.</summary>
-    public string Describe() => string.Create(CultureInfo.InvariantCulture,
-        $"Security descriptors captured on {Files} file(s) will not be applied, and the folder they take their "
-        + $"access from ({string.Join(", ", Folders)}) gives them access their own did not, to "
-        + $"{string.Join(", ", Accounts)}.");
+    public string Describe()
+    {
+        var files = string.Create(CultureInfo.InvariantCulture, $"{Files} file(s)");
+        var folders = string.Create(CultureInfo.InvariantCulture, $"{OpenedFolders} folder(s)");
+        var items = OpenedFolders == 0 ? files : Files == 0 ? folders : $"{files} and {folders}";
+        return $"Security descriptors captured on {items} will not be applied, and the folder they take their "
+            + $"access from ({string.Join(", ", Folders)}) gives them access their own did not, to "
+            + $"{string.Join(", ", Accounts)}.";
+    }
 }
 
 /// <summary>
@@ -764,7 +771,7 @@ public static class RestoreMetadata
         ThrowHelper.ThrowIfNull(destinationOf);
         ThrowHelper.ThrowIfNull(reader);
 
-        // Each folder is read once, to choose what to read and to judge it.
+        // Each place is read once, to choose what to read and to judge it.
         var inheritedAt = new Dictionary<string, InheritedAccess?>(StringComparer.Ordinal);
         InheritedAccess? Inherited(string folder)
         {
@@ -776,8 +783,22 @@ public static class RestoreMetadata
             return access;
         }
 
+        var madeAt = new Dictionary<string, InheritedAccess?>(StringComparer.Ordinal);
+        InheritedAccess? Made(string path)
+        {
+            if (!madeAt.TryGetValue(path, out var access))
+            {
+                madeAt[path] = access = target.InheritedFolderAccessAt(path);
+            }
+
+            return access;
+        }
+
         var judged = plan.Items
-            .Where(item => item.Kind == EntryKind.File && destinationOf(item) is { } folder && Inherited(folder) is not null)
+            .Where(item => destinationOf(item) is { } folder
+                && (item.Kind == EntryKind.File ? Inherited(folder)
+                    : item.Kind == EntryKind.DirectoryPlaceholder ? Made(Path.Combine(folder, NameOf(item)))
+                    : null) is not null)
             .ToList();
         var facts = new Dictionary<ObjectId, RestoreItemFacts>();
         foreach (var wave in judged.Chunk(ManifestWave))
@@ -793,26 +814,30 @@ public static class RestoreMetadata
 
             foreach (var item in wave)
             {
-                if (await ManifestMetadataAsync(reader, item.ObjectId, cancellationToken).ConfigureAwait(false) is { } metadata)
+                if (await ManifestMetadataAsync(reader, item, cancellationToken).ConfigureAwait(false) is { } metadata)
                 {
                     facts[item.ObjectId] = new RestoreItemFacts(
-                        EntryKind.File, 0, MetadataRules.Captured(metadata),
+                        item.Kind, 0, MetadataRules.Captured(metadata),
                         Accounts: MetadataRules.AccountsOf(metadata), Access: MetadataRules.AccessOf(metadata));
                 }
             }
         }
 
-        return Widened(plan, facts, target with { InheritedAccessAt = Inherited }, destinationOf, new Names());
+        return Widened(
+            plan, facts, target with { InheritedAccessAt = Inherited, InheritedFolderAccessAt = Made }, destinationOf, new Names());
     }
 
-    /// <summary>What a file's manifest says was captured with it, or null where it will not read.</summary>
+    /// <summary>
+    /// What a file's manifest, or a folder's own record, says was captured
+    /// with it, or null where it will not read.
+    /// </summary>
     private static async ValueTask<EntryMetadata?> ManifestMetadataAsync(
-        RepositoryReader reader, ObjectId objectId, CancellationToken cancellationToken)
+        RepositoryReader reader, RestorePlanItem item, CancellationToken cancellationToken)
     {
         RecordReadResult read;
         try
         {
-            read = await reader.ReadSegmentAsync(objectId, cancellationToken).ConfigureAwait(false);
+            read = await reader.ReadSegmentAsync(item.ObjectId, cancellationToken).ConfigureAwait(false);
         }
         catch (IOException)
         {
@@ -826,7 +851,9 @@ public static class RestoreMetadata
 
         try
         {
-            return FileVersionManifestCodec.Decode(read.Plaintext).Metadata;
+            return item.Kind == EntryKind.DirectoryPlaceholder
+                ? TreeManifestCodec.Decode(read.Plaintext).Metadata
+                : FileVersionManifestCodec.Decode(read.Plaintext).Metadata;
         }
         catch (FormatException)
         {
@@ -834,10 +861,14 @@ public static class RestoreMetadata
         }
     }
 
+    /// <summary>The last component of an item's path: the name it is made under.</summary>
+    private static string NameOf(RestorePlanItem item) => item.Path[(item.Path.LastIndexOf('/') + 1)..];
+
     /// <summary>
-    /// A file whose descriptor names an account the target does not know
-    /// takes its folder's access instead of its own, which architecture 06 §3
-    /// has a restore say, and refuse, where that is more.
+    /// A file or a folder the restore makes, whose descriptor names an
+    /// account the target does not know, takes what passes to it instead of
+    /// its own access, which architecture 06 §3 has a restore say, and
+    /// refuse, where that is more.
     /// </summary>
     private static WiderAccess? Widened(
         RestorePlan plan,
@@ -852,14 +883,17 @@ public static class RestoreMetadata
         }
 
         var files = 0;
+        var made = 0;
         var folders = new List<string>();
         var accounts = new List<string>();
 
-        // Each folder's access is read once, however many files land in it.
+        // Each place is read once, however many files land in it. A folder
+        // is judged at its own path, where one that stands says nothing.
         var inheritedAt = new Dictionary<string, InheritedAccess?>(StringComparer.Ordinal);
+        var madeAt = new Dictionary<string, InheritedAccess?>(StringComparer.Ordinal);
         foreach (var item in plan.Items)
         {
-            if (item.Kind != EntryKind.File
+            if (item.Kind is not (EntryKind.File or EntryKind.DirectoryPlaceholder)
                 || !facts.TryGetValue(item.ObjectId, out var known)
                 || (Applied(item.Kind, target) & known.Captured & CapturedMetadata.SecurityDescriptor) == 0
                 || known.Accounts is not { } named
@@ -870,9 +904,12 @@ public static class RestoreMetadata
                 continue;
             }
 
-            if (!inheritedAt.TryGetValue(folder, out var inherited))
+            var file = item.Kind == EntryKind.File;
+            var at = file ? folder : Path.Combine(folder, NameOf(item));
+            var read = file ? inheritedAt : madeAt;
+            if (!read.TryGetValue(at, out var inherited))
             {
-                inheritedAt[folder] = inherited = target.InheritedAccessAt(folder);
+                read[at] = inherited = file ? target.InheritedAccessAt(at) : target.InheritedFolderAccessAt(at);
             }
 
             if (inherited is null || WindowsAccess.Wider(own, inherited.Access) is not { Count: > 0 } gaining)
@@ -880,7 +917,15 @@ public static class RestoreMetadata
                 continue;
             }
 
-            files++;
+            if (file)
+            {
+                files++;
+            }
+            else
+            {
+                made++;
+            }
+
             accounts.AddRange(gaining.Where(account => !accounts.Contains(account, StringComparer.Ordinal)));
             if (!folders.Contains(inherited.Folder, StringComparer.Ordinal))
             {
@@ -888,7 +933,7 @@ public static class RestoreMetadata
             }
         }
 
-        return files == 0 ? null : new WiderAccess(files, folders, accounts);
+        return files + made == 0 ? null : new WiderAccess(files, folders, accounts, made);
     }
 
     /// <summary>

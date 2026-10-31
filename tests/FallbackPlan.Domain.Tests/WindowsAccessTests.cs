@@ -18,7 +18,8 @@ namespace FallbackPlan.Domain.Tests;
 /// right the entry did not give it, synchronising apart. A file made below
 /// folders the restore makes takes what passes down through them: an entry
 /// marked not to propagate goes no further than the first (ADR-0178
-/// Amendment 3).
+/// Amendment 3). A folder the restore makes takes, as its own, what passes
+/// to folders; one that stands is nothing to judge (ADR-0178 Amendment 4).
 /// </summary>
 [TestClass]
 public sealed class WindowsAccessTests : IDisposable
@@ -164,9 +165,66 @@ public sealed class WindowsAccessTests : IDisposable
     }
 
     [TestMethod]
+    public void InheritedByAFolder_TakesWhatPassesToFolders_AsItsOwn_AndNothingThatPassesToFilesAlone()
+    {
+        AccessEntry[] standing =
+        [
+            new(LocalSystem, Allows: true, FullControl, ObjectInherit | ContainerInherit),
+            new(Users, Allows: true, ReadAndExecute, ObjectInherit),
+            new(Everyone, Allows: true, Read, ContainerInherit),
+            new(Administrators, Allows: true, FullControl, ObjectInherit | ContainerInherit | NoPropagate),
+            new(CreatorOwner, Allows: true, GenericAll, ObjectInherit | ContainerInherit | InheritOnly),
+            new(Ana, Allows: true, Read, 0),
+        ];
+
+        var made = WindowsAccess.InheritedByAFolder(standing);
+        CollectionAssert.AreEquivalent(new[] { LocalSystem, Everyone, Administrators }, made.Keys.ToArray());
+        Assert.AreEqual(Read, made[Everyone]);
+
+        var below = WindowsAccess.InheritedByAFolder(standing, 2);
+        CollectionAssert.AreEquivalent(new[] { LocalSystem, Everyone }, below.Keys.ToArray(), "what stops at the first goes no further");
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => WindowsAccess.InheritedByAFolder(standing, -1));
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "only Windows keeps a folder's DACL")]
     [PlatformTrait(TestPlatforms.Posix)]
     public void InheritedByAFileAt_IsNotKnownOffWindows() => Assert.IsNull(WindowsAccess.InheritedByAFileAt(_root));
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "only Windows keeps a folder's DACL")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public void InheritedByAFolderAt_IsNotKnownOffWindows() =>
+        Assert.IsNull(WindowsAccess.InheritedByAFolderAt(Path.Combine(_root, "not-made")));
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a folder's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void InheritedByAFolderAt_OnWindows_IsNothingForAFolderThatStands_AndReadsTheNearestAboveOneMade()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(_root, "shared")).FullName;
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(
+            WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(Users), FileSystemRights.ReadAndExecute,
+            InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(Everyone), FileSystemRights.Read,
+            InheritanceFlags.ContainerInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(folder).SetAccessControl(security);
+
+        Assert.IsNull(WindowsAccess.InheritedByAFolderAt(folder), "a folder that stands keeps its own, so nothing is judged");
+
+        var inherited = WindowsAccess.InheritedByAFolderAt(Path.Combine(folder, "made"));
+        Assert.IsNotNull(inherited);
+        Assert.AreEqual(folder, inherited.Folder);
+        Assert.AreEqual(Read, inherited.Access[Everyone]);
+        Assert.IsFalse(inherited.Access.ContainsKey(Users), "what passes to files alone is not the folder's own");
+    }
 
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a folder's DACL")]

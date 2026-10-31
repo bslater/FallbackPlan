@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.80
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.81
 
 ---
 
@@ -265,3 +265,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.78 | Which kept runs resumed within a file ([ADR-0134](../../docs/adr/0134-the-kept-receipts-say-which-files-were-resumed-within.md), FR-RST-004). `restore_receipts`' each receipt gains `resumed_within`, how many of its run's files a resume wrote from the part an earlier run had assembled of each, counted among those restored as `found_in_place` is. Additive: a pre-1.78 client ignores the field, and a pre-1.78 service's receipts say none. |
 | 1.79 | A kept receipt is let go ([ADR-0140](../../docs/adr/0140-the-service-lets-a-kept-restore-receipt-go.md), FR-RST-004). `forget_restore_receipt` names a run alone, and the service removes that run's receipt and no other, answering `acknowledged`; a run it keeps no receipt of is not found, and what is not a run's name is refused. Additive: a pre-1.79 service refuses the command as unknown. |
 | 1.80 | A run that would open a file wider is refused unless acknowledged ([ADR-0178 Amendment 1](../../docs/adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged), FR-RST-003). `run_restore` and `resume_restore` take `acknowledge_wider_access`; without it, a run with a file whose descriptor will not be written, and whose folder gives some account access the file's own did not, is refused before anything is written, naming the files, the folders and the accounts that gain. `restore_plan` gains `opened_wider`, how many such files there are, null where none. Additive: a client that never sends the field is refused, never passed, and a pre-1.80 service ignores it and runs. |
+| 1.81 | A folder the run would make is judged too ([ADR-0178 Amendment 4](../../docs/adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-4-2026-10--a-folder-the-restore-makes-is-judged-too), FR-RST-003). `restore_plan` gains `opened_wider_folders`, how many folders the run would make that what passes to them would open wider, apart from `opened_wider`'s files, null where none; a run with any is refused unless it acknowledges wider access, as one with such files is. Additive: a pre-1.81 service judges no folder. |

@@ -42,7 +42,9 @@ public sealed record InheritedAccess(string Folder, IReadOnlyDictionary<string, 
 /// A folder made in a folder passes entries on as Windows does: one that
 /// passes to folders becomes its own, and passes further; one that passes to
 /// files alone is kept for the files below it; one marked not to propagate
-/// stops there (ADR-0178 Amendment 3).
+/// stops there (ADR-0178 Amendment 3). What it takes as its own is what
+/// it is judged by where its descriptor is not written (ADR-0178
+/// Amendment 4).
 /// </para>
 /// </remarks>
 public static partial class WindowsAccess
@@ -142,6 +144,59 @@ public static partial class WindowsAccess
         return [.. inherited
             .Where(grant => (grant.Value & ~Synchronize & ~own.GetValueOrDefault(grant.Key)) != 0)
             .Select(grant => grant.Key)];
+    }
+
+    /// <summary>
+    /// The access a folder takes as its own where it is made
+    /// <paramref name="made"/> folders below a folder whose DACL holds
+    /// <paramref name="folder"/>, each of those made too: the entries that
+    /// pass to folders, the creator's apart.
+    /// </summary>
+    /// <param name="folder">The DACL entries of the folder that stands, in its order.</param>
+    /// <param name="made">How many folders are made between it and this one: none where this one is made in it.</param>
+    public static IReadOnlyDictionary<string, uint> InheritedByAFolder(IReadOnlyList<AccessEntry> folder, int made = 0)
+    {
+        ArgumentNullException.ThrowIfNull(folder);
+        ArgumentOutOfRangeException.ThrowIfNegative(made);
+
+        var passing = folder;
+        for (var level = 0; level <= made; level++)
+        {
+            passing = PassedToAFolder(passing);
+        }
+
+        return Of(passing);
+    }
+
+    /// <summary>
+    /// The access a folder the restore makes at <paramref name="path"/> would
+    /// take as its own, read from the nearest folder above it that stands,
+    /// through each folder between that the restore makes. Null where a
+    /// folder stands at <paramref name="path"/>, since the restore keeps its
+    /// own; off Windows; and where the folder above will not read.
+    /// </summary>
+    /// <param name="path">Where the restore would make the folder.</param>
+    public static InheritedAccess? InheritedByAFolderAt(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        var made = 0;
+        for (var at = Path.GetFullPath(path); at is not null; at = Path.GetDirectoryName(at), made++)
+        {
+            if (Directory.Exists(at))
+            {
+                return made > 0
+                    && DaclOf(at) is { } descriptor && WindowsSecurityDescriptor.Read(descriptor) is { DaclPresent: true } read
+                    ? new InheritedAccess(at, InheritedByAFolder(read.Entries, made - 1))
+                    : null;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
