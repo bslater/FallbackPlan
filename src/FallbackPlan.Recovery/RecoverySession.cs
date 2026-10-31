@@ -513,6 +513,11 @@ public sealed class RecoverySession : IDisposable
         // agree on, where it landed, and what it got (ADR-0156).
         var groups = new Dictionary<string, (string Key, string Landing, CapturedMetadata Applied)>(StringComparer.Ordinal);
 
+        // Each name the tool has written a file or a link under, so an output
+        // that takes two of the snapshot's names for one is met with what the
+        // tool wrote there named (ADR-0170 Amendment 4).
+        var landed = new NamesLanded();
+
         try
         {
             await WalkAsync(rootTree, string.Empty, folder: null).ConfigureAwait(false);
@@ -671,6 +676,21 @@ public sealed class RecoverySession : IDisposable
 
                     var manifest = FileVersionManifestCodec.Decode(manifestBytes);
 
+                    // An output that takes two of the snapshot's names for one
+                    // finds the first standing where the second lands. That is
+                    // the tool's own file, and it is not replaced: the second
+                    // is refused, naming it (ADR-0170 Amendment 4).
+                    if (manifest.EntryKind is EntryKind.File or EntryKind.Symlink
+                        && landed.TakenForOneAt(path, destination) is { } takenFor)
+                    {
+                        failed++;
+                        notes.Add(new RecoveryNote(
+                            RecoveryNoteKind.Refused,
+                            path,
+                            Reason: $"the output takes this name and {takenFor} for one, and the tool restored {takenFor} there"));
+                        continue;
+                    }
+
                     // A link is made where the account may make one, as the
                     // executor makes one (ADR-0155; ADR-0181 Amendment 1).
                     if (manifest.EntryKind == EntryKind.Symlink && SymbolicLinks.CanCreate
@@ -679,6 +699,7 @@ public sealed class RecoverySession : IDisposable
                         if (MakeLink(manifest, path, destination, Encoding.UTF8.GetString(linkTarget.Span), foldersHere))
                         {
                             restored++;
+                            landed.Add(path);
                             NoteFlags(manifest, path);
                         }
                         else
@@ -716,6 +737,7 @@ public sealed class RecoverySession : IDisposable
                         else if (link(first.Landing, destination))
                         {
                             restored++;
+                            landed.Add(path);
                             Count(MetadataRules.Captured(manifest.Metadata), first.Applied);
                             NoteFlags(manifest, path);
                             continue;
@@ -730,6 +752,7 @@ public sealed class RecoverySession : IDisposable
                     if (await RestoreFileAsync(manifest, path, destination).ConfigureAwait(false) is { } applied)
                     {
                         restored++;
+                        landed.Add(path);
                         NoteFlags(manifest, path);
                         if (group is not null)
                         {
