@@ -79,6 +79,11 @@ namespace FallbackPlan.Restore;
 /// plan declares where a target keeps attributes as streams (ADR-0177
 /// Amendment 1).
 /// </param>
+/// <param name="Flags">
+/// The file flags its manifest's capture diagnostics name
+/// (<see cref="MetadataRules.FileFlagsOf"/>), none of which a restore sets,
+/// which the plan declares on every target (ADR-0180 Amendment 1).
+/// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -98,7 +103,8 @@ public sealed record RestoreItemFacts(
     IReadOnlyList<string>? AuditedAccounts = null,
     int StreamsOutsideUserNamespace = 0,
     int LongestStreamName = 0,
-    ulong LargestStream = 0);
+    ulong LargestStream = 0,
+    FileFlagBits Flags = FileFlagBits.None);
 
 /// <summary>
 /// The files and the folders a restore would open wider than they were
@@ -333,6 +339,11 @@ public static class RestoreMetadata
     /// will restore the file degraded (ADR-0174 Amendment 3).
     /// </para>
     /// <para>
+    /// On every target, the items whose capture named file flags are declared
+    /// on a line of their own that names the flags, because no format key
+    /// keeps them and no restore sets them (ADR-0180 Amendment 1).
+    /// </para>
+    /// <para>
     /// What the planner already says is not said twice. On a target that
     /// applies no POSIX metadata, its line covers permissions and ownership.
     /// Its alternate-streams line covers streams. Symlinks on a target that
@@ -377,6 +388,8 @@ public static class RestoreMetadata
         var refusedStreams = new Tally();
         var streamsOutside = new Tally();
         var streamsTooLarge = new Tally();
+        var fileFlags = new Tally();
+        var flagMask = FileFlagBits.None;
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -393,6 +406,12 @@ public static class RestoreMetadata
             if (link && !target.SupportsSymlinks)
             {
                 continue;
+            }
+
+            if (known.Flags != FileFlagBits.None)
+            {
+                fileFlags.Add(item.Kind);
+                flagMask |= known.Flags;
             }
 
             var (given, unresolved) = Ownership(known.Owner, known.Group, target, names);
@@ -664,6 +683,9 @@ public static class RestoreMetadata
             + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask, target.SupportsCompression))}. Those will not be "
             + $"applied; the read-only, hidden, system, archive and not-content-indexed bits will"
             + $"{(target.SupportsCompression ? ", and so will compression" : string.Empty)}."));
+        Add("file-flags", fileFlags, string.Create(CultureInfo.InvariantCulture,
+            $"File flags captured on {fileFlags} will not be applied; no restore sets them: "
+            + $"{string.Join(", ", MetadataRules.FileFlagNamesOf(flagMask))}."));
 
         return declared;
     }

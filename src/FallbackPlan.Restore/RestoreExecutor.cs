@@ -1090,7 +1090,7 @@ public sealed class RestoreExecutor(
                             notLinked, foundInPlace: true, keptStreams);
                         if (!keptDegraded && group is not null && notLinked is null)
                         {
-                            groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, standing, keptNotApplied));
+                            groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, standing, keptNotApplied, FlagsNotApplied(manifest)));
                         }
 
                         items.Add(kept);
@@ -1262,7 +1262,7 @@ public sealed class RestoreExecutor(
                         streamsLeft, resumedAt: (ulong)result.Resumed);
                     if (!degraded && group is not null && notLinked is null)
                     {
-                        groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, landing, notApplied));
+                        groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, landing, notApplied, FlagsNotApplied(manifest)));
                     }
 
                     items.Add(settled);
@@ -1345,7 +1345,7 @@ public sealed class RestoreExecutor(
                     items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = 0, WrittenAs = linkWrittenAs,
-                        Detail = linkWritten.Detail,
+                        Detail = Joined(linkWritten.Detail, FlagsNotApplied(manifest)),
                         NotApplied = MetadataRules.NotApplied(MetadataRules.Captured(manifest.Metadata), linkWritten.Applied),
                     }));
                     break;
@@ -1454,6 +1454,7 @@ public sealed class RestoreExecutor(
         // not applied; it does not undo content that landed and verified
         // (ADR-0084).
         var written = _metadata.Write(landing, manifest.Metadata);
+        var flags = FlagsNotApplied(manifest);
         var streamsWritten = (target.SupportsAlternateStreams || _streamsAsAttributes) && streamsLeft is null;
         var notApplied = MetadataRules.NotApplied(
             MetadataRules.Captured(manifest.Metadata),
@@ -1467,7 +1468,7 @@ public sealed class RestoreExecutor(
             return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
             {
                 Path = item.Path, Outcome = "degraded", Bytes = length, WrittenAs = writtenAs,
-                Detail = Joined(notLinked, streamsLeft, written.Detail),
+                Detail = Joined(notLinked, streamsLeft, written.Detail, flags),
                 NotApplied = notApplied,
                 FoundInPlace = foundInPlace,
                 ResumedAt = resumedAt,
@@ -1483,7 +1484,8 @@ public sealed class RestoreExecutor(
                     notLinked,
                     $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
                         + "and not written back on this target (declared in the plan)"
-                        + (written.Detail is { } left ? $"; {left}" : string.Empty)),
+                        + (written.Detail is { } left ? $"; {left}" : string.Empty),
+                    flags),
                 NotApplied = notApplied,
                 FoundInPlace = foundInPlace,
                 ResumedAt = resumedAt,
@@ -1493,7 +1495,7 @@ public sealed class RestoreExecutor(
         return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
         {
             Path = item.Path, Outcome = "restored", Bytes = length, WrittenAs = writtenAs,
-            Detail = Joined(notLinked, written.Detail), NotApplied = notApplied,
+            Detail = Joined(notLinked, written.Detail, flags), NotApplied = notApplied,
             FoundInPlace = foundInPlace, ResumedAt = resumedAt,
         }), notApplied, false);
     }
@@ -2101,9 +2103,17 @@ public sealed class RestoreExecutor(
         return new ReceiptItem
         {
             Path = item.Path, Outcome = "restored", Bytes = (ulong)new FileInfo(landing).Length, WrittenAs = writtenAs,
-            NotApplied = first.NotApplied, LinkedTo = first.Path,
+            Detail = first.FlagsNotApplied, NotApplied = first.NotApplied, LinkedTo = first.Path,
         };
     }
+
+    /// <summary>
+    /// What an item's detail says of the file flags its manifest names, none
+    /// of which a restore sets (ADR-0180 Amendment 1), or null where it names
+    /// none.
+    /// </summary>
+    private static string? FlagsNotApplied(FileVersionManifest manifest) =>
+        MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.CaptureDiagnostics));
 
     /// <summary>The parts of an item's detail there are, joined, or null when there are none.</summary>
     private static string? Joined(params string?[] parts) =>
@@ -2114,5 +2124,6 @@ public sealed class RestoreExecutor(
     /// <param name="Path">Its path in the snapshot.</param>
     /// <param name="Landing">Where it landed.</param>
     /// <param name="NotApplied">What its file did not get back, which every name of it shares.</param>
-    private sealed record LandedName(string Key, string Path, string Landing, IReadOnlyList<string>? NotApplied);
+    /// <param name="FlagsNotApplied">What its item's detail says of its file's flags, which every name of it shares too.</param>
+    private sealed record LandedName(string Key, string Path, string Landing, IReadOnlyList<string>? NotApplied, string? FlagsNotApplied);
 }

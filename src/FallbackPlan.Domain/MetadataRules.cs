@@ -421,9 +421,23 @@ public static class MetadataRules
     /// are none (ADR-0180; specification 06 §4.1 key 13).
     /// </summary>
     public static string? FileFlagsDiagnostic(FileFlagBits flags) =>
+        flags == FileFlagBits.None ? null : FileFlagsPrefix + string.Join(", ", FileFlagNamesOf(flags));
+
+    /// <summary>
+    /// The name of each of <paramref name="flags"/>, as the diagnostic gives
+    /// them and in its order (ADR-0180).
+    /// </summary>
+    public static IReadOnlyList<string> FileFlagNamesOf(FileFlagBits flags) =>
+        [.. FileFlagNames.Where(entry => flags.HasFlag(entry.Flag)).Select(entry => entry.Name)];
+
+    /// <summary>
+    /// What a restore says of <paramref name="flags"/> a file carried, none
+    /// of which it sets, or null where there are none (ADR-0180 Amendment 1).
+    /// </summary>
+    public static string? FileFlagsNotApplied(FileFlagBits flags) =>
         flags == FileFlagBits.None
             ? null
-            : FileFlagsPrefix + string.Join(", ", FileFlagNames.Where(entry => flags.HasFlag(entry.Flag)).Select(entry => entry.Name));
+            : $"file flag(s) not applied: {string.Join(", ", FileFlagNamesOf(flags))} (not set by a restore)";
 
     /// <summary>
     /// The flags the capture <paramref name="diagnostics"/> name
