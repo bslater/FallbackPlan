@@ -6494,12 +6494,19 @@ function rstShort(plan) {
 }
 
 /*
- * Whether a folder the run writes to would open a file wider than it was,
- * which the service refuses unless the run acknowledges it (ADR-0178
- * Amendment 1).
+ * Whether the run would open a file, or a folder it makes, wider than it
+ * was, which the service refuses unless the run acknowledges it (ADR-0178
+ * Amendments 1 and 4).
  */
 function rstWider(plan) {
-  return (plan?.openedWider ?? 0) > 0;
+  return (plan?.openedWider ?? 0) > 0 || (plan?.openedWiderFolders ?? 0) > 0;
+}
+
+/* The files and the folders a plan counts as opened wider, as a person reads them. */
+function rstWiderCount(plan) {
+  const files = (plan?.openedWider ?? 0) > 0 ? `${fmtCount(plan.openedWider)} file(s)` : "";
+  const folders = (plan?.openedWiderFolders ?? 0) > 0 ? `${fmtCount(plan.openedWiderFolders)} folder(s)` : "";
+  return files && folders ? `${files} and ${folders}` : files || folders;
 }
 
 /* The choices a plan's run is armed only once a person has made: each its own checkbox. */
@@ -6508,15 +6515,15 @@ function rstNeeds(plan) {
   return needs.length ? ` data-needs="${needs.join(" ")}"` : "";
 }
 
-/* The files a folder would open wider, and the acknowledgement that goes past them; `arming` as rstPlanDetails takes it. */
+/* What a folder would open wider, and the acknowledgement that goes past it; `arming` as rstPlanDetails takes it. */
 function rstWiderChoice(plan, arming) {
   if (!rstWider(plan)) return "";
   return `<div id="rst-wider">
-      <ul class="warnings"><li>${fmtCount(plan.openedWider)} file(s) would be open to more accounts than they were: their
+      <ul class="warnings"><li>${rstWiderCount(plan)} would be open to more accounts than they were: their
         own permissions name accounts this machine does not know, so they take the folder's, which give more. Nothing will
         be written unless you choose to restore anyway. Go back and choose another folder, or restore anyway.</li></ul>
       <label class="check-row"><input type="checkbox" id="rst-ack-wider" ${arming}>
-        Restore anyway — I accept that these files will be open to more accounts than they were</label></div>`;
+        Restore anyway — I accept that these will be open to more accounts than they were</label></div>`;
 }
 
 /* Whether the person chose to go past the files a folder would open wider. */
