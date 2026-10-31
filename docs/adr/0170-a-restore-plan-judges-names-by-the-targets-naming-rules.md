@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another)
+**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the executor's rule for where a repository's path is written, which the recovery tool shares), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-7
 
 **Built:**
@@ -63,6 +63,8 @@ On Windows, `TryResolve` refuses such a component with a reason that names Windo
 - **Judge a POSIX target by its own limits.** A POSIX volume's 255-byte component limit, and macOS's composed-name rules, are not judged. The plan's whole-path byte limit (`MaxPathBytes`) is unchanged.
 
   > **Built 2026-10 for Linux ([Amendment 1](#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds)).** A target that counts a name in bytes states how many it holds, and the local profile states 255 on Linux. A name longer than that is a conflict. macOS's limit and its composed-name rules are still not judged.
+
+  > **2026-10 ([Amendment 2](#amendment-2-2026-10--a-collision-is-named-only-where-the-target-takes-the-two-names-for-one)).** That macOS takes a name's composed and decomposed forms for one name is now stated, and two such names are a collision there. A volume that stores a name in another form than it was given, as HFS+ stores one decomposed, is still not judged, nor is macOS's limit.
 - **Judge a destination by its volume rather than its platform.** A FAT or SMB volume mounted on POSIX may name by stricter rules than its host. The flag says what the platform does, and a caller that knows better can set it.
 
 ## Alternatives considered
@@ -93,9 +95,32 @@ Windows counts a name in UTF-16 units, and Linux in bytes. A name in UTF-8 is ne
 
 **Not done.** A name on a volume mounted on Linux that holds fewer bytes, or more, is judged by Linux's common limit, since the profile states the platform's and not the volume's (the third bullet of "What this does not do"). The whole path is still not judged against the platform's path limit.
 
+## Amendment 2 (2026-10) — a collision is named only where the target takes the two names for one
+
+The plan named two paths as colliding on any case-insensitive target where they matched once each was turned to its composed Unicode form and lower-cased. That is the catalogue's fold ([ADR-0026](0026-phase-1-capture-shapes.md) §8). It is right for macOS, whose volumes take a name's composed and decomposed forms for one name. It is wrong for Windows:
+
+- **NTFS compares names by case alone.** It keeps `café` with its accent composed into the letter apart from `café` with the accent a mark of its own after the `e`. A snapshot holding both, restored to Windows, planned with both named as a collision, a decision put to the operator that did not exist. The run then restored both, as they were.
+- **A case-sensitive volume on macOS still takes the two forms for one.** No target could say so: a target stated case-sensitive was not judged at all.
+
+**Decision.**
+
+- **The target profile gains `NormalisationInsensitive`:** whether the target takes two names that differ only in their Unicode normalisation for one. Like `CaseSensitive` it is stated, so a plan for any target can be made, and tested, anywhere. The local profile states it on macOS.
+- **The plan folds a path only as the target does.** Case is folded where the target is case-insensitive, compared as the executor compares paths there, by ordinal comparison ignoring case. Normalisation is folded, to the composed form, only where the target ignores it. A case-sensitive target that ignores normalisation is judged by normalisation alone.
+- **The reason no longer says case alone.** Each item names the others it would land on, "which it takes for the same name".
+- **Execution is unchanged.** On Windows and Linux both forms of a name land, each with its own content.
+
+**Built:** `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests`:
+
+- of a composed and a decomposed `café.txt` and of `Notes.txt` and `notes.txt`, a target that folds case alone, as Windows does, names only the case pair; one that folds both, as macOS does, names all four; a case-sensitive one that folds normalisation names only the two forms; Linux's names none;
+- the local profile states it on macOS alone, and the volume the tests write on agrees: a name written composed is found decomposed on macOS and on no other platform;
+- on Windows and Linux a run restores both forms of the name, each with its own content, and displaces nothing.
+
+**Not done.** The flag follows the platform, as the others do, so a folder Linux makes case-insensitive, or a volume of another platform's kind mounted there, is judged as Linux (the third bullet of "What this does not do"). A volume that stores a name in another form than it was given, as HFS+ stores one decomposed, is not judged.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A restore plan names every name the target cannot make, by a stated Windows naming rule, and a restore on Windows refuses one rather than writing it under another. No contract or format change. |
 | 2026-10 | Amended | Amendment 1: a target that counts a name in bytes states how many it holds, 255 for the local profile on Linux, and the plan names a name longer than that before any byte moves. `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests`; `Repository.Tests/RestoreLongNameTests` |
+| 2026-10 | Amended | Amendment 2: the target states whether it takes a name's composed and decomposed forms for one, the local profile on macOS, and the plan names two paths as colliding only where the target folds them together, by case as the executor compares them and by normalisation only where the target ignores it. `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests` |
