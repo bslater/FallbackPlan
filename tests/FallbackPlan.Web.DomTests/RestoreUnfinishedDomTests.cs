@@ -28,7 +28,8 @@ namespace FallbackPlan.Web.DomTests;
 /// how many begun within stay is said; days below one, or not whole, are
 /// refused before anything is asked to go (ADR-0169). A resume whose plan
 /// counts files a folder would open wider is asked only once the person
-/// acknowledges it (FR-RST-003, ADR-0178 Amendment 2).
+/// acknowledges it (FR-RST-003, ADR-0178 Amendment 2), and so is one that
+/// counts folders, which it names beside the files (ADR-0178 Amendment 5).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -182,6 +183,25 @@ public sealed class RestoreUnfinishedDomTests
         var resumed = await harness.ReceivedAsync<ResumeRestoreCommand>();
         Assert.IsTrue(resumed.AcknowledgeWiderAccess);
         Assert.IsFalse(resumed.IgnoreFreeSpace);
+    }
+
+    [TestMethod]
+    public async Task AResumeThatWouldOpenFilesAndFoldersWider_NamesBoth_AndIsAskedOnlyWhenAcknowledged()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Fakes(plan: _ => Fits with { OpenedWider = 1, OpenedWiderFolders = 2 });
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToTheResumeAsync(page, harness);
+
+        await Expect(page.Locator("#rst-wider")).ToContainTextAsync("1 file(s) and 2 folder(s)");
+        var go = page.Locator("#rst-resume-go");
+        await Expect(go).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ack-wider");
+        await go.ClickAsync();
+
+        Assert.IsTrue((await harness.ReceivedAsync<ResumeRestoreCommand>()).AcknowledgeWiderAccess);
     }
 
     [TestMethod]

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain; amended by [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such files is refused before anything is written unless it acknowledges wider access, and the plan counts them; amended by [Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement): the console asks the person for that acknowledgement; amended by [Amendment 3](#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in): a file is judged by the folder it lands in, through the folders the restore makes, and the folders its access comes from are named; amended by [Amendment 4](#amendment-4-2026-10--a-folder-the-restore-makes-is-judged-too): a folder the restore makes is judged too, counted apart, and its run refused alike)
+**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain; amended by [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such files is refused before anything is written unless it acknowledges wider access, and the plan counts them; amended by [Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement): the console asks the person for that acknowledgement; amended by [Amendment 3](#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in): a file is judged by the folder it lands in, through the folders the restore makes, and the folders its access comes from are named; amended by [Amendment 4](#amendment-4-2026-10--a-folder-the-restore-makes-is-judged-too): a folder the restore makes is judged too, counted apart, and its run refused alike; amended by [Amendment 5](#amendment-5-2026-10--the-console-asks-for-folders-too): the console asks for the acknowledgement where folders are counted too)
 **Related:** [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) (a descriptor is written only where the machine knows every account it names, and is otherwise declared), [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (the plan and the receipt say what a target will not get back, and a run that will not fit is refused unless a person goes on), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (refuse is reserved for a descriptor that cannot be applied where the default would grant broader access)
 
 **Built:**
@@ -212,6 +212,8 @@ Architecture 06 §3 reserves refusal for a descriptor that cannot be applied whe
 ### What this does not do
 
 - **Ask in the console.** The console's wizard asks for the acknowledgement where `opened_wider` counts files. A run with only such folders is refused through it, naming them, until it reads `opened_wider_folders` too.
+
+  > **Built 2026-10 ([Amendment 5](#amendment-5-2026-10--the-console-asks-for-folders-too)).** It reads it now, and asks where either is counted.
 - **Judge a folder that stands.** It keeps its own descriptor, so nothing it gives is in question.
 
 **Built:** `Domain/WindowsAccess`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Agent/ServiceCommandHandler`; `Cli/OperationGateway`; `Cli/RestorePlanReport`:
@@ -227,6 +229,31 @@ Architecture 06 §3 reserves refusal for a descriptor that cannot be applied whe
 - `Hosts.Tests/RestoreHonestyServiceTests`, on Windows: a real folder kept to an unknown account, restored into a folder that shares with Users, is counted. Its run is refused and writes nothing, then restores once acknowledged.
 - `Cli.Tests/RestoreHonestyCommandTests`, on Windows: in direct mode the command line's plan counts such a folder apart from files, and fails.
 
+## Amendment 5 (2026-10) — the console asks for folders too
+
+### Context
+
+Amendment 4 counts the folders a run would make that what passes to them would open wider, in `opened_wider_folders`, and refuses the run for them as for files. The console's wizard asked for the acknowledgement only where `opened_wider` counted files. A plan that counted only such folders showed the plan's line and offered nothing, and the run it asked was refused.
+
+### Decision
+
+- **The wizard asks where either is counted.** Where a plan counts such files, such folders or both, the wizard says how many of each, "N file(s)", "M folder(s)" or "N file(s) and M folder(s)", and arms the run only once the person ticks the acknowledgement, as Amendment 2 has it.
+- **Every path Amendment 2 covers asks alike**: a run, a kept plan's run, a resume of a run left unfinished and the resume a result offers, since each judges its plan by the same test.
+- **The checkbox speaks of what is counted.** It says "these", not "these files", since what it acknowledges may be folders.
+
+### Consequences
+
+- A person restoring through the console can go on past a refusal for folders, having been told how many, as they can for files.
+
+### What this does not do
+
+- **Name the folders on the checkbox.** The plan's line above it names the folders their access comes from and the accounts that gain, as Amendment 2 leaves it.
+
+**Built:** `FallbackPlan.Web` (`wwwroot/app.js`):
+
+- `Web.DomTests/RestoreWizardDomTests`: a plan that counts only such folders says how many and no files, and its run is armed only once the person acknowledges it, which the run then sends.
+- `Web.DomTests/RestoreUnfinishedDomTests`: a resume whose plan counts both says "1 file(s) and 2 folder(s)", and is asked only once acknowledged.
+
 ## Status history
 
 | Date | Status | Note |
@@ -236,3 +263,4 @@ Architecture 06 §3 reserves refusal for a descriptor that cannot be applied whe
 | 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement): the console's restore wizard says how many files a plan counts a folder would open wider, and arms the run only once the person ticks the acknowledgement, which a run, a kept plan's run and either resume send; a plan short of room as well needs both choices. `Web/wwwroot`; `Web.DomTests/RestoreWizardDomTests`; `Web.DomTests/RestoreUnfinishedDomTests`; `Web.DomTests/RestoreKeptPlanDomTests` |
 | 2026-10 | Amended | [Amendment 3](#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in): a file is judged by the folder it lands in, resolved under its slice's folder as the executor resolves it, and by what passes down to it through the folders the restore makes, an entry marked not to propagate stopping at the first; the plan's line and the refusal name the folders the access comes from. `Domain/WindowsAccess`; `Restore/RestoreMetadata`; `Domain.Tests/WindowsAccessTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Amended | [Amendment 4](#amendment-4-2026-10--a-folder-the-restore-makes-is-judged-too): a folder the restore makes, whose descriptor names an account the machine does not know, is held against what passes to it as its own, counted apart from files (`opened_wider_folders`, contract 1.81), and its run refused alike unless acknowledged; a folder that stands is not judged. `Domain/WindowsAccess`; `Restore/RestoreMetadata`; `Cli/RestorePlanReport`; `Domain.Tests/WindowsAccessTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Api.Tests/ConfigurationContractTests`; `Cli.Tests/GatewayRestoreReportTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Cli.Tests/RestoreHonestyCommandTests` |
+| 2026-10 | Amended | [Amendment 5](#amendment-5-2026-10--the-console-asks-for-folders-too): the console's wizard asks for the acknowledgement where a plan counts folders opened wider as well as files, saying how many of each, for a run, a kept plan's run and either resume. `Web.DomTests/RestoreWizardDomTests`; `Web.DomTests/RestoreUnfinishedDomTests` |

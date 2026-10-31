@@ -33,7 +33,8 @@ namespace FallbackPlan.Web.DomTests;
 /// A plan counting files a folder would open wider says how many, and its
 /// run, and the resume a result offers, are armed only once the person
 /// acknowledges it, beside the choice to go on for room where the plan is
-/// short of that too (FR-RST-003, ADR-0178 Amendment 2).
+/// short of that too (FR-RST-003, ADR-0178 Amendment 2). A plan counting only
+/// folders the run would make is asked of alike (ADR-0178 Amendment 5).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -375,6 +376,36 @@ public sealed class RestoreWizardDomTests
         var restored = await harness.ReceivedAsync<RunRestoreCommand>();
         Assert.IsTrue(restored.AcknowledgeWiderAccess);
         Assert.IsFalse(restored.IgnoreFreeSpace, "one choice is not taken for the other");
+    }
+
+    [TestMethod]
+    public async Task Wizard_APlanThatWouldOpenOnlyFoldersWider_SaysSo_AndOnlyAcknowledgingItArmsTheRestore()
+    {
+        // ADR-0178 Amendment 5: the service refuses a run for such folders
+        // as for files (Amendment 4), though the plan counts no file.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(1, 42, [], WriteBytes: 42, OpenedWiderFolders: 3)
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+
+        await Expect(page.Locator("#rst-wider")).ToContainTextAsync("3 folder(s)");
+        await Expect(page.Locator("#rst-wider")).Not.ToContainTextAsync("file(s)");
+
+        var run = page.Locator("#rst-run-go");
+        await page.FillAsync("#confirm-word", "restore");
+        await Expect(run).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ack-wider");
+        await Expect(run).ToBeEnabledAsync();
+        await run.ClickAsync();
+
+        Assert.IsTrue((await harness.ReceivedAsync<RunRestoreCommand>()).AcknowledgeWiderAccess);
     }
 
     [TestMethod]
