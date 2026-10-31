@@ -50,6 +50,18 @@ public static class SymbolicLinks
     }
 
     /// <summary>
+    /// The full path the link at <paramref name="link"/> names by
+    /// <paramref name="target"/>: from the folder the link is in, or where a
+    /// target from the root says.
+    /// </summary>
+    public static string PathNamed(string link, string target)
+    {
+        ThrowHelper.ThrowIfNull(link);
+        ThrowHelper.ThrowIfNull(target);
+        return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(link)!, target));
+    }
+
+    /// <summary>
     /// Makes the link <paramref name="path"/> to <paramref name="target"/>,
     /// as a folder's where <paramref name="folder"/> says so, which only
     /// Windows distinguishes.

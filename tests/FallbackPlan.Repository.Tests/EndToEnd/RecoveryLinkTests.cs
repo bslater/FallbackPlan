@@ -17,7 +17,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// the executor does (FR-RST-004; ADR-0155). A link standing in the output
 /// still carries nothing out of it, since every later path is placed by the
 /// executor's rule (ADR-0152). A link's flags, which no restore sets, are
-/// noted as a file's are (ADR-0180 Amendment 2).
+/// noted as a file's are (ADR-0180 Amendment 2). On Windows the tool makes
+/// a link where the account may, a folder's or a file's as the executor
+/// makes it, with Windows' separators, and skips it with a note where it
+/// may not (ADR-0181 Amendment 1).
 /// </summary>
 /// <remarks>
 /// Whatever the output holds at a file's or a link's name and will not give
@@ -192,9 +195,9 @@ public sealed class RecoveryLinkTests : IDisposable
     }
 
     [TestMethod]
-    [PlatformCondition(TestPlatforms.Windows, "Windows makes a link only with a privilege a restore does not ask for")]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows decides whether the account may make a link")]
     [PlatformTrait(TestPlatforms.Windows)]
-    public async Task RecoveryRestore_ASymlink_WhereTheTargetMakesNoLinks_IsSkippedWithANote()
+    public async Task RecoveryRestore_OnWindows_ASymlink_IsALinkWhereTheAccountMayMakeOne_AndSkippedWithANoteWhereItMayNot()
     {
         var source = new FakeFileSystemSource();
         source.AddNode(Link("link", "elsewhere"));
@@ -202,10 +205,48 @@ public sealed class RecoveryLinkTests : IDisposable
 
         var report = await RestoreIntoAsync(source, output);
 
-        Assert.AreEqual((0, 0, 1), (report.Restored, report.Failed, report.Skipped));
-        var note = Assert.ContainsSingle(report.Notes);
-        Assert.AreEqual((RecoveryNoteKind.SkippedSpecial, "link"), (note.Kind, note.Path));
-        Assert.IsFalse(Path.Exists(Path.Combine(output, "link")));
+        if (SymbolicLinks.CanCreate)
+        {
+            Assert.AreEqual((1, 0, 0), (report.Restored, report.Failed, report.Skipped));
+            Assert.IsEmpty(report.Notes);
+            Assert.AreEqual("elsewhere", new FileInfo(Path.Combine(output, "link")).LinkTarget);
+        }
+        else
+        {
+            Assert.AreEqual((0, 0, 1), (report.Restored, report.Failed, report.Skipped));
+            var note = Assert.ContainsSingle(report.Notes);
+            Assert.AreEqual((RecoveryNoteKind.SkippedSpecial, "link"), (note.Kind, note.Path));
+            Assert.IsFalse(Path.Exists(Path.Combine(output, "link")));
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows tells a folder's link from a file's")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task RecoveryRestore_OnWindows_ALink_IsAFoldersOrAFilesAsTheExecutorMakesIt_WithWindowsSeparators()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", [1, 2, 3]);
+        source.AddFile("docs/inside.txt", [4]);
+        source.AddNode(Link("a-docs", "docs"));
+        source.AddNode(Link("a-file", "data/target.bin"));
+        source.AddNode(Link("a-windows-folder", "data/target.bin") with
+        {
+            Metadata = new EntryMetadata { ModifiedAt = LinkModified, FileAttributes = 0x10 | 0x400 },
+        });
+        var output = Path.Combine(_root, "restored");
+
+        var report = await RestoreIntoAsync(source, output);
+
+        Assert.AreEqual(0, report.Failed);
+        Assert.IsTrue(Directory.Exists(Path.Combine(output, "a-docs")), "a link naming a folder of its tree is a folder's link");
+        Assert.IsTrue(File.Exists(Path.Combine(output, "a-docs", "inside.txt")), "and it resolves");
+        Assert.AreEqual(@"data\target.bin", new FileInfo(Path.Combine(output, "a-file")).LinkTarget);
+        CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, File.ReadAllBytes(Path.Combine(output, "a-file")));
+        Assert.IsTrue(
+            (File.GetAttributes(Path.Combine(output, "a-windows-folder")) & FileAttributes.Directory) != 0,
+            "a link Windows captured as a folder's is made one");
     }
 
     /// <inheritdoc />

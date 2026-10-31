@@ -10,6 +10,8 @@ namespace FallbackPlan.Domain.Tests;
 /// folder, and one captured elsewhere where what it names is a folder. A
 /// target captured with another platform's separators is written with
 /// Windows' own, which is the only separator Windows resolves in a link.
+/// What a link names is its target from the folder the link is in, which
+/// the executor and the recovery tool both judge by (ADR-0181 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class SymbolicLinksTests
@@ -37,6 +39,20 @@ public sealed class SymbolicLinksTests
     {
         Assert.IsTrue(SymbolicLinks.PointsAtAFolder(null, () => true));
         Assert.IsFalse(SymbolicLinks.PointsAtAFolder(null, () => false));
+    }
+
+    [TestMethod]
+    public void WhatALinkNames_IsItsTarget_FromTheFolderTheLinkIsIn()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "fbp-names", "deep");
+        var link = Path.Combine(folder, "link");
+
+        Assert.AreEqual(Path.Combine(folder, "docs"), SymbolicLinks.PathNamed(link, "docs"));
+        Assert.AreEqual(
+            Path.Combine(Path.GetTempPath(), "fbp-names", "shared"),
+            SymbolicLinks.PathNamed(link, Path.Combine("..", "shared")));
+        var elsewhere = Path.Combine(Path.GetTempPath(), "elsewhere");
+        Assert.AreEqual(elsewhere, SymbolicLinks.PathNamed(link, elsewhere), "a target from the root is where it says");
     }
 
     [TestMethod]
