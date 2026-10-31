@@ -60,8 +60,9 @@ public sealed class RestoresUnderWayTests
     {
         RestoresUnderWay.Hold(_state, Restored, "0123456789abcdef").Dispose();
 
-        Assert.IsFalse(RestoresUnderWay.AnyFor(_state, Restored));
+        // Looked for before anything asks, since a look clears a marker nobody holds.
         Assert.IsEmpty(Directory.EnumerateFiles(_state, "*", SearchOption.AllDirectories));
+        Assert.IsFalse(RestoresUnderWay.AnyFor(_state, Restored));
     }
 
     [TestMethod]
