@@ -221,6 +221,8 @@ Three rules close it, one on each side and one in the order of reads:
 
 The cost is a pass's worth of latency on blob space, and on a dead backup the declared hour plus the margin. Staging has one writer, so the wait is for the set's own backup and no one else's.
 
+> **2026-10 ([ADR-0172 Amendment 3](../adr/0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-3-2026-10--a-retention-pass-holds-its-blobs-beside-a-restore-of-the-set)).** The third rule holds beside a restore of the set too. A restore reads the blobs of the snapshot it restores as it goes, which no survey shows, so a pass collects no blob while the service has one under way, and says so on a line of its own. A sync's convergence at the destinations is not yet held for one.
+
 ## 4. Why leases are not load-bearing
 
 Leases exist. They are advisory, and their only job is stopping two collectors from doing the same work at the same time. Losing one costs efficiency and nothing else.

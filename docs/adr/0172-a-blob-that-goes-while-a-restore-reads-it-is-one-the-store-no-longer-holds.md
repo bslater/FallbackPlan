@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held)
+**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way)
 **Related:** [ADR-0075](0075-a-restore-reads-around-damage.md) §5 (what a copy passed over is called), [ADR-0068](0068-the-catalogue-directed-restore-read.md) (the catalogue-directed read), [ADR-0009](0009-garbage-collection-safety.md) (the collector), [ADR-0034](0034-hub-and-spoke-destinations.md) §6 (the staging trim), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-4
 
 **Built:**
@@ -69,6 +69,8 @@ Damage stays damage. The blob reader is unchanged. Its other callers, the loader
 ## What this does not do
 
 - **Hold the collector off a restore.** A snapshot that expires and is swept while it is being restored loses the files whose blobs went, with no copy to read them from: destinations converge to the same policy. They fail, named, and the receipt says so. The sweep's grace spans two retention applies and a publication between them, and a person runs an apply, so the window is a restore that outlives all three.
+
+  > **Built 2026-10 for the set's own pass ([Amendment 3](#amendment-3-2026-10--a-retention-pass-holds-its-blobs-beside-a-restore-of-the-set)).** A retention pass, and a person's deletion, hold every blob while the service has a restore of the set under way, and say so. A sync's convergence at the destinations, and a restore run in direct mode, are not held for.
 - **Say "not held" in the failure.** A record no loaded blob carries is reported as a format violation, as it was for a blob missing before the run began.
 
   > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-record-no-store-holds-fails-as-not-held)).** A record whose blob the store does not hold fails as not held, whether the blob went during the run or before it, and the receipt says so. A record nothing places at all is still a format violation.
@@ -134,6 +136,30 @@ Every other reader of the outcome compares it against success, or leaves what it
 - the control: a blob the store still holds, cut short inside the record, fails as damage, not as not held, and is skipped as damage;
 - through the executor, with a blob swept partway and no copy, every failed item's detail names "NotHeld".
 
+## Amendment 3 (2026-10) — a retention pass holds its blobs beside a restore of the set
+
+"What this does not do" left the collector free to run beside a restore. A restore reads the blobs of the snapshot it restores as it goes, and nothing in the store says it is reading them. A snapshot that expired, or that a person deleted, while a restore of it ran could have its blobs swept from under the run. The files they held then failed as not held (Amendment 2), with no copy to read them from where the destinations had converged to the same policy.
+
+A pass already holds every blob beside a backup in flight, on the journal's word or on the service's that the set's backup is queued, running or parked ([ADR-0009](0009-garbage-collection-safety.md) Amendment 8). The service knows its restores the same way: it records each one under way from before it writes until it ends ([ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md)).
+
+**Decision.**
+
+- **The service says whether a restore of a set is under way.** `RestoreRunJournal` answers it from the runs under way in this process, by the set they restore. A run on record when the journal opens was left by a process that has gone, and is not under way.
+- **A pass holds every blob while one is,** as beside a backup. It writes no blob tombstone, and the sweep and the trim delete no blob; snapshots still expire. The service asks before each retention apply and each person's deletion, the two places it runs a pass.
+- **The report says so,** on a line of its own: "held beside a restore", with what was not tombstoned, deleted or trimmed. A pass held beside both a backup and a restore says both.
+- **No time bound.** A restore through the service ends, finished or not, and its record says it is no longer under way. A process that dies takes the hold with it.
+
+**Built:** `Application/RestoreRunJournal`, `Retention/RetentionRunner`, `Agent/ServiceCommandHandler`:
+
+- `Application.Tests/RestoreRunJournalTests` — a run under way says its set is being restored, and another set is not; one that ended, finished or not, says nothing; a run on record when the journal opens says nothing.
+- `Retention.Tests/CollectionBesideABackupTests` — a pass told a restore of the set is under way holds a blob whose grace has run, and its line names a restore and not a backup; the next pass, told nothing, deletes it.
+- `Hosts.Tests/RetentionBesideARestoreTests` — through the service, an apply and a person's deletion beside a run of the set say they held; an apply beside a run of another set holds nothing, and one after the run has ended holds nothing.
+
+**Not done.**
+
+- **A sync's convergence.** A destination still drops what its policy no longer keeps while a restore of the set is under way. Under direct-ship the destinations are the only holders, and a restore reads around to them.
+- **A restore in direct mode.** The command line restores outside the service, and nothing tells a pass it is running.
+
 ## Status history
 
 | Date | Status | Note |
@@ -141,3 +167,4 @@ Every other reader of the outcome compares it against success, or leaves what it
 | 2026-10 | Accepted | Built in one slice, tests first. The review's compaction case held as it stood. A blob that goes while a restore reads it no longer ends the run or reads as damage. No contract, format or schema change. |
 | 2026-10 | Amended | Amendment 1: a blob that goes from another copy while the run reads around to it is passed over there as not held, and a read through that copy's footer no longer ends the run. `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |
 | 2026-10 | Amended | Amendment 2: with no copy to read it from, a record whose blob the store does not hold fails as not held, not as a format violation, whether the blob went during the run or before it. `Repository.Packing/RecordReadResult`, `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |
+| 2026-10 | Amended | Amendment 3: a retention pass and a person's deletion hold every blob while the service has a restore of the set under way, and say so on a line of their own; snapshots still expire. `Application/RestoreRunJournal`, `Retention/RetentionRunner`, `Agent/ServiceCommandHandler`; `Application.Tests/RestoreRunJournalTests`, `Retention.Tests/CollectionBesideABackupTests`, `Hosts.Tests/RetentionBesideARestoreTests` |
