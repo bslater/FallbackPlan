@@ -17,6 +17,8 @@ namespace FallbackPlan.Filesystem.Tests;
 /// holds SeSecurityPrivilege (FR-RST-004, ADR-0176 Amendment 3), and a link
 /// is captured as a link, never followed, with its own security descriptor
 /// read through a handle opened on the link itself (FR-MAN-003, ADR-0182).
+/// A reparse point whose tag names no other path, as a deduplicated file's
+/// does, is captured as the file it is, never as a link (ADR-0183).
 /// </summary>
 [TestClass]
 public sealed partial class LocalScanTests : IDisposable
@@ -263,6 +265,30 @@ public sealed partial class LocalScanTests : IDisposable
         var read = Described(link);
         Assert.IsTrue(read.SaclPresent);
         Assert.Contains("S-1-1-0", read.AuditedAccounts);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps reparse points")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_AReparsePointWhoseTagNamesNoPath_IsCapturedAsTheFileItIs_NotAsALink()
+    {
+        const string content = "the content a filter keeps";
+        var path = Write("kept-by-a-filter.bin", content);
+        ForeignReparsePoint.Set(path);
+        Assert.IsTrue(
+            (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0,
+            "the premise: the file carries the reparse bit");
+
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.AreEqual(ScanEntryKind.File, entry.Kind);
+        Assert.IsNull(entry.LinkTarget);
+        Assert.AreEqual(content.Length, entry.Length);
+
+        // No filter on this machine keeps the tag, so its content does not
+        // open, and the read says so where a link would have kept nothing.
+        Assert.Throws<IOException>(() => _source.OpenRead(entry));
     }
 
     [TestMethod]

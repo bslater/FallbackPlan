@@ -207,6 +207,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0180](adr/0180-capture-names-the-file-flags-it-does-not-keep.md) | Capture names the file flags it does not keep: Linux's flags as `statx` reports them, only where the volume reports each, and macOS's from its stat, named among a file's capture diagnostics in one order and read back by the rule, and counted in the digest an incremental compares, so a change of flags alone is a change; no format key keeps them, so a restore gives none back. Amendment 1: the restore's plan names the files and links captured with flags on every target, and its receipt names them beside each such item, which is still restored. Amendment 2: the recovery tool notes them for each file, link and later hard-link name, and `restore-file` says so | **Built** | `Domain/FileFlagBits` · `Domain/MetadataRules` · `Filesystem.Local/LocalFileSystemSource` · `Repository.Format/FileVersionManifestCodec` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Cli/CliApplication` · `Domain.Tests/FileFlagsTests` · `Filesystem.Tests/LocalScanTests` · `Repository.Tests/FileFlagsCaptureTests` · `Repository.Tests/MetadataOnlyChangeTests` · `Repository.Tests/RestoreMetadataHonestyTests` · `Repository.Tests/RestoreHardLinkTests` · `Repository.Tests/RecoveryMetadataTests` · `Cli.Tests/InspectionCommandTests` · [notes](#0180--file-flags) |
 | [0181](adr/0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md) | A restore on Windows makes a symlink where the account may: whether it may is asked once by making one, each link is a folder's or a file's as its captured attribute bits say, or as what it names says where none were captured, and its target is written with Windows' separators; the plan declares links skipped only where they will be. Amendment 1: the recovery tool makes links there too, judging a folder's link by its tree or what stands. Amendment 2: a link made there gets its own times back through a handle opened on the link itself. Amendment 3: and its attribute bits, through the same handle | **Built** | `Domain/SymbolicLinks` · `Domain/SymlinkMetadata` · `Domain/MetadataWriter` · `Domain/MetadataRules` · `Restore/RestorePlan` · `Restore/RestoreMetadata` · `Restore/RestoreExecutor` · `Recovery/RecoverySession` · `Domain.Tests/SymbolicLinksTests` · `Domain.Tests/SymlinkMetadataOnWindowsTests` · `Repository.Tests/RestoreWindowsLinkTests` · `Repository.Tests/RecoveryLinkTests` · [notes](#0181--windows-links) |
 | [0182](adr/0182-capture-reads-a-links-own-security-descriptor-on-windows.md) | Capture reads a link's own security descriptor on Windows: through a handle opened on the reparse point, with the audit list's right asked only where SeSecurityPrivilege is enabled for the read; files and folders are read by their path as before. Amendment 1: a restore writes it back onto the link through a handle of the same kind, by ADR-0176's rule | **Built** | `Filesystem.Local/WindowsInterop` · `Filesystem.Local/LocalFileSystemSource` · `Domain/WindowsSecurity` · `Domain/MetadataWriter` · `Restore/RestoreMetadata` · `Filesystem.Tests/LocalScanTests` · `Domain.Tests/SecurityDescriptorWriteBackTests` · `Repository.Tests/RestoreWindowsLinkTests` · `TestSupport/LinkSecurity` · [notes](#0182--a-links-descriptor) |
+| [0183](adr/0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) | Capture reads a reparse point as a link only where its tag names one: the tag is read through a handle on the reparse point where the bit is set; a symbolic link or a mount point is a link, any other the file or folder a filter keeps, read through the filter, and one whose tag cannot be read a link, never followed | **Built** | `Filesystem.Local/ReparsePoints` · `Filesystem.Local/WindowsInterop` · `Filesystem.Local/LocalFileSystemSource` · `Filesystem.Tests/ReparsePointTests` · `Filesystem.Tests/LocalScanTests` · [notes](#0183--reparse-points) |
 
 ---
 
@@ -5172,3 +5173,26 @@ asked for, as well as around the write. A link is held to a file's rule
 and order, refused and named in the same words, and the plan counts it
 on the same lines. The line for a file its new folder would open wider
 still judges files and folders alone.
+
+### 0183 — reparse points
+
+Windows capture took every entry carrying the reparse-point bit for a
+link. The bit marks a symbolic link and a junction, but also a file a
+filter keeps, as one deduplicated on a Windows Server volume is. Such
+a file was captured as a link with no target and none of its content,
+and a restore skipped it. A folder a filter keeps was not descended
+into. A file compressed with `compact /exe` was never among them: the
+filter it compresses through hides its reparse point.
+
+The tag now decides, read through a handle on the reparse point where
+the bit is set. A symbolic link or a mount point is a link, never
+followed. Any other is the file or folder its directory bit says, read
+through the filter, which gives its content whole. One whose tag cannot
+be read is a link, so a folder's link is never walked through.
+
+What remains is recorded rather than done:
+
+- a mount point is still captured as a link, and a junction comes back
+  as a folder's symbolic link;
+- a file a cloud provider keeps only as a placeholder is fetched when
+  it is read.
