@@ -301,6 +301,10 @@ Four rules close the gap.
      parked. This signal has no time bound. It needs none, because a backup
      parked across a shut background window can outlive any bound, and a
      queued backup has published nothing yet.
+
+   > **2026-10 ([ADR-0172 Amendment 3](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-3-2026-10--a-retention-pass-holds-its-blobs-beside-a-restore-of-the-set)).** A pass holds the same
+   > way while the service has a restore of the set under way, which reads
+   > the blobs of the snapshot it restores, and says so on a line of its own.
 4. **A refused snapshot delete holds back the blobs that snapshot reaches.**
    A snapshot whose delete did not happen is still listed, so it must still
    restore. The sweep therefore tries every snapshot before any blob. It
@@ -359,3 +363,4 @@ written to bound that cost.
 | 2026-09 | Accepted | NFR-TIME-001 proved for GC safety under injected skew: a collector a day ahead, a day behind or a year ahead of the writer sweeps nothing without a publication, keeps the newest snapshot the floor protects, and expires no intent whose generation has not passed (`Retention.Tests/ClockSkewTests`). "None of them a clock" holds for intents only by circumstance: expiry's duration half reads the collector's clock against the writer's stamp over a fixed five-minute margin, and is safe under skew today because the key generation never advances. A configured margin is NFR-TIME-002's |
 | 2026-09 | Accepted (amended) | Amendment 7: the skew margin is configured. It is `clock_skew_margin_hours`, a day when absent, where it was a fixed five minutes. Each retention pass and the check read it, and a pass logs it beside the generation it binds against (NFR-TIME-002, `Retention.Tests/ClockSkewTests`, `Hosts.Tests/ClockSkewMarginServiceTests`) |
 | 2026-10 | Accepted (amended) | Amendment 8: a backup builds on no tombstoned blob, a pass reads the journal before the snapshots and collects no blob beside a backup in flight, and a refused snapshot delete holds back the blobs that snapshot reaches (FR-GC-003, FR-GC-006, `Retention.Tests/CollectionBesideABackupTests`, `Retention.Tests/SweepFailureTests`, `Hosts.Tests/RetentionBesideABackupTests`) |
+| 2026-10 | Accepted (related) | [ADR-0172 Amendment 3](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md#amendment-3-2026-10--a-retention-pass-holds-its-blobs-beside-a-restore-of-the-set): rule 3 of Amendment 8 holds beside a restore of the set the service has under way too. `Retention/RetentionRunner` |
