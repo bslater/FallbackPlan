@@ -11,6 +11,14 @@ public sealed record RestoreTargetProfile
     /// <summary>Whether the target filesystem distinguishes case.</summary>
     public required bool CaseSensitive { get; init; }
 
+    /// <summary>
+    /// Whether the target takes two names that differ only in their Unicode
+    /// normalisation, an accent composed into its letter or a mark of its
+    /// own after it, for one name, as macOS's volumes do. Windows' and
+    /// Linux's keep them apart (ADR-0170 Amendment 2).
+    /// </summary>
+    public bool NormalisationInsensitive { get; init; }
+
     /// <summary>Whether the target can apply POSIX mode/ownership.</summary>
     public required bool SupportsPosixMetadata { get; init; }
 
@@ -214,6 +222,7 @@ public sealed record RestoreTargetProfile
     public static RestoreTargetProfile ForLocalPlatform() => new()
     {
         CaseSensitive = !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS(),
+        NormalisationInsensitive = OperatingSystem.IsMacOS(),
         SupportsPosixMetadata = !OperatingSystem.IsWindows(),
         SupportsSymlinks = SymbolicLinks.CanCreate,
         WindowsNamingRules = OperatingSystem.IsWindows(),
@@ -386,20 +395,26 @@ public static class RestorePlanner
             }
         }
 
-        // Case collisions: two captured paths that fold to one target path
+        // Collisions: two captured paths the target takes for one
         // (architecture 08 §2 — a plan-time conflict, never a capture
-        // error and never a silent overwrite).
-        if (!target.CaseSensitive)
+        // error and never a silent overwrite). A path is folded only as the
+        // target folds it: case as the executor compares it, and
+        // normalisation only where the target ignores it, since Windows
+        // keeps a name's composed and decomposed forms apart (ADR-0170
+        // Amendment 2).
+        if (!target.CaseSensitive || target.NormalisationInsensitive)
         {
             foreach (var group in items
-                .GroupBy(item => Catalogue.Casefold(item.Path), StringComparer.Ordinal)
+                .GroupBy(
+                    item => target.NormalisationInsensitive ? item.Path.Normalize(System.Text.NormalizationForm.FormC) : item.Path,
+                    target.CaseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase)
                 .Where(group => group.Count() > 1))
             {
                 foreach (var item in group)
                 {
                     conflicts.Add(new RestoreConflict(
                         item.Path,
-                        $"Collides on a case-insensitive target with: {string.Join(", ", group.Select(other => other.Path).Where(path => path != item.Path))}."));
+                        $"Collides on this target with: {string.Join(", ", group.Select(other => other.Path).Where(path => path != item.Path))}, which it takes for the same name."));
                 }
             }
         }

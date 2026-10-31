@@ -28,7 +28,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// running platform: names a POSIX source wrote that Windows would refuse or
 /// alter are each named before any byte moves, and Windows' own names plan
 /// clean on a POSIX target (ADR-0170), save one longer in bytes than a
-/// target that counts in bytes holds (ADR-0170 Amendment 1). The three
+/// target that counts in bytes holds (ADR-0170 Amendment 1). Two paths are
+/// named as colliding only where the target takes them for one: by case on
+/// a case-insensitive target, and by Unicode normalisation only where the
+/// target ignores it, as macOS does and Windows does not, so a name's
+/// composed and decomposed forms each restore with their own content on
+/// Windows and Linux (ADR-0170 Amendment 2). The three
 /// selectors that exist — snapshot, path, destination — are exercised end to
 /// end; device, time and file-version selection is phase-2 work that has not
 /// been built, so FR-RST-001 is covered in part and says so.
@@ -125,6 +130,112 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var sensitivePlan = RestorePlanner.Plan(
             catalogue, snapshotId, string.Empty, RestoreTargetProfile.ForLocalPlatform() with { CaseSensitive = true });
         Assert.DoesNotContain(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal), sensitivePlan.Conflicts);
+    }
+
+    /// <summary>"café.txt" with its accent composed into one character.</summary>
+    private const string Composed = "names/caf\u00E9.txt";
+
+    /// <summary>"café.txt" with its accent a mark of its own after the "e".</summary>
+    private const string Decomposed = "names/cafe\u0301.txt";
+
+    [TestMethod]
+    public async Task RestorePlan_NamesThatDifferOnlyInTheirNormalisation_CollideOnlyWhereTheTargetFoldsThem()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile(Composed, Deterministic(64, 1));
+        source.AddFile(Decomposed, Deterministic(64, 2));
+        source.AddFile("names/Notes.txt", Deterministic(64, 3));
+        source.AddFile("names/notes.txt", Deterministic(64, 4));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA7), CancellationToken.None);
+        var snapshotId = Enumerable.Repeat((byte)0xA7, 16).ToArray();
+
+        string[] Colliding(RestoreTargetProfile target) =>
+        [
+            .. RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target).Conflicts
+                .Where(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal))
+                .Select(conflict => conflict.Path)
+                .Order(StringComparer.Ordinal),
+        ];
+
+        // Windows folds case and keeps the two forms apart, as NTFS does.
+        SequenceAssert.AreEqual(
+            new[] { "names/Notes.txt", "names/notes.txt" },
+            Colliding(PosixTarget() with { CaseSensitive = false, NormalisationInsensitive = false }));
+
+        // macOS folds both.
+        SequenceAssert.AreEqual(
+            new[] { Decomposed, "names/Notes.txt", Composed, "names/notes.txt" }.Order(StringComparer.Ordinal).ToArray(),
+            Colliding(PosixTarget() with { CaseSensitive = false, NormalisationInsensitive = true }));
+
+        // A case-sensitive volume on macOS still folds the two forms.
+        SequenceAssert.AreEqual(
+            new[] { Decomposed, Composed }.Order(StringComparer.Ordinal).ToArray(),
+            Colliding(PosixTarget() with { NormalisationInsensitive = true }));
+
+        // Linux folds neither.
+        Assert.IsEmpty(Colliding(PosixTarget()));
+
+        // Each names the other it would land on.
+        var composed = RestorePlanner.Plan(
+            catalogue, snapshotId, string.Empty, PosixTarget() with { NormalisationInsensitive = true }).Conflicts
+            .Single(conflict => conflict.Path == Composed);
+        Assert.Contains(Decomposed, composed.Reason, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void ForLocalPlatform_NormalisationInsensitive_IsWhatThisMachinesVolumeDoes()
+    {
+        Assert.AreEqual(OperatingSystem.IsMacOS(), RestoreTargetProfile.ForLocalPlatform().NormalisationInsensitive);
+
+        // The volume the tests write to answers the same: on macOS a name
+        // written composed is found decomposed, and elsewhere it is not.
+        var folder = Path.Combine(SpoolDirectory, "normalisation");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "caf\u00E9.txt"), "composed");
+        Assert.AreEqual(
+            RestoreTargetProfile.ForLocalPlatform().NormalisationInsensitive,
+            File.Exists(Path.Combine(folder, "cafe\u0301.txt")));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows | TestPlatforms.Linux, "macOS takes the two forms for one name")]
+    [PlatformTrait(TestPlatforms.Windows | TestPlatforms.Linux)]
+    public async Task RestoreExecution_NamesThatDifferOnlyInTheirNormalisation_EachLandWithItsOwnContent_WhereTheTargetKeepsThemApart()
+    {
+        var composedContent = Deterministic(4_096, 6);
+        var decomposedContent = Deterministic(4_096, 7);
+        var source = new FakeFileSystemSource();
+        source.AddFile(Composed, composedContent);
+        source.AddFile(Decomposed, decomposedContent);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xB2), CancellationToken.None);
+        var snapshotId = Enumerable.Repeat((byte)0xB2, 16).ToArray();
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target);
+        Assert.IsEmpty(plan.Conflicts);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var output = Path.Combine(SpoolDirectory, "restore-out");
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, output,
+            new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000 },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.IsEmpty(receipt.Displaced);
+        SequenceAssert.AreEqual(composedContent, File.ReadAllBytes(Path.Combine(receipt.WrittenTo, "names", "caf\u00E9.txt")));
+        SequenceAssert.AreEqual(decomposedContent, File.ReadAllBytes(Path.Combine(receipt.WrittenTo, "names", "cafe\u0301.txt")));
     }
 
     [TestMethod]
