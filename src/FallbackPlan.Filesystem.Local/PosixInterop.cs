@@ -1,10 +1,12 @@
 using System.Runtime.InteropServices;
+using FallbackPlan.Domain;
 
 namespace FallbackPlan.Filesystem.Local;
 
 /// <summary>
 /// The stat result the scanner consumes, platform-neutral: identity,
-/// classification, times in Unix milliseconds, and POSIX ownership. Public
+/// classification, times in Unix milliseconds, POSIX ownership, and the
+/// file's flags (ADR-0180). Public
 /// because pre/post-read revalidation (architecture 06 §1) is part of the
 /// capture contract the publisher consumes.
 /// </summary>
@@ -20,7 +22,8 @@ public readonly record struct StatResult(
     ulong? CreatedAtMs,
     ulong? AccessedAtMs,
     uint RdevMajor,
-    uint RdevMinor)
+    uint RdevMinor,
+    FileFlagBits Flags = FileFlagBits.None)
 {
     private const uint TypeMask = 0xF000;
 
@@ -230,7 +233,8 @@ internal static partial class LinuxInterop
         CreatedAtMs: (stx.Mask & StatxBtime) != 0 ? ToMilliseconds(stx.BirthTime) : null,
         AccessedAtMs: ToMilliseconds(stx.AccessTime),
         RdevMajor: stx.RdevMajor,
-        RdevMinor: stx.RdevMinor);
+        RdevMinor: stx.RdevMinor,
+        Flags: MetadataRules.FileFlagsFromStatx(stx.Attributes, stx.AttributesMask));
 
     private static ulong? ToMilliseconds(StatxTimestamp timestamp) =>
         timestamp.Seconds < 0
@@ -423,7 +427,8 @@ internal static partial class DarwinInterop
         CreatedAtMs: ToMilliseconds(stat.BirthSeconds, stat.BirthNanoseconds),
         AccessedAtMs: ToMilliseconds(stat.AccessSeconds, stat.AccessNanoseconds),
         RdevMajor: (uint)((stat.Rdev >> 24) & 0xFF),
-        RdevMinor: (uint)(stat.Rdev & 0xFFFFFF));
+        RdevMinor: (uint)(stat.Rdev & 0xFFFFFF),
+        Flags: MetadataRules.FileFlagsFromDarwin(stat.Flags));
 
     private static ulong? ToMilliseconds(long seconds, long nanoseconds) =>
         seconds < 0 ? null : (ulong)seconds * 1_000 + (ulong)nanoseconds / 1_000_000;

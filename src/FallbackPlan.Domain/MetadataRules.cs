@@ -364,6 +364,102 @@ public static class MetadataRules
     public static bool KeepsAttributesAsStreams(EntryKind kind, bool supportsAlternateStreams, bool writesAttributes) =>
         kind is EntryKind.File or EntryKind.DirectoryPlaceholder && supportsAlternateStreams && !writesAttributes;
 
+    /// <summary>The prefix of the capture diagnostic that names a file's flags (ADR-0180).</summary>
+    private const string FileFlagsPrefix = "file-flags: ";
+
+    /// <summary>Each flag with the name a diagnostic gives it, in the order it gives them.</summary>
+    private static readonly (FileFlagBits Flag, string Name)[] FileFlagNames =
+    [
+        (FileFlagBits.Immutable, "immutable"),
+        (FileFlagBits.AppendOnly, "append-only"),
+        (FileFlagBits.NoDump, "no-dump"),
+        (FileFlagBits.Compressed, "compressed"),
+        (FileFlagBits.Encrypted, "encrypted"),
+        (FileFlagBits.Hidden, "hidden"),
+    ];
+
+    /// <summary>
+    /// The flags a Linux file carries, from what <c>statx</c> reports in
+    /// <paramref name="attributes"/>, read only where
+    /// <paramref name="attributesMask"/> says the volume reports each
+    /// (ADR-0180).
+    /// </summary>
+    /// <param name="attributes"><c>stx_attributes</c>.</param>
+    /// <param name="attributesMask"><c>stx_attributes_mask</c>.</param>
+    public static FileFlagBits FileFlagsFromStatx(ulong attributes, ulong attributesMask)
+    {
+        var reported = attributes & attributesMask;
+        var flags = FileFlagBits.None;
+        flags |= (reported & 0x10) != 0 ? FileFlagBits.Immutable : FileFlagBits.None;
+        flags |= (reported & 0x20) != 0 ? FileFlagBits.AppendOnly : FileFlagBits.None;
+        flags |= (reported & 0x40) != 0 ? FileFlagBits.NoDump : FileFlagBits.None;
+        flags |= (reported & 0x04) != 0 ? FileFlagBits.Compressed : FileFlagBits.None;
+        flags |= (reported & 0x800) != 0 ? FileFlagBits.Encrypted : FileFlagBits.None;
+        return flags;
+    }
+
+    /// <summary>
+    /// The flags a macOS file carries, from its <c>st_flags</c>
+    /// <paramref name="flags"/>: the user's and the system's immutable and
+    /// append-only flags alike, no-dump, compressed and hidden (ADR-0180).
+    /// </summary>
+    /// <param name="flags"><c>st_flags</c>.</param>
+    public static FileFlagBits FileFlagsFromDarwin(uint flags)
+    {
+        var named = FileFlagBits.None;
+        named |= (flags & (0x00000002 | 0x00020000)) != 0 ? FileFlagBits.Immutable : FileFlagBits.None;
+        named |= (flags & (0x00000004 | 0x00040000)) != 0 ? FileFlagBits.AppendOnly : FileFlagBits.None;
+        named |= (flags & 0x00000001) != 0 ? FileFlagBits.NoDump : FileFlagBits.None;
+        named |= (flags & 0x00000020) != 0 ? FileFlagBits.Compressed : FileFlagBits.None;
+        named |= (flags & 0x00008000) != 0 ? FileFlagBits.Hidden : FileFlagBits.None;
+        return named;
+    }
+
+    /// <summary>
+    /// The capture diagnostic that names <paramref name="flags"/>, each in
+    /// one order (<c>file-flags: immutable, no-dump</c>), or null where there
+    /// are none (ADR-0180; specification 06 §4.1 key 13).
+    /// </summary>
+    public static string? FileFlagsDiagnostic(FileFlagBits flags) =>
+        flags == FileFlagBits.None
+            ? null
+            : FileFlagsPrefix + string.Join(", ", FileFlagNames.Where(entry => flags.HasFlag(entry.Flag)).Select(entry => entry.Name));
+
+    /// <summary>
+    /// The flags the capture <paramref name="diagnostics"/> name
+    /// (<see cref="FileFlagsDiagnostic"/>); a name no build knows is passed
+    /// over.
+    /// </summary>
+    public static FileFlagBits FileFlagsOf(IEnumerable<string> diagnostics)
+    {
+        ThrowHelper.ThrowIfNull(diagnostics);
+
+        var flags = FileFlagBits.None;
+        foreach (var diagnostic in diagnostics.Where(diagnostic => diagnostic.StartsWith(FileFlagsPrefix, StringComparison.Ordinal)))
+        {
+            foreach (var name in diagnostic[FileFlagsPrefix.Length..].Split(", "))
+            {
+                flags |= FileFlagNames.FirstOrDefault(entry => entry.Name == name).Flag;
+            }
+        }
+
+        return flags;
+    }
+
+    /// <summary>
+    /// <paramref name="diagnostics"/> with the line that names a file's flags
+    /// made to name <paramref name="flags"/>: a manifest restated for a file
+    /// whose bytes did not change keeps what it said of its read, and says
+    /// the flags the file carries now (ADR-0180).
+    /// </summary>
+    public static IReadOnlyList<string> WithFileFlags(IReadOnlyList<string> diagnostics, FileFlagBits flags)
+    {
+        ThrowHelper.ThrowIfNull(diagnostics);
+
+        IEnumerable<string> kept = diagnostics.Where(diagnostic => !diagnostic.StartsWith(FileFlagsPrefix, StringComparison.Ordinal));
+        return FileFlagsDiagnostic(flags) is { } named ? [.. kept, named] : [.. kept];
+    }
+
     /// <summary>
     /// Whether a target keeps a file's alternate streams as extended
     /// attributes of the same names: where it writes attributes of its own

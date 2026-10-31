@@ -459,6 +459,12 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             }
         }
 
+        // A folder is kept as a tree, which carries no diagnostics.
+        if (kind != ScanEntryKind.Directory && MetadataRules.FileFlagsDiagnostic(stat.Flags) is { } flags)
+        {
+            diagnostics.Add(flags);
+        }
+
         // Extended attributes come off the descriptor when there is one — the
         // same object the content came from, rather than whatever the path
         // resolves to by the time they are read.

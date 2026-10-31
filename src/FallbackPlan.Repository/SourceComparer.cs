@@ -186,7 +186,7 @@ public static class SourceComparer
                 if (ChangeDetection.IsContentUnchanged(entry, prior))
                 {
                     if (ChangeDetection.IsMetadataUnchanged(
-                            FileVersionManifestCodec.MetadataDigest(entry.Metadata), prior))
+                            FileVersionManifestCodec.MetadataDigest(entry.Metadata, MetadataRules.FileFlagsOf(entry.Diagnostics)), prior))
                     {
                         unchanged++;
                     }

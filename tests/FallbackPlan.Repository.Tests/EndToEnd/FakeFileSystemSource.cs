@@ -33,7 +33,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
         public Dictionary<string, byte[]> AlternateStreams { get; init; } = [];
 
-        public IReadOnlyList<string> Diagnostics { get; init; } = [];
+        public IReadOnlyList<string> Diagnostics { get; set; } = [];
 
         /// <summary>When set, opening this node's content throws.</summary>
         public Exception? OpenFailure { get; set; }

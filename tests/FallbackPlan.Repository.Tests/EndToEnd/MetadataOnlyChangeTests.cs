@@ -15,7 +15,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// A file whose bytes did not change but whose metadata did (FR-MAN-002,
-/// NFR-PERF-003).
+/// NFR-PERF-003). The flags a file carries that no format key keeps are
+/// named in its diagnostics, and a change to them alone is a change too
+/// (FR-MAN-003; ADR-0180).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -234,6 +236,167 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         var file = Assert.ContainsSingle(second.Files);
         Assert.IsTrue(file.Reused, "a backup's own read must not make the next backup think the file changed");
         Assert.AreEqual(Assert.ContainsSingle(first.Files).ObjectId, file.ObjectId);
+    }
+
+    /// <summary>
+    /// Runs two publications with the file's flags <paramref name="before"/>
+    /// and then <paramref name="after"/>, and returns the second
+    /// publication's version of <c>locked.bin</c>, whether its content was
+    /// opened, and the first publication's version.
+    /// </summary>
+    private async Task<(PublishedFileVersion File, FileVersionManifest Manifest, bool Opened, ObjectId First)> AfterFlagsChangeAsync(
+        string[] before, string[] after)
+    {
+        var source = new FakeFileSystemSource();
+        var node = source.AddFile("locked.bin", Content());
+        node.Diagnostics = before;
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        // chattr and chflags move a file's ctime, not its mtime: every signal
+        // the short-circuit looks at says nothing happened.
+        node.Diagnostics = after;
+        source.OpenedPaths.Clear();
+
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, 0xB2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray(),
+                    ParentSnapshots = [Enumerable.Repeat((byte)0xA1, 16).ToArray()],
+                },
+                CancellationToken.None);
+
+        var file = Assert.ContainsSingle(second.Files);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        return (file, await ReadFileVersionAsync(reader, file.ObjectId), source.OpenedPaths.Count > 0, Assert.ContainsSingle(first.Files).ObjectId);
+    }
+
+    [TestMethod]
+    public async Task OnlyTheFlagsChanged_TheSnapshotNamesTheNewOnes_WithoutReadingTheContentAgain()
+    {
+        var (file, manifest, opened, _) = await AfterFlagsChangeAsync([], ["file-flags: immutable"]);
+
+        Assert.IsFalse(file.Reused, "a file newly made immutable is a change; the prior version cannot stand in for it");
+        Assert.Contains("file-flags: immutable", manifest.CaptureDiagnostics);
+        Assert.IsFalse(opened, "the bytes did not change");
+    }
+
+    [TestMethod]
+    public async Task TheFlagsWentAway_TheSnapshotNamesNone()
+    {
+        var (file, manifest, _, _) = await AfterFlagsChangeAsync(["file-flags: no-dump"], []);
+
+        Assert.IsFalse(file.Reused);
+        Assert.DoesNotContain(diagnostic => diagnostic.StartsWith("file-flags:", StringComparison.Ordinal), manifest.CaptureDiagnostics);
+    }
+
+    [TestMethod]
+    public async Task TheFlagsStayedAsTheyWere_TheShortCircuitStillFires()
+    {
+        var (file, _, opened, first) = await AfterFlagsChangeAsync(["file-flags: no-dump"], ["file-flags: no-dump"]);
+
+        Assert.IsTrue(file.Reused);
+        Assert.AreEqual(first, file.ObjectId);
+        Assert.IsFalse(opened);
+    }
+
+    /// <summary>
+    /// Publishes a file carrying the no-dump flag, has <paramref name="rebuild"/>
+    /// make the catalogue again from the repository alone, and returns the
+    /// metadata digest the publication recorded for it and the one the
+    /// rebuilt catalogue holds.
+    /// </summary>
+    /// <remarks>
+    /// A rebuilt catalogue holds no identities, so it never short-circuits a
+    /// file; the digest it records is what a later catalogue built from it
+    /// compares against, so it must be the one capture computes, flags and all.
+    /// </remarks>
+    private async Task<(byte[] Published, byte[] Rebuilt, byte[] WithoutFlags)> FlaggedDigestsAsync(
+        Func<IObjectStore, RepositoryKeySet, RepositoryWriteCredential, CatalogueDb, Task> rebuild)
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("locked.bin", Content()).Diagnostics = ["file-flags: no-dump"];
+        var snapshot = Enumerable.Repeat((byte)0xA1, 16).ToArray();
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        byte[] published;
+        byte[] withoutFlags;
+        using (var live = OpenCatalogue())
+        {
+            var first = await CreateOrchestrator(store, keys, credential, live).PublishAsync(Job(source, 0xA1), CancellationToken.None);
+            published = live.LookupPath(snapshot, "locked.bin")!.MetadataDigest!.Value.ToArray();
+            using var reader = new RepositoryReader(Repo, keys, store, Authority);
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            var manifest = await ReadFileVersionAsync(reader, Assert.ContainsSingle(first.Files).ObjectId);
+            withoutFlags = FileVersionManifestCodec.MetadataDigest(manifest.Metadata);
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        File.Delete(Path.Combine(SpoolDirectory, "catalogue.db"));
+        using var rebuilt = OpenCatalogue();
+        await rebuild(store, keys, credential, rebuilt);
+        return (published, rebuilt.LookupPath(snapshot, "locked.bin")!.MetadataDigest!.Value.ToArray(), withoutFlags);
+    }
+
+    [TestMethod]
+    public async Task AFlaggedFile_TheProjectedCatalogue_RecordsTheDigestCaptureComputed()
+    {
+        var (published, rebuilt, withoutFlags) = await FlaggedDigestsAsync(async (store, keys, credential, catalogue) =>
+        {
+            await new CatalogueRebuilder(new IndexLoader(store, Repo, credential)).RebuildAsync(
+                catalogue, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, CancellationToken.None);
+            using var reader = new RepositoryReader(Repo, keys, store, Authority);
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            await CatalogueProjector.ProjectAsync(catalogue, reader, store, Repo, keys, credential, CancellationToken.None);
+        });
+
+        CollectionAssert.AreEqual(published, rebuilt);
+        CollectionAssert.AreNotEqual(withoutFlags, published, "the digest a publication records counts the flags capture named");
+    }
+
+    [TestMethod]
+    public async Task AFlaggedFile_AForensicRebuild_RecordsTheDigestCaptureComputed()
+    {
+        var (published, rebuilt, _) = await FlaggedDigestsAsync(async (store, _, credential, catalogue) =>
+        {
+            using var rebuilder = new FallbackPlan.Repository.Catalogue.Forensic.ForensicRebuilder(store, Repo, credential);
+            await rebuilder.RebuildAsync(catalogue, new FallbackPlan.Repository.Catalogue.Forensic.ForensicTarget.Everything(), CancellationToken.None);
+        });
+
+        CollectionAssert.AreEqual(published, rebuilt);
+    }
+
+    [TestMethod]
+    public async Task TheComparer_CountsAFlaggedFileUnchanged_AndAFlagChangeAMetadataChange()
+    {
+        var source = new FakeFileSystemSource();
+        var node = source.AddFile("locked.bin", Content());
+        node.Diagnostics = ["file-flags: no-dump"];
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        var baseline = Assert.ContainsSingle(catalogue.EnumerateSnapshots()).SnapshotId;
+        IReadOnlyList<ScanRoot> roots = [new ScanRoot("/")];
+
+        var same = await SourceComparer.CompareAsync(source, roots, [], [], catalogue, baseline, sampleLimit: 20, CancellationToken.None);
+        node.Diagnostics = ["file-flags: immutable, no-dump"];
+        var flagged = await SourceComparer.CompareAsync(source, roots, [], [], catalogue, baseline, sampleLimit: 20, CancellationToken.None);
+
+        Assert.AreEqual(1, same.Unchanged);
+        Assert.AreEqual("locked.bin", Assert.ContainsSingle(flagged.MetadataOnly.Sample));
     }
 
     /// <summary>
