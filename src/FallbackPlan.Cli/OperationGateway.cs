@@ -2006,7 +2006,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             {
                 if (logger is not null)
                 {
-                    Log.RestoreNotSaidUnderWay(logger, directory, exception.Message);
+                    Log.RestoreNotSaidUnderWay(logger, new Domain.Diagnostics.LogPath(directory), exception.Message);
                 }
             }
         }

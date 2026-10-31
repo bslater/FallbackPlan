@@ -34,5 +34,5 @@ internal static partial class Log
         EventId = 4002, Level = LogLevel.Warning,
         Message = "A restore could not say it is under way in '{StateDirectory}' ({Reason}): it goes ahead, and a "
             + "service working there may collect what it reads while it runs (ADR-0172 Amendment 6)")]
-    internal static partial void RestoreNotSaidUnderWay(ILogger logger, string stateDirectory, string reason);
+    internal static partial void RestoreNotSaidUnderWay(ILogger logger, Domain.Diagnostics.LogPath stateDirectory, string reason);
 }
