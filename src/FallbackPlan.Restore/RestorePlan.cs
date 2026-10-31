@@ -62,6 +62,16 @@ public sealed record RestoreTargetProfile
     public Func<string, InheritedAccess?> InheritedAccessAt { get; init; } = _ => null;
 
     /// <summary>
+    /// The access a folder the restore makes at a path would take as its own,
+    /// and the folder it comes from, which the plan holds against the
+    /// folder's own where its descriptor will not be written
+    /// (<see cref="WindowsAccess"/>; ADR-0178 Amendment 4). Null where it
+    /// does not say: where a folder stands at the path, off Windows, and for
+    /// a target no case names.
+    /// </summary>
+    public Func<string, InheritedAccess?> InheritedFolderAccessAt { get; init; } = _ => null;
+
+    /// <summary>
     /// Whether the executor gives a file and a folder their NTFS compression
     /// back on this target: Windows keeps it, and nothing else does
     /// (<see cref="FileCompression"/>; ADR-0175 Amendment 2). Where it does,
@@ -196,6 +206,7 @@ public sealed record RestoreTargetProfile
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         SupportsCompression = FileCompression.CanSet,
         InheritedAccessAt = WindowsAccess.InheritedByAFileAt,
+        InheritedFolderAccessAt = WindowsAccess.InheritedByAFolderAt,
         Account = RestoreAccount.OfThisProcess(),
     };
 

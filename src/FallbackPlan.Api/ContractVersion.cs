@@ -802,8 +802,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// Additive on the wire, and a client that never sends the field is
     /// refused, never passed: a pre-1.80 service ignores the field and runs.
     /// </para>
+    /// <para>
+    /// 1.81 judges a folder the run would make as it judges a file
+    /// (FR-RST-003, ADR-0178 Amendment 4). `restore_plan` says how many such
+    /// folders there are in `opened_wider_folders`, apart from the files, and
+    /// a run with any is refused unless it acknowledges wider access, as one
+    /// with such files is. Additive: a pre-1.81 service judges no folder.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 80);
+    public static ContractVersion Current { get; } = new(1, 81);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -95,13 +95,13 @@ internal static class RestorePlanReport
         lines.AddRange(plan.Degradations ?? []);
 
         // The run it plans is refused for these unless a person goes on
-        // (ADR-0178 Amendment 1), as one that will not fit is.
-        if (plan.OpenedWider is > 0 and var wider)
+        // (ADR-0178 Amendments 1 and 4), as one that will not fit is.
+        var opened = OpenedWider(plan);
+        if (opened is not null)
         {
-            lines.Add(string.Create(
-                CultureInfo.InvariantCulture,
-                $"wider access: {wider} file(s) would be opened wider than they were, so the restore would be refused; "
-                + $"--acknowledge-wider-access restores anyway"));
+            lines.Add(
+                $"wider access: {opened} would be opened wider than they were, so the restore would be refused; "
+                + "--acknowledge-wider-access restores anyway");
         }
 
         if (request.PlanExport is { } file)
@@ -113,8 +113,21 @@ internal static class RestorePlanReport
         lines.Add("nothing was restored: this was a plan");
 
         return new OperationReport(
-            fits && plan.MissingObjects.Count == 0 && plan.ArchivedObjects is not { Count: > 0 } && plan.OpenedWider is not > 0,
+            fits && plan.MissingObjects.Count == 0 && plan.ArchivedObjects is not { Count: > 0 } && opened is null,
             lines);
+    }
+
+    /// <summary>
+    /// The files and the folders a plan counts as opened wider, said as a
+    /// person reads them, or null where it counts none.
+    /// </summary>
+    private static string? OpenedWider(RestorePlanResult plan)
+    {
+        var files = plan.OpenedWider is > 0 and var file ? string.Create(CultureInfo.InvariantCulture, $"{file} file(s)") : null;
+        var folders = plan.OpenedWiderFolders is > 0 and var folder
+            ? string.Create(CultureInfo.InvariantCulture, $"{folder} folder(s)")
+            : null;
+        return files is not null && folders is not null ? $"{files} and {folders}" : files ?? folders;
     }
 
     /// <summary>

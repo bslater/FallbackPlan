@@ -838,6 +838,13 @@ public sealed record DirectoryResult(
 /// folders and the accounts. Null where there are none, and from a service
 /// before 1.80.
 /// </param>
+/// <param name="OpenedWiderFolders">
+/// How many folders the run would make that what passes to them would open
+/// wider than they were (contract 1.81, FR-RST-003, ADR-0178 Amendment 4),
+/// counted apart from <paramref name="OpenedWider"/>. The run is refused for
+/// them as for files. Null where there are none, and from a service before
+/// 1.81.
+/// </param>
 public sealed record RestorePlanResult(
     long Files,
     long Bytes,
@@ -850,7 +857,8 @@ public sealed record RestorePlanResult(
     long? ReadBytes = null,
     IReadOnlyList<string>? ArchivedObjects = null,
     long? Landed = null,
-    long? OpenedWider = null) : ServiceResult;
+    long? OpenedWider = null,
+    long? OpenedWiderFolders = null) : ServiceResult;
 
 /// <summary>The room a restore needs on one volume it writes to (contract 1.53, FR-RST-003).</summary>
 /// <param name="Directory">

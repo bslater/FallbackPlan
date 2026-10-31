@@ -1850,7 +1850,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 (long)probed.ReadBytes,
                 probed.Archived.Count == 0 ? null : probed.Archived,
                 request.Resume ? space.Landed : null,
-                wider?.Files),
+                wider is { Files: > 0 } ? wider.Files : null,
+                wider is { OpenedFolders: > 0 } ? wider.OpenedFolders : null),
             request);
     }
 

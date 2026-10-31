@@ -946,7 +946,8 @@ public sealed partial class ServiceCommandHandler(
                 (long)probed.ReadBytes,
                 probed.Archived.Count == 0 ? null : probed.Archived,
                 landed,
-                wider?.Files);
+                wider is { Files: > 0 } ? wider.Files : null,
+                wider is { OpenedFolders: > 0 } ? wider.OpenedFolders : null);
         }
         finally
         {

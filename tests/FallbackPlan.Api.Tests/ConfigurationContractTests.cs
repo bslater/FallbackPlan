@@ -34,11 +34,29 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_AcknowledgingWiderAccess_IsRecordedAtOneEighty()
+    public void ContractVersion_CountingFoldersOpenedWider_IsRecordedAtOneEightyOne()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.80", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.81", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void FoldersOpenedWider_CrossUnderTheirWireName_AndAnOlderServiceSaysNothingOfThem()
+    {
+        // Contract 1.81 (FR-RST-003, ADR-0178 Amendment 4): a plan says how
+        // many folders the restore makes would be opened wider, apart from
+        // the files.
+        var plan = JsonSerializer.Serialize<ServiceResult>(
+            new RestorePlanResult(1, 10, [], OpenedWider: 1, OpenedWiderFolders: 2), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"opened_wider\":1", plan, StringComparison.Ordinal);
+        Assert.Contains("\"opened_wider_folders\":2", plan, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            JsonSerializer.Deserialize<ServiceResult>(
+                """{"result":"restore_plan","files":1,"bytes":10,"missing_objects":[],"opened_wider":1}""", FrameCodec.SerializerOptions),
+            out var older);
+        Assert.IsNull(older.OpenedWiderFolders, "a service before 1.81 says nothing of folders");
     }
 
     [TestMethod]
