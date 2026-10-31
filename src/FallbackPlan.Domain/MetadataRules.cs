@@ -206,6 +206,23 @@ public static class MetadataRules
     }
 
     /// <summary>
+    /// The SIDs the audit list of the Windows security descriptor captured
+    /// with <paramref name="metadata"/> audits
+    /// (<see cref="WindowsSecurityDescriptor.AuditedAccounts"/>; ADR-0176
+    /// Amendment 3), or null where it carries no audit list with an entry in
+    /// it, or a descriptor that does not read.
+    /// </summary>
+    public static IReadOnlyList<string>? AuditedAccountsOf(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+
+        return metadata.WindowsSecurityDescriptor is { IsEmpty: false } descriptor
+            && WindowsSecurityDescriptor.Read(descriptor.Span) is { SaclPresent: true } read
+            ? read.AuditedAccounts
+            : null;
+    }
+
+    /// <summary>
     /// The SID the Windows security descriptor captured with
     /// <paramref name="metadata"/> names as its owner, or null where it names
     /// none, carries none, or carries one that does not read.

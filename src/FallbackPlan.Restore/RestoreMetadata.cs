@@ -52,6 +52,12 @@ namespace FallbackPlan.Restore;
 /// its folder would give it where the descriptor is not written (ADR-0178),
 /// or null where it carries none that says.
 /// </param>
+/// <param name="AuditedAccounts">
+/// The SIDs the audit list of its captured Windows security descriptor
+/// audits, which the writer writes only with SeSecurityPrivilege and where
+/// the target knows each (ADR-0176 Amendment 3), or null where it carries
+/// none.
+/// </param>
 /// <param name="RefusedAttributeNames">
 /// How many of its captured extended attributes are not kept as streams for
 /// their names (<see cref="MetadataRules.RefusedAttributeNames"/>), which the
@@ -73,7 +79,8 @@ public sealed record RestoreItemFacts(
     int RefusedStreams = 0,
     string? DescriptorOwner = null,
     int RefusedAttributeNames = 0,
-    IReadOnlyDictionary<string, uint>? Access = null);
+    IReadOnlyDictionary<string, uint>? Access = null,
+    IReadOnlyList<string>? AuditedAccounts = null);
 
 /// <summary>
 /// The files a restore would open wider than they were (ADR-0178): their
@@ -330,6 +337,8 @@ public static class RestoreMetadata
         var linkAttributes = new Tally();
         var strangers = new Tally();
         var refusedOwners = new Tally();
+        var auditLists = new Tally();
+        var auditStrangers = new Tally();
         var kernelAttributes = new Tally();
         var attributeNames = new Tally();
         var unsetBits = new Tally();
@@ -426,15 +435,31 @@ public static class RestoreMetadata
                     apart |= CapturedMetadata.SecurityDescriptor;
                     strangers.Add(item.Kind);
                 }
-                else if (!target.HoldsRestorePrivilege
-                    && known.DescriptorOwner is { } owner
-                    && !names.MayOwn(owner, target.MayOwnBy))
+                else
                 {
-                    // The writer still lands the DACL alone, as its receipt
-                    // says, but the descriptor is not applied.
-                    applied &= ~CapturedMetadata.SecurityDescriptor;
-                    apart |= CapturedMetadata.SecurityDescriptor;
-                    refusedOwners.Add(item.Kind);
+                    // The writer still lands the DACL in each case, as its
+                    // receipt says, but the descriptor is not applied.
+                    if (!target.HoldsRestorePrivilege
+                        && known.DescriptorOwner is { } owner
+                        && !names.MayOwn(owner, target.MayOwnBy))
+                    {
+                        applied &= ~CapturedMetadata.SecurityDescriptor;
+                        apart |= CapturedMetadata.SecurityDescriptor;
+                        refusedOwners.Add(item.Kind);
+                    }
+
+                    if (known.AuditedAccounts is { Count: > 0 } audited)
+                    {
+                        // No privilege mends an account the machine does not
+                        // know, so that is said whatever the account holds.
+                        var stranger = audited.Any(account => !names.Knows(account, target.KnowsAccount));
+                        if (stranger || !target.HoldsSecurityPrivilege)
+                        {
+                            applied &= ~CapturedMetadata.SecurityDescriptor;
+                            apart |= CapturedMetadata.SecurityDescriptor;
+                            (stranger ? auditStrangers : auditLists).Add(item.Kind);
+                        }
+                    }
                 }
             }
 
@@ -524,6 +549,14 @@ public static class RestoreMetadata
             $"Security descriptors captured on {refusedOwners} name an owner the account running the restore may "
             + $"not give: giving it needs SeRestorePrivilege, which the account does not hold. Their access control "
             + $"lists will be applied; their owner and group will not, so they will belong to that account."));
+        Add("security-descriptor-audit-lists", auditLists, string.Create(CultureInfo.InvariantCulture,
+            $"Security descriptors captured on {auditLists} carry an audit list the account running the restore may "
+            + $"not write: writing it needs SeSecurityPrivilege, which the account does not hold. Their audit lists "
+            + $"will not be applied; the rest of each will be, unless another line says otherwise."));
+        Add("security-descriptor-audit-accounts", auditStrangers, string.Create(CultureInfo.InvariantCulture,
+            $"Security descriptors captured on {auditStrangers} carry an audit list naming accounts this machine does "
+            + $"not know, so their audit lists will not be applied; the rest of each will be, unless another line says "
+            + $"otherwise."));
 
         var extended = attributes.GetValueOrDefault(CapturedMetadata.ExtendedAttributes);
         Add("extended-attributes", extended, string.Create(CultureInfo.InvariantCulture,

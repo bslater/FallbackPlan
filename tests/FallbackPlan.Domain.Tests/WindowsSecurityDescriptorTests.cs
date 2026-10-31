@@ -10,7 +10,10 @@ namespace FallbackPlan.Domain.Tests;
 /// owner, its group and each account its DACL grants or denies, once each,
 /// and whether the DACL takes nothing from its folder. Bytes that do not read
 /// as a self-relative descriptor, in every part a write would hand the
-/// platform, are no descriptor, so nothing of them is written.
+/// platform, are no descriptor, so nothing of them is written. A SACL is
+/// read too, whether it is there, whether it takes nothing from its folder,
+/// and the accounts it audits, apart from those the rest names (ADR-0176
+/// Amendment 3).
 /// </summary>
 [TestClass]
 public sealed class WindowsSecurityDescriptorTests
@@ -33,6 +36,48 @@ public sealed class WindowsSecurityDescriptorTests
         Assert.IsTrue(read.DaclPresent);
         Assert.IsFalse(read.DaclProtected);
         CollectionAssert.AreEqual(new[] { Ana, Users, Everyone, LocalSystem }, read.Accounts.ToArray());
+    }
+
+    [TestMethod]
+    public void Read_ASacl_SaysItIsThere_WhetherItIsProtected_AndNamesTheAccountsItAudits()
+    {
+        var read = WindowsSecurityDescriptor.Read(Build(
+            Ana, Users, Acl(Ace(Allowed, 0, Ana)), AuditProtected, sacl: Acl(Ace(Audit, AuditSuccess, Everyone))));
+
+        Assert.IsNotNull(read);
+        Assert.IsTrue(read.SaclPresent);
+        Assert.IsTrue(read.SaclProtected);
+        Assert.IsFalse(read.DaclProtected);
+        CollectionAssert.AreEqual(new[] { Ana, Users }, read.Accounts.ToArray(), "an audit grants and denies nothing");
+        CollectionAssert.AreEqual(new[] { Everyone }, read.AuditedAccounts.ToArray());
+        Assert.IsEmpty(read.Entries.Where(entry => entry.Account == Everyone));
+
+        var none = WindowsSecurityDescriptor.Read(Build(Ana, Users, Acl(Ace(Allowed, 0, Ana))));
+        Assert.IsNotNull(none);
+        Assert.IsFalse(none.SaclPresent);
+        Assert.IsFalse(none.SaclProtected);
+        Assert.IsEmpty(none.AuditedAccounts);
+    }
+
+    [TestMethod]
+    public void Read_AnAuditListWithNoEntries_IsNone()
+    {
+        // Asked for a file's audit list, Windows hands back an empty one
+        // where it audits nothing, which is nothing to write back.
+        var read = WindowsSecurityDescriptor.Read(Build(Ana, Users, Acl(Ace(Allowed, 0, Ana)), sacl: Acl()));
+
+        Assert.IsNotNull(read);
+        Assert.IsFalse(read.SaclPresent);
+    }
+
+    [TestMethod]
+    public void Read_ASaclThatDoesNotRead_IsNoDescriptor()
+    {
+        var descriptor = Build(Ana, Users, Acl(Ace(Allowed, 0, Ana)), sacl: Acl(Ace(Audit, AuditSuccess, Everyone)));
+        var saclAt = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.AsSpan(12));
+        BinaryPrimitives.WriteUInt16LittleEndian(descriptor.AsSpan((int)saclAt + 2), 0xFFFF);
+
+        Assert.IsNull(WindowsSecurityDescriptor.Read(descriptor));
     }
 
     [TestMethod]

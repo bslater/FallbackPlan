@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: a file's and a folder's Windows security descriptor comes back where the target keeps one and knows every account it names, and one that names an account it does not know is named; by [Amendment 1](#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not), an account that holds SeRestorePrivilege gives an owner it is not), FR-RST-003 (the plan says so per item; amended by [Amendment 2](#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give): it names a descriptor whose owner the restoring account may not give)
+**Requirements:** FR-RST-004 (amended: a file's and a folder's Windows security descriptor comes back where the target keeps one and knows every account it names, and one that names an account it does not know is named; by [Amendment 1](#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not), an account that holds SeRestorePrivilege gives an owner it is not; by [Amendment 3](#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege), a descriptor's audit list is captured and comes back where the account holds SeSecurityPrivilege and the machine knows every account it audits, and is named where it does not), FR-RST-003 (the plan says so per item; amended by [Amendment 2](#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give): it names a descriptor whose owner the restoring account may not give; by [Amendment 3](#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege): it names an audit list the restoring account may not write, and one naming an account the machine does not know)
 **Related:** [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (what a restore says it does not write back, and its Amendment 1: an empty descriptor is none), [ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) (an owner is given back where its name resolves and the account may give it), [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) (a folder's metadata, which goes on last), [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) (an ACL that names accounts by number is written only where they mean what they meant), [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md) and [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) (the one writer the executor, the command line and the recovery tool share), [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) (the attribute bits, which now go on before it), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (Windows ACLs are preserved on Windows), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 7, the descriptor as captured)
 
 **Built:**
@@ -29,6 +29,8 @@ A descriptor names accounts by SID. A SID is the number a machine or its domain 
 
 The writer hands the captured descriptor to `SetFileSecurityW`: owner, group and DACL in one call, with the DACL's protection said outright, so a DACL that took nothing from its folder still takes nothing. The DACL keeps the entries its folder had given it when captured, each still marked as given. Restored in place, a file has exactly the access it had, and restored elsewhere, the access it had where it was. Nothing beneath a folder is walked.
 
+> **2026-10 ([Amendment 3](#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege)).** The call carries the descriptor's audit list too, where it has one and the restoring account holds SeSecurityPrivilege, with its protection said outright as well.
+
 The call does not keep the DACL's control bit that marks its inherited entries as given by automatic inheritance. The entries and their own marks land; that bit does not. Setting it is the work of `SetNamedSecurityInfoW`, which the alternatives below reject because it takes the inherited entries from the new folder.
 
 ### 2. Only where the machine knows every account it names
@@ -36,6 +38,8 @@ The call does not keep the DACL's control bit that marks its inherited entries a
 The writer asks the machine whether it knows each SID the descriptor names: the owner, the group, and every account its DACL grants or denies. It asks once per SID. If any is unknown, the descriptor is not written, the entry keeps its folder's access, and the item's detail names each unknown SID. A descriptor that does not read as one is not written either, and the detail says so.
 
 It is all or nothing. Writing the DACL without the entries for unknown accounts could drop a deny, so the file would grant more than it did. Writing it whole would grant the file's access to nobody: on a rebuilt machine, the person's own new account would find their files closed to it.
+
+> **2026-10 ([Amendment 3](#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege)).** The accounts an audit list audits are asked about apart from the rest. One the machine does not know holds back the audit list alone: an audit grants nothing, so the rest written without it opens nothing.
 
 ### 3. Where the owner is refused, the DACL lands alone
 
@@ -53,6 +57,8 @@ The plan's facts carry the SIDs each item's descriptor names. A target that writ
 
 > **2026-10 ([Amendment 2](#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give)).** The plan now judges it. Where the restoring account does not hold SeRestorePrivilege, a descriptor whose owner the account may not give is declared on a line of its own.
 
+> **2026-10 ([Amendment 3](#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege)).** An audit list the account may not write, for want of SeSecurityPrivilege, is declared on a line of its own, and one naming an account the machine does not know on another.
+
 ## Consequences
 
 - On the machine that captured them, or one in the same domain, a file and a folder come back with their own access, owner and group.
@@ -67,6 +73,8 @@ The plan's facts carry the SIDs each item's descriptor names. A target that writ
 
   > **Built 2026-10 ([Amendment 1](#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not)).** A restore whose account holds the privilege enables it, on its own thread, for a descriptor write refused without it. An account that does not hold it still has its owners refused, and its DACLs land alone.
 - **The SACL.** Capture does not record one: reading it needs SeSecurityPrivilege.
+
+  > **Built 2026-10 ([Amendment 3](#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege)).** Capture records it where the capturing account holds the privilege, enabled for that read alone, and a restore writes it back where the restoring account holds it and the machine knows every account it audits. Elsewhere the rest of the descriptor lands, and the audit list is named.
 - **Map an account.** A SID the machine does not know is not mapped to one it does, by name or otherwise. Capture records SIDs, not names.
 - **Refuse where the folder would grant more.** Architecture 06 §3 reserves refusal for a descriptor that cannot be applied into a place whose own access is broader. A descriptor that is not written is degraded and declared, as before. Comparing the two is not built.
 
@@ -145,6 +153,49 @@ The privileged cases need an elevated process, and run where one runs, as on CI'
   - on Windows, its own account is one;
   - in an elevated process, so is the administrators' group.
 
+## Amendment 3 (2026-10) — an audit list comes back where the account holds the security privilege
+
+**Gap.** Capture read a descriptor's owner, group and DACL, and not its audit list, the SACL, which says whose uses of a file Windows records in its security log. Reading one needs SeSecurityPrivilege. So a file audited where it was captured came back audited for no one, and nothing said so: no audit list was captured for the plan or the receipt to name. Architecture 06 §3 has Windows ACLs, the DACL and the SACL, preserved on Windows. Administrators hold the privilege, and so does the local system account a service runs as.
+
+**Decision.** An audit list is captured and written back as the rest of the descriptor is, by an account that holds the privilege:
+
+- **Captured where the account holds it.** Where the process's token holds SeSecurityPrivilege, the local source asks for the audit list with the rest, with the privilege enabled for that read alone through `WindowsPrivileges.RunWith`. Where that read is refused, it reads the rest as before. An account that does not hold the privilege captures as before.
+- **One with no entries is none.** Windows answers an empty audit list for a file it audits nothing of. That is nothing to write back, and nothing to name.
+- **Written back where the restoring account holds it.** `HoldsSecurityPrivilege` joins `Domain/MetadataTarget` and `Restore/RestorePlan`'s profile, as `HoldsRestorePrivilege` did, and the local target asks the process's token. The writer puts the audit list in the call §1 makes, with its protection said outright, and with the privilege enabled for that call alone. A write that needs SeRestorePrivilege as well enables both in the one copy of the token, since `WindowsPrivileges.RunWith` now takes several.
+- **Where it does not, the rest lands.** The owner, group and DACL are written as before, the descriptor is not applied, and the receipt names the audit list and says the rest landed.
+- **The accounts it audits are judged apart.** `WindowsSecurityDescriptor.AuditedAccounts` holds them, apart from `Accounts`. An audit grants nothing, so one the machine does not know holds back the audit list alone, and the receipt names it. §2's all or nothing still holds for the accounts the rest names.
+- **Where the owner is refused,** the DACL lands alone, as §3 has it, and the receipt says the audit list did not land either.
+- **The plan judges it by the same rule.** Each item's facts carry the accounts its audit list audits (`MetadataRules.AuditedAccountsOf`, through `Restore/RestoreBlobSet`). Where the target writes descriptors and knows every account the rest of one names, an audit list naming an account it does not know is declared on `security-descriptor-audit-accounts`, whatever the privilege. Otherwise one the account may not write is declared on `security-descriptor-audit-lists`. An item whose owner is refused as well is counted on the owners line too: each line says what of the descriptor will not land.
+
+**Consequences.**
+
+- The first backup by an account that holds the privilege, after this, writes a new manifest for each file whose descriptor reads otherwise with its audit list asked for, as for any change to a file's metadata. Its content is not read again.
+- Each such read is made under a copy of the process's token, as a privileged write is, so capture by such an account makes one more round of token calls per entry.
+
+**Built:** `Domain/WindowsSecurityDescriptor`; `Domain/WindowsPrivileges`; `Domain/WindowsSecurity`; `Domain/MetadataWriter`; `Domain/MetadataTarget`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Restore/RestorePlan`; `Filesystem.Local/WindowsInterop`:
+
+- `Domain.Tests/WindowsSecurityDescriptorTests`, on every platform:
+  - an audit list is read for whether it is there, whether it is protected, and the accounts it audits, apart from those the rest names;
+  - one with no entries is none;
+  - one that does not read makes the descriptor none.
+- `Domain.Tests/WindowsPrivilegesTests`:
+  - off Windows, several privileges are held by no one and no call is made;
+  - in an elevated process on Windows, the restore and security privileges are each enabled for the call alone, and the thread runs under the process's token again once it returns.
+- `Domain.Tests/SecurityDescriptorWriteBackTests`:
+  - the local target holds the security privilege exactly where its account does;
+  - on Windows, an audit list naming an account the machine does not know is named and the rest lands;
+  - where the owner is refused, the receipt says the audit list did not land either;
+  - in an elevated process, a descriptor with an audit list lands with it where the target holds the privilege; where it does not, the audit list is named and the rest lands.
+- `Filesystem.Tests/LocalScanTests`: in an elevated process on Windows, a file's audit list is captured with its descriptor.
+- `Repository.Tests/RestoreMetadataHonestyTests`, on every platform, against manifests the fake source writes:
+  - on a target that writes descriptors and holds no security privilege, the plan declares a file with an audit list on its own line, and none where it holds it;
+  - where the owner is refused too, the file is on both lines;
+  - an audit list naming an account the target does not know is declared on its own line whatever the privilege, and not on the accounts line;
+  - a descriptor whose rest names such an account is declared on the accounts line alone.
+- `Repository.Tests/RestoreSecurityDescriptorTests`: the local profile holds the security privilege exactly where its account does, and passes it to the writer.
+
+The privileged cases need an elevated process, and run where one runs, as on CI's Windows job; elsewhere they are reported as skipped.
+
 ## Status history
 
 | Date | Status | Note |
@@ -152,5 +203,6 @@ The privileged cases need an elevated process, and run where one runs, as on CI'
 | 2026-10 | Accepted | Built in one slice, tests first. The writer every way of restoring shares writes a file's and a folder's security descriptor back on Windows, as captured, after the times and before the attribute bits, where the machine knows every account it names; one naming an account it does not know is not written and is named; the DACL lands alone where the owner is refused; and the plan predicts it per item. `Domain/WindowsSecurityDescriptor`; `Domain/WindowsSecurity`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/WindowsSecurityDescriptorTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreSecurityDescriptorTests` |
 | 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--an-account-that-holds-the-restore-privilege-gives-an-owner-it-is-not): an account that holds SeRestorePrivilege gives a file an owner it is not; the writer enables the privilege, on its own thread, only for a descriptor write refused without it, and the process's token is left as it was. `Domain/WindowsPrivileges`; `Domain/MetadataWriter`; `Domain/MetadataTarget`; `Domain.Tests/WindowsPrivilegesTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreSecurityDescriptorTests` |
 | 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--the-plan-names-an-owner-the-restoring-account-may-not-give): the plan names, on a line of its own, a descriptor whose owner the restoring account may not give without SeRestorePrivilege, where it does not hold it, from the owner each item's facts now carry and the owners the account's token lets it give. `Domain/WindowsPrivileges`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Repository.Tests/RestoreMetadataHonestyTests`; `Repository.Tests/RestoreSecurityDescriptorTests`; `Domain.Tests/SecurityDescriptorWriteBackTests` |
+| 2026-10 | Amended | [Amendment 3](#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege): a descriptor's audit list is captured where the capturing account holds SeSecurityPrivilege and written back where the restoring account holds it and the machine knows every account it audits, each with the privilege enabled for that call alone; elsewhere the rest lands and the audit list is named, and the plan declares it on a line of its own. `Domain/WindowsSecurityDescriptor`; `Domain/WindowsPrivileges`; `Domain/WindowsSecurity`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/WindowsSecurityDescriptorTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Filesystem.Tests/LocalScanTests` |
 | 2026-10 | Accepted (related) | [ADR-0178](0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md): the plan names a file whose descriptor is not written and whose folder would open it wider, with the accounts that gain; the refusal is still not made. |
 | 2026-10 | Accepted (related) | [ADR-0178 Amendment 1](0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such a file is refused before anything is written, unless it acknowledges wider access. |

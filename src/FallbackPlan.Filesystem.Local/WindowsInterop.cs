@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using FallbackPlan.Domain;
 using Microsoft.Win32.SafeHandles;
 
 namespace FallbackPlan.Filesystem.Local;
@@ -73,6 +74,10 @@ internal static partial class WindowsInterop
     private const uint OwnerSecurityInformation = 0x1;
     private const uint GroupSecurityInformation = 0x2;
     private const uint DaclSecurityInformation = 0x4;
+    private const uint SaclSecurityInformation = 0x8;
+
+    /// <summary>Whether this process may read a file's audit list, asked once.</summary>
+    private static readonly bool ReadsAuditLists = WindowsPrivileges.Holds(WindowsPrivileges.Security);
 
     [LibraryImport("kernel32", EntryPoint = "CreateFileW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     private static partial SafeFileHandle CreateFile(
@@ -156,11 +161,26 @@ internal static partial class WindowsInterop
         return streams;
     }
 
-    /// <summary>The self-relative security descriptor (owner, group, DACL); null when unreadable — degrade, never abort.</summary>
+    /// <summary>
+    /// The self-relative security descriptor (owner, group, DACL, and the
+    /// audit list where this account holds SeSecurityPrivilege, enabled for
+    /// that read alone; ADR-0176 Amendment 3); null when unreadable — degrade,
+    /// never abort.
+    /// </summary>
     public static byte[]? GetSecurityDescriptor(string path)
     {
         const uint requested = OwnerSecurityInformation | GroupSecurityInformation | DaclSecurityInformation;
 
+        byte[]? audited = null;
+        return ReadsAuditLists
+            && WindowsPrivileges.RunWith(
+                WindowsPrivileges.Security, () => (audited = GetSecurityDescriptor(path, requested | SaclSecurityInformation)) is not null)
+            ? audited
+            : GetSecurityDescriptor(path, requested);
+    }
+
+    private static byte[]? GetSecurityDescriptor(string path, uint requested)
+    {
         if (GetFileSecurity(path, requested, null, 0, out var needed) || needed == 0)
         {
             return null;

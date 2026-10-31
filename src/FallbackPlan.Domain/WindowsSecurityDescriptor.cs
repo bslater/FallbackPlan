@@ -7,8 +7,9 @@ namespace FallbackPlan.Domain;
 /// <summary>
 /// What a captured Windows security descriptor names, read from its
 /// self-relative form (specification 06 §4.1 key 7): the accounts a restore
-/// has to know before it writes the descriptor back, and whether its DACL
-/// takes nothing from its folder (ADR-0176).
+/// has to know before it writes the descriptor back, whether its DACL takes
+/// nothing from its folder (ADR-0176), and whether it carries an audit list
+/// (ADR-0176 Amendment 3).
 /// </summary>
 /// <remarks>
 /// A descriptor that does not read is none: every offset and length a write
@@ -20,7 +21,9 @@ public sealed record WindowsSecurityDescriptor
 {
     private const int HeaderLength = 20;
     private const ushort DaclPresentBit = 0x0004;
+    private const ushort SaclPresentBit = 0x0010;
     private const ushort DaclProtectedBit = 0x1000;
+    private const ushort SaclProtectedBit = 0x2000;
     private const ushort SelfRelativeBit = 0x8000;
     private const byte AccessAllowed = 0x00;
     private const byte AccessDenied = 0x01;
@@ -41,10 +44,29 @@ public sealed record WindowsSecurityDescriptor
     public bool DaclProtected { get; init; }
 
     /// <summary>
+    /// Whether the descriptor carries an audit list (SACL) with an entry in
+    /// it, which only an account holding SeSecurityPrivilege reads or writes.
+    /// One with no entries is none: Windows hands one back for a file it
+    /// audits nothing of.
+    /// </summary>
+    public bool SaclPresent { get; init; }
+
+    /// <summary>Whether the audit list takes nothing from the folder it is in.</summary>
+    public bool SaclProtected { get; init; }
+
+    /// <summary>
     /// Every account the descriptor names, once each: its owner, its group,
     /// and then each its DACL grants or denies, in the DACL's order.
     /// </summary>
     public IReadOnlyList<string> Accounts { get; init; } = [];
+
+    /// <summary>
+    /// Every account its audit list audits, once each, in the list's order.
+    /// An audit grants nothing, so these are kept apart from
+    /// <see cref="Accounts"/>: one the machine does not know holds back the
+    /// audit list alone (ADR-0176 Amendment 3).
+    /// </summary>
+    public IReadOnlyList<string> AuditedAccounts { get; init; } = [];
 
     /// <summary>
     /// Whether the DACL is carried with no ACL at all, which grants everyone
@@ -89,7 +111,15 @@ public sealed record WindowsSecurityDescriptor
         Add(group);
         var present = (control & DaclPresentBit) != 0;
         var daclOffset = BinaryPrimitives.ReadUInt32LittleEndian(selfRelative[16..]);
-        if (present && daclOffset != 0 && !TryDaclAt(selfRelative, daclOffset, accounts, entries))
+        if (present && daclOffset != 0 && !TryAclAt(selfRelative, daclOffset, accounts, entries))
+        {
+            return null;
+        }
+
+        var audited = (control & SaclPresentBit) != 0;
+        var saclOffset = BinaryPrimitives.ReadUInt32LittleEndian(selfRelative[12..]);
+        var auditedAccounts = new List<string>();
+        if (audited && saclOffset != 0 && !TryAclAt(selfRelative, saclOffset, auditedAccounts, entries: null))
         {
             return null;
         }
@@ -100,7 +130,10 @@ public sealed record WindowsSecurityDescriptor
             Group = group,
             DaclPresent = present,
             DaclProtected = (control & DaclProtectedBit) != 0,
+            SaclPresent = audited && saclOffset != 0 && BinaryPrimitives.ReadUInt16LittleEndian(selfRelative[(int)(saclOffset + 4)..]) > 0,
+            SaclProtected = (control & SaclProtectedBit) != 0,
             Accounts = accounts,
+            AuditedAccounts = auditedAccounts,
             NullDacl = present && daclOffset == 0,
             Entries = entries,
         };
@@ -125,9 +158,10 @@ public sealed record WindowsSecurityDescriptor
     /// <summary>
     /// Each account the ACL at <paramref name="offset"/> names, added to
     /// <paramref name="accounts"/> once, and each of its entries that allows or
-    /// denies one account, added to <paramref name="entries"/>.
+    /// denies one account, added to <paramref name="entries"/> where they are
+    /// kept: a DACL's are, an audit list's grant nothing.
     /// </summary>
-    private static bool TryDaclAt(ReadOnlySpan<byte> descriptor, uint offset, List<string> accounts, List<AccessEntry> entries)
+    private static bool TryAclAt(ReadOnlySpan<byte> descriptor, uint offset, List<string> accounts, List<AccessEntry>? entries)
     {
         if (offset < HeaderLength || offset > descriptor.Length - 8)
         {
@@ -165,7 +199,7 @@ public sealed record WindowsSecurityDescriptor
                 accounts.Add(sid!);
             }
 
-            if (acl[at] is AccessAllowed or AccessDenied)
+            if (entries is not null && acl[at] is AccessAllowed or AccessDenied)
             {
                 entries.Add(new AccessEntry(
                     sid!, acl[at] == AccessAllowed, BinaryPrimitives.ReadUInt32LittleEndian(acl[(at + 4)..]), acl[at + 1]));

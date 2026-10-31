@@ -101,6 +101,8 @@ A reader that makes the names of a `hardlink_group` one file again MUST NOT rely
 
 An empty `windows_security_descriptor` is no descriptor, since a self-relative descriptor is at least twenty bytes. A writer omits key 7 where it read none, and a reader MUST treat an empty value as absent. Repositories written before this rule hold an empty key 7 on every entry captured where no descriptor was read ([ADR-0083 Amendment 1](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor)).
 
+Key 7 holds the owner, the group and the DACL, and the audit list (SACL) as well where the capturing account held SeSecurityPrivilege ([ADR-0176 Amendment 3](../../docs/adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege)). A reader MUST NOT take a descriptor without one to mean the entry was audited for no one. An audit list with no entries is none.
+
 > **Erratum (phase 1).** Several shapes in §4 and §4.1 were unassigned
 > until the first production writer needed them. Pending a normative edit,
 > [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) pins them:

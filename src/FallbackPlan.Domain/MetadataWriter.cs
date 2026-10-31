@@ -215,13 +215,19 @@ public sealed class MetadataWriter(MetadataTarget target)
         // one this machine does not know would hand the file to nobody's
         // access; it is not written, and the file keeps its folder's. The
         // restore privilege is enabled only for a write refused without it,
-        // so a file given its own account's owner never runs under it.
+        // so a file given its own account's owner never runs under it. An
+        // audit list is written only by an account holding the security
+        // privilege, and only where the machine knows every account it
+        // audits; otherwise the rest lands and the audit list is named. It
+        // grants nothing, so it holds back nothing else.
         string? descriptorDetail = null;
         if (target.SupportsSecurityDescriptors && OperatingSystem.IsWindows() && !link
             && metadata.WindowsSecurityDescriptor is { IsEmpty: false } descriptor)
         {
             var read = WindowsSecurityDescriptor.Read(descriptor.Span);
             var strangers = read?.Accounts.Where(account => !Known(account)).ToList() ?? [];
+            var unaudited = read?.AuditedAccounts.Where(account => !Known(account)).ToList() ?? [];
+            var audit = target.HoldsSecurityPrivilege && unaudited.Count == 0;
             if (read is null)
             {
                 descriptorDetail = "security descriptor not applied: it does not read as one";
@@ -230,16 +236,29 @@ public sealed class MetadataWriter(MetadataTarget target)
             {
                 descriptorDetail = $"security descriptor not applied: it names {string.Join(", ", strangers)}, which this machine does not know";
             }
-            else if (WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true)
+            else if (WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true, withAuditList: audit)
                 || (target.HoldsRestorePrivilege
-                    && WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: true, withRestorePrivilege: true)))
+                    && WindowsSecurity.TryWrite(
+                        destination, descriptor.Span, read, withOwner: true, withRestorePrivilege: true, withAuditList: audit)))
             {
-                applied |= CapturedMetadata.SecurityDescriptor;
+                if (read.SaclPresent && !audit)
+                {
+                    descriptorDetail = unaudited.Count > 0
+                        ? $"security descriptor's audit list not applied: it names {string.Join(", ", unaudited)}, which this "
+                            + "machine does not know; its owner, group and access control list were"
+                        : "security descriptor's audit list not applied: writing it needs SeSecurityPrivilege, "
+                            + "which the account does not hold; its owner, group and access control list were";
+                }
+                else
+                {
+                    applied |= CapturedMetadata.SecurityDescriptor;
+                }
             }
             else
             {
                 descriptorDetail = read.DaclPresent && WindowsSecurity.TryWrite(destination, descriptor.Span, read, withOwner: false)
-                    ? "security descriptor's owner and group not applied (refused by the target); its access control list was"
+                    ? "security descriptor's owner and group not applied (refused by the target)"
+                        + (read.SaclPresent ? ", nor its audit list" : "") + "; its access control list was"
                     : "security descriptor not applied (refused by the target)";
             }
         }

@@ -276,7 +276,8 @@ public static class RestoreBlobSet
                         own.OwnerName, own.GroupName, own.PosixMode, MetadataRules.KindsOf(own),
                         Accounts: MetadataRules.AccountsOf(own), FileAttributes: own.FileAttributes,
                         DescriptorOwner: MetadataRules.DescriptorOwnerOf(own),
-                        RefusedAttributeNames: MetadataRules.RefusedAttributeNames(own), Access: MetadataRules.AccessOf(own));
+                        RefusedAttributeNames: MetadataRules.RefusedAttributeNames(own), Access: MetadataRules.AccessOf(own),
+                        AuditedAccounts: MetadataRules.AuditedAccountsOf(own));
                 }
 
                 continue;
@@ -312,7 +313,8 @@ public static class RestoreBlobSet
                 manifest.Metadata.AlternateStreams.Count(stream => !AlternateStreams.TryName(stream.Name.Span, out _, out _)),
                 MetadataRules.DescriptorOwnerOf(manifest.Metadata),
                 MetadataRules.RefusedAttributeNames(manifest.Metadata),
-                MetadataRules.AccessOf(manifest.Metadata));
+                MetadataRules.AccessOf(manifest.Metadata),
+                MetadataRules.AuditedAccountsOf(manifest.Metadata));
 
             // A lost segment makes the path missing whatever else of it is
             // archived, because no rehydration brings that segment back. The

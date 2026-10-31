@@ -26,6 +26,12 @@ public static partial class WindowsPrivileges
     /// </summary>
     public const string Restore = "SeRestorePrivilege";
 
+    /// <summary>
+    /// The privilege that lets an account read and write a file's audit list
+    /// (SACL), which Windows grants to administrators.
+    /// </summary>
+    public const string Security = "SeSecurityPrivilege";
+
     private const uint TokenQuery = 0x0008;
     private const uint TokenAdjustPrivileges = 0x0020;
     private const int TokenUserClass = 1;
@@ -88,11 +94,36 @@ public static partial class WindowsPrivileges
     public static bool RunWith(string privilege, Func<bool> call)
     {
         ThrowHelper.ThrowIfNullOrEmpty(privilege);
+
+        return RunWith([privilege], call);
+    }
+
+    /// <summary>
+    /// Makes <paramref name="call"/> as the overload of one privilege does,
+    /// with each of <paramref name="privileges"/> enabled, and not at all
+    /// where the token does not hold every one of them.
+    /// </summary>
+    /// <param name="privileges">The privileges' names, as <see cref="Restore"/> and <see cref="Security"/>.</param>
+    /// <param name="call">A synchronous call, which must not leave this thread.</param>
+    public static bool RunWith(IReadOnlyCollection<string> privileges, Func<bool> call)
+    {
+        ThrowHelper.ThrowIfNull(privileges);
         ThrowHelper.ThrowIfNull(call);
 
-        if (!OperatingSystem.IsWindows() || !LookupPrivilegeValue(null, privilege, out var luid))
+        if (!OperatingSystem.IsWindows())
         {
             return false;
+        }
+
+        var luids = new List<long>(privileges.Count);
+        foreach (var privilege in privileges)
+        {
+            if (!LookupPrivilegeValue(null, privilege, out var luid))
+            {
+                return false;
+            }
+
+            luids.Add(luid);
         }
 
         if (OpenThreadToken(GetCurrentThread(), TokenQuery, openAsSelf: true, out var standing))
@@ -109,7 +140,7 @@ public static partial class WindowsPrivileges
         try
         {
             return OpenThreadToken(GetCurrentThread(), TokenAdjustPrivileges | TokenQuery, openAsSelf: true, out var copy)
-                && Closing(copy, Enable(copy, luid))
+                && Closing(copy, EnableAll(copy, luids))
                 && call();
         }
         finally
@@ -181,6 +212,20 @@ public static partial class WindowsPrivileges
     {
         CloseHandle(token);
         return answer;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static bool EnableAll(nint token, List<long> luids)
+    {
+        foreach (var luid in luids)
+        {
+            if (!Enable(token, luid))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     [SupportedOSPlatform("windows")]
