@@ -1344,8 +1344,8 @@ public sealed class RestoreExecutor(
                             made,
                             OperatingSystem.IsWindows() && SymbolicLinks.PointsAtAFolder(
                                 manifest.Metadata.FileAttributes,
-                                () => folderDestinations.Value.Contains(LinkTargetPath(linkLanding, made))
-                                    || Directory.Exists(LinkTargetPath(linkLanding, made))));
+                                () => SymbolicLinks.PathNamed(linkLanding, made) is var named
+                                    && (folderDestinations.Value.Contains(named) || Directory.Exists(named))));
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
@@ -2125,10 +2125,6 @@ public sealed class RestoreExecutor(
             Detail = first.FlagsNotApplied, NotApplied = first.NotApplied, LinkedTo = first.Path,
         };
     }
-
-    /// <summary>The full path a link at <paramref name="link"/> names by <paramref name="target"/>.</summary>
-    private static string LinkTargetPath(string link, string target) =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(link)!, target));
 
     /// <summary>
     /// What an item's detail says of the file flags its manifest names, none

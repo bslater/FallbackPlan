@@ -614,6 +614,15 @@ public sealed class RecoverySession : IDisposable
                         RestorePaths.SpoolName(fileName, "recover"), prefix.Length == 0 ? fileName : prefix + "/" + fileName);
                 }
 
+                // The folders this tree makes, which a link made before them
+                // may name: Windows makes a folder's link apart from a file's.
+                var here = folder?.Destination ?? root;
+                var foldersHere = new HashSet<string>(
+                    tree.Entries
+                        .Where(entry => entry.EntryKind == EntryKind.DirectoryPlaceholder)
+                        .Select(entry => Path.GetFullPath(Path.Combine(here, Encoding.UTF8.GetString(entry.Name.Span)))),
+                    StringComparer.OrdinalIgnoreCase);
+
                 foreach (var entry in tree.Entries)
                 {
                     var name = Encoding.UTF8.GetString(entry.Name.Span);
@@ -662,12 +671,12 @@ public sealed class RecoverySession : IDisposable
 
                     var manifest = FileVersionManifestCodec.Decode(manifestBytes);
 
-                    // A link is made where links can be made without a
-                    // privilege, as the executor makes one (ADR-0155).
-                    if (manifest.EntryKind == EntryKind.Symlink && !OperatingSystem.IsWindows()
+                    // A link is made where the account may make one, as the
+                    // executor makes one (ADR-0155; ADR-0181 Amendment 1).
+                    if (manifest.EntryKind == EntryKind.Symlink && SymbolicLinks.CanCreate
                         && manifest.LinkTarget is { } linkTarget)
                     {
-                        if (MakeLink(manifest, path, destination, Encoding.UTF8.GetString(linkTarget.Span)))
+                        if (MakeLink(manifest, path, destination, Encoding.UTF8.GetString(linkTarget.Span), foldersHere))
                         {
                             restored++;
                             NoteFlags(manifest, path);
@@ -758,13 +767,20 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
-        // The link's metadata goes onto the link, never through it.
-        bool MakeLink(FileVersionManifest manifest, string path, string destination, string target)
+        // The link's metadata goes onto the link, never through it. Windows
+        // resolves only its own separators in a link, and makes a folder's
+        // link apart from a file's.
+        bool MakeLink(FileVersionManifest manifest, string path, string destination, string target, HashSet<string> foldersHere)
         {
+            var made = OperatingSystem.IsWindows() ? SymbolicLinks.TargetOnWindows(target) : target;
+            var asFolder = OperatingSystem.IsWindows() && SymbolicLinks.PointsAtAFolder(
+                manifest.Metadata.FileAttributes,
+                () => SymbolicLinks.PathNamed(destination, made) is var named
+                    && (foldersHere.Contains(named) || Directory.Exists(named)));
             if (!Placed(path, () =>
                 {
                     Clear(destination);
-                    File.CreateSymbolicLink(destination, target);
+                    SymbolicLinks.Create(destination, made, asFolder);
                 }))
             {
                 return false;

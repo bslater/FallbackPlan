@@ -31,6 +31,8 @@ The link's own captured metadata then goes onto the link through the executor's 
 
 On Windows, the executor makes no link, and neither does the tool. It skips the link with its note, as before.
 
+> **2026-10 ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md) and its [Amendment 1](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too)).** Both now make a link on Windows where the account may, and skip it with its note where it may not.
+
 ### 2. A write the output refuses fails its entry alone
 
 The output's own calls are each contained to the entry they serve:
@@ -57,6 +59,8 @@ A store's fault is not contained. It is an I/O error too, but it says the archiv
   > **2026-10 ([ADR-0156](0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md)).** A hard-link group now comes back as one file, by the executor's rule.
 - **Make a link on Windows.** That needs a privilege the executor does not ask for either.
 
+  > **2026-10: taken up by [ADR-0181 Amendment 1](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too)** where the account holds that privilege, or the machine is in developer mode.
+
 ## Alternatives considered
 
 - **Skip a link whose target leads out of the output.** Rejected. The executor makes such a link, the target is what was captured, and the containment rule already keeps anything from being written through it.
@@ -68,3 +72,4 @@ A store's fault is not contained. It is an I/O error too, but it says the archiv
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The recovery tool makes a symlink a link where links can be made, replacing a file or link at its name and giving it its own metadata onto the link. A write the output refuses at an entry's name fails that entry alone, with a note, where it ended the run. |
 | 2026-10 | Accepted | Noted by [ADR-0156](0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md): the tool now gives a hard-link group back as one file. |
+| 2026-10 | Accepted (related) | [ADR-0181 Amendment 1](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too): the tool makes a link on Windows where the account may, as the executor does, and skips it with its note where it may not. |
