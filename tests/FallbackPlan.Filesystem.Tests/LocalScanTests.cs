@@ -17,6 +17,8 @@ namespace FallbackPlan.Filesystem.Tests;
 /// holds SeSecurityPrivilege (FR-RST-004, ADR-0176 Amendment 3), and a link
 /// is captured as a link, never followed, with its own security descriptor
 /// read through a handle opened on the link itself (FR-MAN-003, ADR-0182).
+/// A reparse point that names no other path, as a compressed file's does,
+/// is captured as the file it is, content and all (ADR-0183).
 /// </summary>
 [TestClass]
 public sealed partial class LocalScanTests : IDisposable
@@ -263,6 +265,37 @@ public sealed partial class LocalScanTests : IDisposable
         var read = Described(link);
         Assert.IsTrue(read.SaclPresent);
         Assert.Contains("S-1-1-0", read.AuditedAccounts);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows compresses a file behind a reparse point")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_AFileCompressedBehindAReparsePoint_IsCapturedAsTheFileItIs_ContentAndAll()
+    {
+        var content = string.Concat(Enumerable.Repeat("a file Windows compresses behind a reparse point. ", 6000));
+        var path = Write("compressed.txt", content);
+        using (var compact = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "compact.exe", $"/c /exe:xpress4k \"{path}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }))
+        {
+            Assert.IsNotNull(compact);
+            var said = await compact.StandardOutput.ReadToEndAsync();
+            await compact.WaitForExitAsync();
+            Assert.AreEqual(0, compact.ExitCode, said);
+        }
+
+        Assert.IsTrue(
+            (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0,
+            "the premise: Windows keeps the compressed file behind a reparse point");
+
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.AreEqual(ScanEntryKind.File, entry.Kind);
+        Assert.IsNull(entry.LinkTarget);
+        Assert.AreEqual(content.Length, entry.Length);
+        using var read = _source.OpenRead(entry);
+        using var reader = new StreamReader(read);
+        Assert.AreEqual(content, await reader.ReadToEndAsync());
     }
 
     [TestMethod]

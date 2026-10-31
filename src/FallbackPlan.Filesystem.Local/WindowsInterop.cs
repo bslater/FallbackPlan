@@ -11,6 +11,14 @@ namespace FallbackPlan.Filesystem.Local;
 /// outside <see cref="WindowsInterop"/> because a layout is not a platform
 /// call, so the test that pins it to the native one runs on every platform.
 /// </summary>
+/// <summary><c>FILE_ATTRIBUTE_TAG_INFO</c>: an entry's attribute bits and its reparse tag.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct AttributeTagInformation
+{
+    public uint FileAttributes;
+    public uint ReparseTag;
+}
+
 [StructLayout(LayoutKind.Sequential)]
 internal struct ByHandleFileInformation
 {
@@ -90,6 +98,10 @@ internal static partial class WindowsInterop
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetFileInformationByHandle(SafeFileHandle handle, out ByHandleFileInformation information);
 
+    [LibraryImport("kernel32", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandleEx(SafeFileHandle handle, int informationClass, out AttributeTagInformation information, uint size);
+
     [LibraryImport("kernel32", EntryPoint = "FindFirstStreamW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     private static partial nint FindFirstStream(string fileName, int infoLevel, out FindStreamData data, uint flags);
 
@@ -131,6 +143,26 @@ internal static partial class WindowsInterop
         fileId = ((ulong)information.FileIndexHigh << 32) | information.FileIndexLow;
         linkCount = information.NumberOfLinks;
         return true;
+    }
+
+    /// <summary>
+    /// The reparse tag of the reparse point at <paramref name="path"/>, read
+    /// through a handle on the reparse point itself; null where it cannot be
+    /// opened or does not say (ADR-0183).
+    /// </summary>
+    public static uint? ReparseTagOf(string path)
+    {
+        const int attributeTagInfo = 9;
+
+        using var handle = CreateFile(
+            path, 0, 7 /* read|write|delete share */, 0, 3 /* OPEN_EXISTING */,
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint, 0);
+
+        return !handle.IsInvalid
+            && GetFileInformationByHandleEx(handle, attributeTagInfo, out var information, (uint)Marshal.SizeOf<AttributeTagInformation>())
+            && (information.FileAttributes & (uint)FileAttributes.ReparsePoint) != 0
+                ? information.ReparseTag
+                : null;
     }
 
     /// <summary>Enumerates named alternate data streams (the unnamed <c>::$DATA</c> stream is skipped).</summary>

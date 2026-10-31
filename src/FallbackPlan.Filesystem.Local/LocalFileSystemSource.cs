@@ -621,15 +621,11 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
 
         var attributes = info.Attributes;
 
-        // The reparse bit is tested FIRST, and the order is the whole point.
-        // A directory junction or a directory symlink carries both bits, so
-        // testing Directory first classified it as an ordinary directory and
-        // the scanner would descend through it — out of the approved root,
-        // which architecture 06 §2 forbids. A link is a link whatever it
-        // points at.
-        var mode = (attributes & FileAttributes.ReparsePoint) != 0
-            ? 0xA000u
-            : (attributes & FileAttributes.Directory) != 0 ? 0x4000u : 0x8000u;
+        // Only a reparse point's tag says whether it is a link or a file a
+        // filter keeps, as deduplication and compression do; read as a link,
+        // such a file's content was never captured.
+        var mode = ReparsePoints.ModeOf(
+            attributes, (attributes & FileAttributes.ReparsePoint) != 0 ? WindowsInterop.ReparseTagOf(path) : null);
 
         result = new StatResult(
             Device: device,
