@@ -28,6 +28,9 @@ public static class SecurityDescriptors
     /// <summary>The flag of an ACE a folder made in its folder takes.</summary>
     public const byte ContainerInherit = 0x02;
 
+    /// <summary>The flag of an ACE that passes to what is made in its folder and no further down.</summary>
+    public const byte NoPropagate = 0x04;
+
     /// <summary>The flag of an ACE that governs only what is made in its folder.</summary>
     public const byte InheritOnly = 0x08;
 

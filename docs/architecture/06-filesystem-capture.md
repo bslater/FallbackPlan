@@ -81,6 +81,8 @@ For each metadata class and target platform: **preserve** it, **degrade** it and
 
 > **2026-10 ([ADR-0176 Amendment 3](../adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege)).** The SACL is now captured where the capturing account holds SeSecurityPrivilege, and preserved on Windows where the restoring account holds it and the machine knows every account it audits, so the Windows ACLs row is met for both lists there. Elsewhere it is degraded and reported, and the rest of the descriptor still lands.
 
+> **2026-10 ([ADR-0178 Amendment 3](../adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in)).** The folder a file is held against is now the one it lands in, read through the folders the restore makes. A file restored in place into a folder that shares more than its root is named, and its run refused unless acknowledged.
+
 > **2026-10 ([ADR-0178 Amendment 2](../adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-2-2026-10--the-console-asks-for-the-acknowledgement)).** The console asks too: its restore wizard says how many files a folder would open wider, and runs only once the person acknowledges it.
 
 **Refuse** is reserved for cases where restoring would produce a file that is wrong in a way the user could not detect — for example, restoring a file whose security descriptor cannot be applied into a location where the default descriptor would grant broader access than the original. These are enumerated in the restore plan and require explicit acknowledgement.

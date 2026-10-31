@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain; amended by [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such files is refused before anything is written unless it acknowledges wider access, and the plan counts them; amended by [Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement): the console asks the person for that acknowledgement)
+**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain; amended by [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such files is refused before anything is written unless it acknowledges wider access, and the plan counts them; amended by [Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement): the console asks the person for that acknowledgement; amended by [Amendment 3](#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in): a file is judged by the folder it lands in, through the folders the restore makes, and the folders its access comes from are named)
 **Related:** [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) (a descriptor is written only where the machine knows every account it names, and is otherwise declared), [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (the plan and the receipt say what a target will not get back, and a run that will not fit is refused unless a person goes on), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (refuse is reserved for a descriptor that cannot be applied where the default would grant broader access)
 
 **Built:**
@@ -49,6 +49,8 @@ The reading is per account, not per person: a right an account holds through a g
 
 What a file made in a folder takes is each entry the folder marks to pass to files, wherever the folder got it. The creator's entries are left out: they become the restoring account's, which already holds what it restores. The folder read is the nearest one that stands at or above where the file lands. A restore makes the folders below it, each taking what passes down, and writes their own descriptors only after their files have landed, without passing them down again.
 
+> **2026-10 ([Amendment 3](#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in)).** Built as said only now. Each file was held against the folder its slice writes into, not the one it lands in, and what the folder that stands gives was read as if every file were made in it. A file is now judged where it lands, and an entry marked not to propagate stops at the first folder the restore makes.
+
 ### 3. Wider is a right an account gains
 
 A file's folder opens it wider where some account gets a right from the folder that the file's own DACL did not give that account. Synchronising alone is not counted, since every read grants it.
@@ -56,6 +58,8 @@ A file's folder opens it wider where some account gets a right from the folder t
 ### 4. The plan names those files, the folders and the accounts
 
 For a file whose descriptor names an account the machine does not know, the plan holds what its folder gives against what its own DACL gave. It declares those opened wider on a line of their own, `wider-access`, beside the line that already says their descriptors will not be applied. The new line names the folders and every account that gains. The plan finds each item's folder from the slices the service and direct mode already measure for room, and reads each folder once.
+
+> **2026-10 ([Amendment 3](#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in)).** Each item's folder is now its own, resolved under its slice's folder as the executor resolves it. The line names the folders the access comes from: for each file, the nearest that stands.
 
 A file whose owner is refused still gets its DACL (ADR-0176 Amendment 1), so it is not judged. Nor is a file whose descriptor is written.
 
@@ -108,6 +112,8 @@ The plan names the files a restore would open wider (§4), and the run restored 
 - On Windows a run reads each file's manifest once more before it writes, a blob at a time. A run that acknowledges wider access reads nothing more, and off Windows no run does.
 - The run and its plan judge the same folder: the one the run is told to write to, read where it stands. A quarantined run's own folder, made below it, takes what that folder passes down.
 
+  > **2026-10 ([Amendment 3](#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in)).** Each file is now held against the folder it lands in below that one, through the folders the run makes.
+
 ### What this does not do
 
 - **Ask in the console.** The console shows the plan's line, and sends no acknowledgement. A run it asks is refused, naming the files, until its wizard gives the person a way to go on. That is the next record's.
@@ -140,6 +146,44 @@ The restore wizard asks, as it asks for room the plan says the run lacks.
 
 - **Name the accounts on the checkbox.** The plan's line above it names them. The kept plan's view shows its summary, not the lines.
 
+## Amendment 3 (2026-10) — a file is judged by the folder it lands in
+
+### Context
+
+§2 has the folder read be the nearest one that stands at or above where a file lands, each folder the restore makes taking what passes down. What was built read the folder a slice writes into, for every file in it. A file restored in place, into a folder below that one that stands with access of its own, was judged by the root's access instead. A file landing in a folder that shares more than the root was not named, and the run that opened it wider was not refused. A file landing in a folder that keeps to fewer accounts could be named, and its run refused, for access it would not get. And what passes down was read as though every file were made in the folder that stands. An entry marked not to propagate, which Windows gives that folder's own files and no others, was counted for files below folders the restore makes.
+
+### Decision
+
+- **Each item's folder is its own.** `RestoreMetadata.DestinationsOf` resolves each item's path under its slice's folder by the rule the executor writes by, and gives the folder it lands in. A path the executor would refuse lands nowhere, and is not judged.
+- **What passes down is read as Windows passes it.** `WindowsAccess.InheritedByAFile` takes how many folders the restore makes between the folder that stands and the file.
+  - Each made folder takes an entry that passes to folders as its own, and passes it on.
+  - It keeps an entry that passes to files alone for the files below it.
+  - An entry marked not to propagate stops at the first.
+  - A creator's entry still gives a file nothing.
+- **The folder named is the one the access comes from.** `WindowsAccess.InheritedByAFileAt` gives the access with the folder it read (`InheritedAccess`). The `wider-access` line and the refusal name those folders, each once, not every folder the files land in. A restore of a whole tree into a new place names the folder that stands above it.
+- **The plan, a run and a resume judge alike**, since each maps its slices through `DestinationsOf`.
+
+### Consequences
+
+- A file restored in place into a folder that stands is judged by that folder's own access. One a shared folder below the root would open wider is named, and its run refused unless acknowledged. One a private folder would not open wider is not.
+- Each folder a run's files land in is asked about once. A run into many folders reads the folder that stands above them once for each.
+
+### What this does not do
+
+- **Judge a folder.** A folder the restore makes is still not held against its own captured access, as §4 leaves it.
+- **Read a folder that stands once a run.** It is read once for each folder a file lands in below it.
+
+**Built:** `Domain/WindowsAccess`; `Restore/RestoreMetadata`; `Restore/RestorePlan`:
+
+- `Domain.Tests/WindowsAccessTests`:
+  - on every platform, a file made below folders a restore makes takes what passes down them: an entry that passes to folders and files reaches it, and so does one that passes to files alone. One that passes to folders alone does not, nor one marked not to propagate, nor a creator's;
+  - on Windows, the access comes with the folder it was read from. An entry marked not to propagate reaches a file made in that folder, and not one made below a folder the restore makes. A folder that stands below another is the one read.
+- `Repository.Tests/RestoreMetadataHonestyTests`, on every platform:
+  - each item lands in its own folder under its slice's, and one whose path would be refused lands nowhere;
+  - of two files kept to an unknown account, the one whose access comes from a folder that shares is named, with that folder. The one landing in a folder that keeps to the system is not.
+
+The Windows cases run on CI's Windows job; elsewhere they are reported as skipped.
+
 ## Status history
 
 | Date | Status | Note |
@@ -147,3 +191,4 @@ The restore wizard asks, as it asks for room the plan says the run lacks.
 | 2026-10 | Accepted | Built in one slice, tests first. The plan reads each captured DACL's access per account, and the access a file would take from the folder it lands in. For a file whose descriptor will not be written, it names those opened wider, the folders and the accounts that gain, through the service and direct mode alike. `Domain/WindowsAccess`; `Domain/WindowsSecurityDescriptor`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Restore/RestoreBlobSet`; `Domain.Tests/WindowsAccessTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Cli.Tests/RestoreHonestyCommandTests` |
 | 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run that a folder would open a file wider in is refused before anything is written, naming the files, the folders and the accounts, unless it acknowledges wider access, through the service, direct mode and a resume. The run reads each file's manifest for it, a blob at a time, only where a folder says what a file takes, and the plan counts the files (contract 1.80). `Restore/RestoreMetadata`; `Agent/ServiceCommandHandler`; `Cli/OperationGateway`; `Cli/CliApplication`; `Cli/RestorePlanReport`; `Api/Commands`; `Api/Results`; `Api/ContractVersion`; `Repository.Tests/RestoreMetadataHonestyTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Hosts.Tests/RestoreUnfinishedServiceTests`; `Cli.Tests/RestoreHonestyCommandTests`; `Cli.Tests/GatewayRestoreReportTests`; `Cli.Tests/RestoreResumeVerbTests`; `Api.Tests/ConfigurationContractTests` |
 | 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement): the console's restore wizard says how many files a plan counts a folder would open wider, and arms the run only once the person ticks the acknowledgement, which a run, a kept plan's run and either resume send; a plan short of room as well needs both choices. `Web/wwwroot`; `Web.DomTests/RestoreWizardDomTests`; `Web.DomTests/RestoreUnfinishedDomTests`; `Web.DomTests/RestoreKeptPlanDomTests` |
+| 2026-10 | Amended | [Amendment 3](#amendment-3-2026-10--a-file-is-judged-by-the-folder-it-lands-in): a file is judged by the folder it lands in, resolved under its slice's folder as the executor resolves it, and by what passes down to it through the folders the restore makes, an entry marked not to propagate stopping at the first; the plan's line and the refusal name the folders the access comes from. `Domain/WindowsAccess`; `Restore/RestoreMetadata`; `Domain.Tests/WindowsAccessTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
