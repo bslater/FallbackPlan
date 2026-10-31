@@ -4908,7 +4908,7 @@ What remains is recorded rather than done:
   whose facts carry each item's attribute kinds and not their names
   (taken up by Amendment 1);
 - a stream captured from Windows is not turned back into an attribute on
-  Linux or macOS;
+  Linux or macOS (taken up by [0179](#0179--streams-as-attributes));
 - a folder's attributes are not kept, as a restore writes no folder's
   streams (taken up by Amendment 2).
 
