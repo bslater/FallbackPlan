@@ -15,7 +15,9 @@ namespace FallbackPlan.Web.DomTests;
 /// again through it. The run is offered, under the typed word, only where
 /// nothing the plan said has changed, and asked exactly as it was kept;
 /// otherwise each change is named and nothing can be run. A backup no set
-/// here holds, or a source that does not hold it, runs nothing.
+/// here holds, or a source that does not hold it, runs nothing. Where the
+/// plan made now counts files a folder would open wider, the run is armed
+/// only once the person acknowledges it (FR-RST-003, ADR-0178 Amendment 2).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -78,7 +80,32 @@ public sealed class RestoreKeptPlanDomTests
         Assert.AreEqual("folder", restored.Target);
         Assert.AreEqual("rename", restored.Existing);
         Assert.IsTrue(restored.InPlace);
+        Assert.IsFalse(restored.AcknowledgeWiderAccess);
         await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    public async Task AKeptPlanWhoseFolderWouldOpenFilesWider_IsRunOnlyWhenThePersonAcknowledgesIt()
+    {
+        // What the plan made now says of the folder is the run's to refuse
+        // (ADR-0178 Amendment 1), whatever was kept, so the person says so.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Fakes(planNow: KeptPlan with { OpenedWider = 1 });
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToTheKeptPlanAsync(page, harness, KeptFile());
+
+        await Expect(page.Locator("#rst-kept-summary")).ToContainTextAsync("as kept");
+        await Expect(page.Locator("#rst-wider")).ToContainTextAsync("1 file(s)");
+        var run = page.Locator("#rst-kept-go");
+        await page.FillAsync("#confirm-word", "restore");
+        await Expect(run).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ack-wider");
+        await Expect(run).ToBeEnabledAsync();
+        await run.ClickAsync();
+
+        Assert.IsTrue((await harness.ReceivedAsync<RunRestoreCommand>()).AcknowledgeWiderAccess);
     }
 
     [TestMethod]

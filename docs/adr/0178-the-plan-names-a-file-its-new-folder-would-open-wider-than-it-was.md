@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain; amended by [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such files is refused before anything is written unless it acknowledges wider access, and the plan counts them)
+**Requirements:** FR-RST-003 (amended: the plan names the files whose security descriptor will not be written and whose folder would give an account access their own did not, and the accounts that gain; amended by [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such files is refused before anything is written unless it acknowledges wider access, and the plan counts them; amended by [Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement): the console asks the person for that acknowledgement)
 **Related:** [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) (a descriptor is written only where the machine knows every account it names, and is otherwise declared), [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) (the plan and the receipt say what a target will not get back, and a run that will not fit is refused unless a person goes on), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (refuse is reserved for a descriptor that cannot be applied where the default would grant broader access)
 
 **Built:**
@@ -22,6 +22,7 @@
   - `Repository.Tests/RestoreMetadataHonestyTests` — the count says what the plan's line says; a run reads each manifest to say the same, within NFR-PERF-009's budget of a request a blob, and reads nothing where no folder says what a file takes.
   - `Hosts.Tests/RestoreHonestyServiceTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` — on Windows, the service, a resume and direct mode each refuse a run of a real file kept to an unknown account into a folder that shares with Users, writing nothing, and run it when acknowledged.
   - `Cli.Tests/GatewayRestoreReportTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` — the acknowledgement crosses only when told, under contract 1.80's names, and a plan that counts such files fails, saying how to go on.
+- The console ([Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement)): the restore wizard says how many files a plan counts, and arms the run only once the person ticks the acknowledgement, for a run, a kept plan's run and either resume. `Web.DomTests/RestoreWizardDomTests`, `Web.DomTests/RestoreUnfinishedDomTests` and `Web.DomTests/RestoreKeptPlanDomTests` hold each, and that a plan short of room and opening files wider needs both choices.
 
 ---
 
@@ -110,8 +111,34 @@ The plan names the files a restore would open wider (§4), and the run restored 
 ### What this does not do
 
 - **Ask in the console.** The console shows the plan's line, and sends no acknowledgement. A run it asks is refused, naming the files, until its wizard gives the person a way to go on. That is the next record's.
+
+  > **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement)).** Built: the console's wizard asks, and sends the acknowledgement the person gives.
 - **Keep the acknowledgement.** A resume, and a later run of the same plan, ask for it again.
 - **Judge more than §4 does.** A folder, a descriptor that does not read and a group's members are left as §4 leaves them.
+
+## Amendment 2 (2026-10) — the console asks for the acknowledgement
+
+### Context
+
+Amendment 1 had the service refuse a run that a folder would open a file wider in, unless the run acknowledges it, and gave the command line a flag to say so. The console sent no acknowledgement. A person restoring through it saw the plan's line and then a refusal, with no way to go on short of choosing another folder.
+
+### Decision
+
+The restore wizard asks, as it asks for room the plan says the run lacks.
+- Where a plan counts files a folder would open wider (`opened_wider`), the wizard says how many, and that nothing will be written unless the person chooses to restore anyway.
+- It offers a checkbox to go on. The run is armed only once it is ticked, beside the typed word where the run takes one.
+- Where the plan is also short of room, both choices are needed, each its own.
+- The run, a kept plan's run, a resume of a run left unfinished and a resume a result offers each send the person's choice. A resume asks again, since the run's acknowledgement is not kept with it.
+- A resume whose plan could not be made offers the checkbox unasked, as it offers to go on for room, since its run may still be refused.
+
+### Consequences
+
+- A person restoring through the console can go on past the refusal, having been told what it is for, and nothing is sent that they did not choose.
+- A kept plan's run is held to the plan made now. Files a folder would open wider are asked about whatever the kept plan said, since the run is refused for them either way.
+
+### What this does not do
+
+- **Name the accounts on the checkbox.** The plan's line above it names them. The kept plan's view shows its summary, not the lines.
 
 ## Status history
 
@@ -119,3 +146,4 @@ The plan names the files a restore would open wider (§4), and the run restored 
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. The plan reads each captured DACL's access per account, and the access a file would take from the folder it lands in. For a file whose descriptor will not be written, it names those opened wider, the folders and the accounts that gain, through the service and direct mode alike. `Domain/WindowsAccess`; `Domain/WindowsSecurityDescriptor`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Restore/RestoreBlobSet`; `Domain.Tests/WindowsAccessTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Cli.Tests/RestoreHonestyCommandTests` |
 | 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run that a folder would open a file wider in is refused before anything is written, naming the files, the folders and the accounts, unless it acknowledges wider access, through the service, direct mode and a resume. The run reads each file's manifest for it, a blob at a time, only where a folder says what a file takes, and the plan counts the files (contract 1.80). `Restore/RestoreMetadata`; `Agent/ServiceCommandHandler`; `Cli/OperationGateway`; `Cli/CliApplication`; `Cli/RestorePlanReport`; `Api/Commands`; `Api/Results`; `Api/ContractVersion`; `Repository.Tests/RestoreMetadataHonestyTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Hosts.Tests/RestoreUnfinishedServiceTests`; `Cli.Tests/RestoreHonestyCommandTests`; `Cli.Tests/GatewayRestoreReportTests`; `Cli.Tests/RestoreResumeVerbTests`; `Api.Tests/ConfigurationContractTests` |
+| 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--the-console-asks-for-the-acknowledgement): the console's restore wizard says how many files a plan counts a folder would open wider, and arms the run only once the person ticks the acknowledgement, which a run, a kept plan's run and either resume send; a plan short of room as well needs both choices. `Web/wwwroot`; `Web.DomTests/RestoreWizardDomTests`; `Web.DomTests/RestoreUnfinishedDomTests`; `Web.DomTests/RestoreKeptPlanDomTests` |
