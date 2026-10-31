@@ -471,4 +471,26 @@ internal static class Strings
     /// A writer identity is exactly 16 bytes.
     /// </summary>
     internal static string LocalState_WriterIdentityIs16Bytes => Get(nameof(LocalState_WriterIdentityIs16Bytes));
+
+    /// <summary>
+    /// The marker '{0}' could not be held: each time it was taken, a look for a run that had gone cleared it.
+    /// </summary>
+    private static string RestoresUnderWay_MarkerNotHeld => Get(nameof(RestoresUnderWay_MarkerNotHeld));
+
+    /// <summary>
+    /// The marker '{0}' could not be held: each time it was taken, a look for a run that had gone cleared it.
+    /// </summary>
+    internal static string FormatRestoresUnderWay_MarkerNotHeld(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, RestoresUnderWay_MarkerNotHeld, arg0);
+
+    /// <summary>
+    /// A restore's run is named by lowercase hex digits, and '{0}' is not such a name.
+    /// </summary>
+    private static string RestoresUnderWay_RunNotHex => Get(nameof(RestoresUnderWay_RunNotHex));
+
+    /// <summary>
+    /// A restore's run is named by lowercase hex digits, and '{0}' is not such a name.
+    /// </summary>
+    internal static string FormatRestoresUnderWay_RunNotHex(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, RestoresUnderWay_RunNotHex, arg0);
 }

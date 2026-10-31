@@ -503,6 +503,20 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>Where each restore run keeps the parts of the files it was cut short in (ADR-0129).</summary>
     internal string RestorePartsRoot => RestoreParts.RootUnder(Options.StateDirectory);
 
+    /// <summary>
+    /// Whether a restore of <paramref name="set"/> is under way: one this
+    /// service runs (ADR-0172 Amendment 3), or one in direct mode of the
+    /// set's repository that says so in this service's state directory
+    /// (ADR-0172 Amendment 6). Asked before a retention pass collects, a sync
+    /// drops at a destination or a peer is instructed.
+    /// </summary>
+    /// <param name="set">The set.</param>
+    /// <param name="archive">The set's archive, whose repository a restore in direct mode is said by.</param>
+    /// <returns>Whether one is.</returns>
+    internal bool RestoreUnderWayOf(BackupSetConfiguration set, ArchiveHandle archive) =>
+        RestoreRuns.IsUnderWayFor(set.Name)
+        || RestoresUnderWay.AnyFor(Options.StateDirectory, archive.Repository.RepositoryId);
+
     /// <summary>This device's writer identity — one per device, shared by every archive it writes.</summary>
     public WriterId Writer => WriterId.FromBytes(State.WriterId);
 

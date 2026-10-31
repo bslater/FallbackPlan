@@ -181,4 +181,10 @@
   <data name="LocalState_WriterIdentityIs16Bytes" xml:space="preserve">
     <value>A writer identity is exactly 16 bytes.</value>
   </data>
+  <data name="RestoresUnderWay_MarkerNotHeld" xml:space="preserve">
+    <value>The marker '{0}' could not be held: each time it was taken, a look for a run that had gone cleared it.</value>
+  </data>
+  <data name="RestoresUnderWay_RunNotHex" xml:space="preserve">
+    <value>A restore's run is named by lowercase hex digits, and '{0}' is not such a name.</value>
+  </data>
 </root>

@@ -386,7 +386,7 @@ public static class OperationGateway
             }
 
             session.TakeWriterRole();
-            return new DirectGateway(session, logger);
+            return new DirectGateway(session, logger, stateNamed: stateDirectory is not null);
         }
         catch
         {
@@ -455,7 +455,7 @@ public static class OperationGateway
                 }
             }
 
-            return new DirectGateway(session, logger);
+            return new DirectGateway(session, logger, stateNamed: stateDirectory is not null);
         }
         catch
         {
@@ -1313,11 +1313,20 @@ internal sealed class ServiceGateway(
 }
 
 /// <summary>The gateway that does the work in this process, holding the writer role.</summary>
-internal sealed class DirectGateway(CliSession session, ILogger? logger = null) : IOperationGateway
+/// <param name="session">The session it works through.</param>
+/// <param name="logger">Where what it noticed is recorded.</param>
+/// <param name="stateNamed">
+/// Whether the command named its state directory. One that named none also
+/// says a restore is under way where the installation's service looks
+/// (ADR-0172 Amendment 6).
+/// </param>
+internal sealed class DirectGateway(CliSession session, ILogger? logger = null, bool stateNamed = true) : IOperationGateway
 {
     private static readonly AsyncLocal<Func<string, long?>?> AvailableBytesFlow = new();
 
     private static readonly AsyncLocal<Func<string, ulong?>?> VolumeFlow = new();
+
+    private static readonly AsyncLocal<Action<Domain.Identifiers.RepositoryId>?> RestoreUnderWayFlow = new();
 
     /// <summary>
     /// A test harness's view of the disk for this flow's restores
@@ -1341,6 +1350,53 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     {
         get => VolumeFlow.Value;
         set => VolumeFlow.Value = value;
+    }
+
+    /// <summary>
+    /// Called with the repository a restore in this flow reads, once it has
+    /// said it is under way and before it writes (ADR-0172 Amendment 6), so a
+    /// test can look where a service would. Null, the production value, does
+    /// nothing.
+    /// </summary>
+    internal static Action<Domain.Identifiers.RepositoryId>? RestoreUnderWayInFlow
+    {
+        get => RestoreUnderWayFlow.Value;
+        set => RestoreUnderWayFlow.Value = value;
+    }
+
+    /// <summary>
+    /// Every state directory a restore in direct mode says it is under way in
+    /// (ADR-0172 Amendment 6): the one the command works in and, where it
+    /// named none, the one the installation's service keeps (FR-SVC-016),
+    /// where there is one. That is found as every path-less process finds it,
+    /// but never made: a restore makes no installation.
+    /// </summary>
+    /// <param name="stateDirectory">The state directory the command works in.</param>
+    /// <param name="stateNamed">Whether the command named it.</param>
+    /// <returns>Each directory, once.</returns>
+    internal static IReadOnlyList<string> RestoreSeenFrom(string stateDirectory, bool stateNamed)
+    {
+        List<string> seen = [stateDirectory];
+        if (stateNamed)
+        {
+            return seen;
+        }
+
+        var installation = Environment.GetEnvironmentVariable(InstallationDefaults.StateVariable) is { Length: > 0 } named
+            ? named
+            : Path.Combine(
+                Directory.Exists(InstallationDefaults.MachineRoot) ? InstallationDefaults.MachineRoot : InstallationDefaults.ProfileRoot,
+                "state");
+        // One directory twice would be held twice by one run, and the second
+        // hold refused by the first. Compared without case, as containment is.
+        static string Full(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (Directory.Exists(installation)
+            && !string.Equals(Full(installation), Full(stateDirectory), StringComparison.OrdinalIgnoreCase))
+        {
+            seen.Add(installation);
+        }
+
+        return seen;
     }
 
     /// <summary>The session this gateway works through — the verbs a service cannot serve still need it.</summary>
@@ -1698,9 +1754,15 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 : Strings.FormatDirectGateway_DestinationHeld(parts, problem));
         }
 
+        // Said where a service looks before a byte is written, as the
+        // service names its own runs (ADR-0172 Amendment 6): its retention
+        // pass, a sync's convergence and its peers collect nothing this run
+        // may read while it runs.
+        var underWay = SayUnderWay(options.RunId);
         var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
         try
         {
+            RestoreUnderWayInFlow?.Invoke(session.Repository.RepositoryId);
             foreach (var slice in slices)
             {
                 receipts.Add((
@@ -1710,6 +1772,11 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
         finally
         {
+            foreach (var marker in underWay)
+            {
+                marker.Dispose();
+            }
+
             // Let go however the run ends, and before its folder is, which a
             // platform that deletes no file held open needs.
             hold.Dispose();
@@ -1920,6 +1987,33 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     };
 
     /// <summary>How this machine says how much room a directory's volume has.</summary>
+    /// <summary>
+    /// Holds a marker for <paramref name="run"/> in every state directory a
+    /// service would look in (ADR-0172 Amendment 6). One that cannot be held
+    /// is passed over and said: the restore goes ahead, and a service working
+    /// there may collect what it reads.
+    /// </summary>
+    private List<IDisposable> SayUnderWay(string run)
+    {
+        List<IDisposable> held = [];
+        foreach (var directory in RestoreSeenFrom(session.StateDirectory, stateNamed))
+        {
+            try
+            {
+                held.Add(RestoresUnderWay.Hold(directory, session.Repository.RepositoryId, run));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                if (logger is not null)
+                {
+                    Log.RestoreNotSaidUnderWay(logger, directory, exception.Message);
+                }
+            }
+        }
+
+        return held;
+    }
+
     private RestoreSpaceProbe SpaceProbe() => new()
     {
         AvailableBytes = AvailableBytesInFlow ?? RestoreSpaceProbe.PlatformAvailableBytes,
