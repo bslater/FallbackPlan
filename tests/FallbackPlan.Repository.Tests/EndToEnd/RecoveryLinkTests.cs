@@ -16,7 +16,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// gives it its own metadata back onto the link and never through it, as
 /// the executor does (FR-RST-004; ADR-0155). A link standing in the output
 /// still carries nothing out of it, since every later path is placed by the
-/// executor's rule (ADR-0152).
+/// executor's rule (ADR-0152). A link's flags, which no restore sets, are
+/// noted as a file's are (ADR-0180 Amendment 2).
 /// </summary>
 /// <remarks>
 /// Whatever the output holds at a file's or a link's name and will not give
@@ -63,6 +64,24 @@ public sealed class RecoveryLinkTests : IDisposable
         Assert.AreEqual("data/target.bin", new FileInfo(Path.Combine(output, "link")).LinkTarget);
         Assert.AreEqual((2, 0, 0), (report.Restored, report.Failed, report.Skipped));
         Assert.IsEmpty(report.Notes);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link needs no privilege to create only on a POSIX host")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task RecoveryRestore_ALinksFlags_AreNoted_AndTheLinkStillRestores()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", [1, 2, 3]);
+        source.AddNode(Link("link", "data/target.bin") with { Diagnostics = ["file-flags: hidden"] });
+        var output = Path.Combine(_root, "restored");
+
+        var report = await RestoreIntoAsync(source, output);
+
+        Assert.AreEqual((2, 0), (report.Restored, report.Failed));
+        var note = Assert.ContainsSingle(report.Notes);
+        Assert.AreEqual((RecoveryNoteKind.FlagsNotApplied, "link"), (note.Kind, note.Path));
+        Assert.AreEqual("link: file flag(s) not applied: hidden (not set by a restore)", note.ToString());
     }
 
     [TestMethod]

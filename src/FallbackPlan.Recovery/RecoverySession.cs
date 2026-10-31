@@ -670,6 +670,7 @@ public sealed class RecoverySession : IDisposable
                         if (MakeLink(manifest, path, destination, Encoding.UTF8.GetString(linkTarget.Span)))
                         {
                             restored++;
+                            NoteFlags(manifest, path);
                         }
                         else
                         {
@@ -707,6 +708,7 @@ public sealed class RecoverySession : IDisposable
                         {
                             restored++;
                             Count(MetadataRules.Captured(manifest.Metadata), first.Applied);
+                            NoteFlags(manifest, path);
                             continue;
                         }
                         else
@@ -719,6 +721,7 @@ public sealed class RecoverySession : IDisposable
                     if (await RestoreFileAsync(manifest, path, destination).ConfigureAwait(false) is { } applied)
                     {
                         restored++;
+                        NoteFlags(manifest, path);
                         if (group is not null)
                         {
                             groups.TryAdd(group, (key!, destination, applied));
@@ -742,6 +745,16 @@ public sealed class RecoverySession : IDisposable
             if (new FileInfo(destination).LinkTarget is not null || File.Exists(destination))
             {
                 File.Delete(destination);
+            }
+        }
+
+        // No restore sets a file's flags, so each item that carried them says
+        // so in the receipt's words (ADR-0180 Amendment 2).
+        void NoteFlags(FileVersionManifest manifest, string path)
+        {
+            if (MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.CaptureDiagnostics)) is { } flags)
+            {
+                notes.Add(new RecoveryNote(RecoveryNoteKind.FlagsNotApplied, path, Reason: flags));
             }
         }
 

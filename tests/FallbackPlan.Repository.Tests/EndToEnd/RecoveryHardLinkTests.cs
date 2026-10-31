@@ -20,7 +20,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// A name that does not agree, or that the output will not link, is restored
 /// as a file of its own, with a note that says why. A linked name is the
 /// first name's file, so it is counted as that name was in what did not
-/// land.
+/// land, and its flags are noted as that name's are (ADR-0180 Amendment 2).
 /// </remarks>
 [TestClass]
 public sealed class RecoveryHardLinkTests : IDisposable
@@ -52,6 +52,26 @@ public sealed class RecoveryHardLinkTests : IDisposable
         Assert.AreEqual((2, 0), (report.Restored, report.Failed));
         Assert.IsEmpty(report.Notes);
         AssertOneFile(Path.Combine(output, "docs", "a.bin"), Path.Combine(output, "docs", "b.bin"));
+    }
+
+    [TestMethod]
+    public async Task RecoveryRestore_ALinkedName_NotesTheFlagsItsFileDidNotGet_AsTheFirstNameDoes()
+    {
+        var source = new FakeFileSystemSource();
+        var content = Deterministic(5_000, 7);
+        foreach (var name in new[] { "docs/a.bin", "docs/b.bin" })
+        {
+            source.AddFile(name, content, linkCount: 2, fileId: Shared).Diagnostics = ["file-flags: no-dump"];
+        }
+
+        var output = Path.Combine(_root, "restored");
+
+        var report = await RestoreIntoAsync(source, output);
+
+        AssertOneFile(Path.Combine(output, "docs", "a.bin"), Path.Combine(output, "docs", "b.bin"));
+        CollectionAssert.AreEqual(
+            new[] { "docs/a.bin: file flag(s) not applied: no-dump (not set by a restore)", "docs/b.bin: file flag(s) not applied: no-dump (not set by a restore)" },
+            report.Notes.Select(note => note.ToString()).ToArray());
     }
 
     [TestMethod]
