@@ -26,6 +26,8 @@ Four facts shape the rest.
 - **Some calls never follow one.** `lchown` changes a link's owner and group, `lsetxattr` and macOS's `setxattr` with its no-follow flag write a link's attributes, and macOS's `setattrlist` with `FSOPT_NOFOLLOW` sets its creation time. A restore already used each of them, link-safe, for files and folders. `utimensat` with `AT_SYMLINK_NOFOLLOW` sets a link's own times on Linux and macOS, and macOS's `lchmod` its permissions.
 - **Linux keeps less on a link.** It gives every link `rwxrwxrwx`, has no call that changes that, and consults none of it. It refuses a user-namespace attribute and an ACL on a link. Windows restores no links at all: its target profile says it cannot make one without elevation, and the plan reports every link skipped. So a link's Windows metadata never arises.
 
+  > **2026-10 ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).** A restore on Windows now makes a link where the account may. Nothing is written onto it, so its captured metadata is declared and listed as not applied.
+
 ## Decision
 
 ### 1. Onto the link itself, never through it
@@ -67,6 +69,8 @@ The plan's lines now count links where they count files and folders, as in "2 fi
 
 - **A handle-relative restore.** A link's metadata is written by path, as a file's and a folder's are. Between making the link and writing onto it, an account that may write in the restore's folder could put something else at that path. Every write is by a call that does not follow a link, so a substituted link is the one changed and nothing it points at. The window [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) records stands for this too.
 - **Windows links.** Windows restores no links, so a link's Windows metadata is never written.
+
+  > **2026-10 ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).** Windows now makes links where the account may. Their metadata is still not written, and is declared and listed as not applied.
 - **A link already at the destination.** The existing-file policy decides whether the run makes a link, as it does for a file. Metadata goes only onto a link the run made.
 - **The recovery tool and the CLI's `restore-file`**, which write no metadata.
 
@@ -88,3 +92,4 @@ The plan's lines now count links where they count files and folders, as in "2 fi
 | 2026-10 | Accepted | Built in one slice, tests first. A link the restore makes gets its own times, owner, group, attributes and, on macOS, permissions and creation time, each by a call that changes the link itself. On Linux a link's permissions land only where they are those every link has, and a user attribute or ACL on a link is withheld and named. The plan counts links on the lines files and folders use. |
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's metadata back through the writer the executor uses, and makes no symlink; the recovery tool still writes none. |
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's metadata back through the writer the executor uses, and still makes no symlink. |
+| 2026-10 | Accepted (related) | [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md): a restore on Windows makes a link where the account may, and writes none of its metadata onto it, which is declared and listed as not applied. |

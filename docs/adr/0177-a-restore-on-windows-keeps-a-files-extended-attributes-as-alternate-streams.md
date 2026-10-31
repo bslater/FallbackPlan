@@ -69,6 +69,8 @@ On such a target the plan counts a file's attributes applied. A file that carrie
   > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-folders-attributes-are-kept-as-its-streams)).** A folder's attributes are kept as its streams.
 - **Keep a symlink's.** No restore on Windows makes a symlink.
 
+  > **2026-10 ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).** A restore on Windows now makes a link where the account may; its attributes are still not kept as streams on it, since a stream joined to a link's path would land on what it points at.
+
 ## Alternatives considered
 
 - **Keep every attribute as a stream, the kernel's too.** Rejected. A capability or a security label beside a file on Windows does nothing, and kept as a stream it would read as the file's data; on a later restore it would come back as a stream, never as the label.
@@ -123,3 +125,4 @@ The plan counts a folder's attributes applied on such a target, and declares a f
 | 2026-10 | Amended | Amendment 1: the plan names a file whose attribute no stream is kept under, by the writer's own judgement of each name, which moved to one rule the two share. `Domain/MetadataRules`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Domain.Tests/ExtendedAttributeStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--a-folders-attributes-are-kept-as-its-streams): a folder's attributes are kept as its streams by the rule a file's are, written onto the folder the restore makes before its times; the plan counts them applied, and declares a folder's kernel attributes and refused names on the lines a file's are. `Domain/MetadataRules`; `Domain/MetadataWriter`; `Domain/MetadataTarget`; `Restore/RestoreBlobSet`; `Domain.Tests/ExtendedAttributeStreamsTests`; `Repository.Tests/RestoreAlternateStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Accepted (related) | [ADR-0179](0179-a-restore-on-linux-and-macos-keeps-a-files-alternate-streams-as-extended-attributes.md): on Linux and macOS a file's streams are kept as attributes of their names, so an attribute this record kept as a stream comes back as itself. |
+| 2026-10 | Accepted (related) | [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md): a restore on Windows makes a link where the account may; its attributes are still not kept as streams on it, since a stream joined to a link's path would land on what it points at. |

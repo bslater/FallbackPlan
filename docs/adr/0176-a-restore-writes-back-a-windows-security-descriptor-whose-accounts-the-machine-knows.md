@@ -88,6 +88,8 @@ The plan's facts carry the SIDs each item's descriptor names. A target that writ
 - **Keep the mark of automatic inheritance.** A restored DACL lacks the control bit that marks its inherited entries as given by automatic inheritance (§1). Its entries, their own marks and its protection are as captured.
 - **A link's descriptor.** No restore on Windows makes a symlink.
 
+  > **2026-10 ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).** A restore on Windows now makes a link where the account may; its descriptor is still not written onto it, and is declared and listed as not applied.
+
 ## Alternatives considered
 
 - **Write the DACL through `SetNamedSecurityInfoW`, taking inherited entries from the new folder.** Rejected. It changes what was captured into what the new folder gives. Setting a folder's DACL also walks everything beneath it, and the restore sets folders deepest first, so the walk would repeat for every folder above each entry.
@@ -206,3 +208,4 @@ The privileged cases need an elevated process, and run where one runs, as on CI'
 | 2026-10 | Amended | [Amendment 3](#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege): a descriptor's audit list is captured where the capturing account holds SeSecurityPrivilege and written back where the restoring account holds it and the machine knows every account it audits, each with the privilege enabled for that call alone; elsewhere the rest lands and the audit list is named, and the plan declares it on a line of its own. `Domain/WindowsSecurityDescriptor`; `Domain/WindowsPrivileges`; `Domain/WindowsSecurity`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/WindowsSecurityDescriptorTests`; `Domain.Tests/SecurityDescriptorWriteBackTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Filesystem.Tests/LocalScanTests` |
 | 2026-10 | Accepted (related) | [ADR-0178](0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md): the plan names a file whose descriptor is not written and whose folder would open it wider, with the accounts that gain; the refusal is still not made. |
 | 2026-10 | Accepted (related) | [ADR-0178 Amendment 1](0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-1-2026-10--a-run-that-would-open-a-file-wider-is-refused-unless-acknowledged): a run with such a file is refused before anything is written, unless it acknowledges wider access. |
+| 2026-10 | Accepted (related) | [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md): a restore on Windows makes a link where the account may; its descriptor is still not written onto it, and is declared and listed as not applied. |
