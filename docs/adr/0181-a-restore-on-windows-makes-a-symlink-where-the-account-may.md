@@ -125,6 +125,8 @@ Amendment 2 opened a handle on a link to give it its times and left its attribut
 
 A link's security descriptor is still written only onto files and folders. The recovery tool writes through the same writer, so a link it makes gets its bits too.
 
+> **2026-10 ([ADR-0182 Amendment 1](0182-capture-reads-a-links-own-security-descriptor-on-windows.md#amendment-1-2026-10--a-restore-writes-a-links-own-descriptor-back)).** A link's descriptor is now written back too, through a handle of the same kind, once [ADR-0182](0182-capture-reads-a-links-own-security-descriptor-on-windows.md) had capture read the link's own.
+
 **Built:** `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Domain/MetadataRules`; `Restore/RestoreMetadata`:
 
 - `Domain.Tests/SymlinkMetadataTests`: only Windows sets a link's bits; off Windows nothing is written;
@@ -140,3 +142,4 @@ A link's security descriptor is still written only onto files and folders. The r
 | 2026-10 | Accepted (Amendment 1) | The recovery tool makes a link on Windows where the account may, a folder's or a file's by its captured bits or by what it names in its tree or on disk, with Windows' separators. `Domain/SymbolicLinks`; `Recovery/RecoverySession`; `Restore/RestoreExecutor`; `Domain.Tests/SymbolicLinksTests`; `Repository.Tests/RecoveryLinkTests` |
 | 2026-10 | Accepted (Amendment 2) | A link made on Windows gets its own modification, access and creation times back through a handle opened on the link itself, by the executor and the recovery tool alike; its attribute bits and descriptor are still not written. `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/SymlinkMetadataTests`; `Domain.Tests/SymlinkMetadataOnWindowsTests`; `Repository.Tests/RestoreWindowsLinkTests`; `Repository.Tests/RecoveryLinkTests` |
 | 2026-10 | Accepted (Amendment 3) | A link made on Windows gets its own attribute bits back by ADR-0175's rule, through the same handle on the link; the bits that make it a link stay as making it left them, and a bit no restore sets is named. `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Domain.Tests/SymlinkMetadataTests`; `Domain.Tests/SymlinkMetadataOnWindowsTests`; `Repository.Tests/RestoreWindowsLinkTests`; `Repository.Tests/RecoveryLinkTests` |
+| 2026-10 | Accepted (related) | [ADR-0182](0182-capture-reads-a-links-own-security-descriptor-on-windows.md) and its Amendment 1: capture reads a link's own descriptor, and a restore writes it back, each through a handle on the link. |
