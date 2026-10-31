@@ -37,6 +37,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
     private const uint SystemBit = 0x4;
     private const uint ArchiveBit = 0x20;
     private const uint EncryptedBit = 0x4000;
+    private const uint CompressedBit = 0x800;
 
     /// <summary>The bits the attribute tests read: those a restore writes, and those that say what an entry is.</summary>
     private const FileAttributes Watched = FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive
@@ -177,7 +178,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "a link's own bits are written through Windows' own handle on it")]
     [PlatformTrait(TestPlatforms.Windows)]
-    public async Task OnWindows_ALinkWindowsCaptured_GetsItsAttributeBitsBack_AndABitNoRestoreSetsIsNamed()
+    public async Task OnWindows_ALinkWindowsCaptured_GetsItsAttributeBitsBack_AndABitNoRestoreSetsIsNamed_CompressionAmongThem()
     {
         Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
         var source = new FakeFileSystemSource();
@@ -188,11 +189,15 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         AddLink(source, "z-hidden-folder", "data", fileAttributes: FolderBit | ReparsePointBit | HiddenBit);
         AddLink(source, "z-encrypted", "data/target.bin", fileAttributes: ReparsePointBit | HiddenBit | EncryptedBit);
 
+        // This target compresses files and folders, and nothing compresses a link.
+        AddLink(source, "z-compressed", "data/target.bin", fileAttributes: ReparsePointBit | CompressedBit);
+
         var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB4);
 
+        Assert.IsTrue(RestoreTargetProfile.ForLocalPlatform().SupportsCompression, "the premise: this target compresses");
         var unset = Assert.ContainsSingle(plan.Degradations.Where(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal)));
         Assert.AreEqual("unset-file-attributes", unset.Capability);
-        Assert.Contains("1 symlink(s)", unset.Detail, StringComparison.Ordinal);
+        Assert.Contains("2 symlink(s) include bits no restore sets: Compressed, Encrypted.", unset.Detail, StringComparison.Ordinal);
         foreach (var name in new[] { "z-hidden", "z-hidden-folder" })
         {
             var item = receipt.Items.Single(item => item.Path == name);
@@ -211,6 +216,9 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         Assert.AreEqual("file attribute(s) not applied: Encrypted (not set by a restore)", encrypted.Detail);
         CollectionAssert.AreEqual(new[] { "file_attributes" }, encrypted.NotApplied!.ToArray());
         Assert.AreEqual(FileAttributes.Hidden | FileAttributes.ReparsePoint, File.GetAttributes(Path.Combine(output, "z-encrypted")) & Watched);
+        Assert.AreEqual(
+            "file attribute(s) not applied: Compressed (not set by a restore)",
+            receipt.Items.Single(item => item.Path == "z-compressed").Detail);
 
         Assert.AreEqual(FileAttributes.Archive, File.GetAttributes(Path.Combine(output, "data", "target.bin")) & Watched, "a link's bits went through it");
         Assert.AreEqual(FileAttributes.Directory, File.GetAttributes(Path.Combine(output, "data")) & Watched, "a folder's link's bits went through it");

@@ -129,7 +129,7 @@ A link's security descriptor is still written only onto files and folders. The r
 
 - `Domain.Tests/SymlinkMetadataTests`: only Windows sets a link's bits; off Windows nothing is written;
 - `Domain.Tests/SymlinkMetadataOnWindowsTests`: on Windows a file's link, a folder's link and a link to nothing take the bits captured and lose those not, each is still a link and a folder's link a folder's, and what each points at keeps its own;
-- `Repository.Tests/RestoreWindowsLinkTests`: on Windows a hidden link and a hidden folder's link come back so with nothing listed, an encrypted bit on a link is named in its item and on the plan's line, and the file and folder they name keep their own; on every platform the rule grants a link's bits exactly where the platform sets them;
+- `Repository.Tests/RestoreWindowsLinkTests`: on Windows a hidden link and a hidden folder's link come back so with nothing listed, an encrypted bit on one link and a compressed bit on another, on a target that compresses files, are each named in the link's item and together on the plan's line, and the file and folder they name keep their own; on every platform the rule grants a link's bits exactly where the platform sets them;
 - `Repository.Tests/RecoveryLinkTests`: on Windows the recovery tool gives a link its bits, and the file it names keeps its own.
 
 ## Status history
