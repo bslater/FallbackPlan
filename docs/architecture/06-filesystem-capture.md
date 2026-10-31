@@ -105,6 +105,8 @@ For each metadata class and target platform: **preserve** it, **degrade** it and
 
 > **2026-10 ([ADR-0182](../adr/0182-capture-reads-a-links-own-security-descriptor-on-windows.md)).** Capture reads a link's own security descriptor on Windows, through a handle opened on the link, rather than its target's.
 
+> **2026-10 ([ADR-0182 Amendment 1](../adr/0182-capture-reads-a-links-own-security-descriptor-on-windows.md#amendment-1-2026-10--a-restore-writes-a-links-own-descriptor-back)).** A restore writes it back onto the link through the same kind of handle, so a link made on Windows gets its own descriptor back.
+
 **Refuse** is reserved for cases where restoring would produce a file that is wrong in a way the user could not detect — for example, restoring a file whose security descriptor cannot be applied into a location where the default descriptor would grant broader access than the original. These are enumerated in the restore plan and require explicit acknowledgement.
 
 Everything a snapshot captured is preserved in the repository regardless of the restore target. Degradation is a property of a particular restore, not of the backup: the same snapshot restored to its original platform is lossless.

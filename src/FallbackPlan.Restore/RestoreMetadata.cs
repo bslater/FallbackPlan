@@ -244,9 +244,8 @@ public static class RestoreMetadata
     /// applies POSIX metadata, item by item on Linux; modification and access
     /// times where the platform sets a link's own; and a creation time where
     /// the target keeps one and the platform sets a link's own, on macOS and
-    /// Windows; and its attribute bits where the target writes them and the
-    /// platform sets a link's own, on Windows. A link's descriptor is written
-    /// only onto files and folders.
+    /// Windows; and its attribute bits and its security descriptor where the
+    /// target writes them and the platform sets a link's own, on Windows.
     /// </summary>
     private static CapturedMetadata AppliedToALink(RestoreTargetProfile target)
     {
@@ -279,6 +278,11 @@ public static class RestoreMetadata
         if (target.SupportsFileAttributes && SymlinkMetadata.CanSetAttributes)
         {
             applied |= CapturedMetadata.FileAttributes;
+        }
+
+        if (target.SupportsSecurityDescriptors && SymlinkMetadata.CanSetSecurityDescriptor)
+        {
+            applied |= CapturedMetadata.SecurityDescriptor;
         }
 
         return applied;
