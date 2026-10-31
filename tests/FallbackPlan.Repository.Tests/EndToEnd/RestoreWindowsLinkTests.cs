@@ -17,7 +17,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// is a folder's link: by its captured attribute bits where Windows captured
 /// it, and by what it names otherwise. Its target is written with Windows'
 /// separators. A link gets its own modification, access and creation times
-/// back, onto the link and never through it (ADR-0181 Amendment 2).
+/// back, onto the link and never through it, and the rule the plan and the
+/// receipt hold a link to grants on every platform what that platform sets
+/// on one (ADR-0181 Amendment 2).
 /// </summary>
 /// <remarks>
 /// Windows makes a link only for an account that holds the privilege to, or
@@ -43,6 +45,31 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
     [TestMethod]
     public void TheLocalProfile_MakesLinks_WhereTheAccountMayMakeOne() =>
         Assert.AreEqual(SymbolicLinks.CanCreate, RestoreTargetProfile.ForLocalPlatform().SupportsSymlinks);
+
+    [TestMethod]
+    public void TheRule_ForALink_GrantsWhatThisPlatformSetsOnALink_AndNeverItsWindowsAttributes()
+    {
+        // A target that keeps everything, so the platform alone decides.
+        var everything = RestoreTargetProfile.ForLocalPlatform() with
+        {
+            SupportsSymlinks = true,
+            SupportsPosixMetadata = true,
+            SupportsCreationTimes = true,
+            SupportsFileAttributes = true,
+            SupportsSecurityDescriptors = true,
+            SupportsAlternateStreams = true,
+        };
+
+        var applied = RestoreMetadata.Applied(EntryKind.Symlink, everything);
+
+        Assert.AreEqual(SymlinkMetadata.CanSetTimes, applied.HasFlag(CapturedMetadata.ModifiedAt | CapturedMetadata.AccessedAt));
+        Assert.AreEqual(SymlinkMetadata.CanSetCreationTime, applied.HasFlag(CapturedMetadata.CreatedAt));
+        Assert.AreEqual(!OperatingSystem.IsWindows(), applied.HasFlag(CapturedMetadata.PosixMode), "Windows writes no permissions");
+        Assert.AreEqual(
+            CapturedMetadata.None,
+            applied & (CapturedMetadata.FileAttributes | CapturedMetadata.SecurityDescriptor | CapturedMetadata.AlternateStreams),
+            "a link's attribute bits, descriptor and streams are written onto nothing");
+    }
 
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "only Windows decides whether a link may be made")]
