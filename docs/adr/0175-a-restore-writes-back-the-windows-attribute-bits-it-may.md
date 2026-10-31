@@ -69,6 +69,8 @@ Windows refuses to move a file over a read-only one. A file an earlier restore g
 
   > **2026-10 ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).** A restore on Windows now makes a link where the account may; its bits are still not written onto it, and are declared and listed as not applied.
 
+  > **2026-10 ([ADR-0181 Amendment 3](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-3-2026-10--a-links-own-attribute-bits-on-windows)).** A link's bits are now written back by this record's rule, through a handle opened on the link itself. The bits that make it a link stay as making it left them, and its compressed bit, which nothing gives a link, is named.
+
 ## Alternatives considered
 
 - **Write every captured bit and let the platform refuse.** Rejected. `SetFileAttributes` ignores compressed, encrypted and the bits that say what an entry is, so the call would succeed and the receipt would say they landed.
@@ -119,3 +121,4 @@ Encryption is still named and not set, for the reason this record gives.
 | 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--the-plan-names-a-bit-no-restore-sets): the plan names a bit no restore sets, on a line of its own, from the bits each item's facts now carry. `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--a-restore-gives-a-file-and-a-folder-their-compression-back): a file and a folder get their NTFS compression back through its own call, before the times, as captured; a refusal is named; encryption is still named and not set. `Domain/FileCompression`; `Domain/MetadataWriter`; `Domain/MetadataRules`; `Domain/MetadataTarget`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Domain.Tests/FileCompressionTests`; `Repository.Tests/RestoreFileAttributesTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Accepted (related) | [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md): a restore on Windows makes a link where the account may; its bits are still not written onto it, and are declared and listed as not applied. |
+| 2026-10 | Accepted (related) | [ADR-0181 Amendment 3](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-3-2026-10--a-links-own-attribute-bits-on-windows): a link made on Windows gets its bits back by this record's rule, through a handle opened on the link itself. |

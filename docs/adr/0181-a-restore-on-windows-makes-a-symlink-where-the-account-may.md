@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: a symlink comes back as a link on Windows where the account may make one); FR-RST-003 (amended: the plan says links will be skipped only where they will be); FR-RST-005 (amended by [Amendment 1](#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too): so does the recovery tool); FR-RST-004 (amended again by [Amendment 2](#amendment-2-2026-10--a-links-own-times-on-windows): a link made on Windows gets its own times back)
+**Requirements:** FR-RST-004 (amended: a symlink comes back as a link on Windows where the account may make one); FR-RST-003 (amended: the plan says links will be skipped only where they will be); FR-RST-005 (amended by [Amendment 1](#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too): so does the recovery tool); FR-RST-004 (amended again by [Amendment 2](#amendment-2-2026-10--a-links-own-times-on-windows): a link made on Windows gets its own times back, and by [Amendment 3](#amendment-3-2026-10--a-links-own-attribute-bits-on-windows) its own attribute bits)
 **Related:** [ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md) (a link's own metadata, which Windows did not arise for), [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) §4 and [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (every path a restore writes is placed through no link out of it), [ADR-0155](0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md) (the recovery tool makes links where they need no privilege), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (symbolic links: "preserve, privilege permitting" on Windows)
 
 **Built:**
@@ -49,6 +49,8 @@ A target is written with each forward slash made Windows' separator. No Windows 
 Nothing more than before. No call on Windows sets a link's own times, and its attribute bits and descriptor are written only onto files and folders, so a link's captured metadata is declared and listed as not applied, as ADR-0101 already said of a link it could not write onto.
 
 > **2026-10: amended by [Amendment 2](#amendment-2-2026-10--a-links-own-times-on-windows).** A link's own modification, access and creation times are now written, through a handle opened on the link itself. Its attribute bits and descriptor still are not, and are declared and listed as before.
+
+> **2026-10: amended by [Amendment 3](#amendment-3-2026-10--a-links-own-attribute-bits-on-windows).** A link's attribute bits are now written too, through the same handle. Its descriptor still is not.
 
 ## Consequences
 
@@ -108,6 +110,28 @@ A write the link refuses is listed, as any refused write is. A link to nothing, 
 - `Repository.Tests/RestoreWindowsLinkTests`: on Windows a link to a file, a folder and nothing comes back with all three times, the plan declares nothing of it, its item lists nothing, and the file it names keeps its own;
 - `Repository.Tests/RecoveryLinkTests`: on Windows the recovery tool gives a link leading out of its output its own times, and the file outside keeps its own.
 
+> **2026-10: amended by [Amendment 3](#amendment-3-2026-10--a-links-own-attribute-bits-on-windows).** A link's attribute bits now go on through the same handle; its descriptor is still written only onto files and folders.
+
+## Amendment 3 (2026-10) — a link's own attribute bits on Windows
+
+Amendment 2 opened a handle on a link to give it its times and left its attribute bits to files and folders. A link Windows captured hidden or system came back plain, and every plan and receipt over one said so.
+
+**Decision.** A link made on Windows gets its attribute bits back by [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)'s rule, through the same handle:
+
+- **the handle reads and writes the link's attributes.** It is opened to read them too, and the link's own bits are read through it, never what it points at;
+- **ADR-0175's five bits** (read-only, hidden, system, archive and not-content-indexed) are set as captured and cleared where not, last, as a file's are;
+- **the bits that make it a link stay as making it left them.** Windows sets the reparse-point bit, and a folder's link's folder bit, when it makes the link, and takes neither as a written bit, so neither is written;
+- **a bit no restore sets is named,** as a file's is. Nothing compresses a link, so a link's compressed bit is named among them whatever the target keeps, by the plan and the writer alike.
+
+A link's security descriptor is still written only onto files and folders. The recovery tool writes through the same writer, so a link it makes gets its bits too.
+
+**Built:** `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Domain/MetadataRules`; `Restore/RestoreMetadata`:
+
+- `Domain.Tests/SymlinkMetadataTests`: only Windows sets a link's bits; off Windows nothing is written;
+- `Domain.Tests/SymlinkMetadataOnWindowsTests`: on Windows a file's link, a folder's link and a link to nothing take the bits captured and lose those not, each is still a link and a folder's link a folder's, and what each points at keeps its own;
+- `Repository.Tests/RestoreWindowsLinkTests`: on Windows a hidden link and a hidden folder's link come back so with nothing listed, an encrypted bit on a link is named in its item and on the plan's line, and the file and folder they name keep their own; on every platform the rule grants a link's bits exactly where the platform sets them;
+- `Repository.Tests/RecoveryLinkTests`: on Windows the recovery tool gives a link its bits, and the file it names keeps its own.
+
 ## Status history
 
 | Date | Status | Note |
@@ -115,3 +139,4 @@ A write the link refuses is listed, as any refused write is. A link to nothing, 
 | 2026-10 | Accepted | Built in one slice, tests first. A restore on Windows makes a link where the account may, a folder's or a file's as its captured bits or what it names say, with Windows' separators; the plan says links will be skipped only where they will be. `Domain/SymbolicLinks`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Domain.Tests/SymbolicLinksTests`; `Repository.Tests/RestoreWindowsLinkTests` |
 | 2026-10 | Accepted (Amendment 1) | The recovery tool makes a link on Windows where the account may, a folder's or a file's by its captured bits or by what it names in its tree or on disk, with Windows' separators. `Domain/SymbolicLinks`; `Recovery/RecoverySession`; `Restore/RestoreExecutor`; `Domain.Tests/SymbolicLinksTests`; `Repository.Tests/RecoveryLinkTests` |
 | 2026-10 | Accepted (Amendment 2) | A link made on Windows gets its own modification, access and creation times back through a handle opened on the link itself, by the executor and the recovery tool alike; its attribute bits and descriptor are still not written. `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/SymlinkMetadataTests`; `Domain.Tests/SymlinkMetadataOnWindowsTests`; `Repository.Tests/RestoreWindowsLinkTests`; `Repository.Tests/RecoveryLinkTests` |
+| 2026-10 | Accepted (Amendment 3) | A link made on Windows gets its own attribute bits back by ADR-0175's rule, through the same handle on the link; the bits that make it a link stay as making it left them, and a bit no restore sets is named. `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Domain.Tests/SymlinkMetadataTests`; `Domain.Tests/SymlinkMetadataOnWindowsTests`; `Repository.Tests/RestoreWindowsLinkTests`; `Repository.Tests/RecoveryLinkTests` |
