@@ -39,6 +39,20 @@ public static unsafe partial class ExtendedAttributes
     /// </summary>
     public static bool TakesNamespaces { get; } = OperatingSystem.IsLinux();
 
+    /// <summary>
+    /// The most bytes this platform takes in an attribute's name, its
+    /// namespace with it, on any volume: Linux 255, macOS 127; null where it
+    /// writes none (ADR-0179 Amendment 2).
+    /// </summary>
+    public static uint? MaxNameBytes { get; } = OperatingSystem.IsLinux() ? 255u : OperatingSystem.IsMacOS() ? 127u : null;
+
+    /// <summary>
+    /// The most bytes this platform holds in an attribute's value on any
+    /// volume: Linux 65,536; null where no ceiling is known, as on macOS,
+    /// whose volumes differ (ADR-0179 Amendment 2).
+    /// </summary>
+    public static uint? MaxValueBytes { get; } = OperatingSystem.IsLinux() ? 65_536u : null;
+
     /// <summary>Gives the file or folder at <paramref name="path"/> the attribute <paramref name="name"/>.</summary>
     /// <param name="path">The file or folder; a link is never followed.</param>
     /// <param name="name">The attribute's name.</param>

@@ -1,4 +1,5 @@
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Filesystem.Local;
 using FallbackPlan.Repository.Crypto;
@@ -28,7 +29,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// keeps no streams, as Linux and macOS do, a file's streams are kept as
 /// attributes of the same names: Linux takes only those in its user
 /// namespace, and a stream the file's own captured attribute names is not
-/// written over it; each that does not land is named (ADR-0179).
+/// written over it; each that does not land is named (ADR-0179). One larger
+/// than Linux holds in any volume's attribute is named without being read
+/// (ADR-0179 Amendment 2).
 /// </summary>
 /// <remarks>
 /// Only Windows keeps alternate streams. Most cases run everywhere, against a
@@ -345,6 +348,8 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
     {
         Assert.AreEqual(OperatingSystem.IsWindows(), RestoreTargetProfile.ForLocalPlatform().SupportsAlternateStreams);
         Assert.AreEqual(OperatingSystem.IsLinux(), RestoreTargetProfile.ForLocalPlatform().AttributesTakeNamespaces);
+        Assert.AreEqual(ExtendedAttributes.MaxNameBytes, RestoreTargetProfile.ForLocalPlatform().MaxAttributeNameBytes);
+        Assert.AreEqual(ExtendedAttributes.MaxValueBytes, RestoreTargetProfile.ForLocalPlatform().MaxAttributeValueBytes);
         Assert.IsTrue(RestoreMetadata.Applied(EntryKind.File, WritesStreams).HasFlag(CapturedMetadata.AlternateStreams));
         Assert.IsFalse(RestoreMetadata.Applied(
             EntryKind.File, WritesStreams with { SupportsAlternateStreams = false, SupportsExtendedAttributes = false })
@@ -430,6 +435,26 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
         Assert.Contains("user namespace", item.Detail!, StringComparison.Ordinal);
         Assert.Contains("alternate_streams", item.NotApplied ?? []);
         // The rest are kept.
+        SequenceAssert.AreEqual(Notes, Xattr.Get(Path.Combine(output, "data", "streams.bin"), "user.origin"));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux holds no attribute larger than 64 KiB")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task OnLinux_AStreamLargerThanLinuxHoldsAsAnAttribute_IsNamed_AndTheFileIsDegraded_WhileTheRestLand()
+    {
+        // Segments larger than the stream, as a stream is captured whole in one.
+        using var published = await PublishAsync(
+            Carrier(Deterministic(4_096, 16), ("user.big", Deterministic(70_000, 17)), ("user.origin", Notes)),
+            0xD3,
+            policy: SmallBlobPolicy with { SegmentSize = SegmentSize.Create(128 * 1024) });
+
+        var (receipt, output) = await RestoreAsync(published, published.Plan(KeepsAttributes), KeepsAttributes, streams: null, "too-large");
+
+        var item = Item(receipt);
+        Assert.AreEqual("degraded", item.Outcome);
+        Assert.Contains("'user.big'", item.Detail!, StringComparison.Ordinal);
+        Assert.Contains("65536", item.Detail!, StringComparison.Ordinal);
         SequenceAssert.AreEqual(Notes, Xattr.Get(Path.Combine(output, "data", "streams.bin"), "user.origin"));
     }
 
@@ -525,7 +550,7 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
         return data;
     }
 
-    private async Task<Published> PublishAsync(IFileSystemSource source, byte seed, string root = "/")
+    private async Task<Published> PublishAsync(IFileSystemSource source, byte seed, string root = "/", CapturePolicy? policy = null)
     {
         var store = CreateStore();
         var keys = CreateKeys();
@@ -535,7 +560,7 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
         Directory.CreateDirectory(spool);
 
         var result = await new PublicationOrchestrator(
-                SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
+                policy ?? SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
                 new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
                 spool, FormatVersions.SealedDataPlane, observer: null, catalogue)
             .PublishAsync(

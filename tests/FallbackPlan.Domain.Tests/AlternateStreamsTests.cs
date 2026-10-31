@@ -14,7 +14,9 @@ namespace FallbackPlan.Domain.Tests;
 /// Where the platform writes extended attributes instead, as Linux and macOS
 /// do, a file's streams are kept as attributes of the same names: Linux
 /// takes only those in its user namespace, and a stream the file's own
-/// captured attribute names is left to it (ADR-0179 Amendment 1).
+/// captured attribute names is left to it (ADR-0179 Amendment 1). One
+/// larger than the platform takes in any volume's attribute is neither read
+/// nor written, and is named (ADR-0179 Amendment 2).
 /// </summary>
 [TestClass]
 public sealed class AlternateStreamsTests : IDisposable
@@ -211,7 +213,7 @@ public sealed class AlternateStreamsTests : IDisposable
         var read = new List<ObjectId>();
 
         var left = await AlternateStreams.WriteBackAsAttributesAsync(
-            file, Streams(Stream("user.origin", 1), Stream("user.notes", 2)), Reads(read), namespaced: true, CancellationToken.None);
+            file, Streams(Stream("user.origin", 1), Stream("user.notes", 2)), Reads(read), new AttributeLimits(TakesNamespaces: true), CancellationToken.None);
 
         Assert.IsEmpty(left);
         CollectionAssert.AreEqual(new[] { IdOf(1), IdOf(2) }, read);
@@ -228,7 +230,7 @@ public sealed class AlternateStreamsTests : IDisposable
         var read = new List<ObjectId>();
 
         var left = await AlternateStreams.WriteBackAsAttributesAsync(
-            file, Streams(Stream("Zone.Identifier", 1), Stream("user.notes", 2)), Reads(read), namespaced: true, CancellationToken.None);
+            file, Streams(Stream("Zone.Identifier", 1), Stream("user.notes", 2)), Reads(read), new AttributeLimits(TakesNamespaces: true), CancellationToken.None);
 
         var why = Assert.ContainsSingle(left);
         Assert.Contains("'Zone.Identifier'", why, StringComparison.Ordinal);
@@ -247,7 +249,7 @@ public sealed class AlternateStreamsTests : IDisposable
             ExtendedAttributes = [new ExtendedAttributeEntry("user.tag"u8.ToArray(), "own"u8.ToArray())],
         };
 
-        var left = await AlternateStreams.WriteBackAsAttributesAsync(file, metadata, Reads(read), namespaced: true, CancellationToken.None);
+        var left = await AlternateStreams.WriteBackAsAttributesAsync(file, metadata, Reads(read), new AttributeLimits(TakesNamespaces: true), CancellationToken.None);
 
         var why = Assert.ContainsSingle(left);
         Assert.Contains("'user.tag'", why, StringComparison.Ordinal);
@@ -262,7 +264,7 @@ public sealed class AlternateStreamsTests : IDisposable
             Carrier(),
             Streams(Stream("user.origin", 1)),
             (_, _) => ValueTask.FromResult<(byte[]?, string?)>((null, "its record read AuthenticationFailed")),
-            namespaced: true,
+            new AttributeLimits(TakesNamespaces: true),
             CancellationToken.None);
 
         var why = Assert.ContainsSingle(left);
@@ -276,11 +278,95 @@ public sealed class AlternateStreamsTests : IDisposable
     public async Task WriteBackAsAttributesAsync_OnLinux_AnAttributeTheVolumeRefuses_SaysSo()
     {
         var left = await AlternateStreams.WriteBackAsAttributesAsync(
-            Carrier(), Streams(Stream("Zone.Identifier", 1)), Reads([]), namespaced: false, CancellationToken.None);
+            Carrier(), Streams(Stream("Zone.Identifier", 1)), Reads([]), new AttributeLimits(TakesNamespaces: false), CancellationToken.None);
 
         var why = Assert.ContainsSingle(left);
         Assert.Contains("'Zone.Identifier'", why, StringComparison.Ordinal);
         Assert.Contains("the volume refused it", why, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task WriteBackAsAttributesAsync_AStreamLargerThanTheLimitsTake_IsNeitherReadNorWritten_AndIsNamed()
+    {
+        var read = new List<ObjectId>();
+        var metadata = new EntryMetadata
+        {
+            AlternateStreams =
+            [
+                new AlternateStreamEntry("user.big"u8.ToArray(), IdOf(1), 70_000),
+                new AlternateStreamEntry(Encoding.UTF8.GetBytes("user." + new string('n', 300)), IdOf(2), 4),
+            ],
+        };
+
+        var left = await AlternateStreams.WriteBackAsAttributesAsync(
+            Carrier(), metadata, Reads(read), new AttributeLimits(TakesNamespaces: true, MaxNameBytes: 255, MaxValueBytes: 65_536),
+            CancellationToken.None);
+
+        Assert.HasCount(2, left);
+        Assert.Contains("'user.big'", left[0], StringComparison.Ordinal);
+        Assert.Contains("65536", left[0], StringComparison.Ordinal);
+        Assert.Contains("255", left[1], StringComparison.Ordinal);
+        Assert.IsEmpty(read);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "the limits are Linux's own, held on every volume")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task WriteBackAsAttributesAsync_OnLinux_TheKernelRefusesWhatItsLimitsRefuse()
+    {
+        // With no limits stated the rule passes both, and the volume refuses
+        // them, as the limits say it will on any Linux volume.
+        var metadata = new EntryMetadata
+        {
+            AlternateStreams =
+            [
+                new AlternateStreamEntry("user.big"u8.ToArray(), IdOf(1), 65_537),
+                new AlternateStreamEntry(Encoding.UTF8.GetBytes("user." + new string('n', 251)), IdOf(2), 4),
+            ],
+        };
+
+        var left = await AlternateStreams.WriteBackAsAttributesAsync(
+            Carrier(),
+            metadata,
+            (objectId, _) => ValueTask.FromResult<(byte[]?, string?)>((new byte[objectId == IdOf(1) ? 65_537 : 4], null)),
+            new AttributeLimits(TakesNamespaces: true),
+            CancellationToken.None);
+
+        Assert.HasCount(2, left);
+        Assert.IsTrue(left.All(why => why.Contains("the volume refused it", StringComparison.Ordinal)), string.Join("; ", left));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux holds no attribute larger than 64 KiB")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task WriteBackOnThisPlatformAsync_OnLinux_NamesAStreamLargerThanLinuxHolds_WithoutReadingIt()
+    {
+        var read = new List<ObjectId>();
+        var metadata = new EntryMetadata { AlternateStreams = [new AlternateStreamEntry("user.big"u8.ToArray(), IdOf(1), 70_000)] };
+
+        var left = await AlternateStreams.WriteBackOnThisPlatformAsync(Carrier(), metadata, Reads(read), calls: null, CancellationToken.None);
+
+        Assert.IsNotNull(left);
+        Assert.Contains("65536", Assert.ContainsSingle(left), StringComparison.Ordinal);
+        Assert.IsEmpty(read);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.MacOs, "macOS takes an attribute's name of at most 127 bytes")]
+    [PlatformTrait(TestPlatforms.MacOs)]
+    public async Task WriteBackOnThisPlatformAsync_OnMacOs_NamesAStreamWhoseNameIsLongerThanMacOsTakes_WithoutReadingIt()
+    {
+        var read = new List<ObjectId>();
+        var metadata = new EntryMetadata
+        {
+            AlternateStreams = [new AlternateStreamEntry(Encoding.UTF8.GetBytes(new string('n', 128)), IdOf(1), 4)],
+        };
+
+        var left = await AlternateStreams.WriteBackOnThisPlatformAsync(Carrier(), metadata, Reads(read), calls: null, CancellationToken.None);
+
+        Assert.IsNotNull(left);
+        Assert.Contains("127", Assert.ContainsSingle(left), StringComparison.Ordinal);
+        Assert.IsEmpty(read);
     }
 
     [TestMethod]

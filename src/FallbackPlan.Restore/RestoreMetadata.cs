@@ -58,6 +58,15 @@ namespace FallbackPlan.Restore;
 /// the target knows each (ADR-0176 Amendment 3), or null where it carries
 /// none.
 /// </param>
+/// <param name="LongestStreamName">
+/// The bytes in the longest name of its captured alternate streams
+/// (<see cref="MetadataRules.LongestStreamName"/>), which a target that keeps
+/// streams as attributes takes only within its limit (ADR-0179 Amendment 2).
+/// </param>
+/// <param name="LargestStream">
+/// The length of its largest captured alternate stream
+/// (<see cref="MetadataRules.LargestStream"/>), judged likewise.
+/// </param>
 /// <param name="StreamsOutsideUserNamespace">
 /// How many of its captured alternate streams have no name in the user
 /// namespace (<see cref="MetadataRules.StreamsOutsideUserNamespace"/>), which
@@ -87,7 +96,9 @@ public sealed record RestoreItemFacts(
     int RefusedAttributeNames = 0,
     IReadOnlyDictionary<string, uint>? Access = null,
     IReadOnlyList<string>? AuditedAccounts = null,
-    int StreamsOutsideUserNamespace = 0);
+    int StreamsOutsideUserNamespace = 0,
+    int LongestStreamName = 0,
+    ulong LargestStream = 0);
 
 /// <summary>
 /// The files and the folders a restore would open wider than they were
@@ -365,6 +376,7 @@ public static class RestoreMetadata
         var unsetMask = 0u;
         var refusedStreams = new Tally();
         var streamsOutside = new Tally();
+        var streamsTooLarge = new Tally();
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -515,6 +527,16 @@ public static class RestoreMetadata
                 streamsOutside.Add(item.Kind);
             }
 
+            if ((applied & known.Captured & CapturedMetadata.AlternateStreams) != 0
+                && !target.SupportsAlternateStreams
+                && MetadataRules.StreamTooLargeForAttribute(
+                    known.LongestStreamName, known.LargestStream, target.MaxAttributeNameBytes, target.MaxAttributeValueBytes) is not null)
+            {
+                applied &= ~CapturedMetadata.AlternateStreams;
+                apart |= CapturedMetadata.AlternateStreams;
+                streamsTooLarge.Add(item.Kind);
+            }
+
             var missing = known.Captured & ~(applied | given | apart);
             if (missing == CapturedMetadata.None)
             {
@@ -632,6 +654,10 @@ public static class RestoreMetadata
         Add("alternate-stream-attribute-names", streamsOutside, string.Create(CultureInfo.InvariantCulture,
             $"Alternate streams captured on {streamsOutside} include one with no name in the user namespace, the "
             + $"only one Linux gives a file's own attributes, so it will not be kept as an attribute, and the file "
+            + $"will be restored degraded."));
+        Add("alternate-stream-attribute-sizes", streamsTooLarge, string.Create(CultureInfo.InvariantCulture,
+            $"Alternate streams captured on {streamsTooLarge} include one larger than this target takes in an attribute "
+            + $"({string.Join(", ", AttributeLimitsOf(target))}), so it will not be kept as an attribute, and the file "
             + $"will be restored degraded."));
         Add("unset-file-attributes", unsetBits, string.Create(CultureInfo.InvariantCulture,
             $"File attributes captured on {unsetBits} include bits no restore sets: "
@@ -890,6 +916,20 @@ public static class RestoreMetadata
     }
 
     /// <summary>The last component of an item's path: the name it is made under.</summary>
+    /// <summary>The limits <paramref name="target"/> states for an attribute, as the plan's line says them.</summary>
+    private static IEnumerable<string> AttributeLimitsOf(RestoreTargetProfile target)
+    {
+        if (target.MaxAttributeNameBytes is { } name)
+        {
+            yield return string.Create(CultureInfo.InvariantCulture, $"a name of at most {name} bytes");
+        }
+
+        if (target.MaxAttributeValueBytes is { } value)
+        {
+            yield return string.Create(CultureInfo.InvariantCulture, $"a value of at most {value} bytes");
+        }
+    }
+
     private static string NameOf(RestorePlanItem item) => item.Path[(item.Path.LastIndexOf('/') + 1)..];
 
     /// <summary>

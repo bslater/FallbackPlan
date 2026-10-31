@@ -315,7 +315,9 @@ public static class RestoreBlobSet
                 MetadataRules.RefusedAttributeNames(manifest.Metadata),
                 MetadataRules.AccessOf(manifest.Metadata),
                 MetadataRules.AuditedAccountsOf(manifest.Metadata),
-                MetadataRules.StreamsOutsideUserNamespace(manifest.Metadata));
+                MetadataRules.StreamsOutsideUserNamespace(manifest.Metadata),
+                MetadataRules.LongestStreamName(manifest.Metadata),
+                MetadataRules.LargestStream(manifest.Metadata));
 
             // A lost segment makes the path missing whatever else of it is
             // archived, because no rehydration brings that segment back. The
