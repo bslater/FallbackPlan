@@ -2,13 +2,14 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: on a target that keeps alternate streams and writes no extended attributes of its own, a file's extended attributes come back as streams of the same names, and each that does not is named), FR-RST-003 (amended: the plan names the files whose attributes only Linux's kernel reads)
+**Requirements:** FR-RST-004 (amended: on a target that keeps alternate streams and writes no extended attributes of its own, a file's extended attributes come back as streams of the same names, and each that does not is named), FR-RST-003 (amended: the plan names the files whose attributes only Linux's kernel reads); amended by [Amendment 2](#amendment-2-2026-10--a-folders-attributes-are-kept-as-its-streams): a folder's attributes are kept as its streams by the same rule
 **Related:** [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) (the attributes a restore writes back where the target writes them, which named Windows as not done), [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) (a file's own streams, the rule a stream's name is held to, and the order: after the content, before the times), [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md) and [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md) (the one writer the executor, the command line and the recovery tool share), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (extended attributes on Windows are preserved as alternate streams)
 
 **Built:**
 - The rule: `Domain/MetadataRules` says when a target keeps an entry's attributes as streams, and which attribute it does not keep as one. `Restore/RestoreMetadata` counts a file's attributes applied on such a target, and declares on a line of its own the files whose attributes only Linux's kernel reads.
 - The write: `Domain/MetadataWriter` writes each of a file's attributes as the stream of its name, judged by `Domain/AlternateStreams`, through the calls `Domain/MetadataTarget` names. `Domain/MetadataTarget` and `Restore/RestorePlan` say a local target keeps streams on Windows, and `Restore/RestoreExecutor` hands the writer the calls it was given.
 - The plan's names ([Amendment 1](#amendment-1-2026-10--the-plan-names-a-file-whose-attribute-no-stream-is-kept-under)): `Domain/MetadataRules` judges the stream each attribute is kept as, or why not, for the writer and the plan alike, and `Restore/RestoreBlobSet` counts the attributes it refuses for their names into each item's facts.
+- A folder's ([Amendment 2](#amendment-2-2026-10--a-folders-attributes-are-kept-as-its-streams)): `Domain/MetadataRules` keeps a folder's attributes as streams by the rule a file's are, so `Domain/MetadataWriter` writes them onto the folder it makes and `Restore/RestoreMetadata` counts them applied; `Restore/RestoreBlobSet` counts a folder's refused names too. `Domain.Tests/ExtendedAttributeStreamsTests`, `Repository.Tests/RestoreAlternateStreamsTests` and `Repository.Tests/RestoreMetadataHonestyTests` hold it, a real folder's on Windows among them.
 - The tests:
   - `Domain.Tests/ExtendedAttributeStreamsTests` — on every platform, against calls that hold streams in memory, a file's attributes land as streams of their names and count applied; one in the security or trusted namespace, or a POSIX ACL, is not kept and is named while the rest land; a name no stream may have, one the file's own captured stream has in any case, the second of two that differ only in case and a stream the target refuses are each named; a folder's are not kept as streams; on Linux and macOS a target that writes attributes of its own writes none as streams; on Windows a real file gets its attribute as a stream, with its time kept
   - `Repository.Tests/RestoreAlternateStreamsTests` — the profile passes whether it keeps streams to the writer, and the rule counts a file's attributes applied on a target that keeps them as streams and not a folder's; through the executor, a file's attribute lands as its stream and nothing is declared or listed
@@ -42,6 +43,8 @@ An attribute's name is judged by the rule a captured stream's is ([ADR-0174 §2]
 
 A restore writes no folder's streams (ADR-0174), so a folder's attributes are listed as not applied as before.
 
+> **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--a-folders-attributes-are-kept-as-its-streams)).** A folder's attributes are kept as its streams, by the rule a file's are.
+
 ### 5. The plan says so per file
 
 On such a target the plan counts a file's attributes applied. A file that carries one only Linux's kernel reads is declared on a line of its own, `kernel-attributes`, rather than on the lines that assume a Linux target writes them. The rule is judged by what the target states, so a plan for a Windows target can be made, and tested, on any host.
@@ -60,6 +63,8 @@ On such a target the plan counts a file's attributes applied. A file that carrie
 
 - **Give the attributes back as attributes.** A stream captured from Windows is a stream: restored to Linux or macOS, it is not turned back into the attribute it came from.
 - **Keep a folder's attributes,** for the reason in §4.
+
+  > **Built 2026-10 ([Amendment 2](#amendment-2-2026-10--a-folders-attributes-are-kept-as-its-streams)).** A folder's attributes are kept as its streams.
 - **Keep a symlink's.** No restore on Windows makes a symlink.
 
 ## Alternatives considered
@@ -85,9 +90,33 @@ On such a target the plan counts a file's attributes applied. A file that carrie
 
   The new line declares three. The kernel's file stays on its own line. A target that keeps no streams declares no such line.
 
+## Amendment 2 (2026-10) — a folder's attributes are kept as its streams
+
+### Context
+
+§4 left a folder's attributes listed as not applied, because a restore writes no folder's own streams: capture records none for a folder (ADR-0174). That says nothing about whether one can be written. NTFS keeps named streams on a folder as it does on a file, opened as `folder:name`, and architecture 06 §3 has extended attributes on Windows preserved as streams, whatever carries them. A macOS folder's Finder information, its colour label among it, and a Linux folder's user tags were still lost there.
+
+### Decision
+
+A folder's attributes are kept as streams of their names by the rule a file's are (§§1–3). They are written onto the folder the restore makes, when its own metadata goes on, after everything in it has landed (ADR-0086), and before its times. One that only Linux's kernel reads is not kept, and is named. So is one whose name no stream may have. A folder has no captured stream for an attribute's name to meet.
+
+A folder already at the destination keeps its own metadata (ADR-0086), and nothing is written onto it. A symlink keeps none, since a stream joined to a link's path would be written through it.
+
+The plan counts a folder's attributes applied on such a target, and declares a folder with one only Linux's kernel reads, or one no stream is kept under, on the lines a file is declared on.
+
+### Consequences
+
+- A macOS or Linux folder restored on Windows keeps its attributes beside it, readable as `folder:name`.
+- Each folder's attributes cost a stream write each, on the folder itself.
+
+### What this does not do
+
+- **Capture a folder's streams.** A later backup of the folder on Windows still records none (ADR-0174), so a folder kept this way does not carry its attributes onward from there.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. On a target that keeps a file's alternate streams and writes no attributes of its own, the writer every way of restoring shares keeps a file's extended attributes as streams of their names, before the times; one only Linux's kernel reads, a name no stream may have, one the file's own stream has, one an attribute before it has but for case, and a stream the target refuses are each named; a folder's are not kept; and the plan declares the kernel's on a line of its own. `Domain/MetadataWriter`; `Domain/MetadataRules`; `Domain/MetadataTarget`; `Restore/RestoreMetadata`; `Domain.Tests/ExtendedAttributeStreamsTests`; `Repository.Tests/RestoreAlternateStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Amended | Amendment 1: the plan names a file whose attribute no stream is kept under, by the writer's own judgement of each name, which moved to one rule the two share. `Domain/MetadataRules`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Domain.Tests/ExtendedAttributeStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
+| 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--a-folders-attributes-are-kept-as-its-streams): a folder's attributes are kept as its streams by the rule a file's are, written onto the folder the restore makes before its times; the plan counts them applied, and declares a folder's kernel attributes and refused names on the lines a file's are. `Domain/MetadataRules`; `Domain/MetadataWriter`; `Domain/MetadataTarget`; `Restore/RestoreBlobSet`; `Domain.Tests/ExtendedAttributeStreamsTests`; `Repository.Tests/RestoreAlternateStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
