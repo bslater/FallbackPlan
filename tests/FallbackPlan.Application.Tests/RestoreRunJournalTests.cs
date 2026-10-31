@@ -9,7 +9,9 @@ namespace FallbackPlan.Application.Tests;
 /// kept while it is under way and after it ends unfinished, and dropped
 /// once a run of it finishes or a person lets it go. It outlives the process
 /// that wrote it, because a run cut short by the machine stopping is the one
-/// nobody heard end.
+/// nobody heard end. It also says whether a restore of a set is under way,
+/// which a retention pass of that set holds its blobs for (FR-GC-003,
+/// ADR-0172 Amendment 3).
 /// </summary>
 [TestClass]
 public sealed class RestoreRunJournalTests
@@ -83,6 +85,36 @@ public sealed class RestoreRunJournalTests
 
         Assert.IsFalse(journal.IsLive(Run));
         Assert.AreEqual(Run, Assert.ContainsSingle(journal.Unfinished).Run);
+    }
+
+    [TestMethod]
+    public void ARunUnderWay_SaysItsSetIsBeingRestored_UntilItEnds_HoweverItEnds()
+    {
+        var journal = RestoreRunJournal.Open(_state);
+        Assert.IsFalse(journal.IsUnderWayFor("docs"));
+
+        journal.Begin(Record(Run) with { SetName = "docs" });
+        journal.Begin(Record(Other) with { SetName = null });
+
+        Assert.IsTrue(journal.IsUnderWayFor("docs"));
+        Assert.IsFalse(journal.IsUnderWayFor("photos"), "a run of one set says nothing of another");
+
+        journal.Leave(Run);
+        Assert.IsFalse(journal.IsUnderWayFor("docs"), "a run that ended unfinished reads nothing any more");
+
+        journal.Begin(Record(Run) with { SetName = "docs" });
+        journal.Finish(Run);
+        Assert.IsFalse(journal.IsUnderWayFor("docs"), "a run that finished reads nothing any more");
+    }
+
+    [TestMethod]
+    public void ARunOnRecordAtOpening_IsNoRestoreUnderWay()
+    {
+        // The process that was reading for it has gone, so nothing it read
+        // needs holding.
+        RestoreRunJournal.Open(_state).Begin(Record(Run) with { SetName = "docs" });
+
+        Assert.IsFalse(RestoreRunJournal.Open(_state).IsUnderWayFor("docs"));
     }
 
     [TestMethod]

@@ -192,6 +192,22 @@ public sealed class RestoreRunJournal
     }
 
     /// <summary>
+    /// Whether a run of the set named <paramref name="setName"/> is under way
+    /// in this process. Such a run reads the blobs of the snapshot it
+    /// restores as it goes, so a retention pass of that set holds its blobs
+    /// while one is (ADR-0172 Amendment 3).
+    /// </summary>
+    /// <param name="setName">The set's name.</param>
+    public bool IsUnderWayFor(string setName)
+    {
+        lock (_gate)
+        {
+            return _runs.Any(run =>
+                _live.Contains(run.Run) && string.Equals(run.SetName, setName, StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>
     /// Records a run about to write, under way, replacing any run on record
     /// under its name.
     /// </summary>

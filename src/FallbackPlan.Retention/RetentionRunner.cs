@@ -97,6 +97,12 @@ public static class RetentionRunner
     /// the pass would decline out of the candidates and says why. Null offers
     /// every blob past the threshold.
     /// </param>
+    /// <param name="restoreInFlight">
+    /// Whether the caller knows a restore of this set is under way beside the
+    /// pass (ADR-0172 Amendment 3). It reads the blobs of the snapshot it
+    /// restores as it goes, and nothing in the store says so, so the pass
+    /// holds every blob while one is, as beside a backup.
+    /// </param>
     /// <returns>The report.</returns>
     /// <exception cref="NewerFormatException">An apply in a repository at a format newer than this build writes.</exception>
     public static async ValueTask<RetentionReport> RunAsync(
@@ -118,7 +124,8 @@ public static class RetentionRunner
         TimeSpan? clockSkewMargin = null,
         bool requestsOnly = false,
         bool backupInFlight = false,
-        Func<ObjectId, bool>? relocationStands = null)
+        Func<ObjectId, bool>? relocationStands = null,
+        bool restoreInFlight = false)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
@@ -266,9 +273,11 @@ public static class RetentionRunner
         // condemns, and its snapshot is in no survey yet, so revalidation
         // could not save that blob. Beside one, no blob is tombstoned or
         // deleted, by the sweep or the trim; snapshots still are (ADR-0009
-        // Amendment 8).
+        // Amendment 8). A restore under way reads blobs no survey names as
+        // read, and is held for the same way (ADR-0172 Amendment 3).
         var inFlight = intents.PublicationsInFlight;
-        var holdBlobs = backupInFlight || inFlight.Count > 0;
+        var besideABackup = backupInFlight || inFlight.Count > 0;
+        var holdBlobs = besideABackup || restoreInFlight;
 
         var written = 0;
         if (plan.Deletable && (plan.DeletableBlobs.Count > 0 || plan.ExpiredSnapshotKeys.Count > 0))
@@ -300,13 +309,22 @@ public static class RetentionRunner
         if (holdBlobs)
         {
             var notTombstoned = plan.Deletable ? plan.DeletableBlobs.Count : 0;
-            lines.Add(
-                $"held beside a backup: {notTombstoned} blob(s) not tombstoned, {swept.HeldBlobs} not deleted "
-                + (trim.Eligible.Count > 0 ? $"and {trim.Eligible.Count} not trimmed " : string.Empty)
-                + (inFlight.Count > 0
-                    ? $"while write intent {string.Join(", ", inFlight.Select(intent => intent.Sequence))} is in flight; "
-                    : "while a backup of the set is queued, running or parked; ")
-                + "the next pass takes them up");
+            var held = $"{notTombstoned} blob(s) not tombstoned, {swept.HeldBlobs} not deleted "
+                + (trim.Eligible.Count > 0 ? $"and {trim.Eligible.Count} not trimmed " : string.Empty);
+            if (besideABackup)
+            {
+                lines.Add(
+                    $"held beside a backup: {held}"
+                    + (inFlight.Count > 0
+                        ? $"while write intent {string.Join(", ", inFlight.Select(intent => intent.Sequence))} is in flight; "
+                        : "while a backup of the set is queued, running or parked; ")
+                    + "the next pass takes them up");
+            }
+
+            if (restoreInFlight)
+            {
+                lines.Add($"held beside a restore: {held}while a restore of the set is under way; the next pass takes them up");
+            }
         }
 
         // The trim runs last: direct deletes of historic data blobs every

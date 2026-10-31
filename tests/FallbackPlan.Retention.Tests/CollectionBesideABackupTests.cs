@@ -27,7 +27,10 @@ namespace FallbackPlan.Retention.Tests;
 /// unfinished work. Two rules keep them apart. A backup never builds on a blob
 /// a pass has tombstoned: it stores those bytes again. And a pass beside an
 /// in-flight backup tombstones and deletes no blob, because the backup may
-/// have built on one before any tombstone was there.
+/// have built on one before any tombstone was there. A pass holds the same
+/// way beside a restore of the set the service says is under way, since the
+/// restore reads the blobs of the snapshot it restores as it goes, and that
+/// snapshot may expire while it runs (ADR-0172 Amendment 3).
 /// </summary>
 /// <remarks>
 /// The backups that matter run through the service's own publication path,
@@ -287,6 +290,34 @@ public sealed class CollectionBesideABackupTests : IDisposable
         Assert.IsGreaterThan(0, untold.Swept!.Deleted, "the blob the hold kept did not go once nothing was live");
     }
 
+    [TestMethod]
+    public async Task RetentionPass_ToldARestoreOfTheSetIsUnderWay_HoldsItsBlobs_AndSaysSo()
+    {
+        // A restore reads the blobs of the snapshot it restores as it goes,
+        // and one that expires while it runs would be swept from under it.
+        // The service knows the restore is under way and says so, and the
+        // pass holds on its word as it does on a backup's.
+        await TombstoneTheReturningBytesAsync();
+        await File.WriteAllBytesAsync(ReturningPath, Interim);
+        await BackUpAsync(Day1.AddDays(2));
+
+        var told = await RunAsync(Day1.AddDays(2).AddHours(1), restoreInFlight: true);
+        Assert.Contains(
+            line => line.StartsWith("held beside a restore:", StringComparison.Ordinal),
+            told.Lines,
+            "a pass told a restore is under way held nothing: " + string.Join(" | ", told.Lines));
+        Assert.IsFalse(
+            told.Lines.Any(line => line.StartsWith("held beside a backup:", StringComparison.Ordinal)),
+            "a restore was called a backup: " + string.Join(" | ", told.Lines));
+        Assert.IsGreaterThan(0, told.Swept!.HeldBlobs, "the premise: a blob's grace had run");
+
+        var untold = await RunAsync(Day1.AddDays(2).AddHours(2));
+        Assert.IsFalse(
+            untold.Lines.Any(line => line.StartsWith("held beside a restore:", StringComparison.Ordinal)),
+            string.Join(" | ", untold.Lines));
+        Assert.IsGreaterThan(0, untold.Swept!.Deleted, "the blob the hold kept did not go once no restore was under way");
+    }
+
     /// <summary>Day one stores the bytes, day two replaces them, and a pass tombstones the blob that held them.</summary>
     private async Task TombstoneTheReturningBytesAsync()
     {
@@ -377,7 +408,7 @@ public sealed class CollectionBesideABackupTests : IDisposable
     }
 
     private async Task<RetentionReport> RunAsync(
-        DateTimeOffset now, IObjectStore? store = null, bool backupInFlight = false)
+        DateTimeOffset now, IObjectStore? store = null, bool backupInFlight = false, bool restoreInFlight = false)
     {
         var plain = new LocalFileSystemObjectStore(RepoPath);
         using var opened = await WriteOnlyInstallation.OpenAsync(plain, PassphraseText, CancellationToken.None);
@@ -387,7 +418,7 @@ public sealed class CollectionBesideABackupTests : IDisposable
             name => sync.Find(SetId, name), _ => TrimVerification.None,
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId), apply: true,
             (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim,
-            backupInFlight: backupInFlight);
+            backupInFlight: backupInFlight, restoreInFlight: restoreInFlight);
     }
 
     private async Task BackUpAsync(DateTimeOffset now)
