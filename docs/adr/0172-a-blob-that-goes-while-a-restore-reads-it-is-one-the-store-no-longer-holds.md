@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way), FR-GC-010 (amended by Amendment 4: a destination keeps its blobs through a sync while the service has a restore of the set under way)
+**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way), FR-GC-010 (amended by Amendment 4: a destination keeps its blobs through a sync while the service has a restore of the set under way; by Amendment 5, a peer is instructed by no granted run while one is)
 **Related:** [ADR-0075](0075-a-restore-reads-around-damage.md) §5 (what a copy passed over is called), [ADR-0068](0068-the-catalogue-directed-restore-read.md) (the catalogue-directed read), [ADR-0009](0009-garbage-collection-safety.md) (the collector), [ADR-0034](0034-hub-and-spoke-destinations.md) §6 (the staging trim), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-4
 
 **Built:**
@@ -177,6 +177,22 @@ Amendment 3 held the set's own pass and left a sync's convergence alone. A desti
 
 **Not done.** A restore in direct mode is still held for by nothing. A peer converges on the retention apply's signed instruction rather than on a sync, and is not held for.
 
+> **2026-10: the peer is taken up by [Amendment 5](#amendment-5-2026-10--a-granted-run-instructs-no-peer-beside-a-restore-of-the-set).** A restore in direct mode is still held for by nothing.
+
+## Amendment 5 (2026-10) — a granted run instructs no peer beside a restore of the set
+
+Amendment 4 left a peer as it was. A restore reads around to a peer's copy: the set's other copies include each peer, dialled for the run. A peer drops what an instruction signed under a person's grant tells it to, and a granted run, whether a retention apply or a person's deletion, instructs every peer under rules ([ADR-0055](0055-reclaim-authority.md) §6).
+
+**Decision.**
+
+- **While the service has a restore of the set under way, no granted run instructs a peer.** Both kinds of run converge a peer through one call, and that call sends nothing while a restore of the set is under way.
+- **The run says so** for each peer it held: "held beside a restore", and that the next granted run converges it.
+- **The peer is held whole,** where staging and a sync hold blobs and let snapshots go. Its instruction is a keep-set the peer converges to, and one that kept every blob would be the whole listing. A person's deletion held this way stays pending at the peer, and staging keeps the snapshot until every copy has let it go (FR-GC-013), so the next granted run finishes it.
+
+**Built:** `Agent/FanOut`; `Hosts.Tests/PeerConvergenceBesideARestoreTests` — through two services and a live peer, three days of backups land whole at the peer. A granted apply beside a run of the set under way says the peer was held and leaves it every key it had. The next apply converges it to the one snapshot its policy keeps.
+
+**Not done.** A restore in direct mode is still held for by nothing.
+
 ## Status history
 
 | Date | Status | Note |
@@ -186,3 +202,4 @@ Amendment 3 held the set's own pass and left a sync's convergence alone. A desti
 | 2026-10 | Amended | Amendment 2: with no copy to read it from, a record whose blob the store does not hold fails as not held, not as a format violation, whether the blob went during the run or before it. `Repository.Packing/RecordReadResult`, `Repository/RepositoryReader`; `Repository.Tests/RestoreBesideCollectionTests` |
 | 2026-10 | Amended | Amendment 3: a retention pass and a person's deletion hold every blob while the service has a restore of the set under way, and say so on a line of their own; snapshots still expire. `Application/RestoreRunJournal`, `Retention/RetentionRunner`, `Agent/ServiceCommandHandler`; `Application.Tests/RestoreRunJournalTests`, `Retention.Tests/CollectionBesideABackupTests`, `Hosts.Tests/RetentionBesideARestoreTests` |
 | 2026-10 | Amended | Amendment 4: a sync drops no blob at a destination while the service has a restore of the set under way, and the hold moves the keep fingerprint so the first sync after it converges. `Agent/FanOut`; `Hosts.Tests/ConvergenceBesideARestoreTests`, `Hosts.Tests/DirectShipConvergeSpareTests` |
+| 2026-10 | Amended | Amendment 5: a granted run, a retention apply or a person's deletion, instructs no peer while the service has a restore of the set under way, and says so; the next granted run converges it. `Agent/FanOut`; `Hosts.Tests/PeerConvergenceBesideARestoreTests` |
