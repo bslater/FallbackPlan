@@ -245,6 +245,7 @@ Status per record. **A hundred and seventy of the hundred and seventy-eight are 
 | [0177](adr/0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md) | A restore on Windows keeps a file's extended attributes as alternate streams: each as the stream of its name, before the times, and one only Linux's kernel reads, or whose name no stream may have, is named |
 | [0178](adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md) | The plan names a file its new folder would open wider than it was: where a descriptor is not written, what the folder it lands in gives is held against what its own DACL gave, and the files, folders and accounts that gain are named |
 | [0179](adr/0179-a-restore-on-linux-and-macos-keeps-a-files-alternate-streams-as-extended-attributes.md) | A restore on Linux and macOS keeps a file's alternate streams as extended attributes: each as the attribute of its name where the target writes attributes and keeps no streams; Linux takes only those in its user namespace, and a file's own attribute keeps its name |
+| [0180](adr/0180-capture-names-the-file-flags-it-does-not-keep.md) | Capture names the file flags it does not keep: Linux's and macOS's immutable, append-only, no-dump, compressed, encrypted and hidden flags, read from each platform's stat and named among a file's capture diagnostics, since no format key keeps them |
 
 Template: [0000](adr/0000-template.md)
 

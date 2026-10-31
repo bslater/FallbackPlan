@@ -1,0 +1,67 @@
+# ADR-0180 — Capture names the file flags it does not keep
+
+**Status:** Accepted
+**Date:** 2026-10
+**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics)
+**Related:** [ADR-0026](0026-phase-1-capture-shapes.md) §2 (the `capture_diagnostics` vocabulary, which gains `file-flags:`), [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) (Windows' own attribute bits, which a format key keeps), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (immutable and system flags, and compression and encryption attributes, degraded and reported on Linux and macOS), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 13)
+
+**Built:**
+- The flags: `Domain/FileFlagBits` names them, and `Domain/MetadataRules` maps Linux's and macOS's bits to them, names them in a diagnostic and reads that back.
+- The read: `Filesystem.Local/StatResult` carries the flags each platform's stat gives, and `Filesystem.Local/LocalFileSystemSource` names them among a file's capture diagnostics, which publication writes into its manifest.
+- The change: `Repository.Format/FileVersionManifestCodec` counts the flags in the metadata digest an incremental compares, and publication, the catalogue projection, the forensic rebuild and the source comparer all count them alike; a manifest restated for unchanged bytes names the flags the file carries now.
+- The tests:
+  - `Domain.Tests/FileFlagsTests` — on every platform: Linux's bits are read only where the volume says it reports each, and no other; macOS's user and system flags map alike, and no other; the diagnostic names each flag in one order and none where there are none, and reads back as the flags it named, among other diagnostics, passing over a name no build knows.
+  - `Filesystem.Tests/LocalScanTests` — on Linux a file carrying the no-dump flag is scanned with it named, a plain one with none, and a folder carrying it with none; on macOS a file carrying no-dump and hidden is scanned with both named.
+  - `Repository.Tests/FileFlagsCaptureTests` — on Linux a real file's no-dump flag is named in its published manifest, and a plain file's manifest names none.
+  - `Repository.Tests/MetadataOnlyChangeTests` — a file whose flags alone changed gets a new manifest naming them, with its content not read again; one whose flags went away names none; one whose flags stayed is short-circuited; the projected and the forensically rebuilt catalogue record the digest capture computed, flags and all; the comparer counts a flagged file unchanged and a change of flags a metadata change.
+
+---
+
+## Context
+
+Architecture 06's metadata matrix has a file's immutable and system flags, and its compression and encryption attributes, degraded and reported on Linux and macOS. Capture read neither, so neither was reported. A file Linux kept immutable or append-only, or one macOS kept hidden or locked, was backed up as an ordinary file and restored as one, and no record said it had been anything else.
+
+Both stat calls capture already makes return them. Linux's `statx` reports a file's immutable, append-only, no-dump, compressed and encrypted flags in `stx_attributes`, and says in `stx_attributes_mask` which of them the volume reports at all. macOS's `stat` carries `st_flags`, which hold the user's and the system's immutable and append-only flags, no-dump, compressed and hidden.
+
+No key of the manifest's metadata map keeps them. Key 10 holds Windows' attribute bits, which a restore elsewhere would read as Windows' own. A new key is a format change: a reader of today refuses a manifest with a key it does not know.
+
+## Decision
+
+### 1. Capture reads the flags each platform's stat gives
+
+On Linux a flag is read only where `stx_attributes_mask` says the volume reports it, so a volume that reports none is never taken to have none set. On macOS the user's and the system's immutable flags are one flag, and so are their append-only flags. Linux's other attributes, such as a mount's root, and macOS's other flags, such as the archived one, are not file flags in this sense and are not read.
+
+### 2. Capture names them in a diagnostic
+
+The flags a file carries are named in its capture diagnostics (specification 06 §4.1 key 13), `file-flags: immutable, no-dump`, each by one name and in one order: immutable, append-only, no-dump, compressed, encrypted, hidden. Diagnostics are informational text every reader accepts, so this changes no format. A link and a special file are named alike. A folder is kept as a tree, which carries no diagnostics, so a folder's flags are not named.
+
+### 3. A change of flags alone is a change
+
+An incremental passes over a file whose identity, size, modification time and metadata digest are unchanged, and re-emits its earlier manifest. Setting a file's flags moves its change time, not its modification time, so the digest must count them, or the earlier manifest would go on naming flags the file no longer carries, and a file backed up before this record would never have its flags named. The digest counts the flags a file's diagnostics name, and is the metadata's alone where it names none, so no file without flags is restated. A file whose flags changed gets a new manifest without its content being read again, keeping what the earlier one said of its read and naming the flags it carries now. The catalogue rebuilt from manifests, by projection or forensically, records the same digest, and the source comparer judges by it.
+
+### 4. What is named can be read back
+
+`MetadataRules.FileFlagsOf` reads a manifest's diagnostics back to the flags they name, passing over a name no build knows, so a restore can say what it does not give back.
+
+## Consequences
+
+- `inspect` shows a file's flags with its other diagnostics.
+- A file whose flags change between backups gets a new manifest for the change, with its content not read again. The first backup by this build restates once each file that already carries flags.
+- A volume that keeps many files compressed, as macOS keeps much of its own software, names `compressed` on each of them.
+
+## What this does not do
+
+- **Keep the flags.** A restore gives none back. Keeping them is a format key, with the format version and refusal ADR-0014 asks of one.
+- **Say so on restore.** The plan and the receipt do not yet name a file whose flags were not given back. That is the next record's.
+- **A folder's flags.** A tree carries no diagnostics.
+
+## Alternatives considered
+
+- **Keep the flags in key 10.** Rejected. Key 10 holds Windows' attribute bits, and a restore on Windows would read Linux's or macOS's as its own.
+- **Add a format key now.** Deferred. It is a format change, and naming what is lost comes first, with no change to what any reader accepts.
+
+## Status history
+
+| Date | Status | Note |
+|------|--------|------|
+| 2026-10 | Accepted | Built in one slice, tests first. Capture reads a file's flags from each platform's stat, Linux's only where the volume reports each, and names them in the file's capture diagnostics, which publication writes into its manifest; they read back as the flags they name, and the digest an incremental compares counts them. `Domain/FileFlagBits`; `Domain/MetadataRules`; `Filesystem.Local/LocalFileSystemSource`; `Repository.Format/FileVersionManifestCodec`; `Domain.Tests/FileFlagsTests`; `Filesystem.Tests/LocalScanTests`; `Repository.Tests/FileFlagsCaptureTests`; `Repository.Tests/MetadataOnlyChangeTests` |
