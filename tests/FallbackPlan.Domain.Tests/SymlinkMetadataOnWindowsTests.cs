@@ -7,17 +7,24 @@ namespace FallbackPlan.Domain.Tests;
 /// ADR-0181 Amendment 2): its modification, access and creation times, each
 /// through a handle opened on the link itself, so a link to a file, to a
 /// folder or to nothing is given its own and what it points at keeps its
-/// own.
+/// own. Its attribute bits go on the same way (ADR-0181 Amendment 3): those
+/// a restore writes are set as captured and cleared where not, and the bits
+/// that make it a link, and a folder's, stay as its making left them.
 /// </summary>
 /// <remarks>
-/// The oracle is the times Windows reports for the link's path, which it
-/// reports for a link itself and never for what the link points at. A
-/// write that went through the link would leave the link's own as they were
-/// and move its target's, and both are checked.
+/// The oracle is the times and the bits Windows reports for the link's path,
+/// which it reports for a link itself and never for what the link points at.
+/// A write that went through the link would leave the link's own as they
+/// were and move its target's, and both are checked.
 /// </remarks>
 [TestClass]
 public sealed class SymlinkMetadataOnWindowsTests : IDisposable
 {
+    private const uint HiddenBit = 0x2;
+    private const uint SystemBit = 0x4;
+    private const uint ReparsePointBit = 0x400;
+    private const uint FolderBit = 0x10;
+
     private static readonly DateTime Modified = new(2023, 3, 9, 8, 15, 30, 250, DateTimeKind.Utc);
 
     private static readonly DateTime Accessed = new(2024, 2, 1, 12, 0, 5, 500, DateTimeKind.Utc);
@@ -113,6 +120,63 @@ public sealed class SymlinkMetadataOnWindowsTests : IDisposable
         Assert.IsFalse(SymlinkMetadata.TrySetTimes(absent, Modified, Accessed));
         Assert.IsFalse(SymlinkMetadata.TrySetCreationTime(absent, Created));
     }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own bits are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public void TrySetAttributes_OnWindows_WritesThemOntoTheLinkItself_AndWhatItPointsAtKeepsItsOwn()
+    {
+        var target = Target("shown.bin");
+        var link = Link("hidden-link", target, folder: false);
+
+        Assert.IsTrue(SymlinkMetadata.TrySetAttributes(link, HiddenBit | SystemBit | ReparsePointBit));
+
+        Assert.AreEqual(
+            FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint,
+            File.GetAttributes(link) & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive | FileAttributes.ReparsePoint),
+            "the bits captured are set, the archive bit making set is cleared, and the link is still one");
+        Assert.AreEqual(
+            (FileAttributes)0,
+            File.GetAttributes(target) & (FileAttributes.Hidden | FileAttributes.System),
+            "a link's bits went through it");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own bits are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public void TrySetAttributes_OnWindows_OnAFoldersLink_KeepsItAFoldersLink_AndTheFolderKeepsItsOwn()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(_root, "shown-folder")).FullName;
+        var link = Link("hidden-folder-link", folder, folder: true);
+
+        Assert.IsTrue(SymlinkMetadata.TrySetAttributes(link, FolderBit | ReparsePointBit | HiddenBit));
+
+        Assert.AreEqual(
+            FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Hidden,
+            File.GetAttributes(link) & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Hidden));
+        Assert.AreEqual((FileAttributes)0, File.GetAttributes(folder) & FileAttributes.Hidden, "a link's bits went through it");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own bits are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public void TrySetAttributes_OnWindows_ClearsEveryBitARestoreWritesThatWasNotCaptured_AndOnALinkToNothing()
+    {
+        var link = Link("cleared", Path.Combine(_root, "not-there.bin"), folder: false);
+        Assert.IsTrue(SymlinkMetadata.TrySetAttributes(link, HiddenBit | SystemBit | ReparsePointBit));
+
+        Assert.IsTrue(SymlinkMetadata.TrySetAttributes(link, ReparsePointBit));
+
+        Assert.AreEqual(
+            FileAttributes.ReparsePoint,
+            File.GetAttributes(link) & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive | FileAttributes.ReparsePoint));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own bits are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public void TrySetAttributes_OnWindows_WhereNothingIsThere_AnswersFalse() =>
+        Assert.IsFalse(SymlinkMetadata.TrySetAttributes(Path.Combine(_root, "absent"), HiddenBit));
 
     public void Dispose()
     {

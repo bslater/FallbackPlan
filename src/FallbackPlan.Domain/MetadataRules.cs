@@ -92,8 +92,7 @@ public static class MetadataRules
     public static IReadOnlyList<string> UnsetFileAttributes(uint captured, bool compresses = false)
     {
         List<string> unset = [];
-        var given = WrittenFileAttributes | EntryFileAttributes | (compresses ? CompressedFileAttribute : 0);
-        for (var left = captured & ~given; left != 0; left &= left - 1)
+        for (var left = UnsetFileAttributeBits(captured, compresses); left != 0; left &= left - 1)
         {
             var bit = left & (~left + 1);
             unset.Add(Enum.IsDefined(typeof(FileAttributes), (int)bit)
@@ -103,6 +102,15 @@ public static class MetadataRules
 
         return unset;
     }
+
+    /// <summary>
+    /// The bits of <paramref name="captured"/> that <see cref="UnsetFileAttributes"/>
+    /// names, so the names for several entries can be given from one mask.
+    /// </summary>
+    /// <param name="captured">An entry's captured attribute bits.</param>
+    /// <param name="compresses">Whether the target gives this entry its compression.</param>
+    public static uint UnsetFileAttributeBits(uint captured, bool compresses = false) =>
+        captured & ~(WrittenFileAttributes | EntryFileAttributes | (compresses ? CompressedFileAttribute : 0));
 
     /// <summary>
     /// The bits to set on an entry standing with <paramref name="standing"/>

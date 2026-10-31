@@ -9,8 +9,8 @@ namespace FallbackPlan.Domain.Tests;
 /// on macOS, which keeps a link's own. Every one lands on the link and never
 /// on what it points at, so a link that points out of a restore, or at
 /// nothing, is given its own and nothing else is touched. Which platforms
-/// set a link's times and its creation time is pinned here, Windows among
-/// them (ADR-0181 Amendment 2), whose writes
+/// set a link's times, its creation time and its attribute bits is pinned
+/// here, Windows among them (ADR-0181 Amendments 2 and 3), whose writes
 /// <see cref="SymlinkMetadataOnWindowsTests"/> proves.
 /// </summary>
 /// <remarks>
@@ -45,6 +45,20 @@ public sealed class SymlinkMetadataTests : IDisposable
     [TestMethod]
     public void CanSetCreationTime_IsTrueOnMacOsAndWindowsAlone() =>
         Assert.AreEqual(OperatingSystem.IsMacOS() || OperatingSystem.IsWindows(), SymlinkMetadata.CanSetCreationTime);
+
+    [TestMethod]
+    public void CanSetAttributes_IsTrueOnWindowsAlone() =>
+        Assert.AreEqual(OperatingSystem.IsWindows(), SymlinkMetadata.CanSetAttributes);
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a link needs no privilege to create only on a POSIX host")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public void TrySetAttributes_OffWindows_WritesNothing()
+    {
+        var link = Link("bits", Target("bits-target.bin"));
+
+        Assert.IsFalse(SymlinkMetadata.TrySetAttributes(link, 0x2 | 0x400));
+    }
 
     [TestMethod]
     [PlatformCondition(TestPlatforms.Linux, "Linux has no call that sets a link's creation time")]

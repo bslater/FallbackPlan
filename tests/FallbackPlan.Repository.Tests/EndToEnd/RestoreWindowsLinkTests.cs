@@ -19,7 +19,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// separators. A link gets its own modification, access and creation times
 /// back, onto the link and never through it, and the rule the plan and the
 /// receipt hold a link to grants on every platform what that platform sets
-/// on one (ADR-0181 Amendment 2).
+/// on one (ADR-0181 Amendment 2). A link Windows captured gets its attribute
+/// bits back the same way, and a bit no restore sets is named as a file's
+/// is (ADR-0181 Amendment 3).
 /// </summary>
 /// <remarks>
 /// Windows makes a link only for an account that holds the privilege to, or
@@ -31,6 +33,15 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
 {
     private const uint FolderBit = 0x10;
     private const uint ReparsePointBit = 0x400;
+    private const uint HiddenBit = 0x2;
+    private const uint SystemBit = 0x4;
+    private const uint ArchiveBit = 0x20;
+    private const uint EncryptedBit = 0x4000;
+    private const uint CompressedBit = 0x800;
+
+    /// <summary>The bits the attribute tests read: those a restore writes, and those that say what an entry is.</summary>
+    private const FileAttributes Watched = FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive
+        | FileAttributes.Directory | FileAttributes.ReparsePoint;
     private const ulong Modified = 1_722_000_000_000;
 
     /// <summary>When a link was modified: 2021-03-04.</summary>
@@ -47,7 +58,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         Assert.AreEqual(SymbolicLinks.CanCreate, RestoreTargetProfile.ForLocalPlatform().SupportsSymlinks);
 
     [TestMethod]
-    public void TheRule_ForALink_GrantsWhatThisPlatformSetsOnALink_AndNeverItsWindowsAttributes()
+    public void TheRule_ForALink_GrantsWhatThisPlatformSetsOnALink_AndNeverItsDescriptorOrStreams()
     {
         // A target that keeps everything, so the platform alone decides.
         var everything = RestoreTargetProfile.ForLocalPlatform() with
@@ -65,10 +76,11 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         Assert.AreEqual(SymlinkMetadata.CanSetTimes, applied.HasFlag(CapturedMetadata.ModifiedAt | CapturedMetadata.AccessedAt));
         Assert.AreEqual(SymlinkMetadata.CanSetCreationTime, applied.HasFlag(CapturedMetadata.CreatedAt));
         Assert.AreEqual(!OperatingSystem.IsWindows(), applied.HasFlag(CapturedMetadata.PosixMode), "Windows writes no permissions");
+        Assert.AreEqual(SymlinkMetadata.CanSetAttributes, applied.HasFlag(CapturedMetadata.FileAttributes));
         Assert.AreEqual(
             CapturedMetadata.None,
-            applied & (CapturedMetadata.FileAttributes | CapturedMetadata.SecurityDescriptor | CapturedMetadata.AlternateStreams),
-            "a link's attribute bits, descriptor and streams are written onto nothing");
+            applied & (CapturedMetadata.SecurityDescriptor | CapturedMetadata.AlternateStreams),
+            "a link's descriptor and streams are written onto nothing");
     }
 
     [TestMethod]
@@ -82,7 +94,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         source.AddFile("data/target.bin", content).Metadata = new EntryMetadata { ModifiedAt = Modified };
         AddLink(source, "link", "data/target.bin", fileAttributes: null);
 
-        var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB1);
+        var (plan, _, receipt, output) = await PublishAndRestoreAsync(source, 0xB1);
 
         Assert.DoesNotContain(degradation => degradation.Capability == "symlinks", plan.Degradations);
         Assert.AreEqual("restored", receipt.Items.Single(item => item.Path == "link").Outcome);
@@ -108,7 +120,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         AddLink(source, "a-windows-folder", "notes.txt", fileAttributes: FolderBit | ReparsePointBit);
         AddLink(source, "a-windows-file", "docs", fileAttributes: ReparsePointBit);
 
-        var (_, receipt, output) = await PublishAndRestoreAsync(source, 0xB2);
+        var (_, _, receipt, output) = await PublishAndRestoreAsync(source, 0xB2);
 
         Assert.IsTrue(receipt.Items.Where(item => item.Path.StartsWith("a-", StringComparison.Ordinal)).All(item => item.Outcome == "restored"));
         Assert.IsTrue(Directory.Exists(Path.Combine(output, "a-docs")), "a link naming a folder the restore makes is a folder's link");
@@ -141,9 +153,9 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         AddLink(source, "z-folder", "data", times);
         AddLink(source, "z-nothing", "not-there.bin", times);
 
-        var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB3);
+        var (_, declared, receipt, output) = await PublishAndRestoreAsync(source, 0xB3);
 
-        Assert.DoesNotContain(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal), plan.Degradations);
+        Assert.DoesNotContain(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal), declared);
         foreach (var name in new[] { "z-file", "z-folder", "z-nothing" })
         {
             var item = receipt.Items.Single(item => item.Path == name);
@@ -161,6 +173,55 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
             (Utc(Modified), Utc(Modified), Utc(Modified)),
             (File.GetLastWriteTimeUtc(target), File.GetLastAccessTimeUtc(target), File.GetCreationTimeUtc(target)),
             "a link's times went through it");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own bits are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task OnWindows_ALinkWindowsCaptured_GetsItsAttributeBitsBack_AndABitNoRestoreSetsIsNamed_CompressionAmongThem()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", Deterministic(400, 5)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, FileAttributes = ArchiveBit };
+        source.Folders["data"] = new EntryMetadata { ModifiedAt = Modified, FileAttributes = FolderBit };
+        AddLink(source, "z-hidden", "data/target.bin", fileAttributes: ReparsePointBit | HiddenBit | SystemBit);
+        AddLink(source, "z-hidden-folder", "data", fileAttributes: FolderBit | ReparsePointBit | HiddenBit);
+        AddLink(source, "z-encrypted", "data/target.bin", fileAttributes: ReparsePointBit | HiddenBit | EncryptedBit);
+
+        // This target compresses files and folders, and nothing compresses a link.
+        AddLink(source, "z-compressed", "data/target.bin", fileAttributes: ReparsePointBit | CompressedBit);
+
+        var (_, declared, receipt, output) = await PublishAndRestoreAsync(source, 0xB4);
+
+        Assert.IsTrue(RestoreTargetProfile.ForLocalPlatform().SupportsCompression, "the premise: this target compresses");
+        var unset = Assert.ContainsSingle(declared.Where(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal)));
+        Assert.AreEqual("unset-file-attributes", unset.Capability);
+        Assert.Contains("2 symlink(s) include bits no restore sets: Compressed, Encrypted.", unset.Detail, StringComparison.Ordinal);
+        foreach (var name in new[] { "z-hidden", "z-hidden-folder" })
+        {
+            var item = receipt.Items.Single(item => item.Path == name);
+            Assert.AreEqual("restored", item.Outcome, name);
+            Assert.IsNull(item.Detail, name);
+            Assert.IsNull(item.NotApplied, name);
+        }
+
+        Assert.AreEqual(
+            FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint,
+            File.GetAttributes(Path.Combine(output, "z-hidden")) & Watched);
+        Assert.AreEqual(
+            FileAttributes.Directory | FileAttributes.Hidden | FileAttributes.ReparsePoint,
+            File.GetAttributes(Path.Combine(output, "z-hidden-folder")) & Watched);
+        var encrypted = receipt.Items.Single(item => item.Path == "z-encrypted");
+        Assert.AreEqual("file attribute(s) not applied: Encrypted (not set by a restore)", encrypted.Detail);
+        CollectionAssert.AreEqual(new[] { "file_attributes" }, encrypted.NotApplied!.ToArray());
+        Assert.AreEqual(FileAttributes.Hidden | FileAttributes.ReparsePoint, File.GetAttributes(Path.Combine(output, "z-encrypted")) & Watched);
+        Assert.AreEqual(
+            "file attribute(s) not applied: Compressed (not set by a restore)",
+            receipt.Items.Single(item => item.Path == "z-compressed").Detail);
+
+        Assert.AreEqual(FileAttributes.Archive, File.GetAttributes(Path.Combine(output, "data", "target.bin")) & Watched, "a link's bits went through it");
+        Assert.AreEqual(FileAttributes.Directory, File.GetAttributes(Path.Combine(output, "data")) & Watched, "a folder's link's bits went through it");
     }
 
     private static void AddLink(FakeFileSystemSource source, string path, string target, uint? fileAttributes) =>
@@ -203,7 +264,12 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         ClientVersion = "restore-windows-link-tests/1.0",
     };
 
-    private async Task<(RestorePlan Plan, RestoreReceipt Receipt, string Output)> PublishAndRestoreAsync(
+    /// <summary>
+    /// Backs <paramref name="source"/> up, plans its restore here, and runs
+    /// it, answering the plan, the metadata lines the plan declares over the
+    /// items' facts, the receipt, and where it landed.
+    /// </summary>
+    private async Task<(RestorePlan Plan, IReadOnlyList<MetadataDegradation> Declared, RestoreReceipt Receipt, string Output)> PublishAndRestoreAsync(
         FakeFileSystemSource source, byte seed)
     {
         var store = CreateStore();
@@ -221,6 +287,8 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"links-{seed:x2}.db"), Repo);
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, SnapshotOf(seed), string.Empty, target);
+        var declared = RestoreMetadata.Declare(
+            plan, (await RestoreBlobSet.ResolveAsync(catalogue, plan, store, Repo, keys, CancellationToken.None)).Facts, target);
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var output = Path.Combine(SpoolDirectory, $"restored-{seed:x2}");
@@ -233,6 +301,6 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
                 NowUnixMilliseconds = 1_722_700_000_000,
             },
             CancellationToken.None);
-        return (plan, receipt, output);
+        return (plan, declared, receipt, output);
     }
 }

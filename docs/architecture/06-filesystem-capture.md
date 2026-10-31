@@ -101,6 +101,8 @@ For each metadata class and target platform: **preserve** it, **degrade** it and
 
 > **2026-10 ([ADR-0181 Amendment 2](../adr/0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-2-2026-10--a-links-own-times-on-windows)).** A link made on Windows now gets its own modification, access and creation times back, through a handle opened on the link itself. Its attribute bits and descriptor are still reported, not restored.
 
+> **2026-10 ([ADR-0181 Amendment 3](../adr/0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-3-2026-10--a-links-own-attribute-bits-on-windows)).** Its attribute bits now come back too, through the same handle. Its descriptor is still reported, not restored.
+
 **Refuse** is reserved for cases where restoring would produce a file that is wrong in a way the user could not detect — for example, restoring a file whose security descriptor cannot be applied into a location where the default descriptor would grant broader access than the original. These are enumerated in the restore plan and require explicit acknowledgement.
 
 Everything a snapshot captured is preserved in the repository regardless of the restore target. Degradation is a property of a particular restore, not of the backup: the same snapshot restored to its original platform is lossless.
