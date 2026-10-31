@@ -13,7 +13,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// it. Establishes the direct-ship shape of FR-GC-009 (a destination offline
 /// beyond a sibling's retention window does not cause history to be lost
 /// from every replica silently) and exercises FR-GC-010's per-destination
-/// overrides against the sink.
+/// overrides against the sink. A sync beside a restore of the set holds
+/// its blobs as well, and still spares what a sibling is owed (ADR-0172
+/// Amendment 4).
 /// </summary>
 [TestClass]
 public sealed class DirectShipConvergeSpareTests : IDisposable
@@ -97,6 +99,41 @@ public sealed class DirectShipConvergeSpareTests : IDisposable
         Assert.AreEqual("complete", restored.Outcome);
         var recovered = Assert.ContainsSingle(Directory.GetFiles(output, "a.txt", SearchOption.AllDirectories));
         Assert.Contains("second content", await File.ReadAllTextAsync(recovered, Timeout), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Converge_BesideARestoreOfTheSet_StillSparesWhatASiblingIsOwed()
+    {
+        Directory.CreateDirectory(VaultA);
+        Directory.CreateDirectory(VaultB);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/a.txt", "first content");
+
+        await using var runtime = await StartAsync();
+        var setId = _harness.DocsSetId;
+        await BackUpAsync(runtime);
+        await SyncAllAsync(runtime, setId);
+
+        Directory.Move(VaultB, VaultBUnplugged);
+        _harness.WriteSourceFile("docs/a.txt", "second content");
+        await BackUpAsync(runtime);
+        _harness.WriteSourceFile("docs/a.txt", "third content");
+        await BackUpAsync(runtime);
+
+        // The hold beside a restore spares every blob; the snapshots vault-b
+        // is still owed must stay spared with it, not be traded for it.
+        runtime.RestoreRuns.Begin(new RestoreRunRecord
+        {
+            Run = "0123456789abcdef",
+            SetName = runtime.Configuration.BackupSets.Single().Name,
+            SnapshotId = new string('e', 32),
+            OutputDirectory = "/srv/restored",
+            BeganAt = 1_000,
+        });
+        await SyncAllAsync(runtime, setId);
+
+        var replicaA = Assert.ContainsSingle(Directory.GetDirectories(VaultA));
+        Assert.HasCount(2, SnapshotObjects(replicaA));
     }
 
     private int _runs;
