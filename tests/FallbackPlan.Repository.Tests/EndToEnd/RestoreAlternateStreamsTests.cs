@@ -24,7 +24,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// it stands and read from nowhere. Where the target keeps streams and
 /// writes no extended attributes of its own, as Windows does, a file's
 /// attributes are kept as streams of the same names (ADR-0177), and so are a
-/// folder's (ADR-0177 Amendment 2).
+/// folder's (ADR-0177 Amendment 2). Where the target writes attributes and
+/// keeps no streams, as Linux and macOS do, a file's streams are kept as
+/// attributes of the same names: Linux takes only those in its user
+/// namespace, and a stream the file's own captured attribute names is not
+/// written over it; each that does not land is named (ADR-0179).
 /// </summary>
 /// <remarks>
 /// Only Windows keeps alternate streams. Most cases run everywhere, against a
@@ -47,6 +51,14 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
 
     /// <summary>This machine's target, saying it writes alternate streams back.</summary>
     private static RestoreTargetProfile WritesStreams => RestoreTargetProfile.ForLocalPlatform() with { SupportsAlternateStreams = true };
+
+    /// <summary>This machine's target, saying it writes extended attributes and keeps no streams.</summary>
+    private static RestoreTargetProfile KeepsAttributes =>
+        RestoreTargetProfile.ForLocalPlatform() with { SupportsAlternateStreams = false, SupportsExtendedAttributes = true };
+
+    /// <summary>This machine's target, saying it keeps a file's streams in no form.</summary>
+    private static RestoreTargetProfile KeepsNone =>
+        RestoreTargetProfile.ForLocalPlatform() with { SupportsAlternateStreams = false, SupportsExtendedAttributes = false };
 
     [TestMethod]
     public async Task AFileCarryingStreams_HasEachWrittenBackOntoIt_AndIsRestored()
@@ -306,7 +318,7 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
 
         using var published = await PublishAsync(source, 0xC8);
 
-        var without = await CountedRestoreAsync(published, WritesStreams with { SupportsAlternateStreams = false }, "reads-without");
+        var without = await CountedRestoreAsync(published, KeepsNone, "reads-without");
         var with = await CountedRestoreAsync(published, WritesStreams, "reads-with");
 
         Assert.AreEqual(24, with.Held.Writes);
@@ -332,9 +344,129 @@ public sealed class RestoreAlternateStreamsTests : ArchiveTestHarness
     public void Profile_ForThisPlatform_WritesStreamsOnlyOnWindows()
     {
         Assert.AreEqual(OperatingSystem.IsWindows(), RestoreTargetProfile.ForLocalPlatform().SupportsAlternateStreams);
+        Assert.AreEqual(OperatingSystem.IsLinux(), RestoreTargetProfile.ForLocalPlatform().AttributesTakeNamespaces);
         Assert.IsTrue(RestoreMetadata.Applied(EntryKind.File, WritesStreams).HasFlag(CapturedMetadata.AlternateStreams));
         Assert.IsFalse(RestoreMetadata.Applied(
-            EntryKind.File, WritesStreams with { SupportsAlternateStreams = false }).HasFlag(CapturedMetadata.AlternateStreams));
+            EntryKind.File, WritesStreams with { SupportsAlternateStreams = false, SupportsExtendedAttributes = false })
+            .HasFlag(CapturedMetadata.AlternateStreams));
+
+        // Where the target writes attributes instead, they keep the streams
+        // (ADR-0179), on a platform with a call that writes them.
+        Assert.AreEqual(
+            ExtendedAttributes.CanSet,
+            RestoreMetadata.Applied(EntryKind.File, KeepsAttributes).HasFlag(CapturedMetadata.AlternateStreams));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task OnPosix_AFilesStreamInTheUserNamespace_IsKeptAsItsExtendedAttribute_AndTheFileIsRestored()
+    {
+        using var published = await PublishAsync(Carrier(Deterministic(4_096, 11), ("user.origin", Notes)), 0xD1);
+
+        var (receipt, output) = await RestoreAsync(published, published.Plan(KeepsAttributes), KeepsAttributes, streams: null, "as-attributes");
+
+        var item = Item(receipt);
+        Assert.AreEqual("restored", item.Outcome, item.Detail);
+        SequenceAssert.AreEqual(Notes, Xattr.Get(Path.Combine(output, "data", "streams.bin"), "user.origin"));
+        Assert.DoesNotContain("alternate_streams", item.NotApplied ?? []);
+        Assert.DoesNotContain(degradation => degradation.Capability == "alternate-streams", published.Plan(KeepsAttributes).Degradations);
+    }
+
+    [TestMethod]
+    public async Task AFilesStreams_OnATargetKeepingThemInNoForm_AreNamedAsNotWritten_AndTheFileIsDegraded()
+    {
+        using var published = await PublishAsync(Carrier(Deterministic(4_096, 14), ("user.origin", Notes)), 0xD0);
+
+        var (receipt, output) = await RestoreAsync(published, published.Plan(KeepsNone), KeepsNone, streams: null, "no-form");
+
+        var item = Item(receipt);
+        Assert.AreEqual("degraded", item.Outcome);
+        Assert.Contains("not written back on this target", item.Detail!, StringComparison.Ordinal);
+        Assert.Contains("alternate_streams", item.NotApplied ?? []);
+        Assert.Contains(degradation => degradation.Capability == "alternate-streams", published.Plan(KeepsNone).Degradations);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.IsNull(Xattr.Get(Path.Combine(output, "data", "streams.bin"), "user.origin"));
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task OnPosix_StreamsKeptAsAttributes_AreReadAheadWithTheSegments_NotAFetchAStream()
+    {
+        // Each file's stream is its own, and too large for the reader to
+        // read around from one fetch, so one not read ahead is a fetch of its
+        // own.
+        var source = new FakeFileSystemSource();
+        for (var index = 0; index < 24; index++)
+        {
+            var file = source.AddFile($"data/file-{index:d2}.bin", Deterministic(4_096, (byte)index), fileId: (ulong)(9_300 + index));
+            file.AlternateStreams["user.origin"] = Deterministic(2_048, (byte)(100 + index));
+        }
+
+        using var published = await PublishAsync(source, 0xCF);
+
+        var without = await CountedRestoreAsync(published, KeepsNone, "attribute-reads-without");
+        var with = await CountedRestoreAsync(published, KeepsAttributes, "attribute-reads-with");
+
+        Assert.IsLessThanOrEqualTo(without.Reads + 2, with.Reads, $"{without.Reads} store reads without the streams, {with.Reads} with them");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux takes a file's own attribute only in its user namespace")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task OnLinux_AStreamOutsideTheUserNamespace_IsNotKept_AndTheFileIsDegraded_NamingIt()
+    {
+        using var published = await PublishAsync(
+            Carrier(Deterministic(4_096, 12), ("Zone.Identifier", Zone), ("user.origin", Notes)), 0xD2);
+
+        var (receipt, output) = await RestoreAsync(published, published.Plan(KeepsAttributes), KeepsAttributes, streams: null, "outside-user");
+
+        var item = Item(receipt);
+        Assert.AreEqual("degraded", item.Outcome);
+        Assert.Contains("Zone.Identifier", item.Detail!, StringComparison.Ordinal);
+        Assert.Contains("user namespace", item.Detail!, StringComparison.Ordinal);
+        Assert.Contains("alternate_streams", item.NotApplied ?? []);
+        // The rest are kept.
+        SequenceAssert.AreEqual(Notes, Xattr.Get(Path.Combine(output, "data", "streams.bin"), "user.origin"));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.MacOs, "macOS takes an attribute of any name")]
+    [PlatformTrait(TestPlatforms.MacOs)]
+    public async Task OnMacOs_AStreamOfAnyName_IsKeptAsAnAttribute()
+    {
+        using var published = await PublishAsync(Carrier(Deterministic(4_096, 15), ("Zone.Identifier", Zone)), 0xCD);
+
+        var (receipt, output) = await RestoreAsync(published, published.Plan(KeepsAttributes), KeepsAttributes, streams: null, "any-name");
+
+        Assert.AreEqual("restored", Item(receipt).Outcome, Item(receipt).Detail);
+        SequenceAssert.AreEqual(Zone, Xattr.Get(Path.Combine(output, "data", "streams.bin"), "Zone.Identifier"));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task OnPosix_AStreamWhoseNameTheFilesOwnAttributeHas_IsNotWrittenOverIt_AndIsNamed()
+    {
+        var source = new FakeFileSystemSource();
+        var carrier = source.AddFile(CarrierPath, Deterministic(4_096, 13), fileId: 9_102);
+        carrier.Metadata = new EntryMetadata
+        {
+            ModifiedAt = CapturedModifiedAt,
+            ExtendedAttributes = [new ExtendedAttributeEntry("user.tag"u8.ToArray(), "own"u8.ToArray())],
+        };
+        carrier.AlternateStreams["user.tag"] = Notes;
+        using var published = await PublishAsync(source, 0xCE);
+
+        var (receipt, output) = await RestoreAsync(published, published.Plan(KeepsAttributes), KeepsAttributes, streams: null, "clash");
+
+        var item = Item(receipt);
+        Assert.AreEqual("degraded", item.Outcome);
+        Assert.Contains("'user.tag'", item.Detail!, StringComparison.Ordinal);
+        SequenceAssert.AreEqual("own"u8.ToArray(), Xattr.Get(Path.Combine(output, "data", "streams.bin"), "user.tag"));
     }
 
     [TestMethod]

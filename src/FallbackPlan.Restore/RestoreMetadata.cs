@@ -58,6 +58,12 @@ namespace FallbackPlan.Restore;
 /// the target knows each (ADR-0176 Amendment 3), or null where it carries
 /// none.
 /// </param>
+/// <param name="StreamsOutsideUserNamespace">
+/// How many of its captured alternate streams have no name in the user
+/// namespace (<see cref="MetadataRules.StreamsOutsideUserNamespace"/>), which
+/// a target that keeps streams as attributes and takes names only in a
+/// namespace does not keep (ADR-0179).
+/// </param>
 /// <param name="RefusedAttributeNames">
 /// How many of its captured extended attributes are not kept as streams for
 /// their names (<see cref="MetadataRules.RefusedAttributeNames"/>), which the
@@ -80,7 +86,8 @@ public sealed record RestoreItemFacts(
     string? DescriptorOwner = null,
     int RefusedAttributeNames = 0,
     IReadOnlyDictionary<string, uint>? Access = null,
-    IReadOnlyList<string>? AuditedAccounts = null);
+    IReadOnlyList<string>? AuditedAccounts = null,
+    int StreamsOutsideUserNamespace = 0);
 
 /// <summary>
 /// The files and the folders a restore would open wider than they were
@@ -193,7 +200,9 @@ public static class RestoreMetadata
             applied |= CapturedMetadata.ExtendedAttributes;
         }
 
-        if (kind == EntryKind.File && target.SupportsAlternateStreams)
+        if (kind == EntryKind.File
+            && (target.SupportsAlternateStreams
+                || MetadataRules.KeepsStreamsAsAttributes(kind, target.SupportsAlternateStreams, writesAttributes)))
         {
             applied |= CapturedMetadata.AlternateStreams;
         }
@@ -355,6 +364,7 @@ public static class RestoreMetadata
         var unsetBits = new Tally();
         var unsetMask = 0u;
         var refusedStreams = new Tally();
+        var streamsOutside = new Tally();
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -484,11 +494,25 @@ public static class RestoreMetadata
                 unsetMask |= bits;
             }
 
-            if ((applied & known.Captured & CapturedMetadata.AlternateStreams) != 0 && known.RefusedStreams > 0)
+            if ((applied & known.Captured & CapturedMetadata.AlternateStreams) != 0
+                && target.SupportsAlternateStreams
+                && known.RefusedStreams > 0)
             {
                 applied &= ~CapturedMetadata.AlternateStreams;
                 apart |= CapturedMetadata.AlternateStreams;
                 refusedStreams.Add(item.Kind);
+            }
+
+            // Kept as attributes, a stream's name is judged as Linux judges
+            // an attribute's, not as a stream's path.
+            if ((applied & known.Captured & CapturedMetadata.AlternateStreams) != 0
+                && !target.SupportsAlternateStreams
+                && target.AttributesTakeNamespaces
+                && known.StreamsOutsideUserNamespace > 0)
+            {
+                applied &= ~CapturedMetadata.AlternateStreams;
+                apart |= CapturedMetadata.AlternateStreams;
+                streamsOutside.Add(item.Kind);
             }
 
             var missing = known.Captured & ~(applied | given | apart);
@@ -605,6 +629,10 @@ public static class RestoreMetadata
             $"Alternate streams captured on {refusedStreams} include one whose name no stream may be written "
             + $"under: joined to the file's path, it would name another file or the file itself. That stream will "
             + $"not be written, and the file will be restored degraded."));
+        Add("alternate-stream-attribute-names", streamsOutside, string.Create(CultureInfo.InvariantCulture,
+            $"Alternate streams captured on {streamsOutside} include one with no name in the user namespace, the "
+            + $"only one Linux gives a file's own attributes, so it will not be kept as an attribute, and the file "
+            + $"will be restored degraded."));
         Add("unset-file-attributes", unsetBits, string.Create(CultureInfo.InvariantCulture,
             $"File attributes captured on {unsetBits} include bits no restore sets: "
             + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask, target.SupportsCompression))}. Those will not be "
