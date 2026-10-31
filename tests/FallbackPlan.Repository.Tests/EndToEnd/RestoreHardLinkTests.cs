@@ -32,7 +32,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// Each name meets the existing-file policy at its own destination, as a
 /// file would, and its receipt item names the one it shares a file with.
 /// The shared file's metadata is the file's: written once, with the first
-/// name, and listed the same for every name.
+/// name, and listed the same for every name. So are the flags it carried,
+/// which no restore sets (ADR-0180 Amendment 1).
 /// </para>
 /// </remarks>
 [TestClass]
@@ -83,6 +84,27 @@ public sealed class RestoreHardLinkTests : ArchiveTestHarness
         var first = Item(receipt, "docs/a.bin");
         Assert.IsNotNull(first.NotApplied);
         CollectionAssert.AreEqual(first.NotApplied.ToArray(), Item(receipt, "docs/b.bin").NotApplied!.ToArray());
+    }
+
+    [TestMethod]
+    public async Task Receipt_ALinkedName_NamesTheFlagsTheSharedFileDidNotGet_AsTheFirstNameDoes()
+    {
+        var source = new FakeFileSystemSource();
+        var content = Deterministic(5_000, 12);
+        var shared = new EntryMetadata { ModifiedAt = 1_722_000_000_000 };
+        foreach (var name in new[] { "docs/a.bin", "docs/b.bin" })
+        {
+            var node = source.AddFile(name, content, linkCount: 2, fileId: Shared);
+            node.Metadata = shared;
+            node.Diagnostics = ["file-flags: no-dump"];
+        }
+
+        var (receipt, _) = await PublishAndRestoreAsync(source, 0xEC, RestoreTargetProfile.ForLocalPlatform());
+
+        var linked = Item(receipt, "docs/b.bin");
+        Assert.AreEqual("docs/a.bin", linked.LinkedTo, "the premise: the second name is a link to the first");
+        Assert.AreEqual("file flag(s) not applied: no-dump (not set by a restore)", Item(receipt, "docs/a.bin").Detail);
+        Assert.AreEqual(Item(receipt, "docs/a.bin").Detail, linked.Detail);
     }
 
     [TestMethod]
