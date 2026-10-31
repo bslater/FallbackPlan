@@ -93,6 +93,8 @@ The record left the standalone recovery tool writing no streams. It counted each
 - **a stream that does not land is noted, saying which and why,** and counted not applied, and the file still restores. A name no stream can have, a record in no readable blob or one that will not read, and a write the output refuses each do so;
 - **off Windows the tool asks the platform for no stream,** and counts them not applied, as before.
 
+  > **2026-10 ([ADR-0179 Amendment 1](0179-a-restore-on-linux-and-macos-keeps-a-files-alternate-streams-as-extended-attributes.md#amendment-1-2026-10--the-recovery-tool-and-the-single-file-restore-keep-streams-as-attributes-too)).** On Linux and macOS the tool now keeps them as attributes of their names instead.
+
 The tool has no resume, so it does not look for a stream already standing as captured.
 
 **Built:** `Recovery/RecoverySession`; `Recovery/RecoveryNote`:
@@ -115,6 +117,8 @@ Amendment 1 left the command line's `restore-file` writing no streams. It writes
 - **the recovery tool reads a stream from the record the blob reader authenticates and checks** (Amendment 1), and says what the helper answers in its notes;
 - **`restore-file` reads a stream through the repository reader,** which proves it against its identifier as it proves a segment, once the file has landed and before its times. Each stream that does not land is said in a line of the command's output, and its streams are listed not applied; where every one lands they are not;
 - **where the platform keeps no streams, `restore-file` asks for none,** and lists them not applied as before.
+
+  > **2026-10 ([ADR-0179 Amendment 1](0179-a-restore-on-linux-and-macos-keeps-a-files-alternate-streams-as-extended-attributes.md#amendment-1-2026-10--the-recovery-tool-and-the-single-file-restore-keep-streams-as-attributes-too)).** On Linux and macOS it now keeps them as attributes of their names, through a helper beside this one that picks the platform's form.
 
 The executor keeps its own write, which also proves a stream already standing as captured before it reads one (§3), for the resume the other two do not have.
 
@@ -143,3 +147,4 @@ Off Windows no capture carries a stream, so nothing there reaches `restore-file`
 | 2026-10 | Amended | Amendment 2: `restore-file` writes a file's streams back by the same rule, through one helper the recovery tool now shares, and says each that does not land. `Domain/AlternateStreams`; `Cli/CliApplication`; `Domain.Tests/AlternateStreamsTests`; `Cli.Tests/InspectionCommandTests` |
 | 2026-10 | Amended | Amendment 3: the plan names a file whose stream has a name no stream may be written under, from the count each item's facts now carry. `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Accepted | [ADR-0177](0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md): a file's extended attributes are kept on Windows as streams of their names, judged by this record's rule for a stream's name; one named as the file's own stream is not written over it. |
+| 2026-10 | Accepted (related) | [ADR-0179 Amendment 1](0179-a-restore-on-linux-and-macos-keeps-a-files-alternate-streams-as-extended-attributes.md#amendment-1-2026-10--the-recovery-tool-and-the-single-file-restore-keep-streams-as-attributes-too): off Windows, the recovery tool and `restore-file` keep a file's streams as attributes of their names, through a Domain helper that picks the platform's form and calls this record's on Windows. |
