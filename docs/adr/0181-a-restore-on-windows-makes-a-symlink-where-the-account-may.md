@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: a symlink comes back as a link on Windows where the account may make one); FR-RST-003 (amended: the plan says links will be skipped only where they will be)
+**Requirements:** FR-RST-004 (amended: a symlink comes back as a link on Windows where the account may make one); FR-RST-003 (amended: the plan says links will be skipped only where they will be); FR-RST-005 (amended by [Amendment 1](#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too): so does the recovery tool)
 **Related:** [ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md) (a link's own metadata, which Windows did not arise for), [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) §4 and [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (every path a restore writes is placed through no link out of it), [ADR-0155](0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md) (the recovery tool makes links where they need no privilege), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (symbolic links: "preserve, privilege permitting" on Windows)
 
 **Built:**
@@ -57,6 +57,8 @@ Nothing more than before. No call on Windows sets a link's own times, and its at
 ## What this does not do
 
 - **The recovery tool.** It still makes no link on Windows (ADR-0155). That is the next record's.
+
+  > **2026-10: taken up by [Amendment 1](#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too).**
 - **A link's own times on Windows.** They would need a call opened on the link itself, which nothing here makes.
 - **A junction.** A directory junction captured on Windows comes back as a folder's symbolic link to the same target, not as a junction.
 
@@ -66,8 +68,26 @@ Nothing more than before. No call on Windows sets a link's own times, and its at
 - **Leave a POSIX target's separators as they are.** Rejected. The link would be made and resolve to nothing.
 - **Decide a folder's link by what stands at the write alone.** Rejected. Links sort before what they name as often as after, so a link made before its folder would be a file's.
 
+## Amendment 1 (2026-10) — the recovery tool makes a link on Windows too
+
+The record left the recovery tool as ADR-0155 had it: it made a link wherever links need no privilege, every platform but Windows, and skipped one there with a note. A tree recovered on Windows by an account that may make links lost every link the engine's restore of it would have made.
+
+**Decision.** The tool makes a link where the account may, by the record's rule:
+
+- **where the account may.** It asks `SymbolicLinks.CanCreate`, as the local profile does, and skips a link with its note, as before, where the answer is no;
+- **a folder's link or a file's,** as the record says, by the link's captured bits where Windows captured it, and otherwise by what it names: a folder of the same tree, which it may make after the link, or one that stands. The tool walks one tree at a time, so a folder elsewhere in the snapshot not yet made is not known, and a link naming one is a file's;
+- **with Windows' separators.**
+
+What a link names is its target from the folder it is in (`SymbolicLinks.PathNamed`), which the executor now judges by too.
+
+**Built:** `Domain/SymbolicLinks`; `Recovery/RecoverySession`; `Restore/RestoreExecutor`:
+
+- `Domain.Tests/SymbolicLinksTests`: what a link names is its target from the link's folder, or where a target from the root says;
+- `Repository.Tests/RecoveryLinkTests`: on Windows a link is made where the account may and skipped with its note where it may not; a link naming a folder of its tree is a folder's link that resolves, one naming a file has Windows' separators and resolves, and one Windows captured as a folder's is made one.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A restore on Windows makes a link where the account may, a folder's or a file's as its captured bits or what it names say, with Windows' separators; the plan says links will be skipped only where they will be. `Domain/SymbolicLinks`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Domain.Tests/SymbolicLinksTests`; `Repository.Tests/RestoreWindowsLinkTests` |
+| 2026-10 | Accepted (Amendment 1) | The recovery tool makes a link on Windows where the account may, a folder's or a file's by its captured bits or by what it names in its tree or on disk, with Windows' separators. `Domain/SymbolicLinks`; `Recovery/RecoverySession`; `Restore/RestoreExecutor`; `Domain.Tests/SymbolicLinksTests`; `Repository.Tests/RecoveryLinkTests` |
