@@ -248,6 +248,7 @@ Status per record. **A hundred and seventy of the hundred and seventy-eight are 
 | [0180](adr/0180-capture-names-the-file-flags-it-does-not-keep.md) | Capture names the file flags it does not keep: Linux's and macOS's immutable, append-only, no-dump, compressed, encrypted and hidden flags, read from each platform's stat and named among a file's capture diagnostics, since no format key keeps them |
 | [0181](adr/0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md) | A restore on Windows makes a symlink where the account may: asked once by making one, a folder's or a file's link as its captured bits or what it names say, with Windows' separators; the plan says links will be skipped only where they will be |
 | [0182](adr/0182-capture-reads-a-links-own-security-descriptor-on-windows.md) | Capture reads a link's own security descriptor on Windows: through a handle opened on the link itself, never what it points at, so a link's manifest names only its own accounts and a link to nothing still carries one |
+| [0183](adr/0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) | Capture reads a reparse point as a link only where its tag names one: a symbolic link or a mount point is a link, any other is the file or folder a filter keeps, read with its content, and one whose tag cannot be read is a link, never followed |
 
 Template: [0000](adr/0000-template.md)
 
