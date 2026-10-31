@@ -99,6 +99,8 @@ For each metadata class and target platform: **preserve** it, **degrade** it and
 
 > **2026-10 ([ADR-0181](../adr/0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).** On Windows a symbolic link is now preserved where the account may make one, privilege permitting as the matrix says: a folder's or a file's link as it was captured, or as what it names says, with Windows' separators. Where the account may not, links are still skipped and the plan says so. A link's own metadata there is still reported.
 
+> **2026-10 ([ADR-0181 Amendment 2](../adr/0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-2-2026-10--a-links-own-times-on-windows)).** A link made on Windows now gets its own modification, access and creation times back, through a handle opened on the link itself. Its attribute bits and descriptor are still reported, not restored.
+
 **Refuse** is reserved for cases where restoring would produce a file that is wrong in a way the user could not detect — for example, restoring a file whose security descriptor cannot be applied into a location where the default descriptor would grant broader access than the original. These are enumerated in the restore plan and require explicit acknowledgement.
 
 Everything a snapshot captured is preserved in the repository regardless of the restore target. Degradation is a property of a particular restore, not of the backup: the same snapshot restored to its original platform is lossless.

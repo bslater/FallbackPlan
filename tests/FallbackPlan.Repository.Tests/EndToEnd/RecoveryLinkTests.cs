@@ -20,7 +20,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// noted as a file's are (ADR-0180 Amendment 2). On Windows the tool makes
 /// a link where the account may, a folder's or a file's as the executor
 /// makes it, with Windows' separators, and skips it with a note where it
-/// may not (ADR-0181 Amendment 1).
+/// may not (ADR-0181 Amendment 1), and gives it its own times back there too
+/// (ADR-0181 Amendment 2).
 /// </summary>
 /// <remarks>
 /// Whatever the output holds at a file's or a link's name and will not give
@@ -247,6 +248,33 @@ public sealed class RecoveryLinkTests : IDisposable
         Assert.IsTrue(
             (File.GetAttributes(Path.Combine(output, "a-windows-folder")) & FileAttributes.Directory) != 0,
             "a link Windows captured as a folder's is made one");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own times are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task RecoveryRestore_OnWindows_ALinkLeadingOutOfTheOutput_GetsItsOwnTimesBack_AndNothingGoesThroughIt()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var outside = Path.Combine(Directory.CreateDirectory(Path.Combine(_root, "outside")).FullName, "kept.txt");
+        File.WriteAllBytes(outside, [9, 9, 9]);
+        File.SetLastWriteTimeUtc(outside, Utc(Before));
+        File.SetLastAccessTimeUtc(outside, Utc(Before));
+        var source = new FakeFileSystemSource();
+        source.AddNode(Link("escape", outside) with
+        {
+            Metadata = new EntryMetadata { ModifiedAt = LinkModified, AccessedAt = LinkAccessed },
+        });
+        var output = Path.Combine(_root, "restored");
+
+        var report = await RestoreIntoAsync(source, output);
+
+        var link = new FileInfo(Path.Combine(output, "escape"));
+        Assert.AreEqual((Utc(LinkModified), Utc(LinkAccessed)), (link.LastWriteTimeUtc, link.LastAccessTimeUtc));
+        Assert.AreEqual(Utc(Before), File.GetLastWriteTimeUtc(outside), "a link's times went through it");
+        Assert.AreEqual(Utc(Before), File.GetLastAccessTimeUtc(outside), "a link's times went through it");
+        CollectionAssert.AreEqual(new byte[] { 9, 9, 9 }, File.ReadAllBytes(outside));
+        Assert.AreEqual(1, report.Restored);
     }
 
     /// <inheritdoc />

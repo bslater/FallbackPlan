@@ -16,7 +16,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// longer says links will be skipped there (FR-RST-003). A link to a folder
 /// is a folder's link: by its captured attribute bits where Windows captured
 /// it, and by what it names otherwise. Its target is written with Windows'
-/// separators.
+/// separators. A link gets its own modification, access and creation times
+/// back, onto the link and never through it, and the rule the plan and the
+/// receipt hold a link to grants on every platform what that platform sets
+/// on one (ADR-0181 Amendment 2).
 /// </summary>
 /// <remarks>
 /// Windows makes a link only for an account that holds the privilege to, or
@@ -30,9 +33,43 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
     private const uint ReparsePointBit = 0x400;
     private const ulong Modified = 1_722_000_000_000;
 
+    /// <summary>When a link was modified: 2021-03-04.</summary>
+    private const ulong LinkModified = 1_614_834_367_890;
+
+    /// <summary>When a link was last read: 2022-04-15.</summary>
+    private const ulong LinkAccessed = 1_650_000_000_000;
+
+    /// <summary>When a link was made: 2020-05-20.</summary>
+    private const ulong LinkCreated = 1_590_000_000_000;
+
     [TestMethod]
     public void TheLocalProfile_MakesLinks_WhereTheAccountMayMakeOne() =>
         Assert.AreEqual(SymbolicLinks.CanCreate, RestoreTargetProfile.ForLocalPlatform().SupportsSymlinks);
+
+    [TestMethod]
+    public void TheRule_ForALink_GrantsWhatThisPlatformSetsOnALink_AndNeverItsWindowsAttributes()
+    {
+        // A target that keeps everything, so the platform alone decides.
+        var everything = RestoreTargetProfile.ForLocalPlatform() with
+        {
+            SupportsSymlinks = true,
+            SupportsPosixMetadata = true,
+            SupportsCreationTimes = true,
+            SupportsFileAttributes = true,
+            SupportsSecurityDescriptors = true,
+            SupportsAlternateStreams = true,
+        };
+
+        var applied = RestoreMetadata.Applied(EntryKind.Symlink, everything);
+
+        Assert.AreEqual(SymlinkMetadata.CanSetTimes, applied.HasFlag(CapturedMetadata.ModifiedAt | CapturedMetadata.AccessedAt));
+        Assert.AreEqual(SymlinkMetadata.CanSetCreationTime, applied.HasFlag(CapturedMetadata.CreatedAt));
+        Assert.AreEqual(!OperatingSystem.IsWindows(), applied.HasFlag(CapturedMetadata.PosixMode), "Windows writes no permissions");
+        Assert.AreEqual(
+            CapturedMetadata.None,
+            applied & (CapturedMetadata.FileAttributes | CapturedMetadata.SecurityDescriptor | CapturedMetadata.AlternateStreams),
+            "a link's attribute bits, descriptor and streams are written onto nothing");
+    }
 
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "only Windows decides whether a link may be made")]
@@ -86,14 +123,59 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
             "and one it captured as a file's is made one, whatever it names here");
     }
 
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own times are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task OnWindows_ALink_GetsItsOwnTimesBack_AndWhatItPointsAtKeepsItsOwn()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var times = new EntryMetadata { ModifiedAt = LinkModified, AccessedAt = LinkAccessed, CreatedAt = LinkCreated };
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", Deterministic(500, 4)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, AccessedAt = Modified, CreatedAt = Modified };
+        source.Folders["data"] = new EntryMetadata { ModifiedAt = Modified, CreatedAt = Modified };
+
+        // Each sorts after the file it names, so a write that went through a
+        // link would land on a file already given its own times.
+        AddLink(source, "z-file", "data/target.bin", times);
+        AddLink(source, "z-folder", "data", times);
+        AddLink(source, "z-nothing", "not-there.bin", times);
+
+        var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB3);
+
+        Assert.DoesNotContain(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal), plan.Degradations);
+        foreach (var name in new[] { "z-file", "z-folder", "z-nothing" })
+        {
+            var item = receipt.Items.Single(item => item.Path == name);
+            Assert.AreEqual("restored", item.Outcome, name);
+            Assert.IsNull(item.NotApplied, name);
+            FileSystemInfo link = name == "z-folder" ? new DirectoryInfo(Path.Combine(output, name)) : new FileInfo(Path.Combine(output, name));
+            Assert.AreEqual(
+                (Utc(LinkModified), Utc(LinkAccessed), Utc(LinkCreated)),
+                (link.LastWriteTimeUtc, link.LastAccessTimeUtc, link.CreationTimeUtc),
+                name);
+        }
+
+        var target = Path.Combine(output, "data", "target.bin");
+        Assert.AreEqual(
+            (Utc(Modified), Utc(Modified), Utc(Modified)),
+            (File.GetLastWriteTimeUtc(target), File.GetLastAccessTimeUtc(target), File.GetCreationTimeUtc(target)),
+            "a link's times went through it");
+    }
+
     private static void AddLink(FakeFileSystemSource source, string path, string target, uint? fileAttributes) =>
+        AddLink(source, path, target, new EntryMetadata { ModifiedAt = Modified, FileAttributes = fileAttributes });
+
+    private static void AddLink(FakeFileSystemSource source, string path, string target, EntryMetadata metadata) =>
         source.AddNode(new FakeFileSystemSource.Node
         {
             RelativePath = path,
             Kind = ScanEntryKind.Symlink,
             LinkTarget = System.Text.Encoding.UTF8.GetBytes(target),
-            Metadata = new EntryMetadata { ModifiedAt = Modified, FileAttributes = fileAttributes },
+            Metadata = metadata,
         });
+
+    private static DateTime Utc(ulong milliseconds) => DateTimeOffset.FromUnixTimeMilliseconds((long)milliseconds).UtcDateTime;
 
     private static byte[] SnapshotOf(byte seed) => Enumerable.Repeat(seed, 16).ToArray();
 
