@@ -103,6 +103,8 @@ An empty `windows_security_descriptor` is no descriptor, since a self-relative d
 
 Key 7 holds the owner, the group and the DACL, and the audit list (SACL) as well where the capturing account held SeSecurityPrivilege ([ADR-0176 Amendment 3](../../docs/adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md#amendment-3-2026-10--an-audit-list-comes-back-where-the-account-holds-the-security-privilege)). A reader MUST NOT take a descriptor without one to mean the entry was audited for no one. An audit list with no entries is none.
 
+> **2026-10 ([ADR-0182](../../docs/adr/0182-capture-reads-a-links-own-security-descriptor-on-windows.md)).** A link's key 7 is the link's own descriptor, read without following it. A writer before this record could have written a link's target's.
+
 > **Erratum (phase 1).** Several shapes in §4 and §4.1 were unassigned
 > until the first production writer needed them. Pending a normative edit,
 > [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) pins them:
