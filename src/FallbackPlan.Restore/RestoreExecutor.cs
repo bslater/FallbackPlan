@@ -935,9 +935,22 @@ public sealed class RestoreExecutor(
             return found;
         }
 
+        // Each name the run has landed, taken up as the next item begins, so
+        // a volume that takes two of the snapshot's names for one is met
+        // with what landed there named (ADR-0170 Amendment 3).
+        var landedNames = new NamesLanded();
+        var noted = 0;
         for (var index = 0; index < plan.Items.Count; index++)
         {
             var item = plan.Items[index];
+            for (; noted < items.Count; noted++)
+            {
+                if (items[noted] is { Outcome: "restored" or "degraded", WrittenAs: null } landed)
+                {
+                    landedNames.Add(landed.Path);
+                }
+            }
+
             // Cooperative stop, not an exception: break so the receipt is still
             // produced and Aggregate can see fewer items than planned and
             // report Cancelled (architecture 08 §3's outcome, previously
@@ -1049,6 +1062,24 @@ public sealed class RestoreExecutor(
 
             var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+
+            // A volume that takes two of the snapshot's names for one finds
+            // the first standing where the second lands. That is the run's
+            // own file, restored and counted, and no policy for somebody
+            // else's file is to move it, replace it or fail over it unnamed
+            // (ADR-0170 Amendment 3). Under rename the second lands beside
+            // it, as beside anyone's.
+            if (options.ExistingDestination != ExistingDestinationPolicy.WriteBeside
+                && manifest.EntryKind is EntryKind.File or EntryKind.Symlink
+                && landedNames.TakenForOne(item.Path, Occupied(destination), () => ListedAsWritten(destination)) is { } takenFor)
+            {
+                items.Add(new ReceiptItem
+                {
+                    Path = item.Path, Outcome = "failed", Bytes = 0,
+                    Detail = $"not restored: the target takes this name and {takenFor} for one, and this run restored {takenFor} there, which keeps what it landed",
+                });
+                continue;
+            }
 
             switch (manifest.EntryKind)
             {
@@ -1970,6 +2001,29 @@ public sealed class RestoreExecutor(
     }
 
     /// <summary>The receipt's repository-relative rendering of a beside landing.</summary>
+    /// <summary>Whether anything stands at <paramref name="path"/>: a file, a folder, or a link wherever it leads.</summary>
+    private static bool Occupied(string path) =>
+        File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget is not null;
+
+    /// <summary>
+    /// Whether the folder of <paramref name="destination"/> lists an entry
+    /// under its own name, as written. A folder that cannot be listed is
+    /// taken to, so the policy meets what stands there as it did.
+    /// </summary>
+    private static bool ListedAsWritten(string destination)
+    {
+        var name = Path.GetFileName(destination);
+        try
+        {
+            return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(destination)!)
+                .Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
     private static string BesidePath(string itemPath, string landing)
     {
         var leaf = Path.GetFileName(landing);

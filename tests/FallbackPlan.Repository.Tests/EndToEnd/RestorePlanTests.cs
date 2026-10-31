@@ -33,7 +33,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a case-insensitive target, and by Unicode normalisation only where the
 /// target ignores it, as macOS does and Windows does not, so a name's
 /// composed and decomposed forms each restore with their own content on
-/// Windows and Linux (ADR-0170 Amendment 2). The three
+/// Windows and Linux (ADR-0170 Amendment 2). Where the volume a run writes
+/// to takes two of a snapshot's names for one, whatever the plan judged, the
+/// second never displaces, replaces or fails vaguely over the first: it fails
+/// naming the name the run restored there, which keeps its own content, and
+/// under rename it lands beside it (FR-RST-005; ADR-0170 Amendment 3). The three
 /// selectors that exist — snapshot, path, destination — are exercised end to
 /// end; device, time and file-version selection is phase-2 work that has not
 /// been built, so FR-RST-001 is covered in part and says so.
@@ -236,6 +240,116 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         Assert.IsEmpty(receipt.Displaced);
         SequenceAssert.AreEqual(composedContent, File.ReadAllBytes(Path.Combine(receipt.WrittenTo, "names", "caf\u00E9.txt")));
         SequenceAssert.AreEqual(decomposedContent, File.ReadAllBytes(Path.Combine(receipt.WrittenTo, "names", "cafe\u0301.txt")));
+    }
+
+    [TestMethod]
+    [DataRow(ExistingDestinationPolicy.Preserve)]
+    [DataRow(ExistingDestinationPolicy.Replace)]
+    [DataRow(ExistingDestinationPolicy.Fail)]
+    public async Task RestoreExecution_TwoNamesTheVolumeTakesForOne_TheSecondFailsNamingTheFirst_WhichKeepsItsContent(
+        ExistingDestinationPolicy policy)
+    {
+        var (receipt, contents) = await RestoreNamesAVolumeMayFoldAsync(0xB3, policy);
+
+        // Judged by the volume the run wrote to, which is the test's own:
+        // Windows' and macOS's fold case, macOS's normalisation too, and
+        // Linux's neither.
+        var foldsCase = VolumeFolds("Probe.txt", "probe.txt");
+        var foldsForm = VolumeFolds("caf\u00E9.txt", "cafe\u0301.txt");
+        AssertOneLandedPerName(receipt, contents, foldsCase, "names/Notes.txt", "names/notes.txt");
+        AssertOneLandedPerName(receipt, contents, foldsForm, Composed, Decomposed);
+        Assert.IsEmpty(receipt.Displaced, "nothing the run restored is moved aside by it");
+        Assert.AreEqual(foldsCase || foldsForm ? RestoreOutcome.Failed : RestoreOutcome.Complete, receipt.Outcome);
+    }
+
+    [TestMethod]
+    public async Task RestoreExecution_TwoNamesTheVolumeTakesForOne_UnderRename_EachLandsWithItsOwnContent()
+    {
+        var (receipt, contents) = await RestoreNamesAVolumeMayFoldAsync(0xB4, ExistingDestinationPolicy.WriteBeside);
+
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.IsEmpty(receipt.Displaced);
+        foreach (var item in receipt.Items.Where(item => contents.ContainsKey(item.Path)))
+        {
+            Assert.AreEqual("restored", item.Outcome, item.Detail);
+            SequenceAssert.AreEqual(
+                contents[item.Path], File.ReadAllBytes(Path.Combine(receipt.WrittenTo, item.WrittenAs ?? item.Path)));
+        }
+    }
+
+    /// <summary>
+    /// Restores a snapshot holding two names that differ only in case and two
+    /// that differ only in normalisation, under <paramref name="policy"/>, to
+    /// this test's volume.
+    /// </summary>
+    private async Task<(RestoreReceipt Receipt, Dictionary<string, byte[]> Contents)> RestoreNamesAVolumeMayFoldAsync(
+        byte seed, ExistingDestinationPolicy policy)
+    {
+        var contents = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            ["names/Notes.txt"] = Deterministic(4_096, 8),
+            ["names/notes.txt"] = Deterministic(4_096, 9),
+            [Composed] = Deterministic(4_096, 10),
+            [Decomposed] = Deterministic(4_096, 11),
+        };
+        var source = new FakeFileSystemSource();
+        foreach (var (path, content) in contents)
+        {
+            source.AddFile(path, content);
+        }
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, seed), CancellationToken.None);
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(catalogue, Enumerable.Repeat(seed, 16).ToArray(), string.Empty, target);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan,
+            Path.Combine(SpoolDirectory, "restore-out"),
+            new RestoreExecutionOptions { RunId = "test", NowUnixMilliseconds = 1_722_700_000_000, ExistingDestination = policy },
+            CancellationToken.None);
+        return (receipt, contents);
+    }
+
+    /// <summary>Whether this test's volume finds a file written as <paramref name="written"/> when asked for <paramref name="asked"/>.</summary>
+    private bool VolumeFolds(string written, string asked)
+    {
+        var folder = Path.Combine(SpoolDirectory, $"folds-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        File.WriteAllBytes(Path.Combine(folder, written), []);
+        return File.Exists(Path.Combine(folder, asked));
+    }
+
+    /// <summary>
+    /// Where the volume keeps <paramref name="one"/> and <paramref name="other"/>
+    /// apart, each landed with its own content. Where it takes them for one,
+    /// one landed with its own content and the other failed naming it.
+    /// </summary>
+    private static void AssertOneLandedPerName(
+        RestoreReceipt receipt, Dictionary<string, byte[]> contents, bool folds, string one, string other)
+    {
+        var items = receipt.Items.Where(item => item.Path == one || item.Path == other).ToList();
+        Assert.HasCount(2, items);
+        if (!folds)
+        {
+            foreach (var item in items)
+            {
+                Assert.AreEqual("restored", item.Outcome, item.Detail);
+                SequenceAssert.AreEqual(contents[item.Path], File.ReadAllBytes(Path.Combine(receipt.WrittenTo, item.Path)));
+            }
+
+            return;
+        }
+
+        var landed = Assert.ContainsSingle(items.Where(item => item.Outcome == "restored"));
+        var refused = Assert.ContainsSingle(items.Where(item => item.Outcome == "failed"));
+        Assert.Contains($"this run restored {landed.Path} there", refused.Detail!, StringComparison.Ordinal);
+        SequenceAssert.AreEqual(contents[landed.Path], File.ReadAllBytes(Path.Combine(receipt.WrittenTo, landed.Path)));
     }
 
     [TestMethod]

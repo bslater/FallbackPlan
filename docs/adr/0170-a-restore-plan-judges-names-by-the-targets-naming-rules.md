@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another)
+**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the executor's rule for where a repository's path is written, which the recovery tool shares), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-7
 
 **Built:**
@@ -67,6 +67,8 @@ On Windows, `TryResolve` refuses such a component with a reason that names Windo
   > **2026-10 ([Amendment 2](#amendment-2-2026-10--a-collision-is-named-only-where-the-target-takes-the-two-names-for-one)).** That macOS takes a name's composed and decomposed forms for one name is now stated, and two such names are a collision there. A volume that stores a name in another form than it was given, as HFS+ stores one decomposed, is still not judged, nor is macOS's limit.
 - **Judge a destination by its volume rather than its platform.** A FAT or SMB volume mounted on POSIX may name by stricter rules than its host. The flag says what the platform does, and a caller that knows better can set it.
 
+  > **2026-10 ([Amendment 3](#amendment-3-2026-10--a-run-never-moves-aside-what-it-restored-itself)).** A run no longer moves aside, replaces or fails unnamed over a file it restored itself where its volume takes two of the snapshot's names for one: the second fails, naming the first. The plan still judges by the platform.
+
 ## Alternatives considered
 
 - **Refuse such names on every platform.** Rejected. They are legal on POSIX, and a Linux snapshot restored to Linux must get its own names back.
@@ -109,6 +111,8 @@ The plan named two paths as colliding on any case-insensitive target where they 
 - **The reason no longer says case alone.** Each item names the others it would land on, "which it takes for the same name".
 - **Execution is unchanged.** On Windows and Linux both forms of a name land, each with its own content.
 
+  > **2026-10 ([Amendment 3](#amendment-3-2026-10--a-run-never-moves-aside-what-it-restored-itself)).** Execution changes where a volume takes two of the snapshot's names for one: the second fails naming the first, which keeps what it landed.
+
 **Built:** `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests`:
 
 - of a composed and a decomposed `café.txt` and of `Notes.txt` and `notes.txt`, a target that folds case alone, as Windows does, names only the case pair; one that folds both, as macOS does, names all four; a case-sensitive one that folds normalisation names only the two forms; Linux's names none;
@@ -117,6 +121,41 @@ The plan named two paths as colliding on any case-insensitive target where they 
 
 **Not done.** The flag follows the platform, as the others do, so a folder Linux makes case-insensitive, or a volume of another platform's kind mounted there, is judged as Linux (the third bullet of "What this does not do"). A volume that stores a name in another form than it was given, as HFS+ stores one decomposed, is not judged.
 
+> **2026-10 ([Amendment 3](#amendment-3-2026-10--a-run-never-moves-aside-what-it-restored-itself)).** A run on such a volume no longer moves aside a file it restored itself: the second of the two names fails, naming the first. The plan still judges by the platform.
+
+## Amendment 3 (2026-10) — a run never moves aside what it restored itself
+
+Amendment 2 judges a collision by how the target folds names, and the target says what its platform does. A volume can fold where its platform does not: a FAT or exFAT drive or a share mounted on Linux, or a folder Linux makes case-insensitive. Where the plan does name a collision, the run still goes ahead, since conflicts are the operator's call ([architecture 08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning)). Either way, two of the snapshot's names land on one file. The second found the first standing there, and met it with the policy for somebody else's file:
+
+- **Under preserve, the default,** it moved the first into the run's displaced store and landed in its place. The receipt said both were restored, and one was not where it said.
+- **Under overwrite,** it replaced the first, whose content was then nowhere.
+- **Under fail,** it failed, saying a file was already there, without saying the file was the run's own.
+
+**Decision.**
+
+- **The run keeps each name it lands.** It keeps it by what a volume that folds names would take it for: its composed form, compared without case. `Restore/NamesLanded` holds them.
+- **The second of two names the volume takes for one fails, naming the first.** This applies to a file, or a link, whose destination is occupied, where a name the run landed folds onto it and its folder lists no entry under its own name. The volume took the two names for one, and what stands there is the run's own. The item fails with "the target takes this name and X for one, and this run restored X there". No policy moves the first aside, replaces it or fails over it unnamed, and the first keeps what it landed. The run is not reported complete.
+- **The listing decides, not the fold.** On a volume that keeps the two names apart, a file of somebody else's under the second name is listed under it, and the policy meets it as before.
+- **Under rename the second lands beside the first,** as beside anyone's file, and both are kept.
+- **The plan is unchanged.** It still judges by what the platform does.
+
+**Built:** `Restore/NamesLanded`, `Restore/RestoreExecutor`:
+
+- `Repository.Tests/NamesLandedTests`:
+  - an occupied destination that a landed name folds onto, by case or by normalisation, and whose name its folder does not list, is taken for that name;
+  - one listed under its own name, one unoccupied, and one no landed name folds onto are taken for nothing, and the last two ask for no listing;
+  - a name is not taken for itself, the first name landed for a fold is the one named, and a name that is not well-formed Unicode is folded by case alone.
+- `Repository.Tests/RestorePlanTests`: a snapshot holding `Notes.txt` and `notes.txt`, and a composed and a decomposed `café.txt`, is restored under preserve, overwrite and fail, and judged by the volume the test writes to.
+  - Where the volume takes a pair for one, one lands with its own content, the other fails naming it, nothing is displaced, and the run fails. Windows' and macOS's volumes take the case pair for one; macOS's takes the other pair too.
+  - Where the volume keeps them apart, as Linux's does, both land.
+  - Under rename each lands with its own content.
+
+**Not done.**
+
+- **The plan does not judge the volume.** A collision a volume makes where its platform does not is still not named before the run; the run names it, item by item. Reading a volume's naming rules without writing to it, which a plan must not do, is the next record's.
+- **The recovery tool** replaces whatever stands at a name. On such a volume, the second of two names it takes for one replaces the first.
+- **A volume that stores a name in another form than it was given,** as HFS+ stores one decomposed, lists the landed name in the form the second asks for, and is not judged.
+
 ## Status history
 
 | Date | Status | Note |
@@ -124,3 +163,4 @@ The plan named two paths as colliding on any case-insensitive target where they 
 | 2026-10 | Accepted | Built in one slice, tests first. A restore plan names every name the target cannot make, by a stated Windows naming rule, and a restore on Windows refuses one rather than writing it under another. No contract or format change. |
 | 2026-10 | Amended | Amendment 1: a target that counts a name in bytes states how many it holds, 255 for the local profile on Linux, and the plan names a name longer than that before any byte moves. `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests`; `Repository.Tests/RestoreLongNameTests` |
 | 2026-10 | Amended | Amendment 2: the target states whether it takes a name's composed and decomposed forms for one, the local profile on macOS, and the plan names two paths as colliding only where the target folds them together, by case as the executor compares them and by normalisation only where the target ignores it. `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests` |
+| 2026-10 | Amended | Amendment 3: a run keeps each name it lands, and where its volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside, replacing it or failing over it unnamed; under rename it lands beside. The plan is unchanged. `Restore/NamesLanded`, `Restore/RestoreExecutor`; `Repository.Tests/NamesLandedTests`, `Repository.Tests/RestorePlanTests` |

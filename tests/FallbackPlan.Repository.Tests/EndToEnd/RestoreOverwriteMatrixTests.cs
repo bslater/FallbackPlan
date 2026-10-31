@@ -309,8 +309,9 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
         // and the caller decides whether to run anyway. This characterises
         // that decision's mechanics — the executor does not re-refuse a plan
         // the operator accepted. On this case-sensitive disk both spellings
-        // land distinctly; on a genuinely case-folding target the
-        // existing-destination policy governs whichever lands second.
+        // land distinctly. On a genuinely case-folding volume the second
+        // fails naming the first, or lands beside it under rename, since the
+        // file in its way is the run's own (ADR-0170 Amendment 3).
         var one = Deterministic(1_000, 3);
         var two = Deterministic(1_000, 9);
         var source = new FakeFileSystemSource();
