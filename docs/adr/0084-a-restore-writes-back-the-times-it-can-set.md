@@ -94,6 +94,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back on Linux and macOS, after ownership and before the permissions in §1's order. The rest of this item remains owed.
 
   > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** A symlink's own metadata is now written back, onto the link itself: its times on Linux and macOS through a call that does not follow it, by §1's rule. Windows attribute bits, security descriptors and alternate streams remain owed.
+
+  > **2026-10 ([ADR-0181 Amendment 2](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-2-2026-10--a-links-own-times-on-windows)).** A link made on Windows now gets its own modification, access and creation times back too, through a handle opened on the link itself, by §1's rule.
 - **The recovery tool and the CLI's `restore-file`.** Both write content and no metadata, not even a modification time.
 
   > **2026-10 ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).** The CLI's `restore-file` now writes a file's times back by this record's rule, through the writer the executor uses. The recovery tool still writes none.
@@ -119,3 +121,4 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 | 2026-10 | Accepted | [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md): a file's alternate streams are written back on Windows, before the times this record writes, since writing a stream moves the modification time. |
 | 2026-10 | Accepted | [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md): a file's and a folder's Windows attribute bits are written back on Windows. |
 | 2026-10 | Accepted | [ADR-0176](0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md): a file's and a folder's Windows security descriptor is written back on Windows where the machine knows every account it names. |
+| 2026-10 | Accepted | [ADR-0181 Amendment 2](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-2-2026-10--a-links-own-times-on-windows): a link made on Windows gets its own modification, access and creation times back, through a handle opened on the link itself. |

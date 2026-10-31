@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: a symlink comes back as a link on Windows where the account may make one); FR-RST-003 (amended: the plan says links will be skipped only where they will be); FR-RST-005 (amended by [Amendment 1](#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too): so does the recovery tool)
+**Requirements:** FR-RST-004 (amended: a symlink comes back as a link on Windows where the account may make one); FR-RST-003 (amended: the plan says links will be skipped only where they will be); FR-RST-005 (amended by [Amendment 1](#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too): so does the recovery tool); FR-RST-004 (amended again by [Amendment 2](#amendment-2-2026-10--a-links-own-times-on-windows): a link made on Windows gets its own times back)
 **Related:** [ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md) (a link's own metadata, which Windows did not arise for), [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) §4 and [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (every path a restore writes is placed through no link out of it), [ADR-0155](0155-the-recovery-tool-makes-a-link-a-link-and-fails-only-the-entry-the-output-refuses.md) (the recovery tool makes links where they need no privilege), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (symbolic links: "preserve, privilege permitting" on Windows)
 
 **Built:**
@@ -48,6 +48,8 @@ A target is written with each forward slash made Windows' separator. No Windows 
 
 Nothing more than before. No call on Windows sets a link's own times, and its attribute bits and descriptor are written only onto files and folders, so a link's captured metadata is declared and listed as not applied, as ADR-0101 already said of a link it could not write onto.
 
+> **2026-10: amended by [Amendment 2](#amendment-2-2026-10--a-links-own-times-on-windows).** A link's own modification, access and creation times are now written, through a handle opened on the link itself. Its attribute bits and descriptor still are not, and are declared and listed as before.
+
 ## Consequences
 
 - A tree with links restores on Windows as it does on Linux and macOS where the account may make links, and as before where it may not.
@@ -60,6 +62,8 @@ Nothing more than before. No call on Windows sets a link's own times, and its at
 
   > **2026-10: taken up by [Amendment 1](#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too).**
 - **A link's own times on Windows.** They would need a call opened on the link itself, which nothing here makes.
+
+  > **2026-10: taken up by [Amendment 2](#amendment-2-2026-10--a-links-own-times-on-windows).**
 - **A junction.** A directory junction captured on Windows comes back as a folder's symbolic link to the same target, not as a junction.
 
 ## Alternatives considered
@@ -85,9 +89,29 @@ What a link names is its target from the folder it is in (`SymbolicLinks.PathNam
 - `Domain.Tests/SymbolicLinksTests`: what a link names is its target from the link's folder, or where a target from the root says;
 - `Repository.Tests/RecoveryLinkTests`: on Windows a link is made where the account may and skipped with its note where it may not; a link naming a folder of its tree is a folder's link that resolves, one naming a file has Windows' separators and resolves, and one Windows captured as a folder's is made one.
 
+## Amendment 2 (2026-10) — a link's own times on Windows
+
+The record made a link on Windows and wrote nothing onto it, because no call it made set a link's own times. So every link a restore made there listed its captured times as not applied, and the plan declared them, though Windows keeps a link's own times as it keeps a file's.
+
+**Decision.** A link made on Windows gets its own modification, access and creation times back, onto the link and never through it, by the executor and the recovery tool alike:
+
+- **through a handle opened on the link itself.** Windows opens a reparse point rather than what it points at when asked to (`FILE_FLAG_OPEN_REPARSE_POINT`), and a folder's link when asked for a folder's semantics. Asked for nothing but the right to write attributes, that handle takes .NET's setters for a handle, which write onto what the handle names. The no-follow is the open's own flag, as it is `utimensat`'s on Linux and macOS, so ADR-0101's reason not to trust a path-taking setter is met;
+- **in the writer's order,** the modification and access times, then the creation time, which `SymlinkMetadata` now sets on macOS, as before, and on Windows;
+- **as the rule says.** The plan and the receipt hold a link on Windows to the times, and a creation time where the target keeps one. Its attribute bits and descriptor are still written only onto files and folders, so a link Windows captured still lists them.
+
+A write the link refuses is listed, as any refused write is. A link to nothing, or to a folder, takes its times as one to a file does.
+
+**Built:** `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`:
+
+- `Domain.Tests/SymlinkMetadataTests`: a link's times are set on Windows, and on Linux and macOS in a 64-bit process; its creation time on macOS and Windows, and on Linux not at all;
+- `Domain.Tests/SymlinkMetadataOnWindowsTests`: on Windows a file's link, a folder's link and a link to nothing take their own times, either alone, and their creation time, and what each points at keeps its own;
+- `Repository.Tests/RestoreWindowsLinkTests`: on Windows a link to a file, a folder and nothing comes back with all three times, the plan declares nothing of it, its item lists nothing, and the file it names keeps its own;
+- `Repository.Tests/RecoveryLinkTests`: on Windows the recovery tool gives a link leading out of its output its own times, and the file outside keeps its own.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A restore on Windows makes a link where the account may, a folder's or a file's as its captured bits or what it names say, with Windows' separators; the plan says links will be skipped only where they will be. `Domain/SymbolicLinks`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Domain.Tests/SymbolicLinksTests`; `Repository.Tests/RestoreWindowsLinkTests` |
 | 2026-10 | Accepted (Amendment 1) | The recovery tool makes a link on Windows where the account may, a folder's or a file's by its captured bits or by what it names in its tree or on disk, with Windows' separators. `Domain/SymbolicLinks`; `Recovery/RecoverySession`; `Restore/RestoreExecutor`; `Domain.Tests/SymbolicLinksTests`; `Repository.Tests/RecoveryLinkTests` |
+| 2026-10 | Accepted (Amendment 2) | A link made on Windows gets its own modification, access and creation times back through a handle opened on the link itself, by the executor and the recovery tool alike; its attribute bits and descriptor are still not written. `Domain/SymlinkMetadata`; `Domain/MetadataWriter`; `Restore/RestoreMetadata`; `Domain.Tests/SymlinkMetadataTests`; `Domain.Tests/SymlinkMetadataOnWindowsTests`; `Repository.Tests/RestoreWindowsLinkTests`; `Repository.Tests/RecoveryLinkTests` |

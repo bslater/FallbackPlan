@@ -34,6 +34,8 @@ Four facts shape the rest.
 
 A link the restore makes gets its captured metadata back, every write by a call that changes the link and never what it points at. Its times go through `utimensat` told not to follow a final link, on Linux and macOS, either time left as it is when none was captured. Its permissions go through `lchmod` on macOS. Its owner and group, extended attributes and creation time go through the calls a file's already use, which never follow one. Its creation time is set only on macOS, because the call that sets one on Windows follows a link. No .NET setter is used on a link: its permission setter follows one, and its time setters make no promise either way. A link to nothing gets its metadata back like any other.
 
+> **2026-10 ([ADR-0181 Amendment 2](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-2-2026-10--a-links-own-times-on-windows)).** On Windows a link's own modification, access and creation times are now set too, through a handle opened on the link itself with Windows' flag not to follow it. The handle's setters write onto what the handle names, so no path-taking setter is used on a link there either.
+
 ### 2. The file's rule, in the file's order
 
 A link is held to the rule a file is, in the order [ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) and [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) fixed:
@@ -71,6 +73,8 @@ The plan's lines now count links where they count files and folders, as in "2 fi
 - **Windows links.** Windows restores no links, so a link's Windows metadata is never written.
 
   > **2026-10 ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).** Windows now makes links where the account may. Their metadata is still not written, and is declared and listed as not applied.
+
+  > **2026-10 ([ADR-0181 Amendment 2](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-2-2026-10--a-links-own-times-on-windows)).** A link made on Windows now gets its own times back. Its attribute bits and descriptor are still not written, and are declared and listed as not applied.
 - **A link already at the destination.** The existing-file policy decides whether the run makes a link, as it does for a file. Metadata goes only onto a link the run made.
 - **The recovery tool and the CLI's `restore-file`**, which write no metadata.
 
@@ -93,3 +97,4 @@ The plan's lines now count links where they count files and folders, as in "2 fi
 | 2026-10 | Accepted | [ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md): the command line's restore-file writes a file's metadata back through the writer the executor uses, and makes no symlink; the recovery tool still writes none. |
 | 2026-10 | Accepted | [ADR-0150](0150-the-recovery-tool-writes-back-metadata-by-the-executors-rule.md): the recovery tool writes a file's and a folder's metadata back through the writer the executor uses, and still makes no symlink. |
 | 2026-10 | Accepted (related) | [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md): a restore on Windows makes a link where the account may, and writes none of its metadata onto it, which is declared and listed as not applied. |
+| 2026-10 | Accepted (related) | [ADR-0181 Amendment 2](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-2-2026-10--a-links-own-times-on-windows): a link made on Windows gets its own modification, access and creation times back through a handle opened on the link itself; its attribute bits and descriptor are still not written. |
