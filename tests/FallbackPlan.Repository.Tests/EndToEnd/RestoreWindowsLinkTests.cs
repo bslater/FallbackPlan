@@ -1,0 +1,156 @@
+using FallbackPlan.Domain;
+using FallbackPlan.Filesystem;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Index;
+using FallbackPlan.Restore;
+using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
+using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+
+namespace FallbackPlan.Repository.Tests.EndToEnd;
+
+/// <summary>
+/// A restore on Windows makes a symlink a link where the account may make
+/// one (FR-RST-004; ADR-0181; architecture 06 §3, "preserve, privilege
+/// permitting"), as it already does on Linux and macOS, and the plan no
+/// longer says links will be skipped there (FR-RST-003). A link to a folder
+/// is a folder's link: by its captured attribute bits where Windows captured
+/// it, and by what it names otherwise. Its target is written with Windows'
+/// separators.
+/// </summary>
+/// <remarks>
+/// Windows makes a link only for an account that holds the privilege to, or
+/// on a machine in developer mode. CI's account does. Where neither holds,
+/// the restore skips links as before, and the plan says so.
+/// </remarks>
+[TestClass]
+public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
+{
+    private const uint FolderBit = 0x10;
+    private const uint ReparsePointBit = 0x400;
+    private const ulong Modified = 1_722_000_000_000;
+
+    [TestMethod]
+    public void TheLocalProfile_MakesLinks_WhereTheAccountMayMakeOne() =>
+        Assert.AreEqual(SymbolicLinks.CanCreate, RestoreTargetProfile.ForLocalPlatform().SupportsSymlinks);
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows decides whether a link may be made")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task OnWindows_ALinkCapturedElsewhere_IsMadeALink_ThatResolves_WithWindowsSeparators()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var content = Deterministic(900, 1);
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", content).Metadata = new EntryMetadata { ModifiedAt = Modified };
+        AddLink(source, "link", "data/target.bin", fileAttributes: null);
+
+        var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB1);
+
+        Assert.DoesNotContain(degradation => degradation.Capability == "symlinks", plan.Degradations);
+        Assert.AreEqual("restored", receipt.Items.Single(item => item.Path == "link").Outcome);
+        var link = new FileInfo(Path.Combine(output, "link"));
+        Assert.AreEqual(@"data\target.bin", link.LinkTarget);
+        Assert.IsFalse(Directory.Exists(link.FullName), "a link to a file is a file's link");
+        CollectionAssert.AreEqual(content, File.ReadAllBytes(link.FullName), "the link resolves to the file it named");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows tells a folder's link from a file's")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task OnWindows_ALinkToAFolder_IsAFoldersLink_ByWhatItNames_OrByItsCapturedBits()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/inside.txt", Deterministic(300, 2)).Metadata = new EntryMetadata { ModifiedAt = Modified };
+        source.AddFile("notes.txt", Deterministic(300, 3)).Metadata = new EntryMetadata { ModifiedAt = Modified };
+
+        // Each sorts before what it names, so the folder is not yet made when
+        // the link is: what the plan makes is what decides.
+        AddLink(source, "a-docs", "docs", fileAttributes: null);
+        AddLink(source, "a-windows-folder", "notes.txt", fileAttributes: FolderBit | ReparsePointBit);
+        AddLink(source, "a-windows-file", "docs", fileAttributes: ReparsePointBit);
+
+        var (_, receipt, output) = await PublishAndRestoreAsync(source, 0xB2);
+
+        Assert.IsTrue(receipt.Items.Where(item => item.Path.StartsWith("a-", StringComparison.Ordinal)).All(item => item.Outcome == "restored"));
+        Assert.IsTrue(Directory.Exists(Path.Combine(output, "a-docs")), "a link naming a folder the restore makes is a folder's link");
+        Assert.AreEqual("docs", new DirectoryInfo(Path.Combine(output, "a-docs")).LinkTarget);
+        Assert.IsTrue(File.Exists(Path.Combine(output, "a-docs", "inside.txt")), "and it resolves");
+        Assert.AreEqual("notes.txt", new DirectoryInfo(Path.Combine(output, "a-windows-folder")).LinkTarget);
+        Assert.IsTrue(
+            (File.GetAttributes(Path.Combine(output, "a-windows-folder")) & FileAttributes.Directory) != 0,
+            "a link Windows captured as a folder's is made one");
+        Assert.IsTrue(
+            (File.GetAttributes(Path.Combine(output, "a-windows-file")) & FileAttributes.Directory) == 0,
+            "and one it captured as a file's is made one, whatever it names here");
+    }
+
+    private static void AddLink(FakeFileSystemSource source, string path, string target, uint? fileAttributes) =>
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = path,
+            Kind = ScanEntryKind.Symlink,
+            LinkTarget = System.Text.Encoding.UTF8.GetBytes(target),
+            Metadata = new EntryMetadata { ModifiedAt = Modified, FileAttributes = fileAttributes },
+        });
+
+    private static byte[] SnapshotOf(byte seed) => Enumerable.Repeat(seed, 16).ToArray();
+
+    private static byte[] Deterministic(int length, byte seed)
+    {
+        var data = new byte[length];
+        for (var i = 0; i < length; i++)
+        {
+            data[i] = (byte)(seed + i * 31);
+        }
+
+        return data;
+    }
+
+    private static SnapshotJob Job(FakeFileSystemSource source, byte seed) => new()
+    {
+        Source = source,
+        Roots = [new ScanRoot("/")],
+        DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+        BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
+        SnapshotId = SnapshotOf(seed),
+        NowUnixMilliseconds = 1_722_600_000_000,
+        DeclaredMaxDurationMs = 3_600_000,
+        ExpiryGeneration = 5,
+        ClientVersion = "restore-windows-link-tests/1.0",
+    };
+
+    private async Task<(RestorePlan Plan, RestoreReceipt Receipt, string Output)> PublishAndRestoreAsync(
+        FakeFileSystemSource source, byte seed)
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using (var credential = CreateCredential())
+        using (var publishing = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"links-{seed:x2}.db"), Repo))
+        {
+            await new PublicationOrchestrator(
+                    SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
+                    new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, $"sequence-{seed:x2}.txt"))),
+                    SpoolDirectory, FormatVersions.SealedDataPlane, observer: null, publishing)
+                .PublishAsync(Job(source, seed), CancellationToken.None);
+        }
+
+        using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"links-{seed:x2}.db"), Repo);
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(catalogue, SnapshotOf(seed), string.Empty, target);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var output = Path.Combine(SpoolDirectory, $"restored-{seed:x2}");
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, output,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "windows-links",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+        return (plan, receipt, output);
+    }
+}

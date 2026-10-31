@@ -854,6 +854,16 @@ public sealed class RestoreExecutor(
         var folders = new List<Folder>();
         var displaced = new List<string>();
 
+        // Where each folder the plan makes lands, which a link made before
+        // it may name: Windows makes a folder's link apart from a file's
+        // (ADR-0181).
+        var folderDestinations = new Lazy<HashSet<string>>(() => new HashSet<string>(
+            plan.Items
+                .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
+                .Select(item => TryResolve(root, item.Path, out var folder, out _) ? Path.GetFullPath(folder) : null)
+                .OfType<string>(),
+            target.CaseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase));
+
         // The first name of each hard-link group the run lands, by group, so
         // a later name can be made that file again (ADR-0102).
         var groups = new Dictionary<string, LandedName>(StringComparer.Ordinal);
@@ -1326,7 +1336,16 @@ public sealed class RestoreExecutor(
                             }
                         }
 
-                        File.CreateSymbolicLink(linkLanding, targetText);
+                        // Windows resolves only its own separators in a link,
+                        // and makes a folder's link apart from a file's.
+                        var made = OperatingSystem.IsWindows() ? SymbolicLinks.TargetOnWindows(targetText) : targetText;
+                        SymbolicLinks.Create(
+                            linkLanding,
+                            made,
+                            OperatingSystem.IsWindows() && SymbolicLinks.PointsAtAFolder(
+                                manifest.Metadata.FileAttributes,
+                                () => folderDestinations.Value.Contains(LinkTargetPath(linkLanding, made))
+                                    || Directory.Exists(LinkTargetPath(linkLanding, made))));
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
@@ -2106,6 +2125,10 @@ public sealed class RestoreExecutor(
             Detail = first.FlagsNotApplied, NotApplied = first.NotApplied, LinkedTo = first.Path,
         };
     }
+
+    /// <summary>The full path a link at <paramref name="link"/> names by <paramref name="target"/>.</summary>
+    private static string LinkTargetPath(string link, string target) =>
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(link)!, target));
 
     /// <summary>
     /// What an item's detail says of the file flags its manifest names, none

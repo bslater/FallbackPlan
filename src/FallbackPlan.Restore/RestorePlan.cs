@@ -215,7 +215,7 @@ public sealed record RestoreTargetProfile
     {
         CaseSensitive = !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS(),
         SupportsPosixMetadata = !OperatingSystem.IsWindows(),
-        SupportsSymlinks = !OperatingSystem.IsWindows(),
+        SupportsSymlinks = SymbolicLinks.CanCreate,
         WindowsNamingRules = OperatingSystem.IsWindows(),
 
         // The filesystems Linux commonly creates hold 255 bytes in a name.
