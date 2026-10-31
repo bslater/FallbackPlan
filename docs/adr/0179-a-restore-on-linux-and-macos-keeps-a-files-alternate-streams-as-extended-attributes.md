@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-004 (amended: on a target that writes extended attributes and keeps no alternate streams, a file's streams come back as attributes of the same names, and each that does not is named), FR-RST-003 (amended: the plan names the files with a stream Linux keeps no attribute of), FR-RST-004 (amended by Amendment 1: so do the recovery tool and the single-file restore)
+**Requirements:** FR-RST-004 (amended: on a target that writes extended attributes and keeps no alternate streams, a file's streams come back as attributes of the same names, and each that does not is named), FR-RST-003 (amended: the plan names the files with a stream Linux keeps no attribute of), FR-RST-004 (amended by Amendment 1: so do the recovery tool and the single-file restore), FR-RST-003 (amended by Amendment 2: the plan names the files with a stream larger than the target takes in an attribute)
 **Related:** [ADR-0174](0174-a-restore-writes-a-files-alternate-streams-back-where-the-target-keeps-them.md) (a file's streams where the target keeps them, read and proved like a segment, after the content and before the times), [ADR-0177](0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md) (the other way: a file's attributes as streams of their names on Windows, which left this undone), [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) (the attributes a restore writes where the target writes them, and which namespaces Linux gives whom), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (alternate data streams degraded on Linux and macOS)
 
 **Built:**
@@ -61,6 +61,8 @@ On such a target a file's streams count applied, and the planner no longer decla
 - **Rename a stream into the user namespace.** A stream named outside it is named, not given a `user.` name it never had: that name would not round-trip.
 - **Judge a value's size in the plan.** A volume that takes no attribute that large refuses it at the write, which the receipt names.
 
+  > **2026-10 ([Amendment 2](#amendment-2-2026-10--a-stream-larger-than-the-platform-takes-in-an-attribute-is-named-before-it-is-read)).** The platform's own ceilings are judged: Linux's 255-byte names and 64 KiB values, and macOS's 127-byte names, by the rule, the writers and the plan. A volume that holds less than its platform's ceiling still refuses at the write.
+
 ## Alternatives considered
 
 - **Prefix every stream's name with `user.` on Linux.** Rejected. It would keep `Zone.Identifier`, but under a name it never had. An attribute ADR-0177 kept as a stream would come back as `user.user.tag`.
@@ -84,9 +86,30 @@ The record left the standalone recovery tool and the command line's `restore-fil
 
 Off Windows no capture carries a stream, so `restore-file`'s own path reaches the attribute form only through a snapshot captured on Windows, which its suite cannot make there. The Domain cases hold the form it calls; its Windows case still runs on CI.
 
+## Amendment 2 (2026-10) — a stream larger than the platform takes in an attribute is named before it is read
+
+The record left a value too large for the volume to be found at the write (§4): the stream was read, the call refused, and the receipt said the volume refused it. Some of that is not the volume's to decide. Linux refuses an attribute name over 255 bytes, its namespace with it, and a value over 65,536 bytes, in the system call, whatever the filesystem. macOS refuses a name over 127 bytes. A stream is captured whole in one segment, and the default segment is 1 MiB, so a stream past Linux's ceiling is an ordinary one to restore.
+
+**Decision.** The platform's ceilings are part of the rule:
+
+- **`Domain/ExtendedAttributes` states them,** and `Domain/AttributeLimits` gathers them with whether names take a namespace, as this platform's or as a target states them. macOS states no value ceiling: its volumes differ;
+- **`MetadataRules.StreamTooLargeForAttribute` says why a stream past them does not fit,** naming the limit;
+- **the writers judge each stream by it before reading,** so such a stream is neither read nor written, and the item names it. The executor, the recovery tool and `restore-file` all write through the helper that does (Amendment 1);
+- **the plan predicts it.** Each item's facts carry its longest stream name and its largest stream, the restore profile carries the target's limits, and where a file's streams are kept as attributes and one is past them, the plan declares the file on a line of its own, `alternate-stream-attribute-sizes`, naming the limits. A file the namespace line already declares is not counted again.
+
+A volume may hold less than its platform's ceiling: ext4 keeps a file's attributes within one block unless built otherwise. That is still found at the write, and named. The wave that reads a file's segments ahead may still have fetched a stream the writer then does not read.
+
+**Built:** `Domain/ExtendedAttributes`; `Domain/AttributeLimits`; `Domain/MetadataRules`; `Domain/AlternateStreams`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Restore/RestorePlan`; `Restore/RestoreExecutor`:
+
+- `Domain.Tests/StreamsAsAttributesTests`: a name or a value past the limits is refused, naming the limit, and one at them is kept, as is any where no limit is stated; this platform's limits are Linux's and macOS's; a file's longest stream name and largest stream are measured;
+- `Domain.Tests/AlternateStreamsTests`: a stream past the limits is neither read nor written, and is named; on Linux the kernel refuses what the limits refuse, given none; on Linux the platform's form names a stream larger than Linux holds, and on macOS one whose name is longer than macOS takes, unread;
+- `Repository.Tests/RestoreAlternateStreamsTests`: the profile carries this platform's limits; on Linux a stream larger than 64 KiB is named through the executor and the file degraded while the rest land;
+- `Repository.Tests/RestoreMetadataHonestyTests`: the plan declares the two files past Linux's limits on the new line, one past macOS's name limit alone, and none where no limit is stated.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. On a target that writes extended attributes and keeps no alternate streams, the executor keeps each of a file's streams as the attribute of its name, before the file's own attributes and permissions; on Linux one outside the user namespace is named and not written, and one whose name the file's own attribute has is left to it; the plan counts them applied, and declares on a line of its own the files with a stream Linux keeps no attribute of. `Domain/MetadataRules`; `Restore/RestoreExecutor`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Domain.Tests/StreamsAsAttributesTests`; `Repository.Tests/RestoreAlternateStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Amended | Amendment 1: the recovery tool and `restore-file` keep a file's streams as attributes on Linux and macOS by this rule, through one Domain helper that picks the platform's form and that the executor's attribute write now shares. `Domain/AlternateStreams`; `Domain/ExtendedAttributes`; `Recovery/RecoverySession`; `Cli/CliApplication`; `Domain.Tests/AlternateStreamsTests`; `Repository.Tests/RecoveryAlternateStreamsTests` |
+| 2026-10 | Amended | Amendment 2: the platform's attribute ceilings, Linux's 255-byte names and 64 KiB values and macOS's 127-byte names, are judged by the rule; the writers name a stream past them without reading it, and the plan declares such files on a line of their own. `Domain/ExtendedAttributes`; `Domain/AttributeLimits`; `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Domain.Tests/StreamsAsAttributesTests`; `Domain.Tests/AlternateStreamsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
