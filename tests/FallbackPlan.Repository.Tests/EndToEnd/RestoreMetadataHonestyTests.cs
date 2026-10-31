@@ -644,6 +644,34 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Plan_AFoldersAttributes_AreKeptAsStreams_SaveThoseOnlyLinuxsKernelReads()
+    {
+        // ADR-0177 Amendment 2: a folder is held to the rule a file is.
+        var source = new FakeFileSystemSource();
+        source.AddFile("tagged/a.bin", Deterministic(700, 63));
+        source.AddFile("labelled/b.bin", Deterministic(700, 64));
+        static EntryMetadata Carrying(string attribute) => new()
+        {
+            ModifiedAt = Modified,
+            ExtendedAttributes = [new ExtendedAttributeEntry(System.Text.Encoding.UTF8.GetBytes(attribute), new byte[] { 2, 0, 0, 0 })],
+        };
+        source.AddFile("named/c.bin", Deterministic(700, 65));
+        source.Folders["tagged"] = Carrying("user.tag");
+        source.Folders["labelled"] = Carrying("security.selinux");
+        source.Folders["named"] = Carrying("com.apple.metadata:kMDItemWhereFroms");
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xE3);
+        var declared = RestoreMetadata.Declare(plan, facts, Posix with { SupportsExtendedAttributes = false, SupportsAlternateStreams = true });
+
+        var kernel = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "kernel-attributes"));
+        Assert.Contains("1 folder(s)", kernel.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("file(s)", kernel.Detail, StringComparison.Ordinal);
+        var named = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "attribute-stream-names"));
+        Assert.Contains("1 folder(s)", named.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(degradation => degradation.Capability == "extended-attributes", declared);
+    }
+
+    [TestMethod]
     public async Task Plan_AnAttributeWhoseNameNoStreamIsKeptUnder_IsDeclaredOnItsOwnLine_WhereAttributesAreKeptAsStreams()
     {
         var source = new FakeFileSystemSource();

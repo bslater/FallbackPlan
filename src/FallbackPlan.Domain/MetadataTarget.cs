@@ -25,8 +25,8 @@ public sealed record MetadataTarget
     /// <summary>
     /// Whether the target keeps a file's alternate streams: Windows does, and
     /// nothing else. Where it does and writes no extended attributes of its
-    /// own, a file's captured attributes are kept as streams of the same
-    /// names (ADR-0177).
+    /// own, a file's and a folder's captured attributes are kept as streams
+    /// of the same names (ADR-0177, and Amendment 2 for a folder).
     /// </summary>
     public bool SupportsAlternateStreams { get; init; }
 

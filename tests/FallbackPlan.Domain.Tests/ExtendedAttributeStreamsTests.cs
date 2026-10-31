@@ -10,10 +10,11 @@ namespace FallbackPlan.Domain.Tests;
 /// architecture 06 §3). One in Linux's security or trusted namespace, or a
 /// POSIX ACL, means something to Linux's kernel alone and is not kept; a name
 /// no stream may have, one the file's own captured stream already has, and a
-/// stream the target refuses are each not written, and are named. A folder
-/// keeps no streams, and a target that writes attributes of its own writes
-/// them as attributes. The plan counts by the writer's own judgement of each
-/// name (ADR-0177 Amendment 1).
+/// stream the target refuses are each not written, and are named. A target
+/// that writes attributes of its own writes them as attributes. The plan
+/// counts by the writer's own judgement of each name (ADR-0177 Amendment 1).
+/// A folder's attributes are kept as its streams by the same rule (ADR-0177
+/// Amendment 2).
 /// </summary>
 [TestClass]
 public sealed class ExtendedAttributeStreamsTests : IDisposable
@@ -170,16 +171,37 @@ public sealed class ExtendedAttributeStreamsTests : IDisposable
     }
 
     [TestMethod]
-    public void Write_AFoldersAttributes_AreNotKeptAsStreams()
+    public void Write_AFoldersAttributes_LandAsStreamsOfTheirNames_ButThoseOnlyLinuxsKernelReads()
     {
         var streams = new Held();
         var folder = Directory.CreateDirectory(Path.Combine(_root, "folder")).FullName;
 
-        var written = Writer(streams).Write(
+        var kept = Writer(streams).Write(
             folder, new EntryMetadata { ExtendedAttributes = [Attribute("com.apple.FinderInfo", [1])] }, EntryKind.DirectoryPlaceholder);
 
-        Assert.IsFalse(written.Applied.HasFlag(CapturedMetadata.ExtendedAttributes));
-        Assert.IsEmpty(streams.Written);
+        Assert.IsTrue(kept.Applied.HasFlag(CapturedMetadata.ExtendedAttributes));
+        CollectionAssert.AreEqual(new byte[] { 1 }, streams.Written[(folder, "com.apple.FinderInfo")]);
+
+        var withheld = Writer(streams).Write(
+            folder,
+            new EntryMetadata { ExtendedAttributes = [Attribute("user.tag", "kept"u8), Attribute("system.posix_acl_default", [2])] },
+            EntryKind.DirectoryPlaceholder);
+
+        Assert.IsFalse(withheld.Applied.HasFlag(CapturedMetadata.ExtendedAttributes));
+        Assert.IsNotNull(withheld.Detail);
+        Assert.Contains("system.posix_acl_default", withheld.Detail, StringComparison.Ordinal);
+        CollectionAssert.AreEqual("kept"u8.ToArray(), streams.Written[(folder, "user.tag")]);
+        Assert.HasCount(2, streams.Written);
+    }
+
+    [TestMethod]
+    public void Write_ASymlinksAttributes_AreNotKeptAsStreams()
+    {
+        // A stream joined to a link's path would be written through the link.
+        Assert.IsFalse(MetadataRules.KeepsAttributesAsStreams(EntryKind.Symlink, supportsAlternateStreams: true, writesAttributes: false));
+        Assert.IsTrue(MetadataRules.KeepsAttributesAsStreams(EntryKind.DirectoryPlaceholder, supportsAlternateStreams: true, writesAttributes: false));
+        Assert.IsFalse(MetadataRules.KeepsAttributesAsStreams(EntryKind.DirectoryPlaceholder, supportsAlternateStreams: false, writesAttributes: false));
+        Assert.IsFalse(MetadataRules.KeepsAttributesAsStreams(EntryKind.DirectoryPlaceholder, supportsAlternateStreams: true, writesAttributes: true));
     }
 
     [TestMethod]
@@ -212,6 +234,23 @@ public sealed class ExtendedAttributeStreamsTests : IDisposable
         Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.ExtendedAttributes));
         Assert.AreEqual("kept on Windows", File.ReadAllText($"{file}:user.comment"));
         Assert.AreEqual(Modified, File.GetLastWriteTimeUtc(file));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a folder's alternate streams")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public void Write_OnWindows_AFoldersAttributes_LandAsItsStreams_AndItKeepsItsTime()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(_root, "tagged")).FullName;
+
+        var written = new MetadataWriter(MetadataTarget.ForLocalPlatform()).Write(
+            folder,
+            new EntryMetadata { ModifiedAt = Millis(Modified), ExtendedAttributes = [Attribute("user.comment", "kept on a folder"u8)] },
+            EntryKind.DirectoryPlaceholder);
+
+        Assert.IsTrue(written.Applied.HasFlag(CapturedMetadata.ExtendedAttributes), written.Detail);
+        Assert.AreEqual("kept on a folder", File.ReadAllText($"{folder}:user.comment"));
+        Assert.AreEqual(Modified, Directory.GetLastWriteTimeUtc(folder));
     }
 
     public void Dispose()
