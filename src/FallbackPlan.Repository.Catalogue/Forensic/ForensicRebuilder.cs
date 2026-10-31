@@ -419,7 +419,7 @@ public sealed class ForensicRebuilder : IDisposable
                 manifest.LogicalLength,
                 manifest.Metadata.ModifiedAt,
                 hasAlternateStreams: manifest.Metadata.AlternateStreams.Count > 0,
-                metadataDigest: FileVersionManifestCodec.MetadataDigest(manifest.Metadata));
+                metadataDigest: FileVersionManifestCodec.MetadataDigest(manifest.Metadata, MetadataRules.FileFlagsOf(manifest.CaptureDiagnostics)));
             catalogue.RecordVersionContents(entry.ObjectId, manifest.ContentObjects());
 
             foreach (var reference in manifest.SegmentReferences)

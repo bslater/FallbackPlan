@@ -62,6 +62,8 @@ string — the convention import provenance already established
 Unknown diagnostic keys are permitted (readers treat diagnostics as
 informational text); *writers* in this repository emit only documented keys.
 
+> **2026-10 ([ADR-0180](0180-capture-names-the-file-flags-it-does-not-keep.md)).** `file-flags: <name>, …` names the flags a file carries that no format key keeps, each once and in one order: `immutable`, `append-only`, `no-dump`, `compressed`, `encrypted`, `hidden`.
+
 #### Amendment (2026-08): what "no complete read" means
 
 The row above ends "A file with **no** complete read is instead an
@@ -263,3 +265,4 @@ only cheap because the format is pre-freeze.
 | 2026-10 | Accepted | Decision 10's receipt is at schema 10, by [ADR-0127](0127-what-a-restore-did-not-restore-is-shown-through-the-passphrase.md): it records the identity of the set it names. |
 | 2026-10 | Accepted | Decision 10's receipt is at schema 11, by [ADR-0130](0130-a-restore-says-which-files-it-resumed-within.md): each file a resume wrote from the part its run had assembled says where it was resumed. |
 | 2026-10 | Accepted (amended) | [ADR-0146](0146-the-catalogue-folds-a-paths-case-when-asked-not-when-stored.md): Decision 8's fold is taken when a lookup asks for it, a folder at a time through the parent index, and no longer stored or indexed. |
+| 2026-10 | Accepted (related) | [ADR-0180](0180-capture-names-the-file-flags-it-does-not-keep.md): decision 2's vocabulary gains `file-flags:`, naming the flags a file carries that no format key keeps. |

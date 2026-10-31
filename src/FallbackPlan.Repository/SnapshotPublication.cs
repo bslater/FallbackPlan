@@ -897,7 +897,7 @@ public sealed partial class PublicationOrchestrator
             // short-circuits below and for the ancestry the manifest records.
             var prior = FindPriorVersion(entry);
             var unchanged = ChangeDetection.IsContentUnchanged(entry, prior);
-            var metadataDigest = FileVersionManifestCodec.MetadataDigest(entry.Metadata);
+            var metadataDigest = FileVersionManifestCodec.MetadataDigest(entry.Metadata, MetadataRules.FileFlagsOf(entry.Diagnostics));
 
             // The NFR-PERF-003 short-circuit: nothing about the file changed
             // and it is still where it was — re-emit the prior version's
@@ -982,7 +982,7 @@ public sealed partial class PublicationOrchestrator
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
                     entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId,
                     HasAlternateStreams: withParent.Metadata.AlternateStreams.Count > 0,
-                    MetadataDigest: FileVersionManifestCodec.MetadataDigest(withParent.Metadata),
+                    MetadataDigest: FileVersionManifestCodec.MetadataDigest(withParent.Metadata, MetadataRules.FileFlagsOf(withParent.CaptureDiagnostics)),
                     Streams: withParent.Metadata.AlternateStreams.Count > 0
                         ? [.. withParent.Metadata.AlternateStreams.Select(stream => stream.ObjectId)]
                         : null));
@@ -1042,6 +1042,7 @@ public sealed partial class PublicationOrchestrator
                 NameNormalisation = entry.NameNormalisation,
                 Metadata = entry.Metadata,
                 ParentVersion = prior.ObjectId,
+                CaptureDiagnostics = MetadataRules.WithFileFlags(priorManifest.CaptureDiagnostics, MetadataRules.FileFlagsOf(entry.Diagnostics)),
             };
 
             var objectId = await builder.AppendManifestAsync(

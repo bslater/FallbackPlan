@@ -214,7 +214,7 @@ public sealed class CatalogueProjector
                     version.LogicalLength,
                     version.Metadata.ModifiedAt,
                     hasAlternateStreams: version.Metadata.AlternateStreams.Count > 0,
-                    metadataDigest: FileVersionManifestCodec.MetadataDigest(version.Metadata));
+                    metadataDigest: FileVersionManifestCodec.MetadataDigest(version.Metadata, MetadataRules.FileFlagsOf(version.CaptureDiagnostics)));
                 target.RecordVersionContents(child.ObjectId, version.ContentObjects());
                 versions++;
             }

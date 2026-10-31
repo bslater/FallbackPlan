@@ -116,6 +116,8 @@ Key 7 holds the owner, the group and the DACL, and the audit list (SACL) as well
 > v1 (§Decision 5); special files (`entry_kind` 4) are zero-content file
 > versions with `special-kind:`/`device:` diagnostics (§Decision 4).
 
+> **2026-10 ([ADR-0180](../../docs/adr/0180-capture-names-the-file-flags-it-does-not-keep.md)).** Key 13's vocabulary gains `file-flags:`, naming the flags a Linux or macOS file carries that no key keeps (immutable, append-only, no-dump, compressed, encrypted, hidden). It is informational text like the rest, and changes nothing a reader accepts.
+
 ### 4.2 The whole-file hash
 
 `whole_file_hash` is computed over the **reconstructed plaintext file**, including materialised sparse extents as zeroes, using the repository's content-hash profile.

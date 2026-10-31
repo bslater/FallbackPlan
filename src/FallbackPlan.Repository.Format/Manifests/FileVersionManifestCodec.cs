@@ -429,7 +429,12 @@ public static class FileVersionManifestCodec
     /// </para>
     /// </remarks>
     /// <param name="metadata">The map to digest.</param>
-    public static byte[] MetadataDigest(EntryMetadata metadata)
+    /// <param name="flags">
+    /// The file's flags no key keeps, which capture names in its diagnostics
+    /// (ADR-0180), so a change to them alone is a change. With none the
+    /// digest is the map's alone, as every catalogue already recorded it.
+    /// </param>
+    public static byte[] MetadataDigest(EntryMetadata metadata, FileFlagBits flags = FileFlagBits.None)
     {
         ThrowHelper.ThrowIfNull(metadata);
 
@@ -439,7 +444,9 @@ public static class FileVersionManifestCodec
             AccessedAt = null,
             WindowsSecurityDescriptor = metadata.WindowsSecurityDescriptor ?? ReadOnlyMemory<byte>.Empty,
         });
-        return System.Security.Cryptography.SHA256.HashData(writer.Encode())[..16];
+        var encoded = writer.Encode();
+        return System.Security.Cryptography.SHA256.HashData(
+            MetadataRules.FileFlagsDiagnostic(flags) is { } named ? [.. encoded, .. System.Text.Encoding.UTF8.GetBytes(named)] : encoded)[..16];
     }
 
     internal static void WriteMetadata(CanonicalCborWriter writer, EntryMetadata metadata)
