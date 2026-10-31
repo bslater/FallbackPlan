@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics); FR-RST-003 and FR-RST-004 (amended by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back): the plan and the receipt name the flags a restore does not set)
+**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics); FR-RST-003 and FR-RST-004 (amended by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back): the plan and the receipt name the flags a restore does not set; FR-RST-004 amended again by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too): so do the recovery tool and `restore-file`)
 **Related:** [ADR-0026](0026-phase-1-capture-shapes.md) §2 (the `capture_diagnostics` vocabulary, which gains `file-flags:`), [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) (Windows' own attribute bits, which a format key keeps), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (immutable and system flags, and compression and encryption attributes, degraded and reported on Linux and macOS), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 13)
 
 **Built:**
@@ -55,6 +55,8 @@ An incremental passes over a file whose identity, size, modification time and me
 - **Say so on restore.** The plan and the receipt do not yet name a file whose flags were not given back. That is the next record's.
 
   > **2026-10: taken up by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back)** for the engine's restore: its plan and its receipt name a file's flags. The recovery tool and `restore-file` do not yet.
+  >
+  > **2026-10: and by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too)** for the recovery tool and `restore-file`.
 - **A folder's flags.** A tree carries no diagnostics.
 
 ## Alternatives considered
@@ -74,11 +76,29 @@ The record left the restore silent ("What this does not do"): a file captured wi
 
 The recovery tool and `restore-file` still say nothing of a file's flags. A folder's are named neither at capture nor on restore, since a tree carries no diagnostics.
 
+> **2026-10: the recovery tool and `restore-file` are taken up by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too).**
+
 **Built:** `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Restore/RestoreExecutor`:
 
 - `Domain.Tests/FileFlagsTests`: the flags' names are the diagnostic's, in its order; what a restore says names each flag, and nothing where there are none;
 - `Repository.Tests/RestoreMetadataHonestyTests`: each file's facts carry the flags its manifest names; the plan declares the two flagged files of three on its own line, naming each flag, on a POSIX target and on one that writes Windows' attribute bits and streams; a file's receipt item names its flags and is still restored, its not-applied list empty; on a POSIX host a link's item names its flags too;
 - `Repository.Tests/RestoreHardLinkTests`: a later name of a hard-link group names the flags its first name names.
+
+## Amendment 2 (2026-10) — the recovery tool and the single-file restore name them too
+
+Amendment 1 left the recovery tool and `restore-file` silent: a file recovered with either came back without its flags, and nothing said so. They write a file's metadata by the executor's rule (ADR-0149, ADR-0150), and should say what they did not give back in the same words.
+
+**Decision.** Both name a file's flags as the executor's receipt does, with `MetadataRules.FileFlagsNotApplied`:
+
+- **the recovery tool notes each item that carried them.** A file, a link, or a later name of a hard-link group that the tool restores gets a note of its own kind, `FlagsNotApplied`, whose reason is the receipt's words, and still counts as restored. The report's count of attributes not applied does not name them, as the receipt's list does not;
+- **`restore-file` says so on a line of its own** after what it says of the rest of the file's metadata.
+
+**Built:** `Recovery/RecoveryNote`; `Recovery/RecoverySession`; `Cli/CliApplication`:
+
+- `Repository.Tests/RecoveryMetadataTests`: a file's flags are noted in the receipt's words, the file restores, and no attribute is counted not applied;
+- `Repository.Tests/RecoveryLinkTests`: on a POSIX host, a link's flags are noted and the link restores;
+- `Repository.Tests/RecoveryHardLinkTests`: a later name of a group is noted as its first name is;
+- `Cli.Tests/InspectionCommandTests`: on Linux, `restore-file` of a file backed up with the no-dump flag says it was not given back.
 
 ## Status history
 
@@ -86,3 +106,4 @@ The recovery tool and `restore-file` still say nothing of a file's flags. A fold
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Capture reads a file's flags from each platform's stat, Linux's only where the volume reports each, and names them in the file's capture diagnostics, which publication writes into its manifest; they read back as the flags they name, and the digest an incremental compares counts them. `Domain/FileFlagBits`; `Domain/MetadataRules`; `Filesystem.Local/LocalFileSystemSource`; `Repository.Format/FileVersionManifestCodec`; `Domain.Tests/FileFlagsTests`; `Filesystem.Tests/LocalScanTests`; `Repository.Tests/FileFlagsCaptureTests`; `Repository.Tests/MetadataOnlyChangeTests` |
 | 2026-10 | Accepted (Amendment 1) | A restore names the file flags it does not give back: the plan on a line of its own on every target, naming each flag, and the receipt beside each file and link that carried them, a later hard-link name as its first; the item is still restored. `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Restore/RestoreExecutor`; `Domain.Tests/FileFlagsTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Repository.Tests/RestoreHardLinkTests` |
+| 2026-10 | Accepted (Amendment 2) | The recovery tool notes the flags a file, a link or a later hard-link name carried, in the receipt's words, and still counts it restored; `restore-file` says so on a line of its own. `Recovery/RecoveryNote`; `Recovery/RecoverySession`; `Cli/CliApplication`; `Repository.Tests/RecoveryMetadataTests`; `Repository.Tests/RecoveryLinkTests`; `Repository.Tests/RecoveryHardLinkTests`; `Cli.Tests/InspectionCommandTests` |
