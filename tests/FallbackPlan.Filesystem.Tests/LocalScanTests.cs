@@ -273,29 +273,52 @@ public sealed partial class LocalScanTests : IDisposable
     [SupportedOSPlatform("windows")]
     public async Task Scan_OnWindows_AFileCompressedBehindAReparsePoint_IsCapturedAsTheFileItIs_ContentAndAll()
     {
-        var content = string.Concat(Enumerable.Repeat("a file Windows compresses behind a reparse point. ", 6000));
-        var path = Write("compressed.txt", content);
-        using (var compact = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-            "compact.exe", $"/c /exe:xpress4k \"{path}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }))
+        // Only a volume that offers compression can hold such a file, and the
+        // temp directory may sit on one that does not, as CI's does. The
+        // system volume always offers it: Windows compresses its own files there.
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Temp", "fbp-scan-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        try
         {
-            Assert.IsNotNull(compact);
-            var said = await compact.StandardOutput.ReadToEndAsync();
-            await compact.WaitForExitAsync();
-            Assert.AreEqual(0, compact.ExitCode, said);
+            var content = string.Concat(Enumerable.Repeat("a file Windows compresses behind a reparse point. ", 6000));
+            var path = Path.Combine(root, "compressed.txt");
+            await File.WriteAllTextAsync(path, content);
+            using (var compact = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                "compact.exe", $"/c /exe:xpress4k \"{path}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }))
+            {
+                Assert.IsNotNull(compact);
+                var said = await compact.StandardOutput.ReadToEndAsync();
+                await compact.WaitForExitAsync();
+                Assert.AreEqual(0, compact.ExitCode, said);
+            }
+
+            Assert.IsTrue(
+                (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0,
+                "the premise: Windows keeps the compressed file behind a reparse point");
+
+            var leaves = new List<ScanEntry>();
+            await foreach (var scanEvent in _source.ScanAsync(root, new ScanOptions(), CancellationToken.None))
+            {
+                if (scanEvent is ScanEvent.Leaf leaf)
+                {
+                    leaves.Add(leaf.Entry);
+                }
+            }
+
+            var entry = Assert.ContainsSingle(leaves);
+            Assert.AreEqual(ScanEntryKind.File, entry.Kind);
+            Assert.IsNull(entry.LinkTarget);
+            Assert.AreEqual(content.Length, entry.Length);
+            using var read = _source.OpenRead(entry);
+            using var reader = new StreamReader(read);
+            Assert.AreEqual(content, await reader.ReadToEndAsync());
         }
-
-        Assert.IsTrue(
-            (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0,
-            "the premise: Windows keeps the compressed file behind a reparse point");
-
-        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
-
-        Assert.AreEqual(ScanEntryKind.File, entry.Kind);
-        Assert.IsNull(entry.LinkTarget);
-        Assert.AreEqual(content.Length, entry.Length);
-        using var read = _source.OpenRead(entry);
-        using var reader = new StreamReader(read);
-        Assert.AreEqual(content, await reader.ReadToEndAsync());
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [TestMethod]

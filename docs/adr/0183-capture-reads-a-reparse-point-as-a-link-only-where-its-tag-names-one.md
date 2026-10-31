@@ -10,7 +10,7 @@
 - The read: `Filesystem.Local/WindowsInterop` reads a reparse point's tag through a handle opened on the reparse point itself, and `Filesystem.Local/LocalFileSystemSource` asks for it only where an entry carries the reparse bit.
 - The tests:
   - `Filesystem.Tests/ReparsePointTests` — on every platform: a symbolic link to a file or a folder and a mount point are links; a compressed file and a deduplicated sparse file are files, and a cloud-kept folder a folder; a reparse point whose tag was not read is a link; an entry without the reparse bit is what its directory bit says, whatever tag is given.
-  - `Filesystem.Tests/LocalScanTests` — on Windows a file compressed with `compact /exe`, behind a reparse point, is scanned as a file with no link target, its full length, and its content read back whole.
+  - `Filesystem.Tests/LocalScanTests` — on Windows a file compressed with `compact /exe` on the system volume, which always offers compression, sits behind a reparse point and is scanned as a file with no link target, its full length, and its content read back whole.
 
 ---
 
