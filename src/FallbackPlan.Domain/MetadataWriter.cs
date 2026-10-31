@@ -69,9 +69,10 @@ public sealed class MetadataWriter(MetadataTarget target)
     /// changes the link itself (ADR-0101). .NET's permission setter follows a
     /// link and would write onto whatever it points at, and its time setters
     /// promise nothing either way, so a link's permissions and times go
-    /// through <see cref="SymlinkMetadata"/>. Its owner, group
-    /// and extended attributes are written by calls that never follow one,
-    /// and its creation time only on macOS, whose call does not. Linux gives
+    /// through <see cref="SymlinkMetadata"/>, as does its creation time, on
+    /// macOS and Windows, the platforms with a call for it. Its owner, group
+    /// and extended attributes are written by calls that never follow one.
+    /// On Windows a link takes its times alone. Linux gives
     /// every link the same permissions and has no call to change them, so
     /// there a link's captured ones are written by nothing and land only where
     /// they are those (<see cref="MetadataRules.LinkPermissionsLand"/>).
@@ -202,9 +203,8 @@ public sealed class MetadataWriter(MetadataTarget target)
         }
 
         if (target.SupportsCreationTimes
-            && (!link || OperatingSystem.IsMacOS())
             && FileTimes.FromUnixMilliseconds(metadata.CreatedAt) is { } created
-            && FileTimes.TrySetCreationTime(destination, created))
+            && (link ? SymlinkMetadata.TrySetCreationTime(destination, created) : FileTimes.TrySetCreationTime(destination, created)))
         {
             applied |= CapturedMetadata.CreatedAt;
         }

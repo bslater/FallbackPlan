@@ -1,4 +1,5 @@
 using Bodu;
+using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -17,19 +18,21 @@ namespace FallbackPlan.Domain;
 /// <c>lchmod</c>. .NET's time setters act on the link itself on this
 /// runtime, but promise nothing a restore could rest on, so a link's times
 /// go through <c>utimensat</c> told not to follow a final link, on Linux and
-/// macOS, where the call itself says so.
+/// macOS, where the call itself says so. On Windows they go through a handle
+/// opened on the reparse point itself, which a handle's time setters then
+/// write onto, a folder's link's as a file's (ADR-0181 Amendment 2).
 /// Linux has no call that changes a link's permissions: it gives every link
 /// <see cref="LinuxPermissions"/> and consults none. A link's owner and group
 /// (<see cref="FileOwnership"/>), its extended attributes
 /// (<see cref="ExtendedAttributes"/>) and its creation time on macOS
 /// (<see cref="FileTimes"/>) are written by calls that already never follow
-/// one. A link a restore makes on Windows (ADR-0181) is given none of these:
-/// no call there sets a link's own times, and its attribute bits and
-/// descriptor are written only onto files and folders.
+/// one. A link a restore makes on Windows (ADR-0181) is given its times
+/// alone: its attribute bits and descriptor are written only onto files and
+/// folders.
 /// </para>
 /// <para>
-/// The timespec both platforms take is two 64-bit words, so a 32-bit process
-/// sets nothing rather than guess at a layout.
+/// The timespec Linux and macOS take is two 64-bit words, so a 32-bit
+/// process there sets nothing rather than guess at a layout.
 /// </para>
 /// </remarks>
 public static partial class SymlinkMetadata
@@ -37,8 +40,12 @@ public static partial class SymlinkMetadata
     /// <summary>The permissions Linux gives every link, <c>rwxrwxrwx</c>, which nothing there changes or consults.</summary>
     public const uint LinuxPermissions = 0x1FF;
 
-    /// <summary>Whether this platform has a call that sets a link's own times: Linux and macOS do, in a 64-bit process.</summary>
-    public static bool CanSetTimes { get; } = (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && Environment.Is64BitProcess;
+    /// <summary>Whether this platform has a call that sets a link's own times: Windows does, and Linux and macOS in a 64-bit process.</summary>
+    public static bool CanSetTimes { get; } =
+        OperatingSystem.IsWindows() || ((OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && Environment.Is64BitProcess);
+
+    /// <summary>Whether this platform has a call that sets a link's own creation time: macOS and Windows do.</summary>
+    public static bool CanSetCreationTime { get; } = OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
 
     /// <summary>Whether this platform keeps a link's own permissions and has a call that sets them: macOS does.</summary>
     [SupportedOSPlatformGuard("macos")]
@@ -61,11 +68,46 @@ public static partial class SymlinkMetadata
             return false;
         }
 
+        if (OperatingSystem.IsWindows())
+        {
+            return Windows.OntoTheLink(path, link =>
+            {
+                if (modifiedUtc is { } modified)
+                {
+                    File.SetLastWriteTimeUtc(link, modified);
+                }
+
+                if (accessedUtc is { } accessed)
+                {
+                    File.SetLastAccessTimeUtc(link, accessed);
+                }
+            });
+        }
+
         // The access time comes first, as the call takes them.
         Span<TimeSpec> times = [TimeSpec.Of(accessedUtc), TimeSpec.Of(modifiedUtc)];
         return OperatingSystem.IsMacOS()
             ? Darwin.SetTimes(Darwin.CurrentDirectory, path, ref times[0], Darwin.NoFollow) == 0
             : Linux.SetTimes(Linux.CurrentDirectory, path, ref times[0], Linux.NoFollow) == 0;
+    }
+
+    /// <summary>
+    /// Sets the creation time of the link at <paramref name="path"/> itself,
+    /// never following it.
+    /// </summary>
+    /// <param name="path">The link, which may point at nothing.</param>
+    /// <param name="createdUtc">Its creation time.</param>
+    /// <returns>Whether it now carries it: false where the platform has no such call, and wherever it refuses.</returns>
+    public static bool TrySetCreationTime(string path, DateTime createdUtc)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+
+        if (OperatingSystem.IsWindows())
+        {
+            return Windows.OntoTheLink(path, link => File.SetCreationTimeUtc(link, createdUtc));
+        }
+
+        return OperatingSystem.IsMacOS() && FileTimes.TrySetCreationTime(path, createdUtc);
     }
 
     /// <summary>
@@ -117,6 +159,49 @@ public static partial class SymlinkMetadata
 
         [LibraryImport("libc", EntryPoint = "utimensat", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
         public static partial int SetTimes(int directory, string path, ref TimeSpec times, int flags);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static partial class Windows
+    {
+        private const uint WriteAttributes = 0x0100;
+
+        private const uint OpenExisting = 3;
+
+        /// <summary>Opens a link itself, and never what it points at.</summary>
+        private const uint OpenReparsePoint = 0x0020_0000;
+
+        /// <summary>Lets a folder's link open, since Windows opens a folder only when asked to open one.</summary>
+        private const uint BackupSemantics = 0x0200_0000;
+
+        /// <summary>
+        /// Opens the link at <paramref name="path"/> itself for its
+        /// attributes alone and makes <paramref name="write"/> onto it.
+        /// </summary>
+        /// <returns>Whether the link opened and took the write.</returns>
+        public static bool OntoTheLink(string path, Action<SafeFileHandle> write)
+        {
+            using var link = CreateFile(
+                path, WriteAttributes, FileShare.ReadWrite | FileShare.Delete, 0, OpenExisting, OpenReparsePoint | BackupSemantics, 0);
+            if (link.IsInvalid)
+            {
+                return false;
+            }
+
+            try
+            {
+                write(link);
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+
+        [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+        private static partial SafeFileHandle CreateFile(
+            string path, uint access, FileShare share, nint security, uint disposition, uint flags, nint template);
     }
 
     [SupportedOSPlatform("macos")]

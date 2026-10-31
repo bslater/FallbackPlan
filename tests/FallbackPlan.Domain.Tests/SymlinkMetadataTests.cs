@@ -8,7 +8,10 @@ namespace FallbackPlan.Domain.Tests;
 /// its modification and access times on Linux and macOS, and its permissions
 /// on macOS, which keeps a link's own. Every one lands on the link and never
 /// on what it points at, so a link that points out of a restore, or at
-/// nothing, is given its own and nothing else is touched.
+/// nothing, is given its own and nothing else is touched. Which platforms
+/// set a link's times and its creation time is pinned here, Windows among
+/// them (ADR-0181 Amendment 2), whose writes
+/// <see cref="SymlinkMetadataOnWindowsTests"/> proves.
 /// </summary>
 /// <remarks>
 /// .NET's permission setter follows a link. Used on one, it would give
@@ -34,8 +37,24 @@ public sealed class SymlinkMetadataTests : IDisposable
         Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "fbp-symlink-metadata-tests", Guid.NewGuid().ToString("n"))).FullName;
 
     [TestMethod]
-    public void CanSetTimes_IsTrueOnLinuxAndMacOsAlone() =>
-        Assert.AreEqual((OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && Environment.Is64BitProcess, SymlinkMetadata.CanSetTimes);
+    public void CanSetTimes_IsTrueOnWindows_AndOnLinuxAndMacOsInA64BitProcess() =>
+        Assert.AreEqual(
+            OperatingSystem.IsWindows() || ((OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && Environment.Is64BitProcess),
+            SymlinkMetadata.CanSetTimes);
+
+    [TestMethod]
+    public void CanSetCreationTime_IsTrueOnMacOsAndWindowsAlone() =>
+        Assert.AreEqual(OperatingSystem.IsMacOS() || OperatingSystem.IsWindows(), SymlinkMetadata.CanSetCreationTime);
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux has no call that sets a link's creation time")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public void TrySetCreationTime_OnLinux_WritesNothing()
+    {
+        var link = Link("born", Target("born-target.bin"));
+
+        Assert.IsFalse(SymlinkMetadata.TrySetCreationTime(link, Modified));
+    }
 
     [TestMethod]
     public void CanSetPermissions_IsTrueOnMacOsAlone() =>

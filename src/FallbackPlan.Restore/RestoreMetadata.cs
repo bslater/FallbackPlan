@@ -242,12 +242,14 @@ public static class RestoreMetadata
     /// follow it: owner and group as for a file, item by item; extended
     /// attributes where the target writes them; permissions where the target
     /// applies POSIX metadata, item by item on Linux; modification and access
-    /// times where the platform sets a link's own; and a creation time only on
-    /// macOS, the one platform whose call for it does not follow a link.
+    /// times where the platform sets a link's own; and a creation time where
+    /// the target keeps one and the platform sets a link's own, on macOS and
+    /// Windows. On Windows that is all: a link's attribute bits and
+    /// descriptor are written only onto files and folders.
     /// </summary>
     private static CapturedMetadata AppliedToALink(RestoreTargetProfile target)
     {
-        if (!target.SupportsSymlinks || OperatingSystem.IsWindows())
+        if (!target.SupportsSymlinks)
         {
             return CapturedMetadata.None;
         }
@@ -258,12 +260,12 @@ public static class RestoreMetadata
             applied |= CapturedMetadata.ModifiedAt | CapturedMetadata.AccessedAt;
         }
 
-        if (target.SupportsCreationTimes && OperatingSystem.IsMacOS())
+        if (target.SupportsCreationTimes && SymlinkMetadata.CanSetCreationTime)
         {
             applied |= CapturedMetadata.CreatedAt;
         }
 
-        if (target.SupportsPosixMetadata)
+        if (target.SupportsPosixMetadata && !OperatingSystem.IsWindows())
         {
             applied |= CapturedMetadata.PosixMode;
         }
