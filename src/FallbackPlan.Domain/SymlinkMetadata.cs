@@ -26,9 +26,9 @@ namespace FallbackPlan.Domain;
 /// (<see cref="FileOwnership"/>), its extended attributes
 /// (<see cref="ExtendedAttributes"/>) and its creation time on macOS
 /// (<see cref="FileTimes"/>) are written by calls that already never follow
-/// one. A link a restore makes on Windows (ADR-0181) is given its times
-/// alone: its attribute bits and descriptor are written only onto files and
-/// folders.
+/// one. A link a restore makes on Windows (ADR-0181) is given its times and
+/// its attribute bits (ADR-0181 Amendment 3), both through the handle on the
+/// link: its descriptor is written only onto files and folders.
 /// </para>
 /// <para>
 /// The timespec Linux and macOS take is two 64-bit words, so a 32-bit
@@ -46,6 +46,10 @@ public static partial class SymlinkMetadata
 
     /// <summary>Whether this platform has a call that sets a link's own creation time: macOS and Windows do.</summary>
     public static bool CanSetCreationTime { get; } = OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
+
+    /// <summary>Whether this platform keeps a link's own attribute bits and has a call that sets them: Windows does.</summary>
+    [SupportedOSPlatformGuard("windows")]
+    public static bool CanSetAttributes { get; } = OperatingSystem.IsWindows();
 
     /// <summary>Whether this platform keeps a link's own permissions and has a call that sets them: macOS does.</summary>
     [SupportedOSPlatformGuard("macos")]
@@ -111,6 +115,24 @@ public static partial class SymlinkMetadata
     }
 
     /// <summary>
+    /// Gives the link at <paramref name="path"/> itself the attribute bits of
+    /// <paramref name="captured"/> a restore writes, set as captured and
+    /// cleared where not (<see cref="MetadataRules.FileAttributesToSet"/>),
+    /// never following it. The bits that make it a link, and a folder's, stay
+    /// as making it left them, which Windows will not take as written bits.
+    /// </summary>
+    /// <param name="path">The link, which may point at nothing.</param>
+    /// <param name="captured">Its captured attribute bits.</param>
+    /// <returns>Whether it now carries them: false on any platform but Windows, and wherever Windows refuses.</returns>
+    public static bool TrySetAttributes(string path, uint captured)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+        return CanSetAttributes && Windows.OntoTheLink(path, link => File.SetAttributes(
+            link,
+            (FileAttributes)MetadataRules.FileAttributesToSet((uint)File.GetAttributes(link) & ~MetadataRules.EntryFileAttributes, captured)));
+    }
+
+    /// <summary>
     /// Sets the permissions of the link at <paramref name="path"/> itself,
     /// never following it.
     /// </summary>
@@ -164,7 +186,8 @@ public static partial class SymlinkMetadata
     [SupportedOSPlatform("windows")]
     private static partial class Windows
     {
-        private const uint WriteAttributes = 0x0100;
+        /// <summary>Reading a link's attribute bits and writing them and its times, and nothing of what it holds.</summary>
+        private const uint ReadAndWriteAttributes = 0x0080 | 0x0100;
 
         private const uint OpenExisting = 3;
 
@@ -182,7 +205,7 @@ public static partial class SymlinkMetadata
         public static bool OntoTheLink(string path, Action<SafeFileHandle> write)
         {
             using var link = CreateFile(
-                path, WriteAttributes, FileShare.ReadWrite | FileShare.Delete, 0, OpenExisting, OpenReparsePoint | BackupSemantics, 0);
+                path, ReadAndWriteAttributes, FileShare.ReadWrite | FileShare.Delete, 0, OpenExisting, OpenReparsePoint | BackupSemantics, 0);
             if (link.IsInvalid)
             {
                 return false;

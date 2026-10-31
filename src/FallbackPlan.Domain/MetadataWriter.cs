@@ -72,7 +72,8 @@ public sealed class MetadataWriter(MetadataTarget target)
     /// through <see cref="SymlinkMetadata"/>, as does its creation time, on
     /// macOS and Windows, the platforms with a call for it. Its owner, group
     /// and extended attributes are written by calls that never follow one.
-    /// On Windows a link takes its times alone. Linux gives
+    /// On Windows a link takes its times and its attribute bits, the bits
+    /// through the same handle on the link. Linux gives
     /// every link the same permissions and has no call to change them, so
     /// there a link's captured ones are written by nothing and land only where
     /// they are those (<see cref="MetadataRules.LinkPermissionsLand"/>).
@@ -269,11 +270,14 @@ public sealed class MetadataWriter(MetadataTarget target)
         // Off Windows .NET maps these bits onto permissions and flags of its
         // own, so none is written there whatever a target says.
         string? unsetDetail = null;
-        if (target.SupportsFileAttributes && OperatingSystem.IsWindows() && !link && metadata.FileAttributes is { } bits)
+        if (target.SupportsFileAttributes && OperatingSystem.IsWindows() && metadata.FileAttributes is { } bits)
         {
-            var unset = MetadataRules.UnsetFileAttributes(bits, target.SupportsCompression);
-            if (Wrote(() => File.SetAttributes(destination, (FileAttributes)MetadataRules.FileAttributesToSet(
-                    (uint)File.GetAttributes(destination), bits)))
+            // Nothing compresses a link, so its compressed bit is named.
+            var unset = MetadataRules.UnsetFileAttributes(bits, target.SupportsCompression && !link);
+            if ((link
+                    ? SymlinkMetadata.TrySetAttributes(destination, bits)
+                    : Wrote(() => File.SetAttributes(destination, (FileAttributes)MetadataRules.FileAttributesToSet(
+                        (uint)File.GetAttributes(destination), bits))))
                 && unset.Count == 0
                 && compressionDetail is null)
             {

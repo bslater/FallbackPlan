@@ -21,7 +21,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a link where the account may, a folder's or a file's as the executor
 /// makes it, with Windows' separators, and skips it with a note where it
 /// may not (ADR-0181 Amendment 1), and gives it its own times back there too
-/// (ADR-0181 Amendment 2).
+/// (ADR-0181 Amendment 2), and its own attribute bits (ADR-0181 Amendment 3).
 /// </summary>
 /// <remarks>
 /// Whatever the output holds at a file's or a link's name and will not give
@@ -275,6 +275,32 @@ public sealed class RecoveryLinkTests : IDisposable
         Assert.AreEqual(Utc(Before), File.GetLastAccessTimeUtc(outside), "a link's times went through it");
         CollectionAssert.AreEqual(new byte[] { 9, 9, 9 }, File.ReadAllBytes(outside));
         Assert.AreEqual(1, report.Restored);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own bits are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task RecoveryRestore_OnWindows_ALinkWindowsCaptured_GetsItsAttributeBitsBack_AndWhatItPointsAtKeepsItsOwn()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", [1, 2, 3]).Metadata = new EntryMetadata { ModifiedAt = LinkModified, FileAttributes = 0x20 };
+        source.AddNode(Link("z-hidden", "data/target.bin") with
+        {
+            Metadata = new EntryMetadata { ModifiedAt = LinkModified, FileAttributes = 0x400 | 0x2 },
+        });
+        var output = Path.Combine(_root, "restored");
+
+        var report = await RestoreIntoAsync(source, output);
+
+        Assert.AreEqual((2, 0), (report.Restored, report.Failed));
+        Assert.AreEqual(
+            FileAttributes.Hidden | FileAttributes.ReparsePoint,
+            File.GetAttributes(Path.Combine(output, "z-hidden")) & (FileAttributes.Hidden | FileAttributes.Archive | FileAttributes.ReparsePoint));
+        Assert.AreEqual(
+            FileAttributes.Archive,
+            File.GetAttributes(Path.Combine(output, "data", "target.bin")) & (FileAttributes.Hidden | FileAttributes.Archive),
+            "a link's bits went through it");
     }
 
     /// <inheritdoc />

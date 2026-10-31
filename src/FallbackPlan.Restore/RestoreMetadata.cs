@@ -244,8 +244,9 @@ public static class RestoreMetadata
     /// applies POSIX metadata, item by item on Linux; modification and access
     /// times where the platform sets a link's own; and a creation time where
     /// the target keeps one and the platform sets a link's own, on macOS and
-    /// Windows. On Windows that is all: a link's attribute bits and
-    /// descriptor are written only onto files and folders.
+    /// Windows; and its attribute bits where the target writes them and the
+    /// platform sets a link's own, on Windows. A link's descriptor is written
+    /// only onto files and folders.
     /// </summary>
     private static CapturedMetadata AppliedToALink(RestoreTargetProfile target)
     {
@@ -273,6 +274,11 @@ public static class RestoreMetadata
         if (target.SupportsExtendedAttributes && ExtendedAttributes.CanSet)
         {
             applied |= CapturedMetadata.ExtendedAttributes;
+        }
+
+        if (target.SupportsFileAttributes && SymlinkMetadata.CanSetAttributes)
+        {
+            applied |= CapturedMetadata.FileAttributes;
         }
 
         return applied;
@@ -517,14 +523,15 @@ public static class RestoreMetadata
                 }
             }
 
+            // Nothing compresses a link, so its compressed bit is unset.
             if ((applied & known.Captured & CapturedMetadata.FileAttributes) != 0
                 && known.FileAttributes is { } bits
-                && MetadataRules.UnsetFileAttributes(bits, target.SupportsCompression).Count > 0)
+                && MetadataRules.UnsetFileAttributeBits(bits, target.SupportsCompression && item.Kind != EntryKind.Symlink) is var unset and not 0)
             {
                 applied &= ~CapturedMetadata.FileAttributes;
                 apart |= CapturedMetadata.FileAttributes;
                 unsetBits.Add(item.Kind);
-                unsetMask |= bits;
+                unsetMask |= unset;
             }
 
             if ((applied & known.Captured & CapturedMetadata.AlternateStreams) != 0
@@ -682,7 +689,7 @@ public static class RestoreMetadata
             + $"will be restored degraded."));
         Add("unset-file-attributes", unsetBits, string.Create(CultureInfo.InvariantCulture,
             $"File attributes captured on {unsetBits} include bits no restore sets: "
-            + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask, target.SupportsCompression))}. Those will not be "
+            + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask))}. Those will not be "
             + $"applied; the read-only, hidden, system, archive and not-content-indexed bits will"
             + $"{(target.SupportsCompression ? ", and so will compression" : string.Empty)}."));
         Add("file-flags", fileFlags, string.Create(CultureInfo.InvariantCulture,

@@ -19,7 +19,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// separators. A link gets its own modification, access and creation times
 /// back, onto the link and never through it, and the rule the plan and the
 /// receipt hold a link to grants on every platform what that platform sets
-/// on one (ADR-0181 Amendment 2).
+/// on one (ADR-0181 Amendment 2). A link Windows captured gets its attribute
+/// bits back the same way, and a bit no restore sets is named as a file's
+/// is (ADR-0181 Amendment 3).
 /// </summary>
 /// <remarks>
 /// Windows makes a link only for an account that holds the privilege to, or
@@ -31,6 +33,14 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
 {
     private const uint FolderBit = 0x10;
     private const uint ReparsePointBit = 0x400;
+    private const uint HiddenBit = 0x2;
+    private const uint SystemBit = 0x4;
+    private const uint ArchiveBit = 0x20;
+    private const uint EncryptedBit = 0x4000;
+
+    /// <summary>The bits the attribute tests read: those a restore writes, and those that say what an entry is.</summary>
+    private const FileAttributes Watched = FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive
+        | FileAttributes.Directory | FileAttributes.ReparsePoint;
     private const ulong Modified = 1_722_000_000_000;
 
     /// <summary>When a link was modified: 2021-03-04.</summary>
@@ -47,7 +57,7 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         Assert.AreEqual(SymbolicLinks.CanCreate, RestoreTargetProfile.ForLocalPlatform().SupportsSymlinks);
 
     [TestMethod]
-    public void TheRule_ForALink_GrantsWhatThisPlatformSetsOnALink_AndNeverItsWindowsAttributes()
+    public void TheRule_ForALink_GrantsWhatThisPlatformSetsOnALink_AndNeverItsDescriptorOrStreams()
     {
         // A target that keeps everything, so the platform alone decides.
         var everything = RestoreTargetProfile.ForLocalPlatform() with
@@ -65,10 +75,11 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
         Assert.AreEqual(SymlinkMetadata.CanSetTimes, applied.HasFlag(CapturedMetadata.ModifiedAt | CapturedMetadata.AccessedAt));
         Assert.AreEqual(SymlinkMetadata.CanSetCreationTime, applied.HasFlag(CapturedMetadata.CreatedAt));
         Assert.AreEqual(!OperatingSystem.IsWindows(), applied.HasFlag(CapturedMetadata.PosixMode), "Windows writes no permissions");
+        Assert.AreEqual(SymlinkMetadata.CanSetAttributes, applied.HasFlag(CapturedMetadata.FileAttributes));
         Assert.AreEqual(
             CapturedMetadata.None,
-            applied & (CapturedMetadata.FileAttributes | CapturedMetadata.SecurityDescriptor | CapturedMetadata.AlternateStreams),
-            "a link's attribute bits, descriptor and streams are written onto nothing");
+            applied & (CapturedMetadata.SecurityDescriptor | CapturedMetadata.AlternateStreams),
+            "a link's descriptor and streams are written onto nothing");
     }
 
     [TestMethod]
@@ -161,6 +172,48 @@ public sealed class RestoreWindowsLinkTests : ArchiveTestHarness
             (Utc(Modified), Utc(Modified), Utc(Modified)),
             (File.GetLastWriteTimeUtc(target), File.GetLastAccessTimeUtc(target), File.GetCreationTimeUtc(target)),
             "a link's times went through it");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a link's own bits are written through Windows' own handle on it")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task OnWindows_ALinkWindowsCaptured_GetsItsAttributeBitsBack_AndABitNoRestoreSetsIsNamed()
+    {
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var source = new FakeFileSystemSource();
+        source.AddFile("data/target.bin", Deterministic(400, 5)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, FileAttributes = ArchiveBit };
+        source.Folders["data"] = new EntryMetadata { ModifiedAt = Modified, FileAttributes = FolderBit };
+        AddLink(source, "z-hidden", "data/target.bin", fileAttributes: ReparsePointBit | HiddenBit | SystemBit);
+        AddLink(source, "z-hidden-folder", "data", fileAttributes: FolderBit | ReparsePointBit | HiddenBit);
+        AddLink(source, "z-encrypted", "data/target.bin", fileAttributes: ReparsePointBit | HiddenBit | EncryptedBit);
+
+        var (plan, receipt, output) = await PublishAndRestoreAsync(source, 0xB4);
+
+        var unset = Assert.ContainsSingle(plan.Degradations.Where(degradation => degradation.Detail.Contains("symlink", StringComparison.Ordinal)));
+        Assert.AreEqual("unset-file-attributes", unset.Capability);
+        Assert.Contains("1 symlink(s)", unset.Detail, StringComparison.Ordinal);
+        foreach (var name in new[] { "z-hidden", "z-hidden-folder" })
+        {
+            var item = receipt.Items.Single(item => item.Path == name);
+            Assert.AreEqual("restored", item.Outcome, name);
+            Assert.IsNull(item.Detail, name);
+            Assert.IsNull(item.NotApplied, name);
+        }
+
+        Assert.AreEqual(
+            FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint,
+            File.GetAttributes(Path.Combine(output, "z-hidden")) & Watched);
+        Assert.AreEqual(
+            FileAttributes.Directory | FileAttributes.Hidden | FileAttributes.ReparsePoint,
+            File.GetAttributes(Path.Combine(output, "z-hidden-folder")) & Watched);
+        var encrypted = receipt.Items.Single(item => item.Path == "z-encrypted");
+        Assert.AreEqual("file attribute(s) not applied: Encrypted (not set by a restore)", encrypted.Detail);
+        CollectionAssert.AreEqual(new[] { "file_attributes" }, encrypted.NotApplied!.ToArray());
+        Assert.AreEqual(FileAttributes.Hidden | FileAttributes.ReparsePoint, File.GetAttributes(Path.Combine(output, "z-encrypted")) & Watched);
+
+        Assert.AreEqual(FileAttributes.Archive, File.GetAttributes(Path.Combine(output, "data", "target.bin")) & Watched, "a link's bits went through it");
+        Assert.AreEqual(FileAttributes.Directory, File.GetAttributes(Path.Combine(output, "data")) & Watched, "a folder's link's bits went through it");
     }
 
     private static void AddLink(FakeFileSystemSource source, string path, string target, uint? fileAttributes) =>
