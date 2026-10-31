@@ -8,7 +8,7 @@
 **Built:**
 - The read: `Filesystem.Local/WindowsInterop` reads a link's descriptor through a handle opened on the link itself, and `Filesystem.Local/LocalFileSystemSource` asks it for a link's.
 - The tests:
-  - `Filesystem.Tests/LocalScanTests` — on Windows: a link to a file kept to an account the link's folder does not name is captured as a link whose DACL is its folder's, while the file's names that account; a folder's link is captured as a link, never descended into, with its own DACL, while the folder it points at keeps its own; a link to nothing still carries a descriptor.
+  - `Filesystem.Tests/LocalScanTests` — on Windows: a link to a file kept to an account the link's folder does not name is captured as a link whose DACL is its folder's, while the file's names that account; a folder's link is captured as a link, never descended into, with its own DACL, while the folder it points at keeps its own; a link to nothing still carries a descriptor; and, where the account holds the privilege an audit list is read with, a link that takes one from its folder is captured with it.
 
 ---
 

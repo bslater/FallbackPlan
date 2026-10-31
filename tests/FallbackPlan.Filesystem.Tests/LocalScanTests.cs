@@ -238,6 +238,34 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Windows, "only an elevated process holds the privilege an audit list is read with")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_ALinkTakingAnAuditListFromItsFolder_IsCapturedWithIt()
+    {
+        // The link's handle asks the right to read an audit list only where
+        // the read asks for one; without it the read falls back to none.
+        Assert.IsTrue(SymbolicLinks.CanCreate, "the premise: this account may make a link");
+        var folder = new DirectoryInfo(_root);
+        var security = folder.GetAccessControl(System.Security.AccessControl.AccessControlSections.Audit);
+        security.AddAuditRule(new System.Security.AccessControl.FileSystemAuditRule(
+            new System.Security.Principal.SecurityIdentifier("S-1-1-0"),
+            System.Security.AccessControl.FileSystemRights.Delete,
+            System.Security.AccessControl.InheritanceFlags.ObjectInherit,
+            System.Security.AccessControl.PropagationFlags.None,
+            System.Security.AccessControl.AuditFlags.Success));
+        folder.SetAccessControl(security);
+        SymbolicLinks.Create(Path.Combine(_root, "audited-link"), Path.Combine(_root, "not-there.txt"), folder: false);
+
+        var link = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        var read = Described(link);
+        Assert.IsTrue(read.SaclPresent);
+        Assert.Contains("S-1-1-0", read.AuditedAccounts);
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "creating a symlink on Windows needs a privilege the runner lacks")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Scan_TreeContainsASymlink_CapturesItAsALinkAndNeverFollowsIt()
