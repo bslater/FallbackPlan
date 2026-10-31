@@ -244,6 +244,7 @@ Status per record. **A hundred and seventy of the hundred and seventy-eight are 
 | [0176](adr/0176-a-restore-writes-back-a-windows-security-descriptor-whose-accounts-the-machine-knows.md) | A restore writes back a Windows security descriptor whose accounts the machine knows: owner, group and DACL as captured, before the attribute bits, and one naming an account it does not know is named |
 | [0177](adr/0177-a-restore-on-windows-keeps-a-files-extended-attributes-as-alternate-streams.md) | A restore on Windows keeps a file's extended attributes as alternate streams: each as the stream of its name, before the times, and one only Linux's kernel reads, or whose name no stream may have, is named |
 | [0178](adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md) | The plan names a file its new folder would open wider than it was: where a descriptor is not written, what the folder it lands in gives is held against what its own DACL gave, and the files, folders and accounts that gain are named |
+| [0179](adr/0179-a-restore-on-linux-and-macos-keeps-a-files-alternate-streams-as-extended-attributes.md) | A restore on Linux and macOS keeps a file's alternate streams as extended attributes: each as the attribute of its name where the target writes attributes and keeps no streams; Linux takes only those in its user namespace, and a file's own attribute keeps its name |
 
 Template: [0000](adr/0000-template.md)
 
