@@ -52,13 +52,14 @@ public sealed record RestoreTargetProfile
     public bool SupportsFileAttributes { get; init; }
 
     /// <summary>
-    /// The access a file made in a folder would take from it, read from the
-    /// nearest folder at or above it that stands, which the plan holds
-    /// against a file's own where its descriptor will not be written
-    /// (<see cref="WindowsAccess"/>; ADR-0178). Null where it does not say:
-    /// off Windows, and for a target no case names.
+    /// The access a file made in a folder would take, and the folder it comes
+    /// from: the nearest at or above it that stands, through each folder below
+    /// that the restore makes. The plan holds it against a file's own where
+    /// its descriptor will not be written (<see cref="WindowsAccess"/>;
+    /// ADR-0178 and its Amendment 3). Null where it does not say: off
+    /// Windows, and for a target no case names.
     /// </summary>
-    public Func<string, IReadOnlyDictionary<string, uint>?> InheritedAccessAt { get; init; } = _ => null;
+    public Func<string, InheritedAccess?> InheritedAccessAt { get; init; } = _ => null;
 
     /// <summary>
     /// Whether the executor gives a file and a folder their NTFS compression

@@ -84,19 +84,23 @@ public sealed record RestoreItemFacts(
 
 /// <summary>
 /// The files a restore would open wider than they were (ADR-0178): their
-/// descriptors will not be written, and the folders they land in give some
-/// account access their own did not. A run is refused for them unless a
+/// descriptors will not be written, and what they take where they land gives
+/// some account access their own did not. A run is refused for them unless a
 /// person acknowledges it (ADR-0178 Amendment 1; architecture 06 §3).
 /// </summary>
 /// <param name="Files">How many files.</param>
-/// <param name="Folders">The folders they land in, each once.</param>
+/// <param name="Folders">
+/// The folders their access comes from, each once: for each file the nearest
+/// that stands at or above where it lands (ADR-0178 Amendment 3).
+/// </param>
 /// <param name="Accounts">Every account that gains, by SID, each once.</param>
 public sealed record WiderAccess(int Files, IReadOnlyList<string> Folders, IReadOnlyList<string> Accounts)
 {
     /// <summary>The plan's <c>wider-access</c> line, which the run's refusal says too.</summary>
     public string Describe() => string.Create(CultureInfo.InvariantCulture,
-        $"Security descriptors captured on {Files} file(s) will not be applied, and the folder they land in "
-        + $"({string.Join(", ", Folders)}) gives them access their own did not, to {string.Join(", ", Accounts)}.");
+        $"Security descriptors captured on {Files} file(s) will not be applied, and the folder they take their "
+        + $"access from ({string.Join(", ", Folders)}) gives them access their own did not, to "
+        + $"{string.Join(", ", Accounts)}.");
 }
 
 /// <summary>
@@ -679,8 +683,10 @@ public static class RestoreMetadata
     }
 
     /// <summary>
-    /// The folder each item of <paramref name="slices"/> is restored into,
-    /// its slice's own (ADR-0178), or null for an item none of them holds.
+    /// The folder each item of <paramref name="slices"/> lands in: its path
+    /// resolved under its slice's folder, as the executor resolves it
+    /// (ADR-0178 Amendment 3). Null for an item none of them holds, and for
+    /// one whose path the executor would refuse.
     /// </summary>
     /// <param name="slices">The restore's slices, each with its plan and where it writes.</param>
     public static Func<RestorePlanItem, string?> DestinationsOf(IReadOnlyList<RestoreSlice> slices)
@@ -692,7 +698,11 @@ public static class RestoreMetadata
         {
             foreach (var item in slice.Plan.Items)
             {
-                into.TryAdd(item.ObjectId, slice.OutputDirectory);
+                if (RestorePaths.TryResolve(Path.GetFullPath(slice.OutputDirectory), item.Path, out var landing, out _)
+                    && Path.GetDirectoryName(landing) is { } folder)
+                {
+                    into.TryAdd(item.ObjectId, folder);
+                }
             }
         }
 
@@ -755,8 +765,8 @@ public static class RestoreMetadata
         ThrowHelper.ThrowIfNull(reader);
 
         // Each folder is read once, to choose what to read and to judge it.
-        var inheritedAt = new Dictionary<string, IReadOnlyDictionary<string, uint>?>(StringComparer.Ordinal);
-        IReadOnlyDictionary<string, uint>? Inherited(string folder)
+        var inheritedAt = new Dictionary<string, InheritedAccess?>(StringComparer.Ordinal);
+        InheritedAccess? Inherited(string folder)
         {
             if (!inheritedAt.TryGetValue(folder, out var access))
             {
@@ -846,7 +856,7 @@ public static class RestoreMetadata
         var accounts = new List<string>();
 
         // Each folder's access is read once, however many files land in it.
-        var inheritedAt = new Dictionary<string, IReadOnlyDictionary<string, uint>?>(StringComparer.Ordinal);
+        var inheritedAt = new Dictionary<string, InheritedAccess?>(StringComparer.Ordinal);
         foreach (var item in plan.Items)
         {
             if (item.Kind != EntryKind.File
@@ -865,16 +875,16 @@ public static class RestoreMetadata
                 inheritedAt[folder] = inherited = target.InheritedAccessAt(folder);
             }
 
-            if (inherited is null || WindowsAccess.Wider(own, inherited) is not { Count: > 0 } gaining)
+            if (inherited is null || WindowsAccess.Wider(own, inherited.Access) is not { Count: > 0 } gaining)
             {
                 continue;
             }
 
             files++;
             accounts.AddRange(gaining.Where(account => !accounts.Contains(account, StringComparer.Ordinal)));
-            if (!folders.Contains(folder, StringComparer.Ordinal))
+            if (!folders.Contains(inherited.Folder, StringComparer.Ordinal))
             {
-                folders.Add(folder);
+                folders.Add(inherited.Folder);
             }
         }
 

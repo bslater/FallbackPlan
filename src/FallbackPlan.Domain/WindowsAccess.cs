@@ -10,6 +10,15 @@ namespace FallbackPlan.Domain;
 public readonly record struct AccessEntry(string Account, bool Allows, uint Mask, byte Flags);
 
 /// <summary>
+/// The access a file made somewhere takes, and the folder it comes from: the
+/// nearest that stands at or above where the file is made (ADR-0178
+/// Amendment 3).
+/// </summary>
+/// <param name="Folder">The folder whose DACL was read.</param>
+/// <param name="Access">What the file takes, per account.</param>
+public sealed record InheritedAccess(string Folder, IReadOnlyDictionary<string, uint> Access);
+
+/// <summary>
 /// The access a Windows DACL gives each account to a file, and the access a
 /// file made in a folder takes from it, so the plan can say where a restore
 /// that does not write a file's own descriptor leaves it open to more than
@@ -29,10 +38,18 @@ public readonly record struct AccessEntry(string Account, bool Allows, uint Mask
 /// restoring account's, which already holds what it restores, so they widen
 /// nothing.
 /// </para>
+/// <para>
+/// A folder made in a folder passes entries on as Windows does: one that
+/// passes to folders becomes its own, and passes further; one that passes to
+/// files alone is kept for the files below it; one marked not to propagate
+/// stops there (ADR-0178 Amendment 3).
+/// </para>
 /// </remarks>
 public static partial class WindowsAccess
 {
     private const byte ObjectInherit = 0x01;
+    private const byte ContainerInherit = 0x02;
+    private const byte NoPropagate = 0x04;
     private const byte InheritOnly = 0x08;
     private const uint GenericRead = 0x8000_0000;
     private const uint GenericWrite = 0x4000_0000;
@@ -88,15 +105,25 @@ public static partial class WindowsAccess
     }
 
     /// <summary>
-    /// The access a file made in a folder whose DACL holds
-    /// <paramref name="folder"/> takes from it: the entries it passes to
-    /// files, as the file's own, the creator's apart.
+    /// The access a file takes where it is made <paramref name="made"/>
+    /// folders below a folder whose DACL holds <paramref name="folder"/>,
+    /// each of them made too: the entries that pass down to it, as the file's
+    /// own, the creator's apart.
     /// </summary>
-    /// <param name="folder">The folder's DACL entries, in its order.</param>
-    public static IReadOnlyDictionary<string, uint> InheritedByAFile(IReadOnlyList<AccessEntry> folder)
+    /// <param name="folder">The DACL entries of the folder that stands, in its order.</param>
+    /// <param name="made">How many folders are made between it and the file: none where the file is made in it.</param>
+    public static IReadOnlyDictionary<string, uint> InheritedByAFile(IReadOnlyList<AccessEntry> folder, int made = 0)
     {
         ArgumentNullException.ThrowIfNull(folder);
-        return Of([.. folder
+        ArgumentOutOfRangeException.ThrowIfNegative(made);
+
+        var passing = folder;
+        for (var level = 0; level < made; level++)
+        {
+            passing = PassedToAFolder(passing);
+        }
+
+        return Of([.. passing
             .Where(entry => (entry.Flags & ObjectInherit) != 0 && entry.Account is not (CreatorOwner or CreatorGroup))
             .Select(entry => entry with { Flags = 0 })]);
     }
@@ -119,12 +146,12 @@ public static partial class WindowsAccess
 
     /// <summary>
     /// The access a file made at <paramref name="folder"/> would take, read
-    /// from the nearest folder at or above it that stands, since a restore
-    /// makes the rest and each takes what passes down to it. Null off
-    /// Windows, or where the folder's DACL will not read.
+    /// from the nearest folder at or above it that stands, through each
+    /// folder below that the restore makes. Null off Windows, or where the
+    /// folder's DACL will not read.
     /// </summary>
     /// <param name="folder">Where the restore would make a file.</param>
-    public static IReadOnlyDictionary<string, uint>? InheritedByAFileAt(string folder)
+    public static InheritedAccess? InheritedByAFileAt(string folder)
     {
         ArgumentException.ThrowIfNullOrEmpty(folder);
         if (!OperatingSystem.IsWindows())
@@ -132,17 +159,50 @@ public static partial class WindowsAccess
             return null;
         }
 
-        for (var at = Path.GetFullPath(folder); at is not null; at = Path.GetDirectoryName(at))
+        var made = 0;
+        for (var at = Path.GetFullPath(folder); at is not null; at = Path.GetDirectoryName(at), made++)
         {
             if (Directory.Exists(at))
             {
                 return DaclOf(at) is { } descriptor && WindowsSecurityDescriptor.Read(descriptor) is { DaclPresent: true } read
-                    ? InheritedByAFile(read.Entries)
+                    ? new InheritedAccess(at, InheritedByAFile(read.Entries, made))
                     : null;
             }
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The entries a folder made in a folder holding <paramref name="folder"/>
+    /// takes, with the flags that say what it passes on. The creator's own
+    /// copy is the restoring account's, so only what it passes on is kept.
+    /// </summary>
+    private static List<AccessEntry> PassedToAFolder(IReadOnlyList<AccessEntry> folder)
+    {
+        var passed = new List<AccessEntry>();
+        foreach (var entry in folder)
+        {
+            var stops = (entry.Flags & NoPropagate) != 0;
+            if ((entry.Flags & ContainerInherit) != 0)
+            {
+                var onward = stops ? (byte)0 : (byte)(entry.Flags & (ObjectInherit | ContainerInherit));
+                if (entry.Account is not (CreatorOwner or CreatorGroup))
+                {
+                    passed.Add(entry with { Flags = onward });
+                }
+                else if (!stops)
+                {
+                    passed.Add(entry with { Flags = (byte)(onward | InheritOnly) });
+                }
+            }
+            else if ((entry.Flags & ObjectInherit) != 0 && !stops)
+            {
+                passed.Add(entry with { Flags = ObjectInherit | InheritOnly });
+            }
+        }
+
+        return passed;
     }
 
     private static uint AsAFiles(uint mask) =>

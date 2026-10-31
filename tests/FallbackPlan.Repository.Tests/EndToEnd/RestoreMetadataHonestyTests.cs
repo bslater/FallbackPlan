@@ -47,6 +47,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// counts such files; a run, asked without its plan's facts, reads each
 /// file's manifest to count them as its plan does, a blob at a time, and
 /// nothing where no folder says what a file takes (ADR-0178 Amendment 1).
+/// Each file is judged by the folder it lands in, and the line names the
+/// folder its access comes from (ADR-0178 Amendment 3).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -545,7 +547,7 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task DestinationsOf_SaysWhichFolderEachSlicesItemsAreRestoredInto()
+    public async Task DestinationsOf_SaysWhichFolderEachItemLandsIn_UnderItsSlicesFolder()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("one/a.bin", Deterministic(700, 70));
@@ -562,8 +564,43 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             new RestoreSlice(plan with { Items = [b] }, second),
         ]);
 
-        Assert.AreEqual(first, destinationOf(a));
-        Assert.AreEqual(second, destinationOf(b));
+        Assert.AreEqual(Path.Combine(first, "one"), destinationOf(a));
+        Assert.AreEqual(Path.Combine(second, "two"), destinationOf(b));
+
+        // A path the restore would refuse lands nowhere.
+        var escaping = a with { Path = "../escape.bin" };
+        Assert.IsNull(RestoreMetadata.DestinationsOf([new RestoreSlice(plan with { Items = [escaping] }, first)])(escaping));
+    }
+
+    [TestMethod]
+    public async Task OpenedWider_JudgesEachFile_ByTheFolderItLandsIn_AndNamesTheFolderItsAccessComesFrom()
+    {
+        // ADR-0178 Amendment 3: two files kept to a stranger land in two
+        // folders below one root. One folder takes its access from the root,
+        // which shares with Users; the other stands, and keeps to the system.
+        var source = new FakeFileSystemSource();
+        var strangers = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, Stranger, FullControl);
+        var system = SecurityDescriptors.Ace(SecurityDescriptors.Allowed, 0, LocalSystem, FullControl);
+        source.AddFile("shared/a.bin", Deterministic(700, 72)).Metadata = KeptTo(Stranger, strangers, system);
+        source.AddFile("kept/b.bin", Deterministic(700, 73)).Metadata = KeptTo(Stranger, strangers, system);
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xE5);
+        var root = Path.Combine(SpoolDirectory, "restored-here");
+        var keeps = Posix with
+        {
+            SupportsSecurityDescriptors = true,
+            KnowsAccount = account => account != Stranger,
+            InheritedAccessAt = folder =>
+                folder == Path.Combine(root, "shared") ? new InheritedAccess(root, new Dictionary<string, uint> { [Users] = ReadAndExecute })
+                : folder == Path.Combine(root, "kept") ? new InheritedAccess(folder, new Dictionary<string, uint> { [LocalSystem] = FullControl })
+                : null,
+        };
+
+        var wider = RestoreMetadata.OpenedWider(plan, facts, keeps, RestoreMetadata.DestinationsOf([new RestoreSlice(plan, root)]));
+
+        Assert.IsNotNull(wider);
+        Assert.AreEqual(1, wider.Files);
+        Assert.AreEqual(root, Assert.ContainsSingle(wider.Folders));
+        Assert.AreEqual(Users, Assert.ContainsSingle(wider.Accounts));
     }
 
     [TestMethod]
@@ -1171,7 +1208,7 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         SupportsSecurityDescriptors = true,
         KnowsAccount = account => account != Stranger,
         InheritedAccessAt = folder => folder == here
-            ? new Dictionary<string, uint> { [LocalSystem] = FullControl, [Users] = ReadAndExecute, [Administrators] = FullControl }
+            ? new InheritedAccess(here, new Dictionary<string, uint> { [LocalSystem] = FullControl, [Users] = ReadAndExecute, [Administrators] = FullControl })
             : null,
     };
 

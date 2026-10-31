@@ -15,7 +15,10 @@ namespace FallbackPlan.Domain.Tests;
 /// generic rights read as a file's; a null DACL grants everyone everything.
 /// A file made in a folder takes the folder's object-inheriting entries, the
 /// creator's own apart. An account is given wider access where it gets a
-/// right the entry did not give it, synchronising apart.
+/// right the entry did not give it, synchronising apart. A file made below
+/// folders the restore makes takes what passes down through them: an entry
+/// marked not to propagate goes no further than the first (ADR-0178
+/// Amendment 3).
 /// </summary>
 [TestClass]
 public sealed class WindowsAccessTests : IDisposable
@@ -132,6 +135,35 @@ public sealed class WindowsAccessTests : IDisposable
     }
 
     [TestMethod]
+    public void InheritedByAFile_BelowFoldersARestoreMakes_TakesWhatPassesDownThem_AndNotWhatStopsAtTheFirst()
+    {
+        // A folder made below passes on what inherits to folders as its own,
+        // and what inherits to files alone as inherit-only, for the files
+        // below it; what is marked not to propagate stops with it.
+        AccessEntry[] standing =
+        [
+            new(LocalSystem, Allows: true, FullControl, ObjectInherit | ContainerInherit),
+            new(Users, Allows: true, ReadAndExecute, ObjectInherit),
+            new(Everyone, Allows: true, Read, ContainerInherit),
+            new(Administrators, Allows: true, FullControl, ObjectInherit | ContainerInherit | NoPropagate),
+            new(Ana, Allows: true, Read, ObjectInherit | NoPropagate),
+            new(CreatorOwner, Allows: true, GenericAll, ObjectInherit | ContainerInherit | InheritOnly),
+        ];
+
+        CollectionAssert.AreEquivalent(
+            new[] { LocalSystem, Users, Administrators, Ana }, WindowsAccess.InheritedByAFile(standing).Keys.ToArray());
+        foreach (var made in new[] { 1, 3 })
+        {
+            var below = WindowsAccess.InheritedByAFile(standing, made);
+            CollectionAssert.AreEquivalent(new[] { LocalSystem, Users }, below.Keys.ToArray(), $"{made} folder(s) down");
+            Assert.AreEqual(ReadAndExecute, below[Users]);
+            Assert.AreEqual(FullControl, below[LocalSystem]);
+        }
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => WindowsAccess.InheritedByAFile(standing, -1));
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "only Windows keeps a folder's DACL")]
     [PlatformTrait(TestPlatforms.Posix)]
     public void InheritedByAFileAt_IsNotKnownOffWindows() => Assert.IsNull(WindowsAccess.InheritedByAFileAt(_root));
@@ -154,14 +186,54 @@ public sealed class WindowsAccessTests : IDisposable
         security.AddAccessRule(new FileSystemAccessRule(
             new SecurityIdentifier(Everyone), FileSystemRights.Read,
             InheritanceFlags.ContainerInherit, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(Administrators), FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.NoPropagateInherit, AccessControlType.Allow));
         new DirectoryInfo(folder).SetAccessControl(security);
 
         var inherited = WindowsAccess.InheritedByAFileAt(Path.Combine(folder, "not", "made", "yet"));
 
         Assert.IsNotNull(inherited);
-        Assert.AreEqual(FullControl, inherited[LocalSystem]);
-        Assert.AreEqual(ReadAndExecute, inherited[Users]);
-        Assert.IsFalse(inherited.ContainsKey(Everyone));
+        Assert.AreEqual(folder, inherited.Folder, "the folder its access comes from");
+        Assert.AreEqual(FullControl, inherited.Access[LocalSystem]);
+        Assert.AreEqual(ReadAndExecute, inherited.Access[Users]);
+        Assert.IsFalse(inherited.Access.ContainsKey(Everyone));
+        Assert.IsFalse(inherited.Access.ContainsKey(Administrators), "an entry that does not propagate stops at the first folder made");
+
+        var direct = WindowsAccess.InheritedByAFileAt(folder);
+        Assert.IsNotNull(direct);
+        Assert.AreEqual(FullControl, direct.Access[Administrators], "a file made in the folder itself takes it");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a folder's DACL")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void InheritedByAFileAt_OnWindows_ReadsAFolderThatStandsBelowAnother_NotTheOneAboveIt()
+    {
+        var shared = Directory.CreateDirectory(Path.Combine(_root, "shared")).FullName;
+        var sharing = new DirectorySecurity();
+        sharing.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        sharing.AddAccessRule(new FileSystemAccessRule(
+            WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        sharing.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(Users), FileSystemRights.ReadAndExecute,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(shared).SetAccessControl(sharing);
+        var kept = Directory.CreateDirectory(Path.Combine(shared, "kept")).FullName;
+        var keeping = new DirectorySecurity();
+        keeping.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        keeping.AddAccessRule(new FileSystemAccessRule(
+            WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(kept).SetAccessControl(keeping);
+
+        var inherited = WindowsAccess.InheritedByAFileAt(kept);
+
+        Assert.IsNotNull(inherited);
+        Assert.AreEqual(kept, inherited.Folder);
+        Assert.IsFalse(inherited.Access.ContainsKey(Users), "the folder above it shares; the one it lands in does not");
     }
 
     public void Dispose()
