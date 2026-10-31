@@ -23,7 +23,9 @@ namespace FallbackPlan.Domain;
 /// (<see cref="FileOwnership"/>), its extended attributes
 /// (<see cref="ExtendedAttributes"/>) and its creation time on macOS
 /// (<see cref="FileTimes"/>) are written by calls that already never follow
-/// one. Windows restores no links.
+/// one. A link a restore makes on Windows (ADR-0181) is given none of these:
+/// no call there sets a link's own times, and its attribute bits and
+/// descriptor are written only onto files and folders.
 /// </para>
 /// <para>
 /// The timespec both platforms take is two 64-bit words, so a 32-bit process
