@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one; by Amendment 5, judged as the volume of each folder a restore writes to takes names, where it says; by Amendment 6, by Windows' rules where a volume written to names files by them, as a FAT or exFAT drive does wherever it is mounted), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first)
+**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one; by Amendment 5, judged as the volume of each folder a restore writes to takes names, where it says; by Amendment 6, by Windows' rules where a volume written to names files by them, as a FAT or exFAT drive does wherever it is mounted), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first; by Amendment 7, a name and the name with a trailing period are two such names where the volume takes them for one)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the executor's rule for where a repository's path is written, which the recovery tool shares), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-7
 
 **Built:**
@@ -140,6 +140,8 @@ Amendment 2 judges a collision by how the target folds names, and the target say
 **Decision.**
 
 - **The run keeps each name it lands.** It keeps it by what a volume that folds names would take it for: its composed form, compared without case. `Domain/NamesLanded` holds them.
+
+  > **2026-11 ([Amendment 7](#amendment-7-2026-11--a-name-and-the-name-with-a-trailing-period-are-taken-for-one-where-the-volume-takes-them-so)).** And with each component's trailing periods taken off, as a FAT or exFAT drive takes them off.
 - **The second of two names the volume takes for one fails, naming the first.** This applies to a file, or a link, whose destination is occupied, where a name the run landed folds onto it and its folder lists no entry under its own name. The volume took the two names for one, and what stands there is the run's own. The item fails with "the target takes this name and X for one, and this run restored X there". No policy moves the first aside, replaces it or fails over it unnamed, and the first keeps what it landed. The run is not reported complete.
 - **The listing decides, not the fold.** On a volume that keeps the two names apart, a file of somebody else's under the second name is listed under it, and the policy meets it as before.
 - **Under rename the second lands beside the first,** as beside anyone's file, and both are kept.
@@ -267,9 +269,40 @@ Some of the rest they write, such as a device's name, and the drive then holds a
 **Not done.**
 
 - **A name the drive strips onto another the snapshot holds.** Where a snapshot holds `notes.` and `notes`, a run to a FAT drive on Linux still takes the second to land for a file that stood there. The run's rule for two names taken for one (Amendment 3) folds case and the two forms, not a trailing period.
+
+  > **2026-11: taken up by [Amendment 7](#amendment-7-2026-11--a-name-and-the-name-with-a-trailing-period-are-taken-for-one-where-the-volume-takes-them-so).**
 - **A name's byte limit** still follows the platform. exFAT on Linux holds a name of 255 UTF-16 units whatever its bytes, and the plan still names one longer than 255 bytes.
 - **macOS's FAT, exFAT and SMB volumes** are taken not to name by Windows' rules.
 - **NTFS mounted on Linux** is taken not to, as Linux's drivers write there names Windows refuses.
+
+## Amendment 7 (2026-11) — a name and the name with a trailing period are taken for one where the volume takes them so
+
+A FAT or exFAT drive strips a trailing period from a name, so `notes.` lands on `notes` ([Amendment 6](#amendment-6-2026-11--a-fat-or-exfat-drive-names-by-windows-rules-wherever-it-is-mounted)). A run keeps each name it lands by what a volume that folds names would take it for, and that was the name's composed form compared without case (Amendment 3). `notes.` and `notes` did not fold together.
+
+So where a snapshot holds both, a run to such a drive landed `notes` first, since it sorts first. `notes.` then found `notes` standing where it lands, and the folder listed no entry under `notes.`, but no landed name folded onto it. The run met the run's own file as somebody else's:
+
+- **Under preserve, the default,** it moved `notes` into the displaced store and wrote `notes.` there. The receipt said both were restored.
+- **Under overwrite,** it replaced `notes`, whose content was then nowhere.
+- **Under fail,** it failed without saying the file was the run's own.
+
+**Decision.**
+
+- **A name is also kept with each component's trailing periods taken off,** as such a drive takes them off: `notes.` and `notes..` fold onto `notes`, and `names./notes` onto `names/notes`. A period within a name or before it stays, and so does a trailing space, which such a drive refuses or keeps.
+- **The listing still decides.** On a volume that keeps the two names apart, as Linux's own volumes do, nothing stands at the second, or what stands there is listed under its own name. The policy meets it as before.
+- **The rule is one,** in `Domain/NamesLanded`, so the recovery tool refuses the second alike (Amendment 4).
+
+**Built:** `Domain/NamesLanded`:
+
+- `Domain.Tests/NamesLandedTests`:
+  - an occupied destination that a landed name differs from only by a component's trailing periods, a file's or a folder's, either way round, and whose name its folder does not list, is taken for that name;
+  - one listed under its own name is an entry of its own;
+  - a period within a name or before it, or a trailing space, is not folded away, and no listing is asked.
+
+No FAT drive is mounted where CI runs, and Windows refuses such a name before it is written. So no test lands the two names on a volume that takes them for one. The fold is tested, and the executor and the recovery tool ask it as before (Amendments 3 and 4).
+
+**Not done.**
+
+- **Two folders the volume takes for one.** A file landing in the second is listed under its own name inside the first, so it is met as somebody else's. This is so whether the volume takes the two folders for one by case, by normalisation or by a trailing period.
 
 ## Status history
 
@@ -282,3 +315,4 @@ Some of the rest they write, such as a device's name, and the drive then holds a
 | 2026-10 | Amended | Amendment 4: `NamesLanded` moved, unchanged, into Domain with a call that asks the disk, and the recovery tool refuses the second of two names its output takes for one, naming the first, rather than replacing it. `Domain/NamesLanded`, `Recovery/RecoverySession`, `Restore/RestoreExecutor`; `Domain.Tests/NamesLandedTests`, `Repository.Tests/RecoveryNamesTests` |
 | 2026-11 | Amended | Amendment 5: the plan reads how the volume of each folder a restore writes to takes names, without writing to it, and judges collisions so, case-sensitive only where every volume is and folding the two forms where any does; the run is unchanged. `Domain/VolumeNaming`, `Restore/RestorePlan`, `Cli/OperationGateway`, `Agent/ServiceCommandHandler`; `Domain.Tests/VolumeNamingTests`, `Repository.Tests/RestorePlanTests`, `Cli.Tests/RestorePlanCommandTests`, `Hosts.Tests/RestoreHonestyServiceTests` |
 | 2026-11 | Amended | Amendment 6: a volume says whether it names files by Windows' rules, as Windows' volumes do and a FAT or exFAT drive does wherever it is mounted, and the plan judges the names written there by them; a share does not; the run is unchanged. `Domain/VolumeNaming`, `Restore/RestorePlan`; `Domain.Tests/VolumeNamingTests`, `Repository.Tests/RestorePlanTests`, `Cli.Tests/RestorePlanCommandTests`, `Hosts.Tests/RestoreHonestyServiceTests` |
+| 2026-11 | Amended | Amendment 7: a run keeps each name it lands with each component's trailing periods taken off too, so on a FAT or exFAT drive the second of a name and the name with a trailing period fails naming the first, and the recovery tool refuses it alike, rather than either taking the run's own file for somebody else's. `Domain/NamesLanded`; `Domain.Tests/NamesLandedTests` |

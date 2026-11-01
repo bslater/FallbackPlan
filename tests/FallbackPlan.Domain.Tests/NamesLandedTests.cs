@@ -8,7 +8,11 @@ namespace FallbackPlan.Domain.Tests;
 /// Unicode normalisation, and the volume lists no entry under the
 /// destination's own name: the volume took the two names for one. The rule
 /// is one, in Domain, for the executor and the recovery tool alike, and asks
-/// the disk itself where a destination is given (ADR-0170 Amendment 4).
+/// the disk itself where a destination is given (ADR-0170 Amendment 4). A
+/// name folds onto one that differs from it only by a component's trailing
+/// periods, which a FAT or exFAT drive strips, so a run to one never takes
+/// the file it landed as <c>notes.</c> for somebody else's <c>notes</c>
+/// (FR-RST-005; ADR-0170 Amendment 7).
 /// </summary>
 [TestClass]
 public sealed class NamesLandedTests
@@ -107,6 +111,42 @@ public sealed class NamesLandedTests
         {
             Directory.Delete(folder, recursive: true);
         }
+    }
+
+    [TestMethod]
+    public void AnOccupiedDestination_ThatALandedNameDiffersFromOnlyByTrailingPeriods_AndNoEntryListsAsWritten_IsTakenForThatName()
+    {
+        var landed = new NamesLanded();
+        landed.Add("names/notes");
+        landed.Add("folder/report.");
+
+        Assert.AreEqual("names/notes", landed.TakenForOne("names/notes.", occupied: true, listedAsWritten: () => false));
+        Assert.AreEqual("names/notes", landed.TakenForOne("names/notes..", occupied: true, listedAsWritten: () => false));
+        Assert.AreEqual("folder/report.", landed.TakenForOne("folder/report", occupied: true, listedAsWritten: () => false));
+
+        // A folder's trailing periods go as a file's do.
+        Assert.AreEqual("names/notes", landed.TakenForOne("names./notes", occupied: true, listedAsWritten: () => false));
+
+        // Where the volume keeps the two apart, the second is listed under
+        // its own name, and is an entry of its own.
+        Assert.IsNull(landed.TakenForOne("names/notes.", occupied: true, listedAsWritten: () => true));
+    }
+
+    [TestMethod]
+    public void APeriodWithinOrBeforeAName_OrATrailingSpace_IsNotFoldedAway()
+    {
+        var landed = new NamesLanded();
+        landed.Add("names/notes.txt");
+        landed.Add("names/draft");
+        landed.Add("names/profile");
+
+        Assert.IsNull(landed.TakenForOne(
+            "names/.profile", occupied: true, listedAsWritten: () => throw new AssertFailedException("listed")));
+
+        Assert.IsNull(landed.TakenForOne(
+            "names/notestxt", occupied: true, listedAsWritten: () => throw new AssertFailedException("listed")));
+        Assert.IsNull(landed.TakenForOne(
+            "names/draft ", occupied: true, listedAsWritten: () => throw new AssertFailedException("listed")));
     }
 
     [TestMethod]
