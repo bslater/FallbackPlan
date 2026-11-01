@@ -1071,7 +1071,7 @@ public sealed class RestoreExecutor(
             // it, as beside anyone's.
             if (options.ExistingDestination != ExistingDestinationPolicy.WriteBeside
                 && manifest.EntryKind is EntryKind.File or EntryKind.Symlink
-                && landedNames.TakenForOne(item.Path, Occupied(destination), () => ListedAsWritten(destination)) is { } takenFor)
+                && landedNames.TakenForOneAt(item.Path, destination) is { } takenFor)
             {
                 items.Add(new ReceiptItem
                 {
@@ -2001,29 +2001,6 @@ public sealed class RestoreExecutor(
     }
 
     /// <summary>The receipt's repository-relative rendering of a beside landing.</summary>
-    /// <summary>Whether anything stands at <paramref name="path"/>: a file, a folder, or a link wherever it leads.</summary>
-    private static bool Occupied(string path) =>
-        File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget is not null;
-
-    /// <summary>
-    /// Whether the folder of <paramref name="destination"/> lists an entry
-    /// under its own name, as written. A folder that cannot be listed is
-    /// taken to, so the policy meets what stands there as it did.
-    /// </summary>
-    private static bool ListedAsWritten(string destination)
-    {
-        var name = Path.GetFileName(destination);
-        try
-        {
-            return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(destination)!)
-                .Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal));
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return true;
-        }
-    }
-
     private static string BesidePath(string itemPath, string landing)
     {
         var leaf = Path.GetFileName(landing);

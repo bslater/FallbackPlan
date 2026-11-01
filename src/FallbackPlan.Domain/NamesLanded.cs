@@ -1,12 +1,14 @@
 using System.Text;
 using Bodu;
 
-namespace FallbackPlan.Restore;
+namespace FallbackPlan.Domain;
 
 /// <summary>
 /// The names a restore run has landed, kept so the run can tell its own file
 /// from somebody else's where the volume it writes to takes two of a
-/// snapshot's names for one (FR-RST-005, ADR-0170 Amendment 3).
+/// snapshot's names for one (FR-RST-005, ADR-0170 Amendment 3). One rule for
+/// the executor and the recovery tool, which may not reference the restore
+/// project (ADR-0170 Amendment 4; ADR-0152).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -57,6 +59,44 @@ public sealed class NamesLanded
         }
 
         return listedAsWritten() ? null : landed;
+    }
+
+    /// <summary>
+    /// The name this run landed that the volume took <paramref name="path"/>
+    /// for, asked of the disk at <paramref name="destination"/>: whether
+    /// anything stands there, and whether its folder lists an entry under its
+    /// own name.
+    /// </summary>
+    /// <param name="path">The repository path about to land.</param>
+    /// <param name="destination">Where it lands.</param>
+    /// <returns>The landed name, or null.</returns>
+    public string? TakenForOneAt(string path, string destination)
+    {
+        ThrowHelper.ThrowIfNull(destination);
+        return TakenForOne(path, Occupied(destination), () => ListedAsWritten(destination));
+    }
+
+    /// <summary>Whether anything stands at <paramref name="path"/>: a file, a folder, or a link wherever it leads.</summary>
+    private static bool Occupied(string path) =>
+        File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget is not null;
+
+    /// <summary>
+    /// Whether the folder of <paramref name="destination"/> lists an entry
+    /// under its own name, as written. A folder that cannot be listed is
+    /// taken to, so what stands there is met as it was.
+    /// </summary>
+    private static bool ListedAsWritten(string destination)
+    {
+        var name = Path.GetFileName(destination);
+        try
+        {
+            return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(destination)!)
+                .Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     private static string Fold(string path)

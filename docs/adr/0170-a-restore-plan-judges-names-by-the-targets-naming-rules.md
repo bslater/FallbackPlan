@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside)
+**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the executor's rule for where a repository's path is written, which the recovery tool shares), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-7
 
 **Built:**
@@ -133,15 +133,17 @@ Amendment 2 judges a collision by how the target folds names, and the target say
 
 **Decision.**
 
-- **The run keeps each name it lands.** It keeps it by what a volume that folds names would take it for: its composed form, compared without case. `Restore/NamesLanded` holds them.
+- **The run keeps each name it lands.** It keeps it by what a volume that folds names would take it for: its composed form, compared without case. `Domain/NamesLanded` holds them.
 - **The second of two names the volume takes for one fails, naming the first.** This applies to a file, or a link, whose destination is occupied, where a name the run landed folds onto it and its folder lists no entry under its own name. The volume took the two names for one, and what stands there is the run's own. The item fails with "the target takes this name and X for one, and this run restored X there". No policy moves the first aside, replaces it or fails over it unnamed, and the first keeps what it landed. The run is not reported complete.
 - **The listing decides, not the fold.** On a volume that keeps the two names apart, a file of somebody else's under the second name is listed under it, and the policy meets it as before.
 - **Under rename the second lands beside the first,** as beside anyone's file, and both are kept.
 - **The plan is unchanged.** It still judges by what the platform does.
 
-**Built:** `Restore/NamesLanded`, `Restore/RestoreExecutor`:
+**Built:** `Domain/NamesLanded`, `Restore/RestoreExecutor`:
 
-- `Repository.Tests/NamesLandedTests`:
+> **2026-10 ([Amendment 4](#amendment-4-2026-10--the-recovery-tool-never-replaces-what-it-restored-itself)).** `NamesLanded` moved, unchanged, from the restore project into Domain, and its tests with it, so the recovery tool holds names by the same rule. It gained `TakenForOneAt`, which asks the disk the two questions the executor had asked itself.
+
+- `Domain.Tests/NamesLandedTests`:
   - an occupied destination that a landed name folds onto, by case or by normalisation, and whose name its folder does not list, is taken for that name;
   - one listed under its own name, one unoccupied, and one no landed name folds onto are taken for nothing, and the last two ask for no listing;
   - a name is not taken for itself, the first name landed for a fold is the one named, and a name that is not well-formed Unicode is folded by case alone.
@@ -154,7 +156,27 @@ Amendment 2 judges a collision by how the target folds names, and the target say
 
 - **The plan does not judge the volume.** A collision a volume makes where its platform does not is still not named before the run; the run names it, item by item. Reading a volume's naming rules without writing to it, which a plan must not do, is the next record's.
 - **The recovery tool** replaces whatever stands at a name. On such a volume, the second of two names it takes for one replaces the first.
+
+  > **2026-10: taken up by [Amendment 4](#amendment-4-2026-10--the-recovery-tool-never-replaces-what-it-restored-itself).**
 - **A volume that stores a name in another form than it was given,** as HFS+ stores one decomposed, lists the landed name in the form the second asks for, and is not judged.
+
+## Amendment 4 (2026-10) — the recovery tool never replaces what it restored itself
+
+Amendment 3 left the recovery tool as it was. It clears whatever stands at a file's or a link's name before it writes there, as a rename replaces what it lands on. On an output whose volume takes two of a snapshot's names for one, the second of the two replaced the first. The report then counted both restored, though one name held the other's content.
+
+**Decision.**
+
+- **One rule for both writers.** `NamesLanded` moves, unchanged, from the restore project into Domain. The recovery tool may not reference the restore project, and a naming rule kept in two places drifts ([ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md)). It gains `TakenForOneAt`, which asks the disk the two questions the executor had asked itself: whether anything stands at the destination, and whether its folder lists an entry under its own name.
+- **The tool keeps each name it writes** a file, a link or a hard link's later name under.
+- **The second of two names the output takes for one is refused, naming the first.** Before writing a file or a link, the tool asks whether the destination is taken for a name it wrote. Where it is, the entry is refused with a note, "the output takes this name and X for one, and the tool restored X there", and counted failed. The first keeps what the tool wrote.
+- **The executor asks through the same call,** and behaves as Amendment 3 has it.
+
+**Built:** `Domain/NamesLanded`, `Recovery/RecoverySession`, `Restore/RestoreExecutor`:
+
+- `Domain.Tests/NamesLandedTests` — the decision's cases, moved from the restore project's tests. On disk: where the volume finds the landed file under the other name, the destination is taken for it. Where it does not, nothing standing there, and somebody else's file listed under its own name, are each taken for nothing.
+- `Repository.Tests/RecoveryNamesTests` — the recovery tool restores `Notes.txt` and `notes.txt`, and a composed and a decomposed `café.txt`, judged by the volume the test writes to. Where the volume takes a pair for one, one keeps its content and the other is refused naming it. Where it keeps them apart, as Linux's does, both are restored.
+
+**Not done.** The plan still judges by the platform, and a volume that stores a name in another form than it was given is still not judged (Amendment 3's "Not done").
 
 ## Status history
 
@@ -163,4 +185,5 @@ Amendment 2 judges a collision by how the target folds names, and the target say
 | 2026-10 | Accepted | Built in one slice, tests first. A restore plan names every name the target cannot make, by a stated Windows naming rule, and a restore on Windows refuses one rather than writing it under another. No contract or format change. |
 | 2026-10 | Amended | Amendment 1: a target that counts a name in bytes states how many it holds, 255 for the local profile on Linux, and the plan names a name longer than that before any byte moves. `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests`; `Repository.Tests/RestoreLongNameTests` |
 | 2026-10 | Amended | Amendment 2: the target states whether it takes a name's composed and decomposed forms for one, the local profile on macOS, and the plan names two paths as colliding only where the target folds them together, by case as the executor compares them and by normalisation only where the target ignores it. `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests` |
-| 2026-10 | Amended | Amendment 3: a run keeps each name it lands, and where its volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside, replacing it or failing over it unnamed; under rename it lands beside. The plan is unchanged. `Restore/NamesLanded`, `Restore/RestoreExecutor`; `Repository.Tests/NamesLandedTests`, `Repository.Tests/RestorePlanTests` |
+| 2026-10 | Amended | Amendment 3: a run keeps each name it lands, and where its volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside, replacing it or failing over it unnamed; under rename it lands beside. The plan is unchanged. `Domain/NamesLanded`, `Restore/RestoreExecutor`; `Domain.Tests/NamesLandedTests`, `Repository.Tests/RestorePlanTests` |
+| 2026-10 | Amended | Amendment 4: `NamesLanded` moved, unchanged, into Domain with a call that asks the disk, and the recovery tool refuses the second of two names its output takes for one, naming the first, rather than replacing it. `Domain/NamesLanded`, `Recovery/RecoverySession`, `Restore/RestoreExecutor`; `Domain.Tests/NamesLandedTests`, `Repository.Tests/RecoveryNamesTests` |

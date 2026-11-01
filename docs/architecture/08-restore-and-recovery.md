@@ -240,6 +240,8 @@ A standalone recovery executable, independent of the Agent and UI, that can:
 
 > **2026-10 ([ADR-0156](../adr/0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md)).** The tool gives a hard-link group back as one file under each of its names, by the rule §3 holds the executor to.
 
+> **2026-10 ([ADR-0170 Amendment 4](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-4-2026-10--the-recovery-tool-never-replaces-what-it-restored-itself)).** The tool never replaces a file it restored itself. Where the output takes two of a snapshot's names for one, the second is refused and noted, naming the first, by the rule the executor holds names by.
+
 Source and reproducible release artifacts are published for every major format version, and remain downloadable and buildable for as long as that format version is supported. A recovery tool that cannot be obtained when needed is not a recovery tool.
 
 ## 6. What must survive a clean machine
