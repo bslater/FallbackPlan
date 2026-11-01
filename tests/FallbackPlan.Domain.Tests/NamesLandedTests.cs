@@ -12,7 +12,10 @@ namespace FallbackPlan.Domain.Tests;
 /// name folds onto one that differs from it only by a component's trailing
 /// periods, which a FAT or exFAT drive strips, so a run to one never takes
 /// the file it landed as <c>notes.</c> for somebody else's <c>notes</c>
-/// (FR-RST-005; ADR-0170 Amendment 7).
+/// (FR-RST-005; ADR-0170 Amendment 7). The listing is asked of every name the
+/// path gives on the way to its destination, each folder's as well as the
+/// file's own, so a file landing in a folder the volume takes for one the
+/// run landed into is taken for the run's own too (ADR-0170 Amendment 8).
 /// </summary>
 [TestClass]
 public sealed class NamesLandedTests
@@ -147,6 +150,77 @@ public sealed class NamesLandedTests
             "names/notestxt", occupied: true, listedAsWritten: () => throw new AssertFailedException("listed")));
         Assert.IsNull(landed.TakenForOne(
             "names/draft ", occupied: true, listedAsWritten: () => throw new AssertFailedException("listed")));
+    }
+
+    [TestMethod]
+    public void ListedAsWritten_AsksEveryNameThePathGivesOnTheWay_AndNoFolderAboveIt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "fbp-listed", "out");
+        var docs = Path.Combine(root, "docs");
+
+        // A volume that took "docs" for the "Docs" a run made lists the
+        // folder under the name it was made with, and the file under its own.
+        var folded = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            [docs] = ["a.txt"],
+            [root] = ["Docs"],
+        };
+        IEnumerable<string>? Lists(Dictionary<string, string[]> listing, string folder) =>
+            listing.TryGetValue(folder, out var names) ? names : throw new AssertFailedException($"asked {folder}");
+
+        Assert.IsFalse(NamesLanded.ListedAsWritten("docs/a.txt", Path.Combine(docs, "a.txt"), folder => Lists(folded, folder)));
+
+        // Each name listed as written: the destination is an entry of its own.
+        var apart = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            [docs] = ["a.txt"],
+            [root] = ["Docs", "docs"],
+        };
+        Assert.IsTrue(NamesLanded.ListedAsWritten("docs/a.txt", Path.Combine(docs, "a.txt"), folder => Lists(apart, folder)));
+
+        // The file's own name, not listed, is not listed as written.
+        var renamed = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            [docs] = ["A.txt"],
+            [root] = ["docs"],
+        };
+        Assert.IsFalse(NamesLanded.ListedAsWritten("docs/a.txt", Path.Combine(docs, "a.txt"), folder => Lists(renamed, folder)));
+
+        // A folder that cannot be listed is taken to list it.
+        Assert.IsTrue(NamesLanded.ListedAsWritten(
+            "docs/a.txt", Path.Combine(docs, "a.txt"), folder => folder == docs ? null : Lists(apart, folder)));
+    }
+
+    [TestMethod]
+    public void OnDisk_AFolderTheVolumeTakesForOneThatALandedNameLiesIn_IsJudgedToo()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"fbp-names-landed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(folder, "Docs"));
+        try
+        {
+            File.WriteAllBytes(Path.Combine(folder, "Docs", "a.txt"), [1]);
+            var landed = new NamesLanded();
+            landed.Add("Docs/a.txt");
+            var second = Path.Combine(folder, "docs", "a.txt");
+
+            // Windows' and macOS's volumes find the landed file in the other
+            // folder, whose name they list as the folder was made.
+            if (File.Exists(second))
+            {
+                Assert.AreEqual("Docs/a.txt", landed.TakenForOneAt("docs/a.txt", second));
+                return;
+            }
+
+            Assert.IsNull(landed.TakenForOneAt("docs/a.txt", second), "nothing stands there");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(second)!);
+            File.WriteAllBytes(second, [2]);
+            Assert.IsNull(landed.TakenForOneAt("docs/a.txt", second), "somebody else's file, in a folder listed under its own name");
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
     }
 
     [TestMethod]
