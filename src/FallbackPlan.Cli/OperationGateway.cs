@@ -1382,11 +1382,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             return seen;
         }
 
-        var installation = Environment.GetEnvironmentVariable(InstallationDefaults.StateVariable) is { Length: > 0 } named
-            ? named
-            : Path.Combine(
-                Directory.Exists(InstallationDefaults.MachineRoot) ? InstallationDefaults.MachineRoot : InstallationDefaults.ProfileRoot,
-                "state");
+        var installation = InstallationDefaults.StateDirectoryWithoutMaking;
         // One directory twice would be held twice by one run, and the second
         // hold refused by the first. Compared without case, as containment is.
         static string Full(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));

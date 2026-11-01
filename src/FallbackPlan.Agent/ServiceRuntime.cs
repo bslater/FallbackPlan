@@ -98,6 +98,15 @@ public sealed record ServiceOptions
     internal int? CheckpointThresholdOverride { get; init; }
 
     /// <summary>
+    /// The installation's state directory, where a restore in direct mode
+    /// that named none says it is under way (ADR-0172 Amendment 7). A test
+    /// harness's knob, so a suite never looks at the machine's; null, the
+    /// production value, finds it as every path-less process does
+    /// (<see cref="Api.InstallationDefaults.StateDirectoryWithoutMaking"/>).
+    /// </summary>
+    internal string? InstallationStateDirectoryOverride { get; init; }
+
+    /// <summary>
     /// A test harness's view of the destination-sync ledger: each row as it
     /// is written, so every state a reader could have read — which polling
     /// can only hope to catch. Null, the production value, observes nothing.
@@ -507,15 +516,53 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// Whether a restore of <paramref name="set"/> is under way: one this
     /// service runs (ADR-0172 Amendment 3), or one in direct mode of the
     /// set's repository that says so in this service's state directory
-    /// (ADR-0172 Amendment 6). Asked before a retention pass collects, a sync
-    /// drops at a destination or a peer is instructed.
+    /// (ADR-0172 Amendment 6) or, where this service runs on a state
+    /// directory of its own, in the installation's (ADR-0172 Amendment 7).
+    /// Asked before a retention pass collects, a sync drops at a destination
+    /// or a peer is instructed.
     /// </summary>
     /// <param name="set">The set.</param>
     /// <param name="archive">The set's archive, whose repository a restore in direct mode is said by.</param>
     /// <returns>Whether one is.</returns>
-    internal bool RestoreUnderWayOf(BackupSetConfiguration set, ArchiveHandle archive) =>
-        RestoreRuns.IsUnderWayFor(set.Name)
-        || RestoresUnderWay.AnyFor(Options.StateDirectory, archive.Repository.RepositoryId);
+    internal bool RestoreUnderWayOf(BackupSetConfiguration set, ArchiveHandle archive)
+    {
+        var repository = archive.Repository.RepositoryId;
+        return RestoreRuns.IsUnderWayFor(set.Name)
+            || RestoresUnderWay.AnyFor(Options.StateDirectory, repository)
+            || (InstallationStateDirectoryBesideOwn() is { } installation && UnderWayIn(installation, repository));
+    }
+
+    /// <summary>
+    /// The installation's state directory where it stands and is not this
+    /// service's own; null otherwise. Looking makes nothing.
+    /// </summary>
+    private string? InstallationStateDirectoryBesideOwn()
+    {
+        var installation = Options.InstallationStateDirectoryOverride ?? Api.InstallationDefaults.StateDirectoryWithoutMaking;
+        static string Full(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        return Directory.Exists(installation)
+            && !string.Equals(Full(installation), Full(Options.StateDirectory), StringComparison.OrdinalIgnoreCase)
+                ? installation
+                : null;
+    }
+
+    /// <summary>
+    /// Whether a restore in direct mode of <paramref name="repository"/> says
+    /// it is under way in <paramref name="stateDirectory"/>, which is not this
+    /// service's own: one this process may not read holds nothing it can see,
+    /// and a pass goes ahead rather than fail over it.
+    /// </summary>
+    private static bool UnderWayIn(string stateDirectory, RepositoryId repository)
+    {
+        try
+        {
+            return RestoresUnderWay.AnyFor(stateDirectory, repository);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>This device's writer identity — one per device, shared by every archive it writes.</summary>
     public WriterId Writer => WriterId.FromBytes(State.WriterId);
