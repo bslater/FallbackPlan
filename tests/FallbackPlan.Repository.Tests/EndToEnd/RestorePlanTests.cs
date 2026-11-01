@@ -33,7 +33,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a case-insensitive target, and by Unicode normalisation only where the
 /// target ignores it, as macOS does and Windows does not, so a name's
 /// composed and decomposed forms each restore with their own content on
-/// Windows and Linux (ADR-0170 Amendment 2). Where the volume a run writes
+/// Windows and Linux (ADR-0170 Amendment 2). What a target takes for one
+/// name is read from the volume of each folder a restore writes to, where
+/// that volume says, so a FAT drive on Linux folds case and a case-sensitive
+/// folder on Windows does not (ADR-0170 Amendment 5). Where the volume a run writes
 /// to takes two of a snapshot's names for one, whatever the plan judged, the
 /// second never displaces, replaces or fails vaguely over the first: it fails
 /// naming the name the run restored there, which keeps its own content, and
@@ -189,6 +192,63 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             catalogue, snapshotId, string.Empty, PosixTarget() with { NormalisationInsensitive = true }).Conflicts
             .Single(conflict => conflict.Path == Composed);
         Assert.Contains(Decomposed, composed.Reason, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task RestorePlan_WrittenWhereAVolumeTakesNamesOtherwiseThanItsPlatform_IsJudgedAsTheVolumeTakesThem()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile(Composed, Deterministic(64, 1));
+        source.AddFile(Decomposed, Deterministic(64, 2));
+        source.AddFile("names/Notes.txt", Deterministic(64, 3));
+        source.AddFile("names/notes.txt", Deterministic(64, 4));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA8), CancellationToken.None);
+        var snapshotId = Enumerable.Repeat((byte)0xA8, 16).ToArray();
+
+        string[] Colliding(RestoreTargetProfile target) =>
+        [
+            .. RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target).Conflicts
+                .Where(conflict => conflict.Reason.Contains("Collides", StringComparison.Ordinal))
+                .Select(conflict => conflict.Path)
+                .Order(StringComparer.Ordinal),
+        ];
+
+        // The flow's own word for each folder: a FAT drive, a case-sensitive
+        // folder, a folder that folds case itself, and one nothing is said of.
+        var fat = Path.Combine(SpoolDirectory, "fat");
+        var caseSensitive = Path.Combine(SpoolDirectory, "case-sensitive");
+        var casefolded = Path.Combine(SpoolDirectory, "casefolded");
+        VolumeNaming.OfInFlow = folder =>
+            folder == fat ? new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false)
+            : folder == caseSensitive ? new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false)
+            : folder == casefolded ? new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: true)
+            : null;
+        string[] casePair = ["names/Notes.txt", "names/notes.txt"];
+        var all = new[] { Decomposed, "names/Notes.txt", Composed, "names/notes.txt" }.Order(StringComparer.Ordinal).ToArray();
+
+        // A FAT drive on Linux folds case though Linux's own volumes do not.
+        SequenceAssert.AreEqual(casePair, Colliding(PosixTarget().AsWrittenTo([fat])));
+
+        // A case-sensitive folder on Windows keeps what Windows' volumes fold.
+        Assert.IsEmpty(Colliding((PosixTarget() with { CaseSensitive = false }).AsWrittenTo([caseSensitive])));
+
+        // A folder that folds case itself folds the two forms of a name too.
+        SequenceAssert.AreEqual(all, Colliding(PosixTarget().AsWrittenTo([casefolded])));
+
+        // Written to more than one volume, the plan folds what any of them folds.
+        SequenceAssert.AreEqual(all, Colliding(PosixTarget().AsWrittenTo([caseSensitive, casefolded])));
+
+        // A volume nothing is said of, or no folder at all, leaves the
+        // platform's word as it was stated.
+        Assert.IsEmpty(Colliding(PosixTarget().AsWrittenTo([Path.Combine(SpoolDirectory, "unsaid")])));
+        SequenceAssert.AreEqual(
+            casePair, Colliding((PosixTarget() with { CaseSensitive = false }).AsWrittenTo([Path.Combine(SpoolDirectory, "unsaid")])));
+        SequenceAssert.AreEqual(casePair, Colliding((PosixTarget() with { CaseSensitive = false }).AsWrittenTo([])));
     }
 
     [TestMethod]

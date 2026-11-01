@@ -878,6 +878,17 @@ public sealed partial class ServiceCommandHandler(
                     return refusal!;
                 }
 
+                // Judged as the volumes the run would write to take names,
+                // where one takes them otherwise than this platform's
+                // (ADR-0170 Amendment 5). The plan made again slices as the
+                // first did, since only how it judges names has changed.
+                if (target.AsWrittenTo(resolved.Select(slice => slice.OutputDirectory)) is var written && !written.NamesAs(target))
+                {
+                    target = written;
+                    plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(command.Paths, command.Path), target);
+                    resolved = SlicesFor(catalogue, snapshotId, plan, toOriginal, command.OutputDirectory).Slices!;
+                }
+
                 if (RefuseAbsentRun(resolved, command.Resume, mode, RestoreExecutionOptions.DefaultQuarantineDirectory) is { } absent)
                 {
                     return absent;
