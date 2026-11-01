@@ -249,6 +249,12 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         SequenceAssert.AreEqual(
             casePair, Colliding((PosixTarget() with { CaseSensitive = false }).AsWrittenTo([Path.Combine(SpoolDirectory, "unsaid")])));
         SequenceAssert.AreEqual(casePair, Colliding((PosixTarget() with { CaseSensitive = false }).AsWrittenTo([])));
+
+        // A plan is made again only where how the target takes names moved,
+        // by case or by normalisation.
+        Assert.IsTrue(PosixTarget().NamesAs(PosixTarget() with { MaxPathBytes = 1 }));
+        Assert.IsFalse(PosixTarget().NamesAs(PosixTarget() with { CaseSensitive = false }));
+        Assert.IsFalse(PosixTarget().NamesAs(PosixTarget() with { NormalisationInsensitive = true }));
     }
 
     [TestMethod]
