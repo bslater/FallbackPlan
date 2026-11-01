@@ -9,7 +9,10 @@ namespace FallbackPlan.Domain.Tests;
 /// and whether the folder folds case itself. A folder not yet made is judged
 /// by the nearest one that is. A volume made by Windows' rules, Windows' own
 /// or a FAT or exFAT drive on Linux, says it names by them, so a plan judges
-/// the names written there by them (FR-RST-003; ADR-0170 Amendment 6).
+/// the names written there by them (FR-RST-003; ADR-0170 Amendment 6). A
+/// volume that holds a name by its length in UTF-16 units, Windows' own or
+/// an exFAT or NTFS volume on Linux, says so, so a plan judges a name's
+/// length there in units rather than bytes (ADR-0170 Amendment 9).
 /// </summary>
 [TestClass]
 public sealed class VolumeNamingTests
@@ -51,6 +54,25 @@ public sealed class VolumeNamingTests
         // own volume does.
         File.WriteAllBytes(Path.Combine(_folder, "Trailing."), []);
         Assert.AreEqual(File.Exists(Path.Combine(_folder, "Trailing")), judged.Value.WindowsNames);
+
+        // A name of 200 three-byte characters is 200 units and 600 bytes:
+        // Windows' volume holds it, and Linux's own does not. macOS's
+        // limit is not judged.
+        if (!OperatingSystem.IsMacOS())
+        {
+            bool held;
+            try
+            {
+                File.WriteAllBytes(Path.Combine(_folder, new string('\u8A9E', 200)), []);
+                held = true;
+            }
+            catch (IOException)
+            {
+                held = false;
+            }
+
+            Assert.AreEqual(held, judged.Value.NamesInUnits);
+        }
     }
 
     [TestMethod]
@@ -76,13 +98,14 @@ public sealed class VolumeNamingTests
     {
         // FAT and exFAT, made by Windows' rules and named by them wherever
         // they are mounted.
-        foreach (var fat in new long[] { 0x4d44, 0x2011BAB0 })
-        {
-            Assert.AreEqual(
-                new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true),
-                VolumeNaming.OfLinuxFilesystem(fat, casefolded: false),
-                fat.ToString("x", System.Globalization.CultureInfo.InvariantCulture));
-        }
+        // FAT's driver holds a name to 255 bytes as well; exFAT's holds one
+        // of 255 units whatever its bytes.
+        Assert.AreEqual(
+            new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true),
+            VolumeNaming.OfLinuxFilesystem(0x4d44, casefolded: false));
+        Assert.AreEqual(
+            new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true, NamesInUnits: true),
+            VolumeNaming.OfLinuxFilesystem(0x2011BAB0, casefolded: false));
 
         // A share served over SMB or CIFS, whose client maps the characters
         // Windows refuses to ones it takes, so a name lands as written.
@@ -98,6 +121,20 @@ public sealed class VolumeNamingTests
         Assert.AreEqual(
             new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false),
             VolumeNaming.OfLinuxFilesystem(0xEF53, casefolded: false));
+    }
+
+    [TestMethod]
+    public void OnLinux_AnNtfsVolume_KeepsCaseApart_AndHoldsANameByItsUnits()
+    {
+        // Linux's in-kernel NTFS drivers, the current and the older, which
+        // keep case apart and write names Windows refuses.
+        foreach (var ntfs in new long[] { 0x7366746e, 0x5346544e })
+        {
+            Assert.AreEqual(
+                new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false, NamesInUnits: true),
+                VolumeNaming.OfLinuxFilesystem(ntfs, casefolded: false),
+                ntfs.ToString("x", System.Globalization.CultureInfo.InvariantCulture));
+        }
     }
 
     [TestMethod]

@@ -7,8 +7,9 @@ namespace FallbackPlan.Domain;
 /// <summary>
 /// How the volume a folder lies on takes names: whether it tells two names
 /// that differ only in case apart, whether it takes a name's composed and
-/// decomposed Unicode forms for one (FR-RST-003, ADR-0170 Amendment 5), and
-/// whether it names files by Windows' rules (ADR-0170 Amendment 6).
+/// decomposed Unicode forms for one (FR-RST-003, ADR-0170 Amendment 5),
+/// whether it names files by Windows' rules (ADR-0170 Amendment 6), and
+/// whether it counts a name's length in UTF-16 units (ADR-0170 Amendment 9).
 /// </summary>
 /// <param name="CaseSensitive">Whether names that differ only in case are two names.</param>
 /// <param name="NormalisationInsensitive">Whether a name's composed and decomposed forms are one name.</param>
@@ -16,6 +17,10 @@ namespace FallbackPlan.Domain;
 /// Whether the volume names files by Windows' rules: the characters Windows
 /// refuses refused, a trailing period stripped, a device's name meaning the
 /// device, and a name counted in UTF-16 units.
+/// </param>
+/// <param name="NamesInUnits">
+/// Whether the volume holds a name by its length in UTF-16 units, 255 of
+/// them whatever its bytes, rather than by its bytes.
 /// </param>
 /// <remarks>
 /// <para>
@@ -36,11 +41,17 @@ namespace FallbackPlan.Domain;
 /// a name lands there as written.
 /// </para>
 /// <para>
+/// Windows' volumes, and an exFAT or NTFS volume on Linux, hold a name of 255
+/// UTF-16 units whatever its bytes. Linux's FAT driver holds one to 255 bytes
+/// as well, and its other filesystems to 255 bytes alone.
+/// </para>
+/// <para>
 /// A folder not yet made is judged by the nearest one that is, which is where
 /// it would be made.
 /// </para>
 /// </remarks>
-public readonly partial record struct VolumeNaming(bool CaseSensitive, bool NormalisationInsensitive, bool WindowsNames = false)
+public readonly partial record struct VolumeNaming(
+    bool CaseSensitive, bool NormalisationInsensitive, bool WindowsNames = false, bool NamesInUnits = false)
 {
     private static readonly AsyncLocal<Func<string, VolumeNaming?>?> Flow = new();
 
@@ -107,8 +118,12 @@ public readonly partial record struct VolumeNaming(bool CaseSensitive, bool Norm
             ? new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: true)
             : (filesystemType & 0xFFFF_FFFF) switch
             {
-                MsdosMagic or ExfatMagic =>
+                MsdosMagic =>
                     new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true),
+                ExfatMagic =>
+                    new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true, NamesInUnits: true),
+                NtfsMagic or OlderNtfsMagic =>
+                    new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false, NamesInUnits: true),
                 CifsMagic or Smb2Magic or SmbMagic =>
                     new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false),
                 _ => new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false),
@@ -119,6 +134,8 @@ public readonly partial record struct VolumeNaming(bool CaseSensitive, bool Norm
     private const long CifsMagic = 0xFF534D42;
     private const long Smb2Magic = 0xFE534D42;
     private const long SmbMagic = 0x517B;
+    private const long NtfsMagic = 0x7366746e;
+    private const long OlderNtfsMagic = 0x5346544e;
 
     /// <summary>The nearest folder at or above <paramref name="directory"/>, or null where a file stands in the way.</summary>
     private static string? NearestFolder(string directory)
@@ -171,7 +188,8 @@ public readonly partial record struct VolumeNaming(bool CaseSensitive, bool Norm
         using var handle = CreateFile(
             folder, ReadAttributes, FileShare.ReadWrite | FileShare.Delete, 0, FileMode.Open, BackupSemantics, 0);
         return !handle.IsInvalid && GetFileInformationByHandleEx(handle, FileCaseSensitiveInfo, out var flags, sizeof(uint))
-            ? new VolumeNaming(CaseSensitive: (flags & CaseSensitiveFolder) != 0, NormalisationInsensitive: false, WindowsNames: true)
+            ? new VolumeNaming(
+                CaseSensitive: (flags & CaseSensitiveFolder) != 0, NormalisationInsensitive: false, WindowsNames: true, NamesInUnits: true)
             : null;
     }
 
