@@ -77,6 +77,7 @@ Object type `0x02`.
 | 11 | bytes | `link_target` — for symlinks, raw bytes |
 | 12 | bytes[16] | `hardlink_group` — present when the file is one of several links to one inode |
 | 13 | array | `capture_diagnostics` — array of text, present only when non-empty |
+| 14 | u8 | `link_form` — 1 the link is a mount point, as a Windows junction is; absent for a symbolic link. Format 6 and later |
 
 ### 4.1 Metadata map
 
@@ -92,6 +93,7 @@ Object type `0x02`.
 | 8 | array | `extended_attributes` — array of `[name, value]` byte-string pairs |
 | 9 | array | `alternate_streams` — array of `[name, object_id, length]` |
 | 10 | u32 | `file_attributes` — platform attribute bits |
+| 11 | u32 | `file_flags` — the flags a Linux or macOS file or folder carries beyond its mode: `0x01` immutable, `0x02` append-only, `0x04` no-dump, `0x08` compressed, `0x10` encrypted, `0x20` hidden; absent where none is set. Format 6 and later |
 
 Names rather than numeric IDs for owner and group: a UID means nothing on the machine a file is restored to, whereas a name has a chance of resolving. Where it does not, restore degrades and reports rather than silently assigning ownership to whoever happens to hold that number.
 
@@ -119,6 +121,13 @@ Key 7 holds the owner, the group and the DACL, and the audit list (SACL) as well
 > versions with `special-kind:`/`device:` diagnostics (§Decision 4).
 
 > **2026-10 ([ADR-0180](../../docs/adr/0180-capture-names-the-file-flags-it-does-not-keep.md)).** Key 13's vocabulary gains `file-flags:`, naming the flags a Linux or macOS file carries that no key keeps (immutable, append-only, no-dump, compressed, encrypted, hidden). It is informational text like the rest, and changes nothing a reader accepts.
+
+> **2026-11 ([ADR-0184](../../docs/adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** Format 6 assigns key 14 and §4.1 key 11.
+>
+> - **`link_form`** is present only on a symlink (`entry_kind` 2) that carries a `link_target`, and only with the value 1. A symbolic link omits it. A reader MUST reject any other value, and the key on any other entry.
+> - **`file_flags`** is present only when some flag is set. A reader MUST reject 0, and any bit above `0x20`, which are reserved. The tree manifest's metadata is this map (§5), so key 11 may keep a folder's flags too.
+> - **A writer MUST NOT write either key below format 6.** A reader that predates format 6 rejects a manifest carrying either as an unknown key, so a repository such a reader is entitled to read never holds one.
+> - The metadata digest an incremental compares covers key 11 as it covers every key, so a file whose flags alone change gets a new version.
 
 ### 4.2 The whole-file hash
 

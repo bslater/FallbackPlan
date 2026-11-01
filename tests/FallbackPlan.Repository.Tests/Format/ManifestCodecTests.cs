@@ -12,7 +12,11 @@ namespace FallbackPlan.Repository.Tests.Format;
 /// FR-ARCH-010, NFR-PORT-003): round-trips are exact, unknown keys are rejected so
 /// physical location has nowhere to hide (exit criteria 2 and 9), the
 /// 06 §3.2 coverage obligation is enforced, tree chains obey 06 §9, and the
-/// snapshot signature survives the two-pass construction.
+/// snapshot signature survives the two-pass construction. Format 6's two keys
+/// round-trip and are held to one encoding: a file's or a folder's flags in
+/// metadata key 11, present only when some flag is set and refused with a
+/// reserved bit, and a link's form in key 14, carried only by a link that is
+/// a mount point (FR-MAN-003; ADR-0184).
 /// </summary>
 [TestClass]
 public sealed class ManifestCodecTests
@@ -62,17 +66,146 @@ public sealed class ManifestCodecTests
     [TestMethod]
     public void FileVersionManifest_CarriesAnUnknownKey_IsRejectedRatherThanSkipped()
     {
-        // Hand-build a manifest carrying key 14 — exactly where a physical
+        // Hand-build a manifest carrying key 15 — exactly where a physical
         // hint would smuggle in (06 §3.1; exit criterion 2's teeth).
         var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
         writer.WriteStartMap(1);
-        writer.WriteKey(14);
+        writer.WriteKey(15);
         writer.WriteUnsignedInteger(1);
         writer.WriteEndMap();
 
         var exception = Assert.ThrowsExactly<ManifestValidationException>(() =>
             FileVersionManifestCodec.Decode(writer.Encode()));
         Assert.Contains("unknown key", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static FileVersionManifest Flagged(FileFlagBits flags) =>
+        SampleFileVersion() with { Metadata = SampleFileVersion().Metadata with { FileFlags = flags } };
+
+    [TestMethod]
+    public void FileVersionManifest_AFilesFlags_AreKeptInMetadataKeyEleven_AndRoundTrip()
+    {
+        var encoded = FileVersionManifestCodec.Encode(Flagged(FileFlagBits.Immutable | FileFlagBits.NoDump));
+        var decoded = FileVersionManifestCodec.Decode(encoded);
+
+        Assert.AreEqual(FileFlagBits.Immutable | FileFlagBits.NoDump, decoded.Metadata.FileFlags);
+        SequenceAssert.AreEqual(encoded, FileVersionManifestCodec.Encode(decoded));
+
+        // The metadata map is the manifest's last key, and key 11 the map's
+        // last, so the flags are the manifest's last two bytes.
+        SequenceAssert.AreEqual(new byte[] { 0x0B, 0x05 }, encoded[^2..]);
+
+        // A file with no flags carries no key, so its manifest is the one an
+        // earlier format wrote.
+        var plain = FileVersionManifestCodec.Encode(SampleFileVersion());
+        Assert.AreEqual(FileFlagBits.None, FileVersionManifestCodec.Decode(plain).Metadata.FileFlags);
+        Assert.HasCount(encoded.Length - 2, plain);
+    }
+
+    [TestMethod]
+    public void FileVersionManifest_FlagsOfNoneOrAReservedBit_AreRefused()
+    {
+        var encoded = FileVersionManifestCodec.Encode(Flagged(FileFlagBits.NoDump));
+
+        // No flag is said by leaving the key out; a zero is a second encoding.
+        var zero = encoded.ToArray();
+        zero[^1] = 0x00;
+        Assert.ThrowsExactly<ManifestValidationException>(() => FileVersionManifestCodec.Decode(zero));
+
+        // Bit 6 and above are reserved: a flag this format does not name is
+        // one no reader can give back.
+        byte[] reserved = [.. encoded[..^1], 0x18, 0x40];
+        Assert.ThrowsExactly<ManifestValidationException>(() => FileVersionManifestCodec.Decode(reserved));
+        Assert.ThrowsExactly<ManifestValidationException>(
+            () => FileVersionManifestCodec.Encode(Flagged((FileFlagBits)(1 << 6))));
+
+        // Every named flag at once is the largest value a reader takes.
+        var all = Flagged(
+            FileFlagBits.Immutable | FileFlagBits.AppendOnly | FileFlagBits.NoDump
+            | FileFlagBits.Compressed | FileFlagBits.Encrypted | FileFlagBits.Hidden);
+        Assert.AreEqual(
+            all.Metadata.FileFlags, FileVersionManifestCodec.Decode(FileVersionManifestCodec.Encode(all)).Metadata.FileFlags);
+    }
+
+    [TestMethod]
+    public void TreeManifest_AFoldersFlags_RoundTripInTheSameKey()
+    {
+        var tree = new TreeManifest
+        {
+            Entries = [new TreeEntry("a.txt"u8.ToArray(), TestObjectId(4), EntryKind.File)],
+            Name = "docs"u8.ToArray(),
+            NameNormalisation = NameNormalisation.Nfc,
+            Metadata = new EntryMetadata { ModifiedAt = 1_722_600_000_000, FileFlags = FileFlagBits.Hidden },
+        };
+
+        var encoded = TreeManifestCodec.Encode(tree);
+
+        var decoded = TreeManifestCodec.Decode(encoded);
+        Assert.IsNotNull(decoded.Metadata);
+        Assert.AreEqual(FileFlagBits.Hidden, decoded.Metadata.FileFlags);
+        SequenceAssert.AreEqual(encoded, TreeManifestCodec.Encode(decoded));
+    }
+
+    private static FileVersionManifest Link(LinkForm form) => new()
+    {
+        EntryKind = EntryKind.Symlink,
+        Name = "shared"u8.ToArray(),
+        NameNormalisation = NameNormalisation.Nfc,
+        LogicalLength = 0,
+        SegmentReferences = [],
+        WholeFileHash = SHA256.HashData([]),
+        SegmentationProfile = 0x0001,
+        LinkTarget = "C:\\Shared"u8.ToArray(),
+        LinkForm = form,
+    };
+
+    [TestMethod]
+    public void FileVersionManifest_ALinkThatIsAMountPoint_SaysSoInKeyFourteen_AndRoundTrips()
+    {
+        var encoded = FileVersionManifestCodec.Encode(Link(LinkForm.MountPoint));
+        var decoded = FileVersionManifestCodec.Decode(encoded);
+
+        Assert.AreEqual(LinkForm.MountPoint, decoded.LinkForm);
+        SequenceAssert.AreEqual(encoded, FileVersionManifestCodec.Encode(decoded));
+
+        // Key 14 is the manifest's last key.
+        SequenceAssert.AreEqual(new byte[] { 0x0E, 0x01 }, encoded[^2..]);
+
+        // A symbolic link says nothing of its form, so its manifest is the
+        // one an earlier format wrote.
+        var symbolic = FileVersionManifestCodec.Encode(Link(LinkForm.SymbolicLink));
+        Assert.AreEqual(LinkForm.SymbolicLink, FileVersionManifestCodec.Decode(symbolic).LinkForm);
+        Assert.HasCount(encoded.Length - 2, symbolic);
+    }
+
+    [TestMethod]
+    public void FileVersionManifest_ALinkFormNoFormatAssigns_OrOneOnAnEntryThatIsNoLink_IsRefused()
+    {
+        var encoded = FileVersionManifestCodec.Encode(Link(LinkForm.MountPoint));
+
+        // 1 is the only form assigned: 0 would be a second encoding of a
+        // symbolic link, and 2 names nothing.
+        foreach (var unassigned in new byte[] { 0x00, 0x02 })
+        {
+            var patched = encoded.ToArray();
+            patched[^1] = unassigned;
+            Assert.ThrowsExactly<ManifestValidationException>(
+                () => FileVersionManifestCodec.Decode(patched), $"link form {unassigned}");
+        }
+
+        // A writer is held to the same single form.
+        Assert.ThrowsExactly<ManifestValidationException>(
+            () => FileVersionManifestCodec.Encode(Link((LinkForm)2)));
+
+        // A mount point is a link to a folder: a file, even one that carries
+        // a target, or a link without a target, cannot be one.
+        Assert.ThrowsExactly<ManifestValidationException>(
+            () => FileVersionManifestCodec.Encode(SampleFileVersion() with { LinkForm = LinkForm.MountPoint }));
+        Assert.ThrowsExactly<ManifestValidationException>(
+            () => FileVersionManifestCodec.Encode(
+                SampleFileVersion() with { LinkTarget = "C:\\Shared"u8.ToArray(), LinkForm = LinkForm.MountPoint }));
+        Assert.ThrowsExactly<ManifestValidationException>(
+            () => FileVersionManifestCodec.Encode(Link(LinkForm.MountPoint) with { LinkTarget = null }));
     }
 
     [TestMethod]
@@ -676,6 +809,20 @@ public sealed class ManifestCodecTests
 
         CollectionAssert.AreEqual(FileVersionManifestCodec.MetadataDigest(empty), FileVersionManifestCodec.MetadataDigest(none));
         CollectionAssert.AreNotEqual(FileVersionManifestCodec.MetadataDigest(none), FileVersionManifestCodec.MetadataDigest(real));
+    }
+
+    [TestMethod]
+    public void MetadataDigest_AFlagKeptInKeyEleven_Counts()
+    {
+        // An incremental passes over a file whose digest is unchanged, so a
+        // file whose flags alone changed must digest otherwise (ADR-0184 §1).
+        var plain = new EntryMetadata { ModifiedAt = 1_700_000_000_000, PosixMode = 0x1A4, OwnerName = "ana" };
+        var noDump = plain with { FileFlags = FileFlagBits.NoDump };
+
+        CollectionAssert.AreNotEqual(FileVersionManifestCodec.MetadataDigest(plain), FileVersionManifestCodec.MetadataDigest(noDump));
+        CollectionAssert.AreNotEqual(
+            FileVersionManifestCodec.MetadataDigest(noDump),
+            FileVersionManifestCodec.MetadataDigest(plain with { FileFlags = FileFlagBits.Immutable }));
     }
 
     [TestMethod]

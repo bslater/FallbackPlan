@@ -52,6 +52,8 @@ An incremental passes over a file whose identity, size, modification time and me
 ## What this does not do
 
 - **Keep the flags.** A restore gives none back. Keeping them is a format key, with the format version and refusal ADR-0014 asks of one.
+
+  > **2026-11: the key is format 6's metadata key 11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** Nothing writes it yet: capture still names the flags among a file's diagnostics, and no restore gives one back.
 - **Say so on restore.** The plan and the receipt do not yet name a file whose flags were not given back. That is the next record's.
 
   > **2026-10: taken up by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back)** for the engine's restore: its plan and its receipt name a file's flags. The recovery tool and `restore-file` do not yet.
@@ -59,10 +61,14 @@ An incremental passes over a file whose identity, size, modification time and me
   > **2026-10: and by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too)** for the recovery tool and `restore-file`.
 - **A folder's flags.** A tree carries no diagnostics.
 
+  > **2026-11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** Format 6's key 11 is in the metadata map a tree carries too, so a folder's flags can be kept there. Nothing writes it yet.
+
 ## Alternatives considered
 
 - **Keep the flags in key 10.** Rejected. Key 10 holds Windows' attribute bits, and a restore on Windows would read Linux's or macOS's as its own.
 - **Add a format key now.** Deferred. It is a format change, and naming what is lost comes first, with no change to what any reader accepts.
+
+  > **2026-11: taken up by [ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md),** format 6, whose metadata key 11 keeps the flags.
 
 ## Amendment 1 (2026-10) — a restore names the file flags it does not give back
 
@@ -107,3 +113,4 @@ Amendment 1 left the recovery tool and `restore-file` silent: a file recovered w
 | 2026-10 | Accepted | Built in one slice, tests first. Capture reads a file's flags from each platform's stat, Linux's only where the volume reports each, and names them in the file's capture diagnostics, which publication writes into its manifest; they read back as the flags they name, and the digest an incremental compares counts them. `Domain/FileFlagBits`; `Domain/MetadataRules`; `Filesystem.Local/LocalFileSystemSource`; `Repository.Format/FileVersionManifestCodec`; `Domain.Tests/FileFlagsTests`; `Filesystem.Tests/LocalScanTests`; `Repository.Tests/FileFlagsCaptureTests`; `Repository.Tests/MetadataOnlyChangeTests` |
 | 2026-10 | Accepted (Amendment 1) | A restore names the file flags it does not give back: the plan on a line of its own on every target, naming each flag, and the receipt beside each file and link that carried them, a later hard-link name as its first; the item is still restored. `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Restore/RestoreExecutor`; `Domain.Tests/FileFlagsTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Repository.Tests/RestoreHardLinkTests` |
 | 2026-10 | Accepted (Amendment 2) | The recovery tool notes the flags a file, a link or a later hard-link name carried, in the receipt's words, and still counts it restored; `restore-file` says so on a line of its own. `Recovery/RecoveryNote`; `Recovery/RecoverySession`; `Cli/CliApplication`; `Repository.Tests/RecoveryMetadataTests`; `Repository.Tests/RecoveryLinkTests`; `Repository.Tests/RecoveryHardLinkTests`; `Cli.Tests/InspectionCommandTests` |
+| 2026-11 | Accepted (related) | [ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) gives the flags a key, format 6's metadata key 11, which a tree's metadata carries too. Nothing writes it yet, so capture still names them among a file's diagnostics and no restore gives one back |

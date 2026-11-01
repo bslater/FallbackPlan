@@ -85,6 +85,26 @@ internal static class FuzzCorpus
                 }),
                 bytes => FileVersionManifestCodec.Decode(bytes)),
 
+            new("file-version-format-6",
+                FileVersionManifestCodec.Encode(new FileVersionManifest
+                {
+                    EntryKind = EntryKind.Symlink,
+                    Name = "junction"u8.ToArray(),
+                    NameNormalisation = NameNormalisation.Nfc,
+                    LogicalLength = 0,
+                    SegmentReferences = [],
+                    LinkTarget = "C:\\Folder"u8.ToArray(),
+                    LinkForm = LinkForm.MountPoint,
+                    WholeFileHash = SHA256.HashData([]),
+                    SegmentationProfile = 0x0001,
+                    Metadata = new EntryMetadata
+                    {
+                        ModifiedAt = 1_722_600_000_000,
+                        FileFlags = FileFlagBits.Immutable | FileFlagBits.NoDump,
+                    },
+                }),
+                bytes => FileVersionManifestCodec.Decode(bytes)),
+
             new("tree",
                 TreeManifestCodec.Encode(new TreeManifest
                 {

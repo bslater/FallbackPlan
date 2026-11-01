@@ -53,6 +53,8 @@ The tag is read only where the bit is set, so an entry without a reparse point c
 ## What this does not do
 
 - **Junctions as junctions.** A mount point is still captured as a link, and comes back as a folder's symbolic link ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)).
+
+  > **2026-11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** Format 6's manifest key 14 says that a link is a mount point. Nothing writes it yet, so a junction is still captured as a link with no form.
 - **A placeholder left unfetched.** A file a cloud provider has not brought down is read like any other, which fetches it. Leaving it as a placeholder would mean capturing it as one, which no format key keeps.
 
 ## Alternatives considered
@@ -66,3 +68,4 @@ The tag is read only where the bit is set, so an entry without a reparse point c
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. On Windows a reparse point is captured as a link only where its tag is a symbolic link's or a mount point's; any other is the file or folder it is, its content read through the filter; one whose tag cannot be read is a link, never followed. `Filesystem.Local/ReparsePoints`; `Filesystem.Local/WindowsInterop`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Tests/ReparsePointTests`; `Filesystem.Tests/LocalScanTests` |
+| 2026-11 | Accepted (related) | [ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) gives a link's form a key, format 6's manifest key 14, whose one value names a mount point. Nothing writes it yet, so a junction is still captured as a link with no form |

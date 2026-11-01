@@ -43,6 +43,13 @@ public static class FormatVersions
     /// </summary>
     public const ushort DeltaCheckpoints = 5;
 
+    /// <summary>
+    /// Format 6: a manifest may keep a file's or a folder's flags (06 §4.1
+    /// key 11) and say that a link is a mount point (06 §4 key 14). The index
+    /// is format 5's, records and blobs format 3's (ADR-0184).
+    /// </summary>
+    public const ushort FileFlagsAndLinkForms = 6;
+
     /// <summary>Whether a descriptor's version is one this implementation reads.</summary>
     public static bool IsReadable(ushort formatVersion) =>
         formatVersion is >= SealedDataPlane and <= FormatLimits.LatestFormatVersion;
@@ -99,6 +106,14 @@ public static class FormatVersions
     public static bool HasDeltaCheckpoints(ushort formatVersion) => formatVersion >= DeltaCheckpoints;
 
     /// <summary>
+    /// Whether a writer at this version may keep a file's flags in a manifest
+    /// (06 §4.1 key 11) or name a link a mount point (06 §4 key 14). Below
+    /// format 6 it must not: a reader that predates the keys refuses the
+    /// manifest and reports it as damage.
+    /// </summary>
+    public static bool HasFileFlagsAndLinkForms(ushort formatVersion) => formatVersion >= FileFlagsAndLinkForms;
+
+    /// <summary>
     /// The version a blob of this class is stamped with inside a repository
     /// of <paramref name="repositoryFormatVersion"/> — which is not the same
     /// number, and the one place that says so.
@@ -109,7 +124,8 @@ public static class FormatVersions
     /// construction is the one format 1 defined and format 2 kept byte for
     /// byte (ADR-0014 Amendment 1); a format-3 repository writes
     /// <see cref="RelocatableRecords"/> for both, and so do format-4 and
-    /// format-5 ones, whose changes are to the index alone. The stamp is AAD input, so
+    /// format-5 ones, whose changes are to the index alone, and format-6
+    /// ones, whose changes are to what a manifest may say. The stamp is AAD input, so
     /// answering this wrongly does not produce a warning — it produces a blob
     /// whose own repository cannot open it.
     /// </remarks>

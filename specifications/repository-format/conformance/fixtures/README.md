@@ -105,6 +105,30 @@ loads from a copy with the delta gone from its key, and the passphrase
 restores `fixture.bin` byte for byte. Regeneration is no more
 byte-identical than format 3's.
 
+## fixture-repository-v6
+
+The same seven objects, written at **format 6**
+([ADR-0184](../../../../docs/adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md))
+under the passphrase `fallbackplan-fixture-v6-passphrase`. Format 6 changes
+what a manifest may say and nothing else, so the checkpoint carries the one
+delta as at format 5, and everything sealed is format 3's and stamped 3. The
+descriptor declares format 6 and lists `file-flags-and-link-forms` beside
+`delta-checkpoints`, `index-generations` and `relocatable-records` as
+**required** features.
+
+The snapshot's tree holds two entries. `fixture.bin` is the same file, whose
+manifest keeps the no-dump flag in metadata key 11. `fixture-junction` is a
+link to `C:\FixtureFolder` whose manifest carries key 14 at 1, naming it a
+mount point, as a Windows junction is.
+
+`FixtureRepositoryV6Tests` holds the read contract on these bytes: the
+descriptor names format 6 and its four features, every blob is stamped 3,
+the index loads with no finding and its delta is carried in the checkpoint,
+a catalogue rebuilds with no finding, the file's manifest keeps the no-dump
+flag and the passphrase restores `fixture.bin` byte for byte, and the
+junction's manifest names it a mount point with its target. Regeneration is
+no more byte-identical than format 3's.
+
 A format-1 fixture (`fixture-repository-v1`, with a key object and a
 byte-identical regeneration) and its committed recovery kit lived here while
 format v1 did. Both were withdrawn with the format, before any freeze; the

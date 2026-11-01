@@ -3,8 +3,9 @@ namespace FallbackPlan.Domain;
 /// <summary>
 /// The flags a Linux or macOS file carries beyond its mode, as capture reads
 /// them (ADR-0180; architecture 06 §3): Linux's inode flags, as <c>statx</c>
-/// reports them, and macOS's <c>st_flags</c>. No format key keeps them, so
-/// capture names them in a diagnostic.
+/// reports them, and macOS's <c>st_flags</c>. Below format 6 no format key
+/// keeps them, so capture names them in a diagnostic; format 6 keeps them in
+/// a manifest's metadata key 11, whose bits are these values (ADR-0184).
 /// </summary>
 [Flags]
 public enum FileFlagBits

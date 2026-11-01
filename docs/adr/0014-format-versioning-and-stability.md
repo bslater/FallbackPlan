@@ -97,6 +97,10 @@ Format v1 freezes only when all of the following pass ([`../roadmap.md`](../road
 > ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)), and reads 2
 > to 5. The criterion above covers all four, and each has a committed fixture.
 
+> **Amended 2026-11.** The product now creates format 6
+> ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)), and reads 2 to
+> 6. The criterion above covers all five, and each has a committed fixture.
+
 **What the gate means now.** The freeze gate's six items are unchanged and read against format 2 — see the second amendment note at the gate for what format 3's arrival does and does not change. The conformance vectors and the committed fixture are format 2's ([conformance](../../specifications/repository-format/conformance/README.md)); the independent-reader criterion is a reader of format 2.
 
 **What was given up.** The choice at creation between two formats, and with it the service's passphrase mode, its platform keystore and the `unlock`/`lock` verbs ([ADR-0028 §9](0028-service-boundary-and-deployment-topologies.md), [ADR-0033](0033-hosting-under-an-os-service-manager.md), both amended). A format-1 recovery kit still parses — its wire shape is pinned until the kit itself goes — but cannot be opened.
@@ -155,12 +159,20 @@ one restores only part of it (NFR-COMP-004 as amended).
 > wrote its own newest format's objects there, under a version whose rules it
 > had never seen.
 
+> **Amended 2026-11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).**
+> Format 6 is what the product creates now, and formats 2 to 5 remain
+> creatable and frozen as fixtures. A format-6 repository's newer objects are
+> manifests carrying a file's flags or a link's form, so a build that predates
+> it and opens an upgraded repository will refuse each such manifest, as
+> damage, and cannot restore that entry. Nothing writes either key yet.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-09 | Amended | Format 1 withdrawn before freeze; the gate reads against format 2 ([Amendment 1](#amendment-1-2026-09--format-1-withdrawn-before-freeze)). |
+| 2026-11 | Amended | Format 6 admitted beside formats 2 to 5, and created by default ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)): a format-6 descriptor lists `0x0006` beside `0x0003`, `0x0004` and `0x0005`, either mismatch is a violation, and a version above 6 is refused naming 2 to 6 (`Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/FormatVersions`). A manifest may keep a file's flags in metadata key 11 and name a link a mount point in key 14; nothing writes either yet. Blobs are still stamped 3 and the index is format 5's. `fixture-repository-v6` joins the fixtures |
 | 2026-10 | Amended | Format 5 admitted beside formats 2 to 4, and created by default ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)): a format-5 descriptor lists `0x0005` beside `0x0003` and `0x0004`, either mismatch is a violation, and a version above 5 is refused naming 2 to 5 (`Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/FormatVersions`). Blobs are still stamped 3 and deltas are format 4's. `fixture-repository-v5` joins the fixtures |
 | 2026-10 | Amended | Format 4 admitted beside formats 2 and 3, and created by default ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)): a format-4 descriptor lists `0x0004` beside `0x0003`, either mismatch is a violation, and a version above 4 is refused naming 2 to 4 (`Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/FormatVersions`). Blobs are still stamped 3. `fixture-repository-v4` joins the fixtures |
 | 2026-09 | Amended | Format 3 admitted beside format 2: readers accept both, a repository's version is fixed at creation and declared by a required descriptor feature, and a build without that feature refuses by name ([ADR-0052](0052-relocatable-records-format-v3.md)). `Domain/FormatVersions` and `Domain/FormatLimits` carry the two versions and the container stamp each implies; `Repository.Format/Descriptor/RepositoryDescriptorCodec` holds the feature and its consistency rule. The freeze gate is unchanged and still reads against format 2 |

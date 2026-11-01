@@ -53,6 +53,13 @@ public sealed record FileVersionManifest
     public IReadOnlyList<string> CaptureDiagnostics { get; init; } = [];
 
     /// <summary>
+    /// What kind of link a link entry is (key 14; ADR-0184): written only for
+    /// a mount point, so a symbolic link's manifest is the one an earlier
+    /// format wrote. Only a format-6 writer names one.
+    /// </summary>
+    public LinkForm LinkForm { get; init; }
+
+    /// <summary>
     /// Every content object restoring this version reads: its segments in
     /// order, then each alternate stream's content — what a damaged object is
     /// traced back to the version through (FR-VER-005).

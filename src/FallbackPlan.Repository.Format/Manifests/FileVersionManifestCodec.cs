@@ -33,7 +33,8 @@ public static class FileVersionManifestCodec
             + (manifest.ParentVersion is not null ? 1 : 0)
             + (manifest.LinkTarget is not null ? 1 : 0)
             + (manifest.HardlinkGroup is not null ? 1 : 0)
-            + (manifest.CaptureDiagnostics.Count > 0 ? 1 : 0);
+            + (manifest.CaptureDiagnostics.Count > 0 ? 1 : 0)
+            + (manifest.LinkForm != LinkForm.SymbolicLink ? 1 : 0);
 
         writer.WriteStartMap(keyCount);
         writer.WriteKey(1);
@@ -106,6 +107,12 @@ public static class FileVersionManifestCodec
             writer.WriteEndArray();
         }
 
+        if (manifest.LinkForm != LinkForm.SymbolicLink)
+        {
+            writer.WriteKey(14);
+            writer.WriteUnsignedInteger((uint)manifest.LinkForm);
+        }
+
         writer.WriteEndMap();
 
         var encoded = writer.Encode();
@@ -150,6 +157,7 @@ public static class FileVersionManifestCodec
         byte[]? linkTarget = null;
         byte[]? hardlinkGroup = null;
         List<string> diagnostics = [];
+        var linkForm = LinkForm.SymbolicLink;
 
         for (var i = 0; i < count; i++)
         {
@@ -206,6 +214,13 @@ public static class FileVersionManifestCodec
                 case 13:
                     diagnostics = ReadDiagnostics(reader);
                     break;
+                case 14:
+                    // 1 is the only form assigned: a symbolic link leaves the
+                    // key out, so 0 would be a second encoding of one.
+                    linkForm = reader.ReadUnsignedInteger() == (ulong)LinkForm.MountPoint
+                        ? LinkForm.MountPoint
+                        : throw new ManifestValidationException(Strings.FileVersionManifestCodec_LinkFormUnassigned);
+                    break;
                 default:
                     // 06 §3.1's enforcement point: an unknown key is exactly
                     // where a physical-location field would hide.
@@ -239,6 +254,7 @@ public static class FileVersionManifestCodec
             LinkTarget = linkTarget is null ? null : (ReadOnlyMemory<byte>?)linkTarget,
             HardlinkGroup = hardlinkGroup is null ? null : (ReadOnlyMemory<byte>?)hardlinkGroup,
             CaptureDiagnostics = diagnostics,
+            LinkForm = linkForm,
         };
 
         Validate(manifest);
@@ -252,6 +268,17 @@ public static class FileVersionManifestCodec
     /// </summary>
     private static void Validate(FileVersionManifest manifest)
     {
+        if (manifest.LinkForm is not (LinkForm.SymbolicLink or LinkForm.MountPoint))
+        {
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_LinkFormUnassigned);
+        }
+
+        if (manifest.LinkForm != LinkForm.SymbolicLink
+            && (manifest.EntryKind != EntryKind.Symlink || manifest.LinkTarget is null))
+        {
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_LinkFormOnlyOnALink);
+        }
+
         if (manifest.SegmentReferences.Count > MaxSegmentReferences)
         {
             throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_SegmentReferencesExceedMaximum(manifest.SegmentReferences.Count));
@@ -461,7 +488,13 @@ public static class FileVersionManifestCodec
             + (metadata.WindowsSecurityDescriptor is not null ? 1 : 0)
             + (metadata.ExtendedAttributes.Count > 0 ? 1 : 0)
             + (metadata.AlternateStreams.Count > 0 ? 1 : 0)
-            + (metadata.FileAttributes.HasValue ? 1 : 0);
+            + (metadata.FileAttributes.HasValue ? 1 : 0)
+            + (metadata.FileFlags != FileFlagBits.None ? 1 : 0);
+
+        if ((metadata.FileFlags & ~KeptFileFlags) != FileFlagBits.None)
+        {
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_FileFlagsCarryAReservedBit);
+        }
 
         writer.WriteStartMap(keyCount);
 
@@ -544,8 +577,19 @@ public static class FileVersionManifestCodec
             writer.WriteUnsignedInteger(attributes);
         }
 
+        if (metadata.FileFlags != FileFlagBits.None)
+        {
+            writer.WriteKey(11);
+            writer.WriteUnsignedInteger((uint)metadata.FileFlags);
+        }
+
         writer.WriteEndMap();
     }
+
+    /// <summary>Every flag 06 §4.1 key 11 names; the bits above are reserved.</summary>
+    private const FileFlagBits KeptFileFlags =
+        FileFlagBits.Immutable | FileFlagBits.AppendOnly | FileFlagBits.NoDump
+        | FileFlagBits.Compressed | FileFlagBits.Encrypted | FileFlagBits.Hidden;
 
     internal static EntryMetadata ReadMetadata(CanonicalCborReader reader)
     {
@@ -553,6 +597,7 @@ public static class FileVersionManifestCodec
 
         ulong? modified = null, created = null, accessed = null;
         uint? posixMode = null, fileAttributes = null;
+        var fileFlags = FileFlagBits.None;
         string? owner = null, group = null;
         byte[]? descriptor = null;
         List<ExtendedAttributeEntry> attributes = [];
@@ -623,6 +668,19 @@ public static class FileVersionManifestCodec
                 case 10:
                     fileAttributes = reader.ReadUInt32();
                     break;
+                case 11:
+                    fileFlags = (FileFlagBits)reader.ReadUInt32();
+                    if (fileFlags == FileFlagBits.None)
+                    {
+                        throw new ManifestValidationException(Strings.FileVersionManifestCodec_FileFlagsNameNoFlag);
+                    }
+
+                    if ((fileFlags & ~KeptFileFlags) != FileFlagBits.None)
+                    {
+                        throw new ManifestValidationException(Strings.FileVersionManifestCodec_FileFlagsCarryAReservedBit);
+                    }
+
+                    break;
                 default:
                     throw new ManifestValidationException(Strings.FileVersionManifestCodec_MetadataMapCarriesUnknownKey);
             }
@@ -642,6 +700,7 @@ public static class FileVersionManifestCodec
             ExtendedAttributes = attributes,
             AlternateStreams = streams,
             FileAttributes = fileAttributes,
+            FileFlags = fileFlags,
         };
     }
 }

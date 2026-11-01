@@ -210,6 +210,15 @@ proofs; one is much cheaper.
 > else. A repository created at 5 lists `delta-checkpoints`, and an older
 > build refuses it by name.
 
+> **Amended 2026-11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).**
+> The same record moves a set to format 6, the latest, which changes what a
+> manifest may say. Nothing writes either new key yet, so an upgraded set's
+> manifests are format 5's until a writer keeps a file's flags or a link's
+> form. A build older than format 6 will then report each manifest carrying
+> one as an object it cannot read, and cannot restore that entry. A
+> repository created at 6 lists `file-flags-and-link-forms`, and an older
+> build refuses it by name.
+
 ## Consequences
 
 **The stated price: an older build misdiagnoses.** A build predating format 3
@@ -336,6 +345,7 @@ it.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-11 | Accepted (amended) | The upgrade verb targets the latest format, 6 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)): an upgraded set's manifests may keep a file's flags and a link's form once a writer keeps them, and an older build will report such a manifest as damage; a repository created at 6 is refused by name |
 | 2026-10 | Accepted (amended) | The record is a named copy phase, so it reaches a destination with the sync after the set's next backup rather than at the daily reconciliation, and that sync's verification no longer fails for lacking it ([ADR-0056 Amendment 1](0056-incremental-reconciliation.md#amendment-1-2026-10--every-prefix-this-build-writes-is-named-and-a-pass-is-asked-only-about-what-it-carries); `Hosts.Tests/FormatUpgradeTests`) |
 | 2026-10 | Accepted (amended) | A destination's delta retirement ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)) is one more act Amendment 1 refuses above the implemented format: the sync still copies the set, and the destination retires nothing (`Agent/FanOut`; `Hosts.Tests/DeltaRetirementServiceTests`) |
 | 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--a-build-writes-only-a-format-it-implements): a build writes only a repository whose effective version it implements. Above it the repository is opened, read and copied, nothing is authored in it, and no destination is converged on this build's reading of it (`Repository/NewerFormatException`, `Domain/FormatVersions`, `Retention/DestinationConvergence`; `Repository.Tests/EndToEnd/NewerFormatTests`, `Retention.Tests/NewerFormatRetentionTests`, `Hosts.Tests/NewerFormatServiceTests`, `Cli.Tests/NewerFormatCommandTests`) |

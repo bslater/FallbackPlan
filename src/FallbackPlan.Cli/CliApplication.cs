@@ -496,9 +496,9 @@ public static class CliApplication
             var formatVersionOption = new Option<int>("--format-version")
             {
                 Description = "The on-disk format to create, fixed for the repository's life. "
-                    + $"{FormatLimits.FormatVersion} is the default and stamps each index delta with an index "
-                    + $"generation (ADR-0096); {FormatVersions.RelocatableRecords} writes relocatable records "
-                    + "without one (ADR-0052).",
+                    + $"{FormatLimits.FormatVersion} is the default, whose manifests may keep a file's flags and "
+                    + $"name a link a mount point (ADR-0184); {FormatVersions.RelocatableRecords} writes "
+                    + "relocatable records without an index generation (ADR-0052).",
                 DefaultValueFactory = _ => FormatLimits.FormatVersion,
             };
             var acknowledgeLossOption = new Option<bool>("--acknowledge-loss")

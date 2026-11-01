@@ -365,17 +365,70 @@ public sealed class RepositoryDescriptorCodecTests
         Assert.Contains("must not list", violation.Message, StringComparison.Ordinal);
     }
 
+    private static RepositoryDescriptor SampleV6() => Sample() with
+    {
+        FormatVersion = FallbackPlan.Domain.FormatVersions.FileFlagsAndLinkForms,
+        RequiredFeatures =
+        [
+            RepositoryDescriptorCodec.FeatureSealedDataPlane,
+            RepositoryDescriptorCodec.FeatureRelocatableRecords,
+            RepositoryDescriptorCodec.FeatureIndexGenerations,
+            RepositoryDescriptorCodec.FeatureDeltaCheckpoints,
+            RepositoryDescriptorCodec.FeatureFileFlagsAndLinkForms,
+        ],
+    };
+
+    [TestMethod]
+    public void RepositoryDescriptorV6_EncodedAndDecoded_RoundTrips()
+    {
+        // A format-6 descriptor (ADR-0184): format 6 keeps format 5's index
+        // and adds two manifest keys, so it lists all four.
+        Assert.AreEqual((ushort)0x0006, RepositoryDescriptorCodec.FeatureFileFlagsAndLinkForms);
+        var bytes = RepositoryDescriptorCodec.Serialize(SampleV6());
+
+        Assert.IsInstanceOfType<DescriptorParseResult.Ok>(RepositoryDescriptorCodec.Parse(bytes), out var ok);
+        Assert.AreEqual(FallbackPlan.Domain.FormatVersions.FileFlagsAndLinkForms, ok.Descriptor.FormatVersion);
+        SequenceAssert.AreEqual(SampleV6().RequiredFeatures, ok.Descriptor.RequiredFeatures);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV6_WithoutTheFileFlagsAndLinkFormsFeature_IsAFormatViolation()
+    {
+        // 01 §3.2: a format-6 descriptor MUST list 0x0006, so a reader that
+        // predates format 6 refuses the repository by that name rather than
+        // reporting its first manifest carrying a new key as damage.
+        Assert.ThrowsExactly<ArgumentException>(
+            () => RepositoryDescriptorCodec.Serialize(SampleV6() with { RequiredFeatures = SampleV5().RequiredFeatures }));
+
+        var bytes = Restamped(SampleV5(), version: 6);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("0x0006", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("must list", violation.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV5_NamingTheFileFlagsAndLinkFormsFeature_IsAFormatViolation()
+    {
+        Assert.ThrowsExactly<ArgumentException>(
+            () => RepositoryDescriptorCodec.Serialize(SampleV5() with { RequiredFeatures = SampleV6().RequiredFeatures }));
+
+        var bytes = Restamped(SampleV6(), version: 5);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("0x0006", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("must not list", violation.Message, StringComparison.Ordinal);
+    }
+
     [TestMethod]
     public void RepositoryDescriptor_AFormatNewerThanThisBuildReads_IsRefusedNamingTheRange()
     {
         // A version above the newest this build reads is the earlier fact
         // and is named first — before any feature it might also list — with
         // the remedy: update, not re-seed, because nothing is withdrawn.
-        var bytes = Restamped(SampleV5(), version: 6);
+        var bytes = Restamped(SampleV6(), version: 7);
 
         Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
-        Assert.Contains("format 6", violation.Message, StringComparison.Ordinal);
-        Assert.Contains("2 to 5", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("format 7", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("2 to 6", violation.Message, StringComparison.Ordinal);
         Assert.Contains("Update", violation.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("withdrawn", violation.Message, StringComparison.Ordinal);
     }
