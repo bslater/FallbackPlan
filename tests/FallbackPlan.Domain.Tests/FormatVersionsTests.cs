@@ -5,7 +5,9 @@ namespace FallbackPlan.Domain.Tests;
 /// specification 00 §5; ADR-0096, ADR-0097). Format 4 changes the index
 /// delta and nothing else: it ranks entries by an index generation, and its
 /// records and blobs are format 3's byte for byte. Format 5 adds a
-/// checkpoint that carries deltas verbatim and changes nothing else. A
+/// checkpoint that carries deltas verbatim and changes nothing else. Format 6
+/// adds two manifest keys, a file's flags and a link's form, and keeps
+/// format 5's index and format 3's blobs (ADR-0184). A
 /// version above the newest this build knows is never written (NFR-COMP-003;
 /// specification 11 §5.3): what such a repository's objects must carry is the
 /// newer build's to say.
@@ -57,24 +59,50 @@ public sealed class FormatVersionsTests
     }
 
     [TestMethod]
-    public void ThisBuild_ReadsFormatsTwoToFive_AndNothingAfter()
+    public void FormatSix_HasFileFlagsAndLinkForms_AndNoEarlierFormatDoes()
+    {
+        Assert.AreEqual((ushort)6, FormatVersions.FileFlagsAndLinkForms);
+        Assert.IsTrue(FormatVersions.HasFileFlagsAndLinkForms(FormatVersions.FileFlagsAndLinkForms));
+        Assert.IsFalse(FormatVersions.HasFileFlagsAndLinkForms(FormatVersions.DeltaCheckpoints));
+        Assert.IsFalse(FormatVersions.HasFileFlagsAndLinkForms(FormatVersions.RelocatableRecords));
+    }
+
+    [TestMethod]
+    public void FormatSix_KeepsFormatFivesIndexAndFormatThreesBlobs()
+    {
+        // Format 6 adds two keys a manifest may carry and changes nothing a
+        // delta, a checkpoint or a blob's container carries (ADR-0184).
+        Assert.IsTrue(FormatVersions.HasDeltaCheckpoints(FormatVersions.FileFlagsAndLinkForms));
+        Assert.IsTrue(FormatVersions.HasIndexGenerations(FormatVersions.FileFlagsAndLinkForms));
+        Assert.IsTrue(FormatVersions.HasRelocatableRecords(FormatVersions.FileFlagsAndLinkForms));
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, FormatVersions.ContainerVersion(FormatVersions.FileFlagsAndLinkForms, dataClass: true));
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, FormatVersions.ContainerVersion(FormatVersions.FileFlagsAndLinkForms, dataClass: false));
+    }
+
+    [TestMethod]
+    public void ThisBuild_ReadsFormatsTwoToSix_AndNothingAfter()
     {
         Assert.IsFalse(FormatVersions.IsReadable(1));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.SealedDataPlane));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.RelocatableRecords));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.IndexGenerations));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.DeltaCheckpoints));
-        Assert.IsFalse(FormatVersions.IsReadable(6));
-        Assert.AreEqual((ushort)5, FormatLimits.LatestFormatVersion);
+        Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.FileFlagsAndLinkForms));
+        Assert.IsFalse(FormatVersions.IsReadable(7));
+        Assert.AreEqual((ushort)6, FormatLimits.LatestFormatVersion);
+        Assert.AreEqual((ushort)6, FormatLimits.FormatVersion);
     }
 
     [TestMethod]
-    public void ThisBuild_WritesFormatsTwoToFive_AndNothingAfter()
+    public void ThisBuild_WritesFormatsTwoToSix_AndNothingAfter()
     {
         Assert.IsFalse(FormatVersions.IsWritable(FormatVersions.Symmetric));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.SealedDataPlane));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.RelocatableRecords));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.IndexGenerations));
+        Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.DeltaCheckpoints));
         Assert.IsTrue(FormatVersions.IsWritable(FormatLimits.LatestFormatVersion));
         Assert.IsFalse(FormatVersions.IsWritable(FormatLimits.LatestFormatVersion + 1));
     }
@@ -82,7 +110,7 @@ public sealed class FormatVersionsTests
     [TestMethod]
     public void ContainerVersion_OfAFormatThisBuildDoesNotKnow_IsRefused()
     {
-        // Answering 3 for a format-6 repository, as every version from 3 up
+        // Answering 3 for a format-7 repository, as every version from 3 up
         // once did, would stamp a container this build cannot vouch for into
         // a repository whose rules it has never seen.
         const ushort unknown = FormatLimits.LatestFormatVersion + 1;

@@ -18,9 +18,11 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// Writes a complete, tiny repository of a given format version: descriptor
 /// with the sealing public key and its required features, <b>no key object
 /// anywhere</b> (FR-WOR-001), one sealed data blob, one metadata blob, a
-/// standalone snapshot, an index delta, a two-record journal and, at format 5,
-/// a checkpoint carrying the delta — the shared-sequence layout of
-/// specification 08 §2.
+/// standalone snapshot, an index delta, a two-record journal and, from format
+/// 5, a checkpoint carrying the delta — the shared-sequence layout of
+/// specification 08 §2. From format 6 the file keeps a flag in its manifest
+/// (06 §4.1 key 11), and the tree holds a link that is a mount point (06 §4
+/// key 14).
 /// </summary>
 /// <remarks>
 /// One generator, one identity per fixture. It exists parameterised rather
@@ -81,6 +83,9 @@ internal static class FixtureRepositoryBuilder
 
     internal const ulong CreatedAt = 1_722_600_000_000;
 
+    /// <summary>Where the format-6 fixture's junction leads.</summary>
+    internal const string JunctionTarget = "C:\\FixtureFolder";
+
     internal static byte[] Salt(byte fill) => [.. Enumerable.Repeat(fill, 32)];
 
     /// <summary>The full authority a fixture's passphrase derives.</summary>
@@ -108,6 +113,11 @@ internal static class FixtureRepositoryBuilder
         if (FormatVersions.HasDeltaCheckpoints(formatVersion))
         {
             features.Add(RepositoryDescriptorCodec.FeatureDeltaCheckpoints);
+        }
+
+        if (FormatVersions.HasFileFlagsAndLinkForms(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureFileFlagsAndLinkForms);
         }
 
         return [.. features];
@@ -197,15 +207,47 @@ internal static class FixtureRepositoryBuilder
                 SegmentReferences = references,
                 WholeFileHash = SHA256.HashData(content),
                 SegmentationProfile = SegmentationProfile.FixedV1.Value,
-                Metadata = new EntryMetadata { ModifiedAt = CreatedAt },
+                // A flag rides only at format 6 (06 §4.1 key 11): a reader
+                // that predates it refuses a manifest carrying it.
+                Metadata = new EntryMetadata
+                {
+                    ModifiedAt = CreatedAt,
+                    FileFlags = FormatVersions.HasFileFlagsAndLinkForms(identity.FormatVersion)
+                        ? FileFlagBits.NoDump
+                        : FileFlagBits.None,
+                },
             };
             var fileVersionId = await AppendManifestAsync(
                 metaWriter, objectIds, ObjectType.FileVersionManifest,
                 FileVersionManifestCodec.Encode(fileVersion), cancellationToken).ConfigureAwait(false);
 
+            List<TreeEntry> treeEntries = [new TreeEntry("fixture.bin"u8.ToArray(), fileVersionId, EntryKind.File)];
+            if (FormatVersions.HasFileFlagsAndLinkForms(identity.FormatVersion))
+            {
+                // A Windows junction, which a format-6 manifest names as a
+                // mount point (06 §4 key 14). Its name sorts before the file's.
+                var junction = new FileVersionManifest
+                {
+                    EntryKind = EntryKind.Symlink,
+                    Name = "fixture-junction"u8.ToArray(),
+                    NameNormalisation = NameNormalisation.Nfc,
+                    LogicalLength = 0,
+                    SegmentReferences = [],
+                    WholeFileHash = SHA256.HashData([]),
+                    SegmentationProfile = SegmentationProfile.FixedV1.Value,
+                    Metadata = new EntryMetadata { ModifiedAt = CreatedAt },
+                    LinkTarget = System.Text.Encoding.UTF8.GetBytes(JunctionTarget),
+                    LinkForm = LinkForm.MountPoint,
+                };
+                var junctionId = await AppendManifestAsync(
+                    metaWriter, objectIds, ObjectType.FileVersionManifest,
+                    FileVersionManifestCodec.Encode(junction), cancellationToken).ConfigureAwait(false);
+                treeEntries.Insert(0, new TreeEntry("fixture-junction"u8.ToArray(), junctionId, EntryKind.Symlink));
+            }
+
             var tree = new TreeManifest
             {
-                Entries = [new TreeEntry("fixture.bin"u8.ToArray(), fileVersionId, EntryKind.File)],
+                Entries = treeEntries,
                 Name = "/"u8.ToArray(),
                 NameNormalisation = NameNormalisation.Nfc,
                 Metadata = EntryMetadata.Empty,

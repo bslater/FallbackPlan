@@ -94,6 +94,8 @@ A format-5 descriptor lists `0x0005` (`delta-checkpoints`) beside `0x0003` and `
 
 Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and its blobs and records format 3's, stamped 3 ([00 §5](../../specifications/repository-format/00-conventions.md#5-versioning-and-feature-negotiation)). `FormatLimits.FormatVersion` is 5, so a repository is born at 5, and formats 2 to 4 remain creatable on request and readable for ever. A set below format 5 is upgraded on request by [ADR-0066](0066-the-format-upgrade-record.md)'s record, to the latest, and checkpoints from its next backup.
 
+> **2026-11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** A repository is born at format 6 now, and an upgrade lands on 6. Format 6 keeps this record's index whole and changes only what a manifest may say, so a format-6 set checkpoints as a format-5 one does, and format 5 remains creatable on request.
+
 ## The six constraints
 
 | | Constraint | How format 5 meets it |
@@ -150,6 +152,7 @@ Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and 
 
 | Date | Status | Note |
 |---|---|---|
+| 2026-11 | Accepted; built (amended) | A repository is born at format 6 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)), whose index is this record's; a format-6 set checkpoints as a format-5 one does |
 | 2026-10 | Accepted; built (amended) | A peer no longer keeps every delta: under a person's reclaim grant the hub judges the peer's replica over retrieval by ADR-0098 §1's rule and names what passes in the signed drop list ([ADR-0098 Amendment 1](0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant)) |
 | 2026-10 | Accepted; built (amended) | Retirement, owed here as constraint 6, is built by [ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md) for staging, a metadata store, a local path and an object store (`Repository.Index/DeltaRetirer`); a carried delta is stored twice only until its checkpoint's writer publishes again. A peer keeps every delta |
 | 2026-10 | Accepted; built (amended) | The refusal to write above the newest format this build knows, owed here, is built by [ADR-0066 Amendment 1](0066-the-format-upgrade-record.md#amendment-1-2026-10--a-build-writes-only-a-format-it-implements): at a newer effective version a publication, compaction, retention apply, deletion request and upgrade record are refused naming both versions, and a destination is given a whole copy (`Repository/NewerFormatException`, `Hosts.Tests/NewerFormatServiceTests`) |

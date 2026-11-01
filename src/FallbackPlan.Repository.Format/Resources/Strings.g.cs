@@ -230,7 +230,7 @@ internal static class Strings
     internal static string FileVersionManifestCodec_ExtendedAttributeExactlyTwoByte => Get(nameof(FileVersionManifestCodec_ExtendedAttributeExactlyTwoByte));
 
     /// <summary>
-    /// The manifest carries an unknown key; specification 06 §4 assigns keys 1-13 only, and a reader MUST reject rather than skip (06 §3.1).
+    /// The manifest carries an unknown key; specification 06 §4 assigns keys 1-14 only, and a reader MUST reject rather than skip (06 §3.1).
     /// </summary>
     internal static string FileVersionManifestCodec_ManifestCarriesUnknownKeySpecification => Get(nameof(FileVersionManifestCodec_ManifestCarriesUnknownKeySpecification));
 
@@ -251,7 +251,27 @@ internal static class Strings
     internal static string FileVersionManifestCodec_ManifestOmitsMandatoryKey => Get(nameof(FileVersionManifestCodec_ManifestOmitsMandatoryKey));
 
     /// <summary>
-    /// The metadata map carries an unknown key; specification 06 §4.1 assigns keys 1-10 only.
+    /// The metadata map's file_flags (06 §4.1 key 11) names no flag; an entry that carries none leaves the key out.
+    /// </summary>
+    internal static string FileVersionManifestCodec_FileFlagsNameNoFlag => Get(nameof(FileVersionManifestCodec_FileFlagsNameNoFlag));
+
+    /// <summary>
+    /// The metadata map's file_flags (06 §4.1 key 11) sets a bit no format names; bits 6 and above are reserved.
+    /// </summary>
+    internal static string FileVersionManifestCodec_FileFlagsCarryAReservedBit => Get(nameof(FileVersionManifestCodec_FileFlagsCarryAReservedBit));
+
+    /// <summary>
+    /// The manifest's link_form (06 §4 key 14) is not 1, a mount point, the only form assigned; a symbolic link leaves the key out.
+    /// </summary>
+    internal static string FileVersionManifestCodec_LinkFormUnassigned => Get(nameof(FileVersionManifestCodec_LinkFormUnassigned));
+
+    /// <summary>
+    /// Only a link entry with a target may carry link_form (06 §4 key 14).
+    /// </summary>
+    internal static string FileVersionManifestCodec_LinkFormOnlyOnALink => Get(nameof(FileVersionManifestCodec_LinkFormOnlyOnALink));
+
+    /// <summary>
+    /// The metadata map carries an unknown key; specification 06 §4.1 assigns keys 1-11 only.
     /// </summary>
     internal static string FileVersionManifestCodec_MetadataMapCarriesUnknownKey => Get(nameof(FileVersionManifestCodec_MetadataMapCarriesUnknownKey));
 

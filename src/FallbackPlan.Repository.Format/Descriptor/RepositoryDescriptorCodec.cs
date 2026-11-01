@@ -89,11 +89,23 @@ public static class RepositoryDescriptorCodec
     /// </summary>
     public const ushort FeatureDeltaCheckpoints = 0x0005;
 
+    /// <summary>
+    /// <c>file-flags-and-link-forms</c>: a manifest may keep a file's or a
+    /// folder's flags (06 §4.1 key 11) and name a link a mount point (06 §4
+    /// key 14)
+    /// ([ADR-0184](../../../docs/adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)):
+    /// a format-6 repository names it in <c>required_features</c>, beside
+    /// <c>delta-checkpoints</c>, and no earlier format may. A reader that
+    /// predates format 6 refuses the repository by that name rather than
+    /// reporting its first manifest carrying either key as damage.
+    /// </summary>
+    public const ushort FeatureFileFlagsAndLinkForms = 0x0006;
+
     /// <summary>The feature identifiers this implementation understands.</summary>
     private static readonly HashSet<ushort> Implemented =
     [
         FeatureSealedDataPlane, FeatureReclaimAuthority, FeatureRelocatableRecords, FeatureIndexGenerations,
-        FeatureDeltaCheckpoints,
+        FeatureDeltaCheckpoints, FeatureFileFlagsAndLinkForms,
     ];
 
     /// <summary>Serialises a descriptor to its store bytes.</summary>
@@ -106,8 +118,8 @@ public static class RepositoryDescriptorCodec
             throw new ArgumentException(Strings.RepositoryDescriptorCodec_KDFSaltExactlyBytes, nameof(descriptor));
         }
 
-        // Only formats 2 to 5 are written (ADR-0042 §1, ADR-0052, ADR-0096,
-        // ADR-0097; format 1 withdrawn before freeze), and a descriptor of
+        // Only formats 2 to 6 are written (ADR-0042 §1, ADR-0052, ADR-0096,
+        // ADR-0097, ADR-0184; format 1 withdrawn before freeze), and a descriptor of
         // any is nothing without its sealing public key — the verifier every
         // open compares against. A caller handing over anything else is a bug
         // refused here rather than a stored contradiction.
@@ -385,7 +397,8 @@ public static class RepositoryDescriptorCodec
     /// Why the version and the features it implies disagree, or null when
     /// they agree (01 §3.2): format 3 and later list relocatable-records,
     /// format 4 and later list index-generations, format 5 and later list
-    /// delta-checkpoints, and an earlier format lists none of the three.
+    /// delta-checkpoints, format 6 and later list file-flags-and-link-forms,
+    /// and an earlier format lists none of the four.
     /// </summary>
     private static string? FeatureVersionDisagreement(ushort formatVersion, IReadOnlyList<ushort> required) =>
         FeatureDisagreement(
@@ -396,7 +409,10 @@ public static class RepositoryDescriptorCodec
             FormatVersions.HasIndexGenerations(formatVersion))
         ?? FeatureDisagreement(
             formatVersion, required, FeatureDeltaCheckpoints, "delta-checkpoints",
-            FormatVersions.HasDeltaCheckpoints(formatVersion));
+            FormatVersions.HasDeltaCheckpoints(formatVersion))
+        ?? FeatureDisagreement(
+            formatVersion, required, FeatureFileFlagsAndLinkForms, "file-flags-and-link-forms",
+            FormatVersions.HasFileFlagsAndLinkForms(formatVersion));
 
     private static string? FeatureDisagreement(
         ushort formatVersion, IReadOnlyList<ushort> required, ushort feature, string name, bool implied)

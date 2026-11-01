@@ -47,4 +47,11 @@ public sealed record EntryMetadata
 
     /// <summary>Platform attribute bits (key 10).</summary>
     public uint? FileAttributes { get; init; }
+
+    /// <summary>
+    /// The flags a Linux or macOS file or folder carries beyond its mode
+    /// (key 11; ADR-0184), <see cref="FileFlagBits.None"/> where it carries
+    /// none, which the key then leaves out. Only a format-6 writer keeps them.
+    /// </summary>
+    public FileFlagBits FileFlags { get; init; }
 }

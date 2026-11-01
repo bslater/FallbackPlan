@@ -110,6 +110,8 @@ The vectors here cover algorithms and encodings. **Fixture repositories** — co
 
 `fixture-repository-v5` is the same repository at **format 5** (ADR-0097), plus a seventh object: a checkpoint at sequence 7 carrying the one delta's stored bytes at key 10 ([07 §5.1](../07-index.md#51-carried-deltas)). Its descriptor declares `delta-checkpoints` beside `index-generations` and `relocatable-records`. It holds the same read contract, plus the checkpoint's: a load reads the delta from the checkpoint and fetches none, and reaches the same index with the delta gone from its key.
 
+`fixture-repository-v6` is the same repository at **format 6** (ADR-0184). Its index is format 5's, its delta carried in a checkpoint, and everything sealed in it is format 3's, stamped 3. Its descriptor declares `file-flags-and-link-forms` beside the three features before it. Its tree holds a second entry, a junction: a link whose manifest carries key 14, `link_form`, naming it a mount point ([06 §4](../06-manifests.md#4-file-version-manifest)). The file's manifest keeps the no-dump flag in metadata key 11, `file_flags` ([06 §4.1](../06-manifests.md#41-metadata-map)). It holds the same read contract, plus the two keys: each manifest decodes with what it keeps, and the file restores byte for byte.
+
 A format-1 fixture with byte-identical regeneration existed while format v1 did; it was withdrawn with the format, before any freeze.
 
 Fixtures containing user data are never committed. Everything in this suite is synthetic and constant.

@@ -137,7 +137,7 @@
     <value>An extended attribute is exactly two byte strings (specification 06 §4.1).</value>
   </data>
   <data name="FileVersionManifestCodec_ManifestCarriesUnknownKeySpecification" xml:space="preserve">
-    <value>The manifest carries an unknown key; specification 06 §4 assigns keys 1-13 only, and a reader MUST reject rather than skip (06 §3.1).</value>
+    <value>The manifest carries an unknown key; specification 06 §4 assigns keys 1-14 only, and a reader MUST reject rather than skip (06 §3.1).</value>
   </data>
   <data name="FileVersionManifestCodec_ManifestNotCanonicalCBOR" xml:space="preserve">
     <value>The manifest is not canonical CBOR: {0}</value>
@@ -145,8 +145,20 @@
   <data name="FileVersionManifestCodec_ManifestOmitsMandatoryKey" xml:space="preserve">
     <value>The manifest omits a mandatory key (specification 06 §4).</value>
   </data>
+  <data name="FileVersionManifestCodec_FileFlagsNameNoFlag" xml:space="preserve">
+    <value>The metadata map's file_flags (06 §4.1 key 11) names no flag; an entry that carries none leaves the key out.</value>
+  </data>
+  <data name="FileVersionManifestCodec_FileFlagsCarryAReservedBit" xml:space="preserve">
+    <value>The metadata map's file_flags (06 §4.1 key 11) sets a bit no format names; bits 6 and above are reserved.</value>
+  </data>
+  <data name="FileVersionManifestCodec_LinkFormUnassigned" xml:space="preserve">
+    <value>The manifest's link_form (06 §4 key 14) is not 1, a mount point, the only form assigned; a symbolic link leaves the key out.</value>
+  </data>
+  <data name="FileVersionManifestCodec_LinkFormOnlyOnALink" xml:space="preserve">
+    <value>Only a link entry with a target may carry link_form (06 §4 key 14).</value>
+  </data>
   <data name="FileVersionManifestCodec_MetadataMapCarriesUnknownKey" xml:space="preserve">
-    <value>The metadata map carries an unknown key; specification 06 §4.1 assigns keys 1-10 only.</value>
+    <value>The metadata map carries an unknown key; specification 06 §4.1 assigns keys 1-11 only.</value>
   </data>
   <data name="FileVersionManifestCodec_NameNormalisationUnassigned" xml:space="preserve">
     <value>name_normalisation {0} is unassigned (specification 06 §4).</value>
