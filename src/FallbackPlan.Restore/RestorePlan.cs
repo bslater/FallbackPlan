@@ -272,6 +272,41 @@ public sealed record RestoreTargetProfile
 
         return ForLocalPlatform() with { CapturedHere = capturedHere };
     }
+
+    /// <summary>
+    /// This target as the volumes of <paramref name="directories"/> take
+    /// names, where they say (ADR-0170 Amendment 5): case-sensitive only where
+    /// every one is, and taking a name's two forms for one where any does. A
+    /// volume that says nothing is taken to name as this target states, and
+    /// no folder leaves it as it is.
+    /// </summary>
+    /// <param name="directories">Each folder a restore writes to.</param>
+    /// <returns>The target as written there.</returns>
+    public RestoreTargetProfile AsWrittenTo(IEnumerable<string> directories)
+    {
+        ThrowHelper.ThrowIfNull(directories);
+        var caseSensitive = true;
+        var normalisationInsensitive = false;
+        var any = false;
+        foreach (var directory in directories)
+        {
+            any = true;
+            var naming = VolumeNaming.Of(directory) ?? new VolumeNaming(CaseSensitive, NormalisationInsensitive);
+            caseSensitive &= naming.CaseSensitive;
+            normalisationInsensitive |= naming.NormalisationInsensitive;
+        }
+
+        return any ? this with { CaseSensitive = caseSensitive, NormalisationInsensitive = normalisationInsensitive } : this;
+    }
+
+    /// <summary>Whether <paramref name="other"/> takes names as this target does, by case and by normalisation.</summary>
+    /// <param name="other">The other target.</param>
+    /// <returns>Whether it does.</returns>
+    public bool NamesAs(RestoreTargetProfile other)
+    {
+        ThrowHelper.ThrowIfNull(other);
+        return CaseSensitive == other.CaseSensitive && NormalisationInsensitive == other.NormalisationInsensitive;
+    }
 }
 
 /// <summary>One planned restore item.</summary>

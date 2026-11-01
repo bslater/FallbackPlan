@@ -1872,11 +1872,21 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             throw new CliFailureException(Strings.FormatDirectGateway_CatalogueKnowsNothingUnderSnapshot(request.SnapshotId));
         }
 
+        // Judged as the volumes the run would write to take names, where one
+        // takes them otherwise than this platform's (ADR-0170 Amendment 5).
+        var rootSlices = SlicesOf(catalogue, snapshotId, plan, request);
+        if (target.AsWrittenTo(rootSlices.Select(slice => slice.OutputDirectory)) is var written && !written.NamesAs(target))
+        {
+            target = written;
+            plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(request), target);
+            rootSlices = SlicesOf(catalogue, snapshotId, plan, request);
+        }
+
         // A resume reads nothing of a file its run landed but the manifest
         // (ADR-0132), nor what the parts it kept prove (ADR-0135).
         IReadOnlyList<RestoreSlice> slices =
         [
-            .. SlicesOf(catalogue, snapshotId, plan, request).Select(slice => new RestoreSlice(
+            .. rootSlices.Select(slice => new RestoreSlice(
                 slice.Plan, slice.OutputDirectory, request.Resume ? slice.OutputDirectory : null, slice.LabelPrefix)),
         ];
         var held = request.Resume

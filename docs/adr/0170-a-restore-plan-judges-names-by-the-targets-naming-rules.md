@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first)
+**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one; by Amendment 5, judged as the volume of each folder a restore writes to takes names, where it says), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the executor's rule for where a repository's path is written, which the recovery tool shares), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-7
 
 **Built:**
@@ -69,6 +69,8 @@ On Windows, `TryResolve` refuses such a component with a reason that names Windo
 
   > **2026-10 ([Amendment 3](#amendment-3-2026-10--a-run-never-moves-aside-what-it-restored-itself)).** A run no longer moves aside, replaces or fails unnamed over a file it restored itself where its volume takes two of the snapshot's names for one: the second fails, naming the first. The plan still judges by the platform.
 
+  > **Built 2026-11 for case and normalisation ([Amendment 5](#amendment-5-2026-11--the-plan-reads-how-the-volume-it-writes-to-takes-names)).** The plan reads how the volume of each folder a restore writes to takes names, where the volume says, and judges collisions so. The other naming rules, Windows' and a name's byte limit, still follow the platform.
+
 ## Alternatives considered
 
 - **Refuse such names on every platform.** Rejected. They are legal on POSIX, and a Linux snapshot restored to Linux must get its own names back.
@@ -123,6 +125,8 @@ The plan named two paths as colliding on any case-insensitive target where they 
 
 > **2026-10 ([Amendment 3](#amendment-3-2026-10--a-run-never-moves-aside-what-it-restored-itself)).** A run on such a volume no longer moves aside a file it restored itself: the second of the two names fails, naming the first. The plan still judges by the platform.
 
+> **2026-11: the flag is now read from the volume, where it says ([Amendment 5](#amendment-5-2026-11--the-plan-reads-how-the-volume-it-writes-to-takes-names)).**
+
 ## Amendment 3 (2026-10) — a run never moves aside what it restored itself
 
 Amendment 2 judges a collision by how the target folds names, and the target says what its platform does. A volume can fold where its platform does not: a FAT or exFAT drive or a share mounted on Linux, or a folder Linux makes case-insensitive. Where the plan does name a collision, the run still goes ahead, since conflicts are the operator's call ([architecture 08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning)). Either way, two of the snapshot's names land on one file. The second found the first standing there, and met it with the policy for somebody else's file:
@@ -155,6 +159,8 @@ Amendment 2 judges a collision by how the target folds names, and the target say
 **Not done.**
 
 - **The plan does not judge the volume.** A collision a volume makes where its platform does not is still not named before the run; the run names it, item by item. Reading a volume's naming rules without writing to it, which a plan must not do, is the next record's.
+
+  > **2026-11: taken up by [Amendment 5](#amendment-5-2026-11--the-plan-reads-how-the-volume-it-writes-to-takes-names).**
 - **The recovery tool** replaces whatever stands at a name. On such a volume, the second of two names it takes for one replaces the first.
 
   > **2026-10: taken up by [Amendment 4](#amendment-4-2026-10--the-recovery-tool-never-replaces-what-it-restored-itself).**
@@ -178,6 +184,49 @@ Amendment 3 left the recovery tool as it was. It clears whatever stands at a fil
 
 **Not done.** The plan still judges by the platform, and a volume that stores a name in another form than it was given is still not judged (Amendment 3's "Not done").
 
+> **2026-11: the plan is taken up by [Amendment 5](#amendment-5-2026-11--the-plan-reads-how-the-volume-it-writes-to-takes-names).**
+
+## Amendment 5 (2026-11) — the plan reads how the volume it writes to takes names
+
+Amendments 2 to 4 judged a collision in the plan by what the target's platform does, and left the volume to the run. A volume can take names otherwise than its platform's commonly do:
+
+- **On Linux,** a FAT or exFAT drive, or a share served over SMB or CIFS, folds case. A folder Linux casefolds folds case and the two forms of a name both.
+- **On Windows,** a folder made case-sensitive keeps apart what Windows' volumes fold.
+- **On macOS,** a volume made case-sensitive keeps case apart, though it still folds the two forms.
+
+On such a volume the plan named a collision that would not happen, or missed one that would. The run met the volume truthfully, item by item, but only after the plan was approved.
+
+**Decision.**
+
+- **`Domain/VolumeNaming` reads how the volume a folder lies on takes names, without writing to it,** since a plan writes nothing:
+  - macOS answers whether the volume distinguishes case (`pathconf`), and its volumes take the two forms of a name for one.
+  - Windows answers whether the folder distinguishes case, a flag a folder made inside one inherits, and its volumes keep the two forms apart.
+  - Linux answers what kind of filesystem the folder is on (`statfs`), and whether the folder is casefolded (`FS_IOC_GETFLAGS`).
+
+  A folder not yet made is judged by the nearest one that is, which is where it would be made. A file in the way, or a platform that does not say, gives no answer.
+- **The target is taken as the volumes of every folder a restore writes to take names.** It is case-sensitive only where every one is, and takes the two forms for one where any does. A volume that gives no answer is taken to name as the platform does.
+- **Each plan made for a run reads them:** the command line's and the service's, for a run into a folder or to the original location. The plan is made again only where the volumes take names otherwise than the platform.
+- **The run is unchanged.** It never reports the plan's conflicts, and it meets what the volume does item by item (Amendments 3 and 4).
+
+**Built:** `Domain/VolumeNaming`, `Restore/RestorePlan`, `Cli/OperationGateway`, `Agent/ServiceCommandHandler`:
+
+- `Domain.Tests/VolumeNamingTests`:
+  - the volume the tests write on is judged as it behaves, on every platform CI runs;
+  - a folder not yet made is judged by its nearest, and nothing is made;
+  - a folder below a file is not judged;
+  - Linux's kinds of filesystem, and the casefold flag, take names as stated;
+  - a flow's own word answers in place of the platform.
+- `Repository.Tests/RestorePlanTests` — plans for stated targets, written to folders whose volumes the flow states: a FAT drive on Linux folds case; a case-sensitive folder on Windows keeps it; a casefolded folder folds both; two volumes fold what either folds; and a volume that says nothing, or no folder at all, leaves the target as stated.
+- `Cli.Tests/RestorePlanCommandTests`, `Hosts.Tests/RestoreHonestyServiceTests` — on Linux, whose own volume holds both names to back up, a plan to a folder whose volume folds case names the collision through the command line and through the service, and without that, names none.
+
+**Not done.**
+
+- **A share is judged by its protocol,** not by the server's own rule. A share whose server keeps case apart is judged as folding it.
+- **NTFS mounted on Linux** is judged as keeping case apart, as Linux's drivers mount it by default.
+- **A volume that is neither APFS nor HFS+ on macOS** is judged as taking the two forms for one, as macOS's own volumes do.
+- **A volume that stores a name in another form than it was given,** as HFS+ stores one decomposed, is still not judged.
+- **Windows' naming rules and a name's byte limit** still follow the platform.
+
 ## Status history
 
 | Date | Status | Note |
@@ -187,3 +236,4 @@ Amendment 3 left the recovery tool as it was. It clears whatever stands at a fil
 | 2026-10 | Amended | Amendment 2: the target states whether it takes a name's composed and decomposed forms for one, the local profile on macOS, and the plan names two paths as colliding only where the target folds them together, by case as the executor compares them and by normalisation only where the target ignores it. `Restore/RestorePlan`; `Repository.Tests/RestorePlanTests` |
 | 2026-10 | Amended | Amendment 3: a run keeps each name it lands, and where its volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside, replacing it or failing over it unnamed; under rename it lands beside. The plan is unchanged. `Domain/NamesLanded`, `Restore/RestoreExecutor`; `Domain.Tests/NamesLandedTests`, `Repository.Tests/RestorePlanTests` |
 | 2026-10 | Amended | Amendment 4: `NamesLanded` moved, unchanged, into Domain with a call that asks the disk, and the recovery tool refuses the second of two names its output takes for one, naming the first, rather than replacing it. `Domain/NamesLanded`, `Recovery/RecoverySession`, `Restore/RestoreExecutor`; `Domain.Tests/NamesLandedTests`, `Repository.Tests/RecoveryNamesTests` |
+| 2026-11 | Amended | Amendment 5: the plan reads how the volume of each folder a restore writes to takes names, without writing to it, and judges collisions so, case-sensitive only where every volume is and folding the two forms where any does; the run is unchanged. `Domain/VolumeNaming`, `Restore/RestorePlan`, `Cli/OperationGateway`, `Agent/ServiceCommandHandler`; `Domain.Tests/VolumeNamingTests`, `Repository.Tests/RestorePlanTests`, `Cli.Tests/RestorePlanCommandTests`, `Hosts.Tests/RestoreHonestyServiceTests` |

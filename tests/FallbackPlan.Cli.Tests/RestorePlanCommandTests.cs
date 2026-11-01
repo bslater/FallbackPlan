@@ -1,5 +1,7 @@
 using System.Text.Json;
 using FallbackPlan.Cli;
+using FallbackPlan.Domain;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
 
@@ -9,7 +11,9 @@ namespace FallbackPlan.Cli.Tests;
 /// could not bring back, with nothing written. The exit code says whether the
 /// run would restore every file, so a script can plan before it restores.
 /// A plan exported to a file is kept as JSON, the plan's own figures beside
-/// the run it was made for (ADR-0108).
+/// the run it was made for (ADR-0108). Two names the volume of the folder
+/// it would write to takes for one are named a collision, whatever its
+/// platform's volumes do (ADR-0170 Amendment 5).
 /// </summary>
 /// <remarks>
 /// In direct mode the CLI makes the plan itself, as it runs the restore
@@ -34,6 +38,29 @@ public sealed class RestorePlanCommandTests : IDisposable
         Assert.Contains("2 file(s)", plan.All, StringComparison.Ordinal);
         Assert.Contains(destination, plan.All, StringComparison.Ordinal);
         Assert.Contains("nothing was restored", plan.All, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(destination), "a plan writes nothing, not even the folder");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "only Linux's own volume holds two names that differ in case as the source")]
+    public async Task Plan_ToAFolderOnAVolumeThatFoldsCase_NamesTheCollision_ThoughItsPlatformsVolumesDoNot()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/Notes.txt", "upper");
+        _cli.WriteFile("tree/notes.txt", "lower");
+        var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+        Assert.AreEqual(0, backup.ExitCode, backup.All);
+        var snapshot = await FirstSnapshotAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        var apart = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+        Assert.DoesNotContain("Collides on this target", apart.All, StringComparison.Ordinal);
+
+        // A FAT drive mounted where the run would write (ADR-0170 Amendment 5).
+        VolumeNaming.OfInFlow = _ => new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false);
+        var folded = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+
+        Assert.Contains("Collides on this target", folded.All, StringComparison.Ordinal);
         Assert.IsFalse(Directory.Exists(destination), "a plan writes nothing, not even the folder");
     }
 
@@ -162,7 +189,11 @@ public sealed class RestorePlanCommandTests : IDisposable
 
         var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
         Assert.IsTrue(backup.ExitCode == 0, backup.All);
+        return await FirstSnapshotAsync();
+    }
 
+    private async Task<string> FirstSnapshotAsync()
+    {
         var snapshots = await _cli.RunAsync("snapshots");
         Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
 
