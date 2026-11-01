@@ -13,7 +13,9 @@ namespace FallbackPlan.Domain;
 /// <remarks>
 /// <para>
 /// A name is kept by what a volume that folds names would take it for: its
-/// composed form, compared without case. That only finds a candidate. The
+/// composed form with each component's trailing periods taken off, as a FAT
+/// or exFAT drive takes them off (ADR-0170 Amendment 7), compared without
+/// case. That only finds a candidate. The
 /// volume decides: a destination is taken for a landed name only where its
 /// folder lists no entry under the destination's own name, so the file found
 /// there is the one listed under the landed name.
@@ -101,15 +103,16 @@ public sealed class NamesLanded
 
     private static string Fold(string path)
     {
+        var stripped = string.Join('/', path.Split('/').Select(component => component.TrimEnd('.')));
         try
         {
-            return path.Normalize(NormalizationForm.FormC);
+            return stripped.Normalize(NormalizationForm.FormC);
         }
         catch (ArgumentException)
         {
             // Not well-formed Unicode, so it has no normal form; it is
             // compared by case alone.
-            return path;
+            return stripped;
         }
     }
 }
