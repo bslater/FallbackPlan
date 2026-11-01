@@ -202,6 +202,14 @@ public sealed record RestoreTargetProfile
     /// </summary>
     public uint? MaxNameBytes { get; init; }
 
+    /// <summary>
+    /// The most UTF-16 units the target holds in one name, or null where that
+    /// is not known or <see cref="WindowsNamingRules"/> judges it: an exFAT or
+    /// NTFS volume on Linux holds 255 whatever the bytes (ADR-0170 Amendment
+    /// 9).
+    /// </summary>
+    public uint? MaxNameUnits { get; init; }
+
     /// <summary>What this target lets a <see cref="MetadataWriter"/> write back.</summary>
     public MetadataTarget Metadata => new()
     {
@@ -280,8 +288,13 @@ public sealed record RestoreTargetProfile
     /// every one is, and taking a name's two forms for one where any does. It
     /// names files by Windows' rules where any volume does, or where this
     /// target already did, since a platform that names by them does so on
-    /// every volume (ADR-0170 Amendment 6). A volume that says nothing is
-    /// taken to name as this target states, and no folder leaves it as it is.
+    /// every volume (ADR-0170 Amendment 6). It holds a name to this target's
+    /// byte limit only where some volume counts a name in bytes, and to 255
+    /// UTF-16 units where some volume counts it in units and Windows' rules,
+    /// which hold a name to as many, are not in force, so a name must fit
+    /// every volume it may be written to (ADR-0170 Amendment 9). A volume
+    /// that says nothing is taken to name as this target states, and no
+    /// folder leaves it as it is.
     /// </summary>
     /// <param name="directories">Each folder a restore writes to.</param>
     /// <returns>The target as written there.</returns>
@@ -291,14 +304,27 @@ public sealed record RestoreTargetProfile
         var caseSensitive = true;
         var normalisationInsensitive = false;
         var windowsNames = WindowsNamingRules;
+        var countedInBytes = false;
+        var countedInUnits = false;
         var any = false;
         foreach (var directory in directories)
         {
             any = true;
-            var naming = VolumeNaming.Of(directory) ?? new VolumeNaming(CaseSensitive, NormalisationInsensitive);
+            if (VolumeNaming.Of(directory) is not { } naming)
+            {
+                // Taken to name as this target states.
+                caseSensitive &= CaseSensitive;
+                normalisationInsensitive |= NormalisationInsensitive;
+                countedInBytes |= MaxNameBytes is not null;
+                countedInUnits |= MaxNameUnits is not null;
+                continue;
+            }
+
             caseSensitive &= naming.CaseSensitive;
             normalisationInsensitive |= naming.NormalisationInsensitive;
             windowsNames |= naming.WindowsNames;
+            countedInBytes |= !naming.NamesInUnits;
+            countedInUnits |= naming.NamesInUnits;
         }
 
         return any
@@ -307,11 +333,17 @@ public sealed record RestoreTargetProfile
                 CaseSensitive = caseSensitive,
                 NormalisationInsensitive = normalisationInsensitive,
                 WindowsNamingRules = windowsNames,
+                MaxNameBytes = countedInBytes ? MaxNameBytes : null,
+                MaxNameUnits = countedInUnits && !windowsNames ? MaxNameUnits ?? MostUnitsInAName : MaxNameUnits,
             }
             : this;
     }
 
-    /// <summary>Whether <paramref name="other"/> takes names as this target does: by case, by normalisation, and by Windows' rules or not.</summary>
+    /// <summary>
+    /// Whether <paramref name="other"/> takes names as this target does: by
+    /// case, by normalisation, by Windows' rules or not, and with the same
+    /// limits on a name's length.
+    /// </summary>
     /// <param name="other">The other target.</param>
     /// <returns>Whether it does.</returns>
     public bool NamesAs(RestoreTargetProfile other)
@@ -319,8 +351,13 @@ public sealed record RestoreTargetProfile
         ThrowHelper.ThrowIfNull(other);
         return CaseSensitive == other.CaseSensitive
             && NormalisationInsensitive == other.NormalisationInsensitive
-            && WindowsNamingRules == other.WindowsNamingRules;
+            && WindowsNamingRules == other.WindowsNamingRules
+            && MaxNameBytes == other.MaxNameBytes
+            && MaxNameUnits == other.MaxNameUnits;
     }
+
+    /// <summary>The most UTF-16 units a volume that counts a name in units holds in one.</summary>
+    private const uint MostUnitsInAName = 255;
 }
 
 /// <summary>One planned restore item.</summary>
@@ -488,6 +525,11 @@ public static class RestorePlanner
             {
                 conflicts.Add(new RestoreConflict(
                     item.Path, $"The target holds at most {maxName} bytes in one name, and this name is {nameBytes}."));
+            }
+            else if (target.MaxNameUnits is { } maxUnits && name.Length > maxUnits)
+            {
+                conflicts.Add(new RestoreConflict(
+                    item.Path, $"The target holds at most {maxUnits} UTF-16 units in one name, and this name is {name.Length}."));
             }
         }
 

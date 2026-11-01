@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one; by Amendment 5, judged as the volume of each folder a restore writes to takes names, where it says; by Amendment 6, by Windows' rules where a volume written to names files by them, as a FAT or exFAT drive does wherever it is mounted), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first; by Amendment 7, a name and the name with a trailing period are two such names where the volume takes them for one; by Amendment 8, so is a file in a folder the volume takes for one the run landed into)
+**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one; by Amendment 5, judged as the volume of each folder a restore writes to takes names, where it says; by Amendment 6, by Windows' rules where a volume written to names files by them, as a FAT or exFAT drive does wherever it is mounted; by Amendment 9, a name's length as the volume counts it, in bytes or in UTF-16 units), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first; by Amendment 7, a name and the name with a trailing period are two such names where the volume takes them for one; by Amendment 8, so is a file in a folder the volume takes for one the run landed into)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the executor's rule for where a repository's path is written, which the recovery tool shares), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-7
 
 **Built:**
@@ -72,6 +72,8 @@ On Windows, `TryResolve` refuses such a component with a reason that names Windo
   > **Built 2026-11 for case and normalisation ([Amendment 5](#amendment-5-2026-11--the-plan-reads-how-the-volume-it-writes-to-takes-names)).** The plan reads how the volume of each folder a restore writes to takes names, where the volume says, and judges collisions so. The other naming rules, Windows' and a name's byte limit, still follow the platform.
 
   > **Built 2026-11 for Windows' rules ([Amendment 6](#amendment-6-2026-11--a-fat-or-exfat-drive-names-by-windows-rules-wherever-it-is-mounted)).** A FAT or exFAT drive names files by Windows' rules wherever it is mounted, and the plan judges the names written to one by them. A share does not, and a name's byte limit still follows the platform.
+
+  > **Built 2026-11 for a name's length ([Amendment 9](#amendment-9-2026-11--a-names-length-is-judged-as-the-volume-counts-it)).** A name is held to the target's byte limit only where a volume written to counts in bytes, and to 255 UTF-16 units where an exFAT or NTFS volume on Linux counts in units.
 
 ## Alternatives considered
 
@@ -235,6 +237,8 @@ On such a volume the plan named a collision that would not happen, or missed one
 
   > **2026-11: Windows' rules are taken up by [Amendment 6](#amendment-6-2026-11--a-fat-or-exfat-drive-names-by-windows-rules-wherever-it-is-mounted)** for a FAT or exFAT drive. A name's byte limit still follows the platform.
 
+  > **2026-11: a name's byte limit is taken up by [Amendment 9](#amendment-9-2026-11--a-names-length-is-judged-as-the-volume-counts-it).**
+
 ## Amendment 6 (2026-11) — a FAT or exFAT drive names by Windows' rules wherever it is mounted
 
 Amendment 5 left Windows' naming rules with the platform. A FAT or exFAT drive is made by those rules, and Linux's drivers for the two hold to most of them:
@@ -274,6 +278,8 @@ Some of the rest they write, such as a device's name, and the drive then holds a
 
   > **2026-11: taken up by [Amendment 7](#amendment-7-2026-11--a-name-and-the-name-with-a-trailing-period-are-taken-for-one-where-the-volume-takes-them-so).**
 - **A name's byte limit** still follows the platform. exFAT on Linux holds a name of 255 UTF-16 units whatever its bytes, and the plan still names one longer than 255 bytes.
+
+  > **2026-11: taken up by [Amendment 9](#amendment-9-2026-11--a-names-length-is-judged-as-the-volume-counts-it).**
 - **macOS's FAT, exFAT and SMB volumes** are taken not to name by Windows' rules.
 - **NTFS mounted on Linux** is taken not to, as Linux's drivers write there names Windows refuses.
 
@@ -342,6 +348,49 @@ The folder pair is taken for one only where CI's Windows and macOS legs run; Lin
 
 **Not done.** Amendment 3's last item stands: a volume that stores a name in another form than it was given, as HFS+ stores one decomposed, is not judged.
 
+## Amendment 9 (2026-11) — a name's length is judged as the volume counts it
+
+Amendment 1 holds a name to the bytes a target holds, 255 for the local profile on Linux, and Amendments 5 and 6 left that limit with the platform. Not every volume on Linux counts a name in bytes:
+
+- an exFAT volume holds a name of 255 UTF-16 units whatever its bytes;
+- so does an NTFS volume, under Linux's in-kernel drivers;
+- FAT's driver holds a name to 255 bytes as well as to 255 units, and Linux's other filesystems hold one to 255 bytes alone.
+
+So a plan for a restore to an exFAT or NTFS volume on Linux named as too long a name of 200 three-byte characters, 600 bytes and 200 units, which the volume holds. And on NTFS, which Linux's drivers name by Linux's rules rather than Windows', nothing held a name to 255 units.
+
+**Decision.**
+
+- **`Domain/VolumeNaming` also says whether a volume counts a name in UTF-16 units.**
+  - Windows' volumes do.
+  - On Linux, exFAT and NTFS do.
+  - An NTFS volume on Linux is said to keep case apart, as its drivers mount it by default. It is also said not to name by Windows' rules, since they write names Windows refuses.
+- **The target holds a name to its byte limit only where some volume written to counts in bytes,** and to 255 units where some volume counts in units, so a name must fit every volume it may be written to. A volume that says nothing counts as the target states.
+- **Where Windows' rules are in force, they hold a name to 255 units already,** and no unit limit is added. A plan to Windows' own volume is made once, as before.
+- **The plan names a name longer in units than the target holds,** saying so in units, as it says a byte limit in bytes.
+- **The run is unchanged.**
+
+**Built:** `Domain/VolumeNaming`, `Restore/RestorePlan`:
+
+- `Domain.Tests/VolumeNamingTests`:
+  - the volume the tests write on counts in units exactly where it holds a name of 200 three-byte characters: Windows' does, and Linux's own does not. macOS's limit is not judged;
+  - on Linux, exFAT and NTFS count in units, and FAT does not;
+  - NTFS keeps case apart and does not name by Windows' rules.
+- `Repository.Tests/RestorePlanTests` — a stated Linux target written to folders whose volumes the flow states:
+  - on ext4, a name of 600 bytes and one of 256 ASCII characters are both too long, in bytes;
+  - on NTFS only the latter is, in units;
+  - written to both volumes, both names are too long;
+  - a volume that says nothing leaves the target's own limits;
+  - a target that names by Windows' rules, written to Windows' own volume, is unchanged, and its plan is made once;
+  - `NamesAs` tells either limit apart.
+
+No test goes through the command line or the service. A name longer than 255 bytes cannot be captured from Linux's own volume, and Windows holds no name to a byte limit. The plan sites plan again on `NamesAs`, as for Amendments 5 and 6.
+
+**Not done.**
+
+- **A share** still counts as the platform states, since its client's limit depends on the server.
+- **An NTFS volume under a userspace driver** says nothing, since such a driver hides the filesystem beneath it, so it is judged as the platform.
+- **macOS's limit** is still not stated.
+
 ## Status history
 
 | Date | Status | Note |
@@ -355,3 +404,4 @@ The folder pair is taken for one only where CI's Windows and macOS legs run; Lin
 | 2026-11 | Amended | Amendment 6: a volume says whether it names files by Windows' rules, as Windows' volumes do and a FAT or exFAT drive does wherever it is mounted, and the plan judges the names written there by them; a share does not; the run is unchanged. `Domain/VolumeNaming`, `Restore/RestorePlan`; `Domain.Tests/VolumeNamingTests`, `Repository.Tests/RestorePlanTests`, `Cli.Tests/RestorePlanCommandTests`, `Hosts.Tests/RestoreHonestyServiceTests` |
 | 2026-11 | Amended | Amendment 7: a run keeps each name it lands with each component's trailing periods taken off too, so on a FAT or exFAT drive the second of a name and the name with a trailing period fails naming the first, and the recovery tool refuses it alike, rather than either taking the run's own file for somebody else's. `Domain/NamesLanded`; `Domain.Tests/NamesLandedTests` |
 | 2026-11 | Amended | Amendment 8: the listing is asked of every name the path gives on the way to the destination, each folder's as well as the file's own, so a file landing in a folder the volume takes for one the run landed into fails naming the first, and the recovery tool refuses it alike. `Domain/NamesLanded`; `Domain.Tests/NamesLandedTests`, `Repository.Tests/RestorePlanTests`, `Repository.Tests/RecoveryNamesTests` |
+| 2026-11 | Amended | Amendment 9: a volume says whether it counts a name in UTF-16 units, as Windows' volumes and an exFAT or NTFS volume on Linux do, and the plan holds a name to the byte limit only where a volume counts bytes and to 255 units where one counts units outside Windows' rules; the run is unchanged. `Domain/VolumeNaming`, `Restore/RestorePlan`; `Domain.Tests/VolumeNamingTests`, `Repository.Tests/RestorePlanTests` |

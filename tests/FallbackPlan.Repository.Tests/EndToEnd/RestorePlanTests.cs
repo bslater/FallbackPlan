@@ -39,7 +39,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// folder on Windows does not (ADR-0170 Amendment 5). So is whether it names
 /// files by Windows' rules: a FAT drive on Linux does, and the plan names what
 /// those rules refuse or alter though Linux's own volumes take it (ADR-0170
-/// Amendment 6). Where the volume a run writes
+/// Amendment 6). So is how it counts a name's length: an exFAT or NTFS
+/// volume on Linux holds 255 UTF-16 units whatever the bytes, and the plan
+/// judges a name written there so (ADR-0170 Amendment 9). Where the volume a run writes
 /// to takes two of a snapshot's names for one, whatever the plan judged, the
 /// second never displaces, replaces or fails vaguely over the first: it fails
 /// naming the name the run restored there, which keeps its own content, and
@@ -314,6 +316,73 @@ public sealed class RestorePlanTests : ArchiveTestHarness
 
         // A plan is made again where how the target names files moved.
         Assert.IsFalse(PosixTarget().NamesAs(PosixTarget() with { WindowsNamingRules = true }));
+    }
+
+    [TestMethod]
+    public async Task RestorePlan_WrittenToAVolumeThatCountsANameInUnits_JudgesItsLengthSo()
+    {
+        // 200 three-byte characters are 200 units and 600 bytes; 256 ASCII
+        // characters are 256 of each.
+        var wide = "names/" + new string('\u8A9E', 200);
+        var long256 = "names/" + new string('n', 256);
+        var source = new FakeFileSystemSource();
+        source.AddFile(wide, Deterministic(64, 1));
+        source.AddFile(long256, Deterministic(64, 2));
+        source.AddFile("names/fine.txt", Deterministic(64, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xAA), CancellationToken.None);
+        var snapshotId = Enumerable.Repeat((byte)0xAA, 16).ToArray();
+
+        Dictionary<string, string> TooLong(RestoreTargetProfile target) =>
+            RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target).Conflicts
+                .Where(conflict => conflict.Reason.Contains("in one name", StringComparison.Ordinal))
+                .ToDictionary(conflict => conflict.Path, conflict => conflict.Reason, StringComparer.Ordinal);
+
+        // The flow's own word for each folder: an NTFS volume on Linux, an
+        // ext4 one, and one nothing is said of.
+        var ntfs = Path.Combine(SpoolDirectory, "ntfs");
+        var ext4 = Path.Combine(SpoolDirectory, "ext4");
+        var windowsVolume = Path.Combine(SpoolDirectory, "windows");
+        var unsaid = Path.Combine(SpoolDirectory, "unsaid");
+        VolumeNaming.OfInFlow = folder =>
+            folder == ntfs ? new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false, NamesInUnits: true)
+            : folder == ext4 ? new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false)
+            : folder == windowsVolume
+                ? new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true, NamesInUnits: true)
+            : null;
+        var linux = PosixTarget() with { MaxNameBytes = 255 };
+
+        // Counted in bytes, both names are too long.
+        var bytes = TooLong(linux.AsWrittenTo([ext4]));
+        CollectionAssert.AreEquivalent(new[] { wide, long256 }, bytes.Keys.ToArray());
+        Assert.Contains("255 bytes", bytes[wide], StringComparison.Ordinal);
+
+        // Counted in units, only the one of 256 is.
+        var units = TooLong(linux.AsWrittenTo([ntfs]));
+        Assert.AreEqual(long256, Assert.ContainsSingle(units.Keys));
+        Assert.Contains("255 UTF-16 units", units[long256], StringComparison.Ordinal);
+        Assert.Contains("256", units[long256], StringComparison.Ordinal);
+
+        // Written to both, a name must fit both.
+        CollectionAssert.AreEquivalent(new[] { wide, long256 }, TooLong(linux.AsWrittenTo([ext4, ntfs])).Keys.ToArray());
+
+        // A volume nothing is said of leaves the target's own limits.
+        CollectionAssert.AreEquivalent(new[] { wide, long256 }, TooLong(linux.AsWrittenTo([unsaid])).Keys.ToArray());
+        Assert.IsEmpty(TooLong(PosixTarget().AsWrittenTo([unsaid])));
+
+        // Windows' rules hold a name to 255 units already, so Windows' own
+        // volume moves nothing, and a plan for it is made once.
+        var windows = PosixTarget() with { CaseSensitive = false, WindowsNamingRules = true };
+        Assert.IsTrue(windows.NamesAs(windows.AsWrittenTo([windowsVolume])));
+        Assert.IsEmpty(TooLong(windows.AsWrittenTo([windowsVolume])));
+
+        // A plan is made again where how the target counts a name moved.
+        Assert.IsFalse(linux.NamesAs(linux with { MaxNameBytes = null }));
+        Assert.IsFalse(linux.NamesAs(linux with { MaxNameUnits = 255 }));
     }
 
     [TestMethod]

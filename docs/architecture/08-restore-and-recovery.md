@@ -35,6 +35,8 @@ A plan is constructed **before** any transfer, and it is the mechanism by which 
   > **Built 2026-10 ([ADR-0170 Amendment 1](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-1-2026-10--a-name-longer-than-a-linux-target-holds)).** A target that counts a name in bytes states how many it holds, 255 for the local profile on Linux, and a name longer than that is a conflict too. Windows' 255 UTF-16 units can be 765 bytes, so a Windows name can be one Linux does not hold. macOS's limit is not stated, and is not judged.
 
   > **Built 2026-11 ([ADR-0170 Amendment 6](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-6-2026-11--a-fat-or-exfat-drive-names-by-windows-rules-wherever-it-is-mounted)).** A volume that names files by Windows' rules is judged by them wherever it is mounted: a FAT or exFAT drive on Linux, as Windows' own volumes. A share is not, since Linux's client maps the characters Windows refuses.
+
+  > **Built 2026-11 ([ADR-0170 Amendment 9](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-9-2026-11--a-names-length-is-judged-as-the-volume-counts-it)).** A name's length is judged as the volume counts it. An exFAT or NTFS volume on Linux holds 255 UTF-16 units whatever the bytes, so a name is held to the byte limit only where a volume counts bytes.
 - metadata that cannot be preserved on this target, per the matrix in [`06-filesystem-capture.md` §3](06-filesystem-capture.md#3-metadata-matrix);
 - free-space assessment against the physical requirement;
 - privileges required — restoring ACLs or ownership may need elevation the current user lacks;
