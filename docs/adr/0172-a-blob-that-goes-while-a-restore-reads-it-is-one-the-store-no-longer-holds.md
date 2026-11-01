@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way; by Amendment 6, while a restore in direct mode of the set's repository is too), FR-GC-010 (amended by Amendment 4: a destination keeps its blobs through a sync while the service has a restore of the set under way; by Amendment 5, a peer is instructed by no granted run while one is; by Amendment 6, both hold beside a restore in direct mode too)
+**Requirements:** FR-RST-007 (amended: a blob that goes from the own store during the run is read around as not held), FR-RST-005 (amended: with no copy to read it from, the files it held fail and the run keeps its receipt; by Amendment 2, they fail as not held), FR-GC-003 (amended by Amendment 3: a collection pass holds its blobs while the service has a restore of the set under way; by Amendment 6, while a restore in direct mode of the set's repository is too; by Amendment 7, as the installation's state directory says, where the service runs on one of its own), FR-GC-010 (amended by Amendment 4: a destination keeps its blobs through a sync while the service has a restore of the set under way; by Amendment 5, a peer is instructed by no granted run while one is; by Amendment 6, both hold beside a restore in direct mode too)
 **Related:** [ADR-0075](0075-a-restore-reads-around-damage.md) §5 (what a copy passed over is called), [ADR-0068](0068-the-catalogue-directed-restore-read.md) (the catalogue-directed read), [ADR-0009](0009-garbage-collection-safety.md) (the collector), [ADR-0034](0034-hub-and-spoke-destinations.md) §6 (the staging trim), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-4
 
 **Built:**
@@ -241,8 +241,36 @@ Amendments 3 to 5 hold beside a restore the service runs, on the word of its run
 **Not done.**
 
 - **A service and a command line that do not meet.** A service started on a state directory of its own naming is held only by a command line that names that same directory.
+
+  > **2026-11: taken up by [Amendment 7](#amendment-7-2026-11--a-service-on-a-state-directory-of-its-own-looks-in-the-installations-too)** for a command line that names none: such a service looks in the installation's state directory too.
 - **A command line that may not write the service's state directory** restores unheld. It warns as it does.
 - **A restore on another machine.** A marker is seen only by a service whose state directory holds it, so a restore from a destination elsewhere is not held for at the service that keeps its source.
+
+## Amendment 7 (2026-11) — a service on a state directory of its own looks in the installation's too
+
+Under Amendment 6, a restore in direct mode that names no state directory holds its marker in the installation's too, and the service looks in its own. A service started on a state directory of its own naming never looked in the installation's. That is how a second service, a harness, or a service unit naming its own paths runs. So a command line that named none, restoring a repository such a service keeps, was not held for there. A retention pass, a sync or a granted run beside it could take a blob the restore was about to read.
+
+**Decision.**
+
+- **The service also looks in the installation's state directory,** found as every path-less process finds it (FR-SVC-016). It looks where that directory stands and is not the service's own, and looking makes nothing.
+- **A marker there holds as one in the service's own does,** before each retention apply, each person's deletion, each sync's convergence and each peer instruction. The four ask one question, as before.
+- **An installation's state directory the service may not read is passed over, without a word.**
+  - A service running unprivileged beside a machine-wide installation may not list the installation's state directory.
+  - Failing every retention pass over that would cost more than the hold protects.
+  - A line on every pass would say nothing new.
+
+**Built:** `Agent/ServiceRuntime`, `Api/InstallationDefaults`, `Cli/OperationGateway`:
+
+- `Hosts.Tests/RetentionBesideARestoreTests`:
+  - a service on a state directory of its own, beside a marker of the set's repository held in the installation's, holds an apply's blobs and says so; once the marker is let go, nothing is held;
+  - where the installation has no state directory, nothing is held and none is made;
+  - on Linux and macOS, where the installation's may not be read, an apply goes ahead and holds nothing. Only a process not running as root is kept from reading it, as on CI.
+- `Cli.Tests/DirectRestoreUnderWayTests` — the command line finds the installation's state directory by the same rule, now `InstallationDefaults.StateDirectoryWithoutMaking`, and never makes it.
+
+**Not done.**
+
+- **A command line that names a state directory of its own** is held for only by a service on that same directory. Amendment 6 decided that a command that names one names the installation it works with.
+- **A restore on another machine** is still not held for (Amendment 6).
 
 ## Status history
 
@@ -255,3 +283,4 @@ Amendments 3 to 5 hold beside a restore the service runs, on the word of its run
 | 2026-10 | Amended | Amendment 4: a sync drops no blob at a destination while the service has a restore of the set under way, and the hold moves the keep fingerprint so the first sync after it converges. `Agent/FanOut`; `Hosts.Tests/ConvergenceBesideARestoreTests`, `Hosts.Tests/DirectShipConvergeSpareTests` |
 | 2026-10 | Amended | Amendment 5: a granted run, a retention apply or a person's deletion, instructs no peer while the service has a restore of the set under way, and says so; the next granted run converges it. `Agent/FanOut`; `Hosts.Tests/PeerConvergenceBesideARestoreTests` |
 | 2026-10 | Amended | Amendment 6: a restore in direct mode holds a marker of its repository in its state directory and, where it named none, in the installation's; the service holds a retention pass, a deletion, a sync's convergence and a peer instruction on such a marker as on its own runs. `Application/RestoresUnderWay`, `Cli/OperationGateway`, `Agent/ServiceRuntime`; `Application.Tests/RestoresUnderWayTests`, `Cli.Tests/DirectRestoreUnderWayTests`, `Hosts.Tests/RetentionBesideARestoreTests`, `Hosts.Tests/ConvergenceBesideARestoreTests`, `Hosts.Tests/PeerConvergenceBesideARestoreTests` |
+| 2026-11 | Amended | Amendment 7: a service on a state directory of its own also holds on a marker of the set's repository in the installation's state directory, found as every path-less process finds it and never made; one it may not read is passed over. `Agent/ServiceRuntime`, `Api/InstallationDefaults`; `Hosts.Tests/RetentionBesideARestoreTests` |

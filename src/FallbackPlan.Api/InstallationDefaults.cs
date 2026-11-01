@@ -44,6 +44,18 @@ public static class InstallationDefaults
             ? state
             : Path.Combine(ResolveRoot(), "state");
 
+    /// <summary>
+    /// The state directory a path-less invocation would use, found without
+    /// making the machine root: the environment's, or the machine root's
+    /// where that stands, or the profile's. Whether it stands is the caller's
+    /// to ask. A process that only looks for the installation, as for a
+    /// restore under way in it (ADR-0172 Amendments 6 and 7), makes none.
+    /// </summary>
+    public static string StateDirectoryWithoutMaking =>
+        Environment.GetEnvironmentVariable(StateVariable) is { Length: > 0 } state
+            ? state
+            : Path.Combine(Directory.Exists(MachineRoot) ? MachineRoot : ProfileRoot, "state");
+
     /// <summary>The archives root a path-less invocation uses.</summary>
     public static string ArchivesRoot =>
         Environment.GetEnvironmentVariable(ArchivesVariable) is { Length: > 0 } archives

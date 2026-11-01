@@ -1,6 +1,8 @@
+using System.Runtime.Versioning;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -14,7 +16,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// its blobs on that word, as it does beside a backup. A restore in direct
 /// mode runs outside the service, and holds a marker of its repository in the
 /// service's state directory while it runs; the pass holds on that too
-/// (ADR-0172 Amendment 6).
+/// (ADR-0172 Amendment 6). A service on a state directory of its own also
+/// looks in the installation's, where a restore that named none holds its
+/// marker, and passes over one it may not read (ADR-0172 Amendment 7).
 /// </summary>
 [TestClass]
 public sealed class RetentionBesideARestoreTests : IDisposable
@@ -164,6 +168,80 @@ public sealed class RetentionBesideARestoreTests : IDisposable
             "a deletion beside a restore in direct mode held nothing: " + string.Join(" | ", deleted.Lines));
     }
 
+    [TestMethod]
+    public async Task RetentionApply_ByAServiceOnAStateDirectoryOfItsOwn_WhileARestoreInDirectModeIsUnderWayInTheInstallations_HoldsItsBlobsAndSaysSo()
+    {
+        var installation = Directory.CreateDirectory(Path.Combine(_harness.WorkPath, "installation-state")).FullName;
+        var (runtime, handler, grant, set) = await StartWithABackupAsync(installation);
+        await using var _ = runtime;
+        var repository = (await runtime.ExistingArchiveAsync(set.Id, Timeout))!.Repository.RepositoryId;
+
+        using (RestoresUnderWay.Hold(installation, repository, Run))
+        {
+            Assert.IsInstanceOfType<RetentionResult>(
+                await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
+                out var beside);
+            Assert.Contains(
+                line => line.Contains("held beside a restore:", StringComparison.Ordinal),
+                beside.Lines,
+                "an apply beside a restore held in the installation's state directory held nothing: " + string.Join(" | ", beside.Lines));
+        }
+
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
+            out var after);
+        Assert.IsFalse(
+            after.Lines.Any(line => line.Contains("held beside a restore:", StringComparison.Ordinal)),
+            string.Join(" | ", after.Lines));
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_ByAServiceOnAStateDirectoryOfItsOwn_WhereTheInstallationHasNone_HoldsNothingAndMakesNone()
+    {
+        var installation = Path.Combine(_harness.WorkPath, "no-installation-state");
+        var (runtime, handler, grant, _) = await StartWithABackupAsync(installation);
+        await using var __ = runtime;
+
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
+            out var report);
+        Assert.IsFalse(
+            report.Lines.Any(line => line.Contains("held beside a restore:", StringComparison.Ordinal)),
+            string.Join(" | ", report.Lines));
+        Assert.IsFalse(Directory.Exists(installation), "a service makes no installation by looking for one");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a folder's mode is how POSIX keeps it from a process")]
+    [UnsupportedOSPlatform("windows")]
+    public async Task RetentionApply_ByAServiceOnAStateDirectoryOfItsOwn_WhereTheInstallationsMayNotBeRead_GoesAhead()
+    {
+        var installation = Directory.CreateDirectory(Path.Combine(_harness.WorkPath, "unreadable-state")).FullName;
+        var (runtime, handler, grant, set) = await StartWithABackupAsync(installation);
+        await using var _ = runtime;
+        var repository = (await runtime.ExistingArchiveAsync(set.Id, Timeout))!.Repository.RepositoryId;
+
+        // A marker nobody holds, in a folder this process may not list
+        // unless it runs as root, which lists it and clears the marker.
+        var folder = Path.Combine(installation, "restores-under-way", repository.ToString());
+        Directory.CreateDirectory(folder);
+        await File.WriteAllBytesAsync(Path.Combine(folder, Run + ".lock"), [], Timeout);
+        File.SetUnixFileMode(folder, UnixFileMode.None);
+        try
+        {
+            Assert.IsInstanceOfType<RetentionResult>(
+                await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
+                out var report);
+            Assert.IsFalse(
+                report.Lines.Any(line => line.Contains("held beside a restore:", StringComparison.Ordinal)),
+                string.Join(" | ", report.Lines));
+        }
+        finally
+        {
+            File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     /// <summary>A run of the set the service holds under way, as it holds a restore through it.</summary>
     private static RestoreRunRecord UnderWay(string setName) => new()
     {
@@ -174,8 +252,14 @@ public sealed class RetentionBesideARestoreTests : IDisposable
         BeganAt = 1_000,
     };
 
+    /// <summary>
+    /// Starts the service on the harness's state directory with one backup
+    /// made, taking <paramref name="installation"/> for the installation's
+    /// state directory, or this test's own state directory where none is
+    /// given, so no test looks at the machine's.
+    /// </summary>
     private async Task<(ServiceRuntime Runtime, ServiceCommandHandler Handler, string Grant, BackupSetConfiguration Set)>
-        StartWithABackupAsync()
+        StartWithABackupAsync(string? installation = null)
     {
         _harness.WriteSourceFile("docs/a.txt", "the snapshot a restore reads");
         _harness.WriteConfiguration("every 1h");
@@ -184,7 +268,12 @@ public sealed class RetentionBesideARestoreTests : IDisposable
         await _harness.SetupAsync();
 
         var runtime = await ServiceRuntime.StartAsync(
-            new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+                InstallationStateDirectoryOverride = installation ?? _harness.StateDirectory,
+            },
             Timeout);
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
