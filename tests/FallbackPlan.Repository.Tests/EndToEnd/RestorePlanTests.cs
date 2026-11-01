@@ -43,7 +43,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// to takes two of a snapshot's names for one, whatever the plan judged, the
 /// second never displaces, replaces or fails vaguely over the first: it fails
 /// naming the name the run restored there, which keeps its own content, and
-/// under rename it lands beside it (FR-RST-005; ADR-0170 Amendment 3). The three
+/// under rename it lands beside it (FR-RST-005; ADR-0170 Amendment 3), and so
+/// does a file landing in a folder the volume takes for one the run landed
+/// into (ADR-0170 Amendment 8). The three
 /// selectors that exist — snapshot, path, destination — are exercised end to
 /// end; device, time and file-version selection is phase-2 work that has not
 /// been built, so FR-RST-001 is covered in part and says so.
@@ -381,6 +383,7 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         var foldsForm = VolumeFolds("caf\u00E9.txt", "cafe\u0301.txt");
         AssertOneLandedPerName(receipt, contents, foldsCase, "names/Notes.txt", "names/notes.txt");
         AssertOneLandedPerName(receipt, contents, foldsForm, Composed, Decomposed);
+        AssertOneLandedPerName(receipt, contents, foldsCase, "Docs/a.txt", "docs/a.txt");
         Assert.IsEmpty(receipt.Displaced, "nothing the run restored is moved aside by it");
         Assert.AreEqual(foldsCase || foldsForm ? RestoreOutcome.Failed : RestoreOutcome.Complete, receipt.Outcome);
     }
@@ -401,9 +404,10 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     }
 
     /// <summary>
-    /// Restores a snapshot holding two names that differ only in case and two
-    /// that differ only in normalisation, under <paramref name="policy"/>, to
-    /// this test's volume.
+    /// Restores a snapshot holding two names that differ only in case, two
+    /// that differ only in normalisation, and a file of one name in each of
+    /// two folders that differ only in case, under <paramref name="policy"/>,
+    /// to this test's volume.
     /// </summary>
     private async Task<(RestoreReceipt Receipt, Dictionary<string, byte[]> Contents)> RestoreNamesAVolumeMayFoldAsync(
         byte seed, ExistingDestinationPolicy policy)
@@ -414,6 +418,8 @@ public sealed class RestorePlanTests : ArchiveTestHarness
             ["names/notes.txt"] = Deterministic(4_096, 9),
             [Composed] = Deterministic(4_096, 10),
             [Decomposed] = Deterministic(4_096, 11),
+            ["Docs/a.txt"] = Deterministic(4_096, 12),
+            ["docs/a.txt"] = Deterministic(4_096, 13),
         };
         var source = new FakeFileSystemSource();
         foreach (var (path, content) in contents)

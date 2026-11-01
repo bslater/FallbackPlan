@@ -16,7 +16,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// snapshot's names for one, by case or by Unicode normalisation, the second
 /// is refused and noted, naming the first, which keeps what the tool wrote
 /// there, as the executor fails it (ADR-0170 Amendment 3). Where the volume
-/// keeps them apart, each is restored with its own content.
+/// keeps them apart, each is restored with its own content. So is a file
+/// in a folder the volume takes for one the tool wrote into (ADR-0170
+/// Amendment 8).
 /// </summary>
 [TestClass]
 public sealed class RecoveryNamesTests : IDisposable
@@ -52,6 +54,8 @@ public sealed class RecoveryNamesTests : IDisposable
             ["names/notes.txt"] = [2, 2, 2, 2],
             [Composed] = [3, 3, 3, 3, 3],
             [Decomposed] = [4, 4, 4, 4, 4, 4],
+            ["Docs/a.txt"] = [5, 5, 5, 5, 5, 5, 5],
+            ["docs/a.txt"] = [6, 6, 6, 6, 6, 6, 6, 6],
         };
         var source = new FakeFileSystemSource();
         foreach (var (path, content) in contents)
@@ -66,10 +70,11 @@ public sealed class RecoveryNamesTests : IDisposable
         // Judged by the volume the tool wrote to, which is the test's own.
         var foldsCase = VolumeFolds("Probe.txt", "probe.txt");
         var foldsForm = VolumeFolds("caf\u00E9.txt", "cafe\u0301.txt");
-        var refusedPairs = (foldsCase ? 1 : 0) + (foldsForm ? 1 : 0);
+        var refusedPairs = (foldsCase ? 2 : 0) + (foldsForm ? 1 : 0);
         AssertOneRecoveredPerName(report, output, contents, foldsCase, "names/Notes.txt", "names/notes.txt");
         AssertOneRecoveredPerName(report, output, contents, foldsForm, Composed, Decomposed);
-        Assert.AreEqual((4 - refusedPairs, refusedPairs), (report.Restored, report.Failed));
+        AssertOneRecoveredPerName(report, output, contents, foldsCase, "Docs/a.txt", "docs/a.txt");
+        Assert.AreEqual((6 - refusedPairs, refusedPairs), (report.Restored, report.Failed));
     }
 
     /// <summary>
