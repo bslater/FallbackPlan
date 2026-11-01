@@ -169,6 +169,43 @@ public sealed class FileFlagWriteTests
         }
     }
 
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS have a call that sets a file's flags")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public void WhereNothingStands_NoFlagIsSaidToLand()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), "fbp-flag-writes", Guid.NewGuid().ToString("n"));
+
+        Assert.AreEqual(FileFlagBits.None, FileFlags.OfThisPlatform.Apply(missing, FileFlagBits.NoDump, EntryKind.File));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux keeps a file's and a folder's inode flags")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public void OnLinux_WhatKeepsNoInodeFlags_IsSaidToGetNone()
+    {
+        // A device keeps none: FS_IOC_GETFLAGS refuses it, whoever asks, so
+        // nothing is written to it.
+        Assert.AreEqual(FileFlagBits.None, FileFlags.OfThisPlatform.Apply("/dev/null", FileFlagBits.NoDump, EntryKind.File));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.MacOs, "macOS keeps a file's flags in st_flags")]
+    [PlatformTrait(TestPlatforms.MacOs)]
+    public void OnMacOs_AFileOnAVolumeThatRefusesEveryFlag_IsSaidToGetOnlyWhatItAlreadyCarried()
+    {
+        // The system volume is mounted read-only, so each flag is refused,
+        // together and alone, whoever asks.
+        const string OnTheSystemVolume = "/System/Library/CoreServices/SystemVersion.plist";
+        const FileFlagBits Asked = FileFlagBits.NoDump | FileFlagBits.Hidden;
+        var before = DiskFlags.OnMacOs(OnTheSystemVolume);
+
+        Assert.AreEqual(
+            MetadataRules.FileFlagsFromDarwin(before) & Asked,
+            FileFlags.OfThisPlatform.Apply(OnTheSystemVolume, Asked, EntryKind.File));
+        Assert.AreEqual(before, DiskFlags.OnMacOs(OnTheSystemVolume));
+    }
+
     private sealed class Held(FileFlagBits lands) : IFileFlags
     {
         public List<(string Path, FileFlagBits Flags, EntryKind Kind)> Asked { get; } = [];

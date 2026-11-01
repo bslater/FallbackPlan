@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Runtime.InteropServices;
 using Bodu;
 
@@ -41,15 +40,14 @@ public interface IFileFlags
 /// link's own. Compressed is the system's to set. Windows keeps none of them.
 /// </para>
 /// <para>
-/// Sits beside <see cref="AlternateStreams"/> for the reason it gives, and
-/// reads a macOS file's flags by the layout capture reads them by.
+/// Sits beside <see cref="AlternateStreams"/> for the reason it gives. A
+/// macOS file's flags are read through <c>getattrlist</c>, which one entry
+/// point serves on either architecture, where <c>lstat</c> needs two.
 /// </para>
 /// </remarks>
 public static partial class FileFlags
 {
     private const FileFlagBits Privileged = FileFlagBits.Immutable | FileFlagBits.AppendOnly;
-
-    private const ulong LinuxImmutableCapability = 1UL << 9;
 
     private const int LinuxNoDump = 0x40;
     private const int LinuxImmutable = 0x10;
@@ -63,6 +61,10 @@ public static partial class FileFlags
     private const uint DarwinImmutable = 0x2;
     private const uint DarwinAppendOnly = 0x4;
     private const uint DarwinHidden = 0x8000;
+
+    private const ushort DarwinAttributeBitmapCount = 5;
+    private const uint DarwinCommonFlags = 0x0004_0000;
+    private const uint DarwinNoFollow = 0x0000_0001;
 
     /// <summary>
     /// What Linux lets a restore set on <paramref name="kind"/>: no-dump on a
@@ -82,7 +84,7 @@ public static partial class FileFlags
         FileFlagBits.Immutable | FileFlagBits.AppendOnly | FileFlagBits.NoDump | FileFlagBits.Hidden;
 
     /// <summary>Whether this process may set Linux's immutable and append-only flags: false off Linux.</summary>
-    public static bool HoldsImmutableCapability { get; } = OperatingSystem.IsLinux() && ReadsImmutableCapability();
+    public static bool HoldsImmutableCapability { get; } = OperatingSystem.IsLinux() && LinuxCapabilities.Hold(LinuxCapabilities.Immutable);
 
     /// <summary>
     /// The flags this platform sets only for an account this one is not:
@@ -99,24 +101,6 @@ public static partial class FileFlags
 
     /// <summary>This platform's calls.</summary>
     public static IFileFlags OfThisPlatform { get; } = new Platform();
-
-    private static bool ReadsImmutableCapability()
-    {
-        try
-        {
-            var effective = File.ReadLines("/proc/self/status")
-                .FirstOrDefault(line => line.StartsWith("CapEff:", StringComparison.Ordinal));
-            return effective is not null
-                && ulong.TryParse(
-                    effective.AsSpan("CapEff:".Length).Trim(), NumberStyles.HexNumber, CultureInfo.InvariantCulture,
-                    out var capabilities)
-                && (capabilities & LinuxImmutableCapability) != 0;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
 
     private static int ToLinux(FileFlagBits flags) =>
         (flags.HasFlag(FileFlagBits.NoDump) ? LinuxNoDump : 0)
@@ -146,19 +130,17 @@ public static partial class FileFlags
     [LibraryImport("libSystem", EntryPoint = "lchflags", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial int Lchflags(string path, uint flags);
 
-    [LibraryImport("libSystem", EntryPoint = "lstat$INODE64", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
-    private static partial int LstatX64(string path, out DarwinStat stat);
-
-    [LibraryImport("libSystem", EntryPoint = "lstat", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
-    private static partial int LstatArm64(string path, out DarwinStat stat);
+    [LibraryImport("libSystem", EntryPoint = "getattrlist", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int GetAttributeList(
+        string path, ref DarwinAttributeList list, out DarwinFlagsBuffer buffer, nuint size, uint options);
 
     /// <summary>The flags of the file at <paramref name="path"/>, its own for a link, or null where it will not say.</summary>
     private static uint? DarwinFlagsOf(string path)
     {
-        var status = RuntimeInformation.ProcessArchitecture == Architecture.X64
-            ? LstatX64(path, out var stat)
-            : LstatArm64(path, out stat);
-        return status == 0 ? stat.Flags : null;
+        var list = new DarwinAttributeList { BitmapCount = DarwinAttributeBitmapCount, CommonAttributes = DarwinCommonFlags };
+        return GetAttributeList(path, ref list, out var buffer, (nuint)Marshal.SizeOf<DarwinFlagsBuffer>(), DarwinNoFollow) == 0
+            ? buffer.Flags
+            : null;
     }
 
     private static FileFlagBits OnLinux(string path, FileFlagBits asked)
@@ -215,43 +197,36 @@ public static partial class FileFlags
         {
             foreach (var flag in Enum.GetValues<FileFlagBits>().Where(flag => flag != FileFlagBits.None && asked.HasFlag(flag)))
             {
-                if (Lchflags(path, current | ToDarwin(flag)) == 0)
-                {
-                    current |= ToDarwin(flag);
-                }
+                current |= Lchflags(path, current | ToDarwin(flag)) == 0 ? ToDarwin(flag) : 0u;
             }
         }
 
         return DarwinFlagsOf(path) is { } after ? MetadataRules.FileFlagsFromDarwin(after) & asked : FileFlagBits.None;
     }
 
-    /// <summary>Darwin's 64-bit-inode <c>struct stat</c>, as capture reads it.</summary>
+    /// <summary>
+    /// <c>struct attrlist</c>: the bitmap count, a reserved half-word, then
+    /// one attribute group per kind. Only the common group's flags are asked
+    /// for.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    private struct DarwinStat
+    private struct DarwinAttributeList
     {
-        public int Dev;
-        public ushort Mode;
-        public ushort LinkCount;
-        public ulong Inode;
-        public uint Uid;
-        public uint Gid;
-        public int Rdev;
-        public long AccessSeconds;
-        public long AccessNanoseconds;
-        public long ModifySeconds;
-        public long ModifyNanoseconds;
-        public long ChangeSeconds;
-        public long ChangeNanoseconds;
-        public long BirthSeconds;
-        public long BirthNanoseconds;
-        public long Size;
-        public long Blocks;
-        public int BlockSize;
+        public ushort BitmapCount;
+        public ushort Reserved;
+        public uint CommonAttributes;
+        public uint VolumeAttributes;
+        public uint DirectoryAttributes;
+        public uint FileAttributes;
+        public uint ForkAttributes;
+    }
+
+    /// <summary>What <c>getattrlist</c> returns for the flags alone: the length it wrote, then <c>st_flags</c>.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DarwinFlagsBuffer
+    {
+        public uint Length;
         public uint Flags;
-        public uint Generation;
-        public int Spare;
-        public long Qspare0;
-        public long Qspare1;
     }
 
     private sealed class Platform : IFileFlags

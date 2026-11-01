@@ -1,5 +1,4 @@
 using Bodu;
-using System.Globalization;
 using System.Runtime.InteropServices;
 
 namespace FallbackPlan.Domain;
@@ -36,9 +35,6 @@ public static unsafe partial class FileOwnership
 
     /// <summary>What a lookup answers when its buffer is too small for the entry, on Linux and macOS alike.</summary>
     private const int RangeError = 34;
-
-    /// <summary>The bit of the effective capability set that is CAP_CHOWN.</summary>
-    private const ulong ChownCapability = 1;
 
     /// <summary>Room for a <c>struct passwd</c> or <c>struct group</c> on every platform here; the largest, macOS's passwd, takes 72 bytes.</summary>
     private const int EntryWords = 16;
@@ -84,7 +80,7 @@ public static unsafe partial class FileOwnership
     /// or a Linux process holding CAP_CHOWN. Never on Windows.
     /// </summary>
     public static bool MayGiveFilesAway =>
-        CanSetOwnership && (Environment.IsPrivilegedProcess || (OperatingSystem.IsLinux() && HoldsChownCapability()));
+        CanSetOwnership && (Environment.IsPrivilegedProcess || (OperatingSystem.IsLinux() && LinuxCapabilities.Hold(LinuxCapabilities.Chown)));
 
     /// <summary>The id of the account named <paramref name="name"/> here, or null when there is none.</summary>
     /// <param name="name">A captured owner's name.</param>
@@ -148,24 +144,6 @@ public static unsafe partial class FileOwnership
         }
 
         return null;
-    }
-
-    private static bool HoldsChownCapability()
-    {
-        try
-        {
-            var effective = File.ReadLines("/proc/self/status")
-                .FirstOrDefault(line => line.StartsWith("CapEff:", StringComparison.Ordinal));
-            return effective is not null
-                && ulong.TryParse(
-                    effective.AsSpan("CapEff:".Length).Trim(), NumberStyles.HexNumber, CultureInfo.InvariantCulture,
-                    out var capabilities)
-                && (capabilities & ChownCapability) != 0;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
     }
 
     [LibraryImport("libc", EntryPoint = "getpwnam_r", StringMarshalling = StringMarshalling.Utf8)]
