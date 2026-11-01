@@ -51,6 +51,23 @@ public sealed record MetadataTarget
     public IFileCompression Compression { get; init; } = FileCompression.OfThisPlatform;
 
     /// <summary>
+    /// The flags a file's and a folder's captured ones are given back of
+    /// (ADR-0180 Amendment 4): what this platform lets the account set
+    /// (<see cref="FileFlags.Settable"/>), and none where a caller says
+    /// nothing.
+    /// </summary>
+    public FileFlagBits SettableFlags { get; init; }
+
+    /// <summary>The flags a link's own captured ones are given back of, as <see cref="SettableFlags"/> are a file's.</summary>
+    public FileFlagBits SettableLinkFlags { get; init; }
+
+    /// <summary>
+    /// The calls flags are set through: the platform's unless a caller says
+    /// otherwise, as a case judged on a platform that keeps none does.
+    /// </summary>
+    public IFileFlags Flags { get; init; } = FileFlags.OfThisPlatform;
+
+    /// <summary>
     /// Whether a file's and a folder's Windows attribute bits are written
     /// back: Windows keeps them, and nothing else does (ADR-0175).
     /// </summary>
@@ -110,6 +127,8 @@ public sealed record MetadataTarget
         SupportsSecurityDescriptors = OperatingSystem.IsWindows(),
         SupportsAlternateStreams = AlternateStreams.CanWrite,
         SupportsCompression = FileCompression.CanSet,
+        SettableFlags = FileFlags.Settable(EntryKind.File),
+        SettableLinkFlags = FileFlags.Settable(EntryKind.Symlink),
         HoldsRestorePrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Restore),
         HoldsSecurityPrivilege = WindowsPrivileges.Holds(WindowsPrivileges.Security),
         Account = RestoreAccount.OfThisProcess(),

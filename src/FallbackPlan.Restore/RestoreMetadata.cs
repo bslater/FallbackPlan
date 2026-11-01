@@ -80,11 +80,11 @@ namespace FallbackPlan.Restore;
 /// Amendment 1).
 /// </param>
 /// <param name="Flags">
-/// The file flags its manifest keeps in metadata key 11 or names in its
-/// capture diagnostics
+/// The flags its manifest keeps in metadata key 11 or names in its capture
+/// diagnostics
 /// (<see cref="MetadataRules.FileFlagsOf(EntryMetadata, IEnumerable{string})"/>),
-/// none of which a restore sets, which the plan declares on every target
-/// (ADR-0180 Amendments 1 and 3).
+/// a folder's from its tree's key 11 (ADR-0180 Amendments 1 and 3), which
+/// the plan declares where the target will not set them (Amendment 4).
 /// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
@@ -353,9 +353,11 @@ public static class RestoreMetadata
     /// will restore the file degraded (ADR-0174 Amendment 3).
     /// </para>
     /// <para>
-    /// On every target, the items whose capture named file flags are declared
-    /// on a line of their own that names the flags, because no format key
-    /// keeps them and no restore sets them (ADR-0180 Amendment 1).
+    /// The files, folders and links captured with flags the target will not
+    /// set are declared on a line of their own that names those flags
+    /// (ADR-0180 Amendments 1 and 4), and says where setting immutable and
+    /// append-only needs a privilege the account running the restore lacks.
+    /// A target that sets every flag an item carries says nothing of it.
     /// </para>
     /// <para>
     /// What the planner already says is not said twice. On a target that
@@ -404,6 +406,7 @@ public static class RestoreMetadata
         var streamsTooLarge = new Tally();
         var fileFlags = new Tally();
         var flagMask = FileFlagBits.None;
+        var flagsNeedPrivilege = false;
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -422,10 +425,12 @@ public static class RestoreMetadata
                 continue;
             }
 
-            if (known.Flags != FileFlagBits.None)
+            var flagsUnset = known.Flags & ~(link ? target.SettableLinkFlags : target.SettableFlags);
+            if (flagsUnset != FileFlagBits.None)
             {
                 fileFlags.Add(item.Kind);
-                flagMask |= known.Flags;
+                flagMask |= flagsUnset;
+                flagsNeedPrivilege |= (flagsUnset & target.FlagsNeedingPrivilege) != FileFlagBits.None;
             }
 
             var (given, unresolved) = Ownership(known.Owner, known.Group, target, names);
@@ -698,9 +703,12 @@ public static class RestoreMetadata
             + $"{string.Join(", ", MetadataRules.UnsetFileAttributes(unsetMask))}. Those will not be "
             + $"applied; the read-only, hidden, system, archive and not-content-indexed bits will"
             + $"{(target.SupportsCompression ? ", and so will compression" : string.Empty)}."));
+        var flagsWhy = flagsNeedPrivilege
+            ? "; setting immutable and append-only needs root or CAP_LINUX_IMMUTABLE, which the account running the restore does not hold"
+            : string.Empty;
         Add("file-flags", fileFlags, string.Create(CultureInfo.InvariantCulture,
-            $"File flags captured on {fileFlags} will not be applied; no restore sets them: "
-            + $"{string.Join(", ", MetadataRules.FileFlagNamesOf(flagMask))}."));
+            $"File flags captured on {fileFlags} will not be applied: "
+            + $"{string.Join(", ", MetadataRules.FileFlagNamesOf(flagMask))}. This target does not set them{flagsWhy}."));
 
         return declared;
     }

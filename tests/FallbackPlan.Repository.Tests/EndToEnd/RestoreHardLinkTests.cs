@@ -99,11 +99,11 @@ public sealed class RestoreHardLinkTests : ArchiveTestHarness
             node.Diagnostics = ["file-flags: no-dump"];
         }
 
-        var (receipt, _) = await PublishAndRestoreAsync(source, 0xEC, RestoreTargetProfile.ForLocalPlatform());
+        var (receipt, _) = await PublishAndRestoreAsync(source, 0xEC, Posix);
 
         var linked = Item(receipt, "docs/b.bin");
         Assert.AreEqual("docs/a.bin", linked.LinkedTo, "the premise: the second name is a link to the first");
-        Assert.AreEqual("file flag(s) not applied: no-dump (not set by a restore)", Item(receipt, "docs/a.bin").Detail);
+        Assert.AreEqual("file flag(s) not applied: no-dump", Item(receipt, "docs/a.bin").Detail);
         Assert.AreEqual(Item(receipt, "docs/a.bin").Detail, linked.Detail);
     }
 

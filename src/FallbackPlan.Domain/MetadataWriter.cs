@@ -21,6 +21,32 @@ public sealed class MetadataWriter(MetadataTarget target)
     private readonly Dictionary<string, bool> _accounts = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Gives the file, folder or link at <paramref name="destination"/> the
+    /// captured <paramref name="flags"/> the target sets on
+    /// <paramref name="kind"/>, and answers which it carries now (ADR-0180
+    /// Amendment 4).
+    /// </summary>
+    /// <remarks>
+    /// Apart from <see cref="Write"/>, and after it: an immutable file or
+    /// folder refuses every write that would follow, its times included, and
+    /// an immutable or append-only file refuses a further name, so a caller
+    /// sets flags once nothing more is to be written onto the entry or made
+    /// of it. A flag the target does not set is not asked for, so nothing is
+    /// asked where none is.
+    /// </remarks>
+    /// <param name="destination">What the restore landed or made.</param>
+    /// <param name="flags">The flags it was captured with.</param>
+    /// <param name="kind">What it is.</param>
+    public FileFlagBits WriteFlags(string destination, FileFlagBits flags, EntryKind kind)
+    {
+        ThrowHelper.ThrowIfNullOrEmpty(destination);
+
+        var settable = kind == EntryKind.Symlink ? target.SettableLinkFlags : target.SettableFlags;
+        var asked = flags & settable;
+        return asked == FileFlagBits.None ? FileFlagBits.None : target.Flags.Apply(destination, asked, kind) & asked;
+    }
+
+    /// <summary>
     /// Writes back what the target takes of <paramref name="metadata"/> onto
     /// the file landed, the folder made or the symlink made at
     /// <paramref name="destination"/>, as <paramref name="kind"/> says, one

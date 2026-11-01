@@ -277,7 +277,7 @@ public static class RestoreBlobSet
                         Accounts: MetadataRules.AccountsOf(own), FileAttributes: own.FileAttributes,
                         DescriptorOwner: MetadataRules.DescriptorOwnerOf(own),
                         RefusedAttributeNames: MetadataRules.RefusedAttributeNames(own), Access: MetadataRules.AccessOf(own),
-                        AuditedAccounts: MetadataRules.AuditedAccountsOf(own));
+                        AuditedAccounts: MetadataRules.AuditedAccountsOf(own), Flags: own.FileFlags);
                 }
 
                 continue;

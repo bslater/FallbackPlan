@@ -55,11 +55,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// attributes and names take a namespace, a stream outside the user
 /// namespace is named (ADR-0179), and so is one larger than the target
 /// takes in an attribute's name or value (ADR-0179 Amendment 2). A file's
-/// flags, which capture names and no format key keeps, are set by no
-/// restore: the plan names them on every target, and the receipt beside
-/// each file and link that carried them (ADR-0180 Amendment 1). A format-6
-/// manifest keeps them in metadata key 11 instead, and both say so alike
-/// (ADR-0180 Amendment 3).
+/// flags are named by the plan where the target will not set them, and by
+/// the receipt beside each file and link whose flags did not land (ADR-0180
+/// Amendments 1 and 4). A format-6 manifest keeps them, a folder's too, in
+/// metadata key 11, and both say so alike (ADR-0180 Amendment 3).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -379,7 +378,7 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Receipt_AFilesFlags_AreNamedNotApplied_AndTheFileIsRestored()
+    public async Task Receipt_AFilesFlagsTheTargetDoesNotSet_AreNamedNotApplied_AndTheFileIsRestored()
     {
         var source = new FakeFileSystemSource();
         var flagged = source.AddFile("data/locked.bin", Deterministic(800, 55));
@@ -387,17 +386,17 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         flagged.Diagnostics = ["file-flags: immutable, append-only"];
         source.AddFile("data/plain.bin", Deterministic(800, 56)).Metadata = new EntryMetadata { ModifiedAt = Modified };
 
-        var (receipt, _) = await PublishAndRestoreAsync(source, 0xF3, RestoreTargetProfile.ForLocalPlatform());
+        var (receipt, _) = await PublishAndRestoreAsync(source, 0xF3, Posix);
 
         var item = receipt.Items.Single(candidate => candidate.Path == "data/locked.bin");
         Assert.AreEqual("restored", item.Outcome, "a flag alone does not change what the content achieved");
-        Assert.AreEqual("file flag(s) not applied: immutable, append-only (not set by a restore)", item.Detail);
+        Assert.AreEqual("file flag(s) not applied: immutable, append-only", item.Detail);
         Assert.IsNull(item.NotApplied, "no metadata key holds a flag, so none is listed among them");
         Assert.IsNull(receipt.Items.Single(candidate => candidate.Path == "data/plain.bin").Detail);
     }
 
     [TestMethod]
-    public async Task AtFormatSix_Receipt_AFilesFlagsKeyElevenKeeps_AreNamedNotApplied_AndTheFileIsRestored()
+    public async Task AtFormatSix_Receipt_AFilesFlagsKeyElevenKeeps_TheTargetDoesNotSet_AreNamedNotApplied()
     {
         var source = new FakeFileSystemSource();
         var flagged = source.AddFile("data/locked.bin", Deterministic(800, 58));
@@ -405,12 +404,11 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         flagged.Diagnostics = ["file-flags: immutable, append-only"];
         source.AddFile("data/plain.bin", Deterministic(800, 59)).Metadata = new EntryMetadata { ModifiedAt = Modified };
 
-        var (receipt, _) = await PublishAndRestoreAsync(
-            source, 0xF5, RestoreTargetProfile.ForLocalPlatform(), FormatVersions.FileFlagsAndLinkForms);
+        var (receipt, _) = await PublishAndRestoreAsync(source, 0xF5, Posix, FormatVersions.FileFlagsAndLinkForms);
 
         var item = receipt.Items.Single(candidate => candidate.Path == "data/locked.bin");
         Assert.AreEqual("restored", item.Outcome);
-        Assert.AreEqual("file flag(s) not applied: immutable, append-only (not set by a restore)", item.Detail);
+        Assert.AreEqual("file flag(s) not applied: immutable, append-only", item.Detail);
         Assert.IsNull(item.NotApplied);
         Assert.IsNull(receipt.Items.Single(candidate => candidate.Path == "data/plain.bin").Detail);
     }
@@ -435,7 +433,7 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
 
         var link = receipt.Items.Single(candidate => candidate.Path == "link");
         Assert.AreEqual("restored", link.Outcome);
-        Assert.AreEqual("file flag(s) not applied: hidden (not set by a restore)", link.Detail);
+        Assert.AreEqual("file flag(s) not applied: hidden", link.Detail);
     }
 
     [TestMethod]
@@ -1271,7 +1269,7 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Plan_AFilesFlags_AreDeclaredOnTheirOwnLine_OnEveryTarget_NamingEachFlag()
+    public async Task Plan_AFilesFlagsTheTargetWillNotSet_AreDeclaredOnTheirOwnLine_NamingEachFlag()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("docs/locked.bin", Deterministic(700, 52)).Diagnostics = ["file-flags: immutable, no-dump"];
@@ -1280,13 +1278,52 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
 
         var (plan, facts) = await PublishAndProbeAsync(source, 0xF2);
 
-        // No restore sets them, so the line is the same wherever they land.
+        // A target that sets none, as Windows and the hand-built targets do.
         foreach (var target in new[] { Posix, Posix with { SupportsPosixMetadata = false, SupportsFileAttributes = true, SupportsAlternateStreams = true } })
         {
             var flags = Assert.ContainsSingle(RestoreMetadata.Declare(plan, facts, target).Where(degradation => degradation.Capability == "file-flags"));
             Assert.Contains("2 file(s)", flags.Detail, StringComparison.Ordinal);
             Assert.Contains("immutable, no-dump, hidden", flags.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain("CAP_LINUX_IMMUTABLE", flags.Detail, StringComparison.Ordinal);
         }
+
+        // One that sets some names the rest, and counts only the files that carry them.
+        var some = Assert.ContainsSingle(RestoreMetadata.Declare(plan, facts, Posix with { SettableFlags = FileFlagBits.NoDump | FileFlagBits.Hidden })
+            .Where(degradation => degradation.Capability == "file-flags"));
+        Assert.Contains("1 file(s)", some.Detail, StringComparison.Ordinal);
+        Assert.Contains(": immutable.", some.Detail, StringComparison.Ordinal);
+
+        // Where the account lacks what Linux asks before it sets them, the line says so.
+        var unprivileged = Assert.ContainsSingle(RestoreMetadata.Declare(
+                plan, facts, Posix with { SettableFlags = FileFlagBits.NoDump, FlagsNeedingPrivilege = FileFlagBits.Immutable | FileFlagBits.AppendOnly })
+            .Where(degradation => degradation.Capability == "file-flags"));
+        Assert.Contains("2 file(s)", unprivileged.Detail, StringComparison.Ordinal);
+        Assert.Contains("immutable, hidden", unprivileged.Detail, StringComparison.Ordinal);
+        Assert.Contains("root or CAP_LINUX_IMMUTABLE", unprivileged.Detail, StringComparison.Ordinal);
+
+        // One that sets them all declares nothing of them.
+        Assert.DoesNotContain(
+            degradation => degradation.Capability == "file-flags",
+            RestoreMetadata.Declare(plan, facts, Posix with { SettableFlags = FileFlagBits.Immutable | FileFlagBits.NoDump | FileFlagBits.Hidden }));
+    }
+
+    [TestMethod]
+    public async Task AtFormatSix_Probe_EachFolder_CarriesTheFlagsKeyElevenKeeps_AndThePlanCountsIt()
+    {
+        var source = new FakeFileSystemSource();
+        source.Folders["docs"] = new EntryMetadata { ModifiedAt = Modified, FileFlags = FileFlagBits.NoDump };
+        source.AddFile("docs/locked.bin", Deterministic(600, 62)).Diagnostics = ["file-flags: immutable"];
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xF7, formatVersion: FormatVersions.FileFlagsAndLinkForms);
+
+        Assert.AreEqual(FileFlagBits.NoDump, facts[plan.Items.Single(item => item.Path == "docs").ObjectId].Flags);
+        var flags = Assert.ContainsSingle(RestoreMetadata.Declare(plan, facts, Posix).Where(degradation => degradation.Capability == "file-flags"));
+        Assert.Contains("1 file(s) and 1 folder(s)", flags.Detail, StringComparison.Ordinal);
+        Assert.Contains("immutable, no-dump", flags.Detail, StringComparison.Ordinal);
+        var folderSet = Assert.ContainsSingle(RestoreMetadata.Declare(plan, facts, Posix with { SettableFlags = FileFlagBits.NoDump })
+            .Where(degradation => degradation.Capability == "file-flags"));
+        Assert.Contains("1 file(s)", folderSet.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("folder", folderSet.Detail, StringComparison.Ordinal);
     }
 
     [TestMethod]
