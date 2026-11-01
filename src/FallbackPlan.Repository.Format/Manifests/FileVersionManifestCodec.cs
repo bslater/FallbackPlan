@@ -460,6 +460,9 @@ public static class FileVersionManifestCodec
     /// The file's flags no key keeps, which capture names in its diagnostics
     /// (ADR-0180), so a change to them alone is a change. With none the
     /// digest is the map's alone, as every catalogue already recorded it.
+    /// The flags key 11 keeps count the same way: a file captured before
+    /// format 6 named them and one captured at 6 keeps them, and an
+    /// incremental compares the one against the other (ADR-0180 Amendment 3).
     /// </param>
     public static byte[] MetadataDigest(EntryMetadata metadata, FileFlagBits flags = FileFlagBits.None)
     {
@@ -470,10 +473,13 @@ public static class FileVersionManifestCodec
         {
             AccessedAt = null,
             WindowsSecurityDescriptor = metadata.WindowsSecurityDescriptor ?? ReadOnlyMemory<byte>.Empty,
+            FileFlags = FileFlagBits.None,
         });
         var encoded = writer.Encode();
         return System.Security.Cryptography.SHA256.HashData(
-            MetadataRules.FileFlagsDiagnostic(flags) is { } named ? [.. encoded, .. System.Text.Encoding.UTF8.GetBytes(named)] : encoded)[..16];
+            MetadataRules.FileFlagsDiagnostic(metadata.FileFlags | flags) is { } named
+                ? [.. encoded, .. System.Text.Encoding.UTF8.GetBytes(named)]
+                : encoded)[..16];
     }
 
     internal static void WriteMetadata(CanonicalCborWriter writer, EntryMetadata metadata)

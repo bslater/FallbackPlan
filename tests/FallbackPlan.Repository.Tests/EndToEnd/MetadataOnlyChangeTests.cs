@@ -17,7 +17,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// A file whose bytes did not change but whose metadata did (FR-MAN-002,
 /// NFR-PERF-003). The flags a file carries that no format key keeps are
 /// named in its diagnostics, and a change to them alone is a change too
-/// (FR-MAN-003; ADR-0180).
+/// (FR-MAN-003; ADR-0180). From format 6 metadata key 11 keeps them, they
+/// count alike in the digest however they are kept, and an upgrade restates
+/// no file for them (ADR-0180 Amendment 3).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -46,12 +48,13 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue,
+        ushort formatVersion = FormatVersions.SealedDataPlane) =>
         new(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
-            FormatVersions.SealedDataPlane, observer: null, catalogue);
+            formatVersion, observer: null, catalogue);
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte snapshotSeed, ulong now = 1_722_600_000_000) => new()
     {
@@ -245,7 +248,8 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     /// opened, and the first publication's version.
     /// </summary>
     private async Task<(PublishedFileVersion File, FileVersionManifest Manifest, bool Opened, ObjectId First)> AfterFlagsChangeAsync(
-        string[] before, string[] after)
+        string[] before, string[] after,
+        ushort firstFormat = FormatVersions.SealedDataPlane, ushort secondFormat = FormatVersions.SealedDataPlane)
     {
         var source = new FakeFileSystemSource();
         var node = source.AddFile("locked.bin", Content());
@@ -256,7 +260,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue, firstFormat)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         // chattr and chflags move a file's ctime, not its mtime: every signal
@@ -264,7 +268,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         node.Diagnostics = after;
         source.OpenedPaths.Clear();
 
-        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue, secondFormat)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -299,6 +303,61 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task AtFormatSix_OnlyTheFlagsChanged_TheSnapshotKeepsTheNewOnes_WithoutReadingTheContentAgain()
+    {
+        var (file, manifest, opened, _) = await AfterFlagsChangeAsync(
+            ["file-flags: no-dump"], ["file-flags: immutable, no-dump"],
+            FormatVersions.FileFlagsAndLinkForms, FormatVersions.FileFlagsAndLinkForms);
+
+        Assert.IsFalse(file.Reused);
+        Assert.AreEqual(FileFlagBits.Immutable | FileFlagBits.NoDump, manifest.Metadata.FileFlags);
+        Assert.DoesNotContain(diagnostic => diagnostic.StartsWith("file-flags:", StringComparison.Ordinal), manifest.CaptureDiagnostics);
+        Assert.IsFalse(opened, "the bytes did not change");
+    }
+
+    [TestMethod]
+    public async Task AtFormatSix_TheFlagsStayedAsTheyWere_TheShortCircuitStillFires()
+    {
+        var (file, manifest, opened, first) = await AfterFlagsChangeAsync(
+            ["file-flags: no-dump"], ["file-flags: no-dump"],
+            FormatVersions.FileFlagsAndLinkForms, FormatVersions.FileFlagsAndLinkForms);
+
+        Assert.IsTrue(file.Reused);
+        Assert.AreEqual(first, file.ObjectId);
+        Assert.AreEqual(FileFlagBits.NoDump, manifest.Metadata.FileFlags);
+        Assert.IsFalse(opened);
+    }
+
+    [TestMethod]
+    public async Task UpgradedToFormatSix_AFileWhoseFlagsANameKept_IsNotRestated()
+    {
+        // The flags count alike in the digest whether a diagnostic names them
+        // or key 11 keeps them, so an upgrade rewrites no flagged file. Its
+        // manifest still names them, and a reader takes either.
+        var (file, manifest, opened, first) = await AfterFlagsChangeAsync(
+            ["file-flags: no-dump"], ["file-flags: no-dump"],
+            FormatVersions.DeltaCheckpoints, FormatVersions.FileFlagsAndLinkForms);
+
+        Assert.IsTrue(file.Reused);
+        Assert.AreEqual(first, file.ObjectId);
+        Assert.Contains("file-flags: no-dump", manifest.CaptureDiagnostics);
+        Assert.IsFalse(opened);
+    }
+
+    [TestMethod]
+    public async Task UpgradedToFormatSix_AFileWhoseFlagsChanged_KeepsThemInKeyEleven_AndNamesThemNoMore()
+    {
+        var (file, manifest, opened, _) = await AfterFlagsChangeAsync(
+            ["file-flags: no-dump"], ["file-flags: hidden"],
+            FormatVersions.DeltaCheckpoints, FormatVersions.FileFlagsAndLinkForms);
+
+        Assert.IsFalse(file.Reused);
+        Assert.AreEqual(FileFlagBits.Hidden, manifest.Metadata.FileFlags);
+        Assert.DoesNotContain(diagnostic => diagnostic.StartsWith("file-flags:", StringComparison.Ordinal), manifest.CaptureDiagnostics);
+        Assert.IsFalse(opened);
+    }
+
+    [TestMethod]
     public async Task TheFlagsStayedAsTheyWere_TheShortCircuitStillFires()
     {
         var (file, _, opened, first) = await AfterFlagsChangeAsync(["file-flags: no-dump"], ["file-flags: no-dump"]);
@@ -320,7 +379,8 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     /// compares against, so it must be the one capture computes, flags and all.
     /// </remarks>
     private async Task<(byte[] Published, byte[] Rebuilt, byte[] WithoutFlags)> FlaggedDigestsAsync(
-        Func<IObjectStore, RepositoryKeySet, RepositoryWriteCredential, CatalogueDb, Task> rebuild)
+        Func<IObjectStore, RepositoryKeySet, RepositoryWriteCredential, CatalogueDb, Task> rebuild,
+        ushort formatVersion = FormatVersions.SealedDataPlane)
     {
         var source = new FakeFileSystemSource();
         source.AddFile("locked.bin", Content()).Diagnostics = ["file-flags: no-dump"];
@@ -333,12 +393,12 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         byte[] withoutFlags;
         using (var live = OpenCatalogue())
         {
-            var first = await CreateOrchestrator(store, keys, credential, live).PublishAsync(Job(source, 0xA1), CancellationToken.None);
+            var first = await CreateOrchestrator(store, keys, credential, live, formatVersion).PublishAsync(Job(source, 0xA1), CancellationToken.None);
             published = live.LookupPath(snapshot, "locked.bin")!.MetadataDigest!.Value.ToArray();
             using var reader = new RepositoryReader(Repo, keys, store, Authority);
             await reader.LoadBlobsAsync(CancellationToken.None);
             var manifest = await ReadFileVersionAsync(reader, Assert.ContainsSingle(first.Files).ObjectId);
-            withoutFlags = FileVersionManifestCodec.MetadataDigest(manifest.Metadata);
+            withoutFlags = FileVersionManifestCodec.MetadataDigest(manifest.Metadata with { FileFlags = FileFlagBits.None });
         }
 
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
@@ -365,6 +425,38 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task AtFormatSix_AFlaggedFile_TheProjectedCatalogue_RecordsTheDigestCaptureComputed()
+    {
+        var (published, rebuilt, withoutFlags) = await FlaggedDigestsAsync(
+            async (store, keys, credential, catalogue) =>
+            {
+                await new CatalogueRebuilder(new IndexLoader(store, Repo, credential)).RebuildAsync(
+                    catalogue, currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, CancellationToken.None);
+                using var reader = new RepositoryReader(Repo, keys, store, Authority);
+                await reader.LoadBlobsAsync(CancellationToken.None);
+                await CatalogueProjector.ProjectAsync(catalogue, reader, store, Repo, keys, credential, CancellationToken.None);
+            },
+            FormatVersions.FileFlagsAndLinkForms);
+
+        CollectionAssert.AreEqual(published, rebuilt);
+        CollectionAssert.AreNotEqual(withoutFlags, published, "the digest a publication records counts the flags key 11 keeps");
+    }
+
+    [TestMethod]
+    public async Task AtFormatSix_AFlaggedFile_AForensicRebuild_RecordsTheDigestCaptureComputed()
+    {
+        var (published, rebuilt, _) = await FlaggedDigestsAsync(
+            async (store, _, credential, catalogue) =>
+            {
+                using var rebuilder = new FallbackPlan.Repository.Catalogue.Forensic.ForensicRebuilder(store, Repo, credential);
+                await rebuilder.RebuildAsync(catalogue, new FallbackPlan.Repository.Catalogue.Forensic.ForensicTarget.Everything(), CancellationToken.None);
+            },
+            FormatVersions.FileFlagsAndLinkForms);
+
+        CollectionAssert.AreEqual(published, rebuilt);
+    }
+
+    [TestMethod]
     public async Task AFlaggedFile_AForensicRebuild_RecordsTheDigestCaptureComputed()
     {
         var (published, rebuilt, _) = await FlaggedDigestsAsync(async (store, _, credential, catalogue) =>
@@ -388,6 +480,32 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
         await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        var baseline = Assert.ContainsSingle(catalogue.EnumerateSnapshots()).SnapshotId;
+        IReadOnlyList<ScanRoot> roots = [new ScanRoot("/")];
+
+        var same = await SourceComparer.CompareAsync(source, roots, [], [], catalogue, baseline, sampleLimit: 20, CancellationToken.None);
+        node.Diagnostics = ["file-flags: immutable, no-dump"];
+        var flagged = await SourceComparer.CompareAsync(source, roots, [], [], catalogue, baseline, sampleLimit: 20, CancellationToken.None);
+
+        Assert.AreEqual(1, same.Unchanged);
+        Assert.AreEqual("locked.bin", Assert.ContainsSingle(flagged.MetadataOnly.Sample));
+    }
+
+    [TestMethod]
+    public async Task AtFormatSix_TheComparer_CountsAFlaggedFileUnchanged_AndAFlagChangeAMetadataChange()
+    {
+        // The comparer is not told the format: it reads the flags off the
+        // source as named, and the digest counts them alike either way.
+        var source = new FakeFileSystemSource();
+        var node = source.AddFile("locked.bin", Content());
+        node.Diagnostics = ["file-flags: no-dump"];
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue, FormatVersions.FileFlagsAndLinkForms)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
         var baseline = Assert.ContainsSingle(catalogue.EnumerateSnapshots()).SnapshotId;
         IReadOnlyList<ScanRoot> roots = [new ScanRoot("/")];
 

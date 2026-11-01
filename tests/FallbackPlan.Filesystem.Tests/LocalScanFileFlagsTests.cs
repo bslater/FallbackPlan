@@ -6,7 +6,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// <summary>
 /// The local scanner names the flags a file carries that no format key keeps,
 /// in a capture diagnostic (FR-MAN-003; ADR-0180; architecture 06 §3): Linux's
-/// as <c>statx</c> reports them, and macOS's from <c>st_flags</c>.
+/// as <c>statx</c> reports them, and macOS's from <c>st_flags</c>. It names a
+/// folder's alike, which a format-6 tree keeps and an earlier one does not
+/// (ADR-0180 Amendment 3).
 /// </summary>
 public sealed partial class LocalScanTests
 {
@@ -27,16 +29,17 @@ public sealed partial class LocalScanTests
     [TestMethod]
     [PlatformCondition(TestPlatforms.Linux, "Linux keeps a folder's inode flags")]
     [PlatformTrait(TestPlatforms.Linux)]
-    public async Task Scan_OnLinux_AFolderCarryingTheNoDumpFlag_NamesNone_SinceATreeCarriesNoDiagnostics()
+    public async Task Scan_OnLinux_AFolderCarryingTheNoDumpFlag_NamesIt_AndAPlainFolderNamesNone()
     {
         Write("flagged/inside.txt");
+        Write("plain/inside.txt");
         DiskFlags.AddOnLinux(Path.Combine(_root, "flagged"), DiskFlags.LinuxNoDump);
 
-        var events = await ScanAsync();
+        var folders = (await ScanAsync()).OfType<ScanEvent.EnterDirectory>()
+            .ToDictionary(enter => enter.Entry.RelativePath, enter => enter.Entry);
 
-        Assert.DoesNotContain(
-            diagnostic => diagnostic.StartsWith("file-flags:", StringComparison.Ordinal),
-            events.OfType<ScanEvent.EnterDirectory>().Single(enter => enter.Entry.RelativePath == "flagged").Entry.Diagnostics);
+        Assert.Contains("file-flags: no-dump", folders["flagged"].Diagnostics);
+        Assert.DoesNotContain(diagnostic => diagnostic.StartsWith("file-flags:", StringComparison.Ordinal), folders["plain"].Diagnostics);
     }
 
     [TestMethod]

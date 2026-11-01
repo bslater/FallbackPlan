@@ -784,7 +784,7 @@ public sealed class RecoverySession : IDisposable
         // so in the receipt's words (ADR-0180 Amendment 2).
         void NoteFlags(FileVersionManifest manifest, string path)
         {
-            if (MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.CaptureDiagnostics)) is { } flags)
+            if (MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics)) is { } flags)
             {
                 notes.Add(new RecoveryNote(RecoveryNoteKind.FlagsNotApplied, path, Reason: flags));
             }

@@ -459,8 +459,10 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             }
         }
 
-        // A folder is kept as a tree, which carries no diagnostics.
-        if (kind != ScanEntryKind.Directory && MetadataRules.FileFlagsDiagnostic(stat.Flags) is { } flags)
+        // A folder's are named too, though a tree carries no diagnostics:
+        // publication keeps them in the tree's metadata from format 6, and
+        // below it they are written nowhere (ADR-0180 Amendment 3).
+        if (MetadataRules.FileFlagsDiagnostic(stat.Flags) is { } flags)
         {
             diagnostics.Add(flags);
         }

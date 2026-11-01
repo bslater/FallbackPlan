@@ -826,6 +826,24 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
+    public void MetadataDigest_TheFlags_CountAlike_WhetherKeyElevenKeepsThemOrADiagnosticNamesThem()
+    {
+        // A file captured before format 6 named its flags; the same file
+        // captured at 6 keeps them. An incremental compares one against the
+        // other, so they must digest alike (ADR-0180 Amendment 3).
+        var plain = new EntryMetadata { ModifiedAt = 1_700_000_000_000, PosixMode = 0x1A4, OwnerName = "ana" };
+        var flags = FileFlagBits.Immutable | FileFlagBits.NoDump;
+
+        CollectionAssert.AreEqual(
+            FileVersionManifestCodec.MetadataDigest(plain, flags),
+            FileVersionManifestCodec.MetadataDigest(plain with { FileFlags = flags }));
+        CollectionAssert.AreEqual(
+            FileVersionManifestCodec.MetadataDigest(plain, flags),
+            FileVersionManifestCodec.MetadataDigest(plain with { FileFlags = FileFlagBits.Immutable }, FileFlagBits.NoDump));
+        CollectionAssert.AreEqual(FileVersionManifestCodec.MetadataDigest(plain), FileVersionManifestCodec.MetadataDigest(plain, FileFlagBits.None));
+    }
+
+    [TestMethod]
     public void ErrorManifest_AnUnassignedReason_IsRefused()
     {
         // The other edge of the same bound. Casting an out-of-range value into

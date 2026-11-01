@@ -80,9 +80,11 @@ namespace FallbackPlan.Restore;
 /// Amendment 1).
 /// </param>
 /// <param name="Flags">
-/// The file flags its manifest's capture diagnostics name
-/// (<see cref="MetadataRules.FileFlagsOf"/>), none of which a restore sets,
-/// which the plan declares on every target (ADR-0180 Amendment 1).
+/// The file flags its manifest keeps in metadata key 11 or names in its
+/// capture diagnostics
+/// (<see cref="MetadataRules.FileFlagsOf(EntryMetadata, IEnumerable{string})"/>),
+/// none of which a restore sets, which the plan declares on every target
+/// (ADR-0180 Amendments 1 and 3).
 /// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
