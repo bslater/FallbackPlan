@@ -880,7 +880,7 @@ public sealed partial class ServiceCommandHandler(
 
                 // Judged as the volumes the run would write to take names,
                 // where one takes them otherwise than this platform's
-                // (ADR-0170 Amendment 5). The plan made again slices as the
+                // (ADR-0170 Amendments 5 and 6). The plan made again slices as the
                 // first did, since only how it judges names has changed.
                 if (target.AsWrittenTo(resolved.Select(slice => slice.OutputDirectory)) is var written && !written.NamesAs(target))
                 {

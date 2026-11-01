@@ -6,11 +6,17 @@ namespace FallbackPlan.Domain;
 
 /// <summary>
 /// How the volume a folder lies on takes names: whether it tells two names
-/// that differ only in case apart, and whether it takes a name's composed
-/// and decomposed Unicode forms for one (FR-RST-003, ADR-0170 Amendment 5).
+/// that differ only in case apart, whether it takes a name's composed and
+/// decomposed Unicode forms for one (FR-RST-003, ADR-0170 Amendment 5), and
+/// whether it names files by Windows' rules (ADR-0170 Amendment 6).
 /// </summary>
 /// <param name="CaseSensitive">Whether names that differ only in case are two names.</param>
 /// <param name="NormalisationInsensitive">Whether a name's composed and decomposed forms are one name.</param>
+/// <param name="WindowsNames">
+/// Whether the volume names files by Windows' rules: the characters Windows
+/// refuses refused, a trailing period stripped, a device's name meaning the
+/// device, and a name counted in UTF-16 units.
+/// </param>
 /// <remarks>
 /// <para>
 /// Read without writing to the volume, since a restore's plan writes
@@ -22,11 +28,19 @@ namespace FallbackPlan.Domain;
 /// case, and a casefolded folder folds both case and the two forms.
 /// </para>
 /// <para>
+/// Windows' volumes, and a FAT or exFAT drive wherever it is mounted, name
+/// files by Windows' rules. Linux's drivers for those two refuse most of what
+/// Windows refuses and strip what it strips; the rest they write, and the
+/// drive then holds a file Windows will not open by its name. A share's
+/// client on Linux maps the characters Windows refuses to ones it takes, so
+/// a name lands there as written.
+/// </para>
+/// <para>
 /// A folder not yet made is judged by the nearest one that is, which is where
 /// it would be made.
 /// </para>
 /// </remarks>
-public readonly partial record struct VolumeNaming(bool CaseSensitive, bool NormalisationInsensitive)
+public readonly partial record struct VolumeNaming(bool CaseSensitive, bool NormalisationInsensitive, bool WindowsNames = false)
 {
     private static readonly AsyncLocal<Func<string, VolumeNaming?>?> Flow = new();
 
@@ -93,7 +107,9 @@ public readonly partial record struct VolumeNaming(bool CaseSensitive, bool Norm
             ? new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: true)
             : (filesystemType & 0xFFFF_FFFF) switch
             {
-                MsdosMagic or ExfatMagic or CifsMagic or Smb2Magic or SmbMagic =>
+                MsdosMagic or ExfatMagic =>
+                    new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true),
+                CifsMagic or Smb2Magic or SmbMagic =>
                     new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false),
                 _ => new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false),
             };
@@ -155,7 +171,7 @@ public readonly partial record struct VolumeNaming(bool CaseSensitive, bool Norm
         using var handle = CreateFile(
             folder, ReadAttributes, FileShare.ReadWrite | FileShare.Delete, 0, FileMode.Open, BackupSemantics, 0);
         return !handle.IsInvalid && GetFileInformationByHandleEx(handle, FileCaseSensitiveInfo, out var flags, sizeof(uint))
-            ? new VolumeNaming(CaseSensitive: (flags & CaseSensitiveFolder) != 0, NormalisationInsensitive: false)
+            ? new VolumeNaming(CaseSensitive: (flags & CaseSensitiveFolder) != 0, NormalisationInsensitive: false, WindowsNames: true)
             : null;
     }
 

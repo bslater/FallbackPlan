@@ -7,7 +7,9 @@ namespace FallbackPlan.Domain.Tests;
 /// Amendment 5). macOS says whether a volume distinguishes case, Windows
 /// whether a folder does, and Linux what kind of filesystem a folder is on
 /// and whether the folder folds case itself. A folder not yet made is judged
-/// by the nearest one that is.
+/// by the nearest one that is. A volume made by Windows' rules, Windows' own
+/// or a FAT or exFAT drive on Linux, says it names by them, so a plan judges
+/// the names written there by them (FR-RST-003; ADR-0170 Amendment 6).
 /// </summary>
 [TestClass]
 public sealed class VolumeNamingTests
@@ -44,6 +46,11 @@ public sealed class VolumeNamingTests
         File.WriteAllBytes(Path.Combine(_folder, "caf\u00E9.txt"), []);
         Assert.AreEqual(!File.Exists(Path.Combine(_folder, "probe.txt")), judged.Value.CaseSensitive);
         Assert.AreEqual(File.Exists(Path.Combine(_folder, "cafe\u0301.txt")), judged.Value.NormalisationInsensitive);
+
+        // Windows strips a name's trailing period, and no other platform's
+        // own volume does.
+        File.WriteAllBytes(Path.Combine(_folder, "Trailing."), []);
+        Assert.AreEqual(File.Exists(Path.Combine(_folder, "Trailing")), judged.Value.WindowsNames);
     }
 
     [TestMethod]
@@ -67,13 +74,24 @@ public sealed class VolumeNamingTests
     [TestMethod]
     public void OnLinux_AFilesystemThatFoldsCase_TakesNamesThatDifferInCaseForOne()
     {
-        // FAT, exFAT, and a share served over SMB or CIFS.
-        foreach (var folding in new long[] { 0x4d44, 0x2011BAB0, 0xFF534D42, 0xFE534D42, 0x517B })
+        // FAT and exFAT, made by Windows' rules and named by them wherever
+        // they are mounted.
+        foreach (var fat in new long[] { 0x4d44, 0x2011BAB0 })
+        {
+            Assert.AreEqual(
+                new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true),
+                VolumeNaming.OfLinuxFilesystem(fat, casefolded: false),
+                fat.ToString("x", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        // A share served over SMB or CIFS, whose client maps the characters
+        // Windows refuses to ones it takes, so a name lands as written.
+        foreach (var share in new long[] { 0xFF534D42, 0xFE534D42, 0x517B })
         {
             Assert.AreEqual(
                 new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false),
-                VolumeNaming.OfLinuxFilesystem(folding, casefolded: false),
-                folding.ToString("x", System.Globalization.CultureInfo.InvariantCulture));
+                VolumeNaming.OfLinuxFilesystem(share, casefolded: false),
+                share.ToString("x", System.Globalization.CultureInfo.InvariantCulture));
         }
 
         // ext4, as Linux commonly makes a volume.

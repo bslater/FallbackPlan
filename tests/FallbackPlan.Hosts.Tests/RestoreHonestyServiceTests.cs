@@ -28,7 +28,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// apart, and refuses for it alike (ADR-0178 Amendment 4). Two names the
 /// volume the run would write to takes for one are named a collision, as
 /// that volume takes them, whatever its platform's volumes do (ADR-0170
-/// Amendment 5).
+/// Amendment 5), and a name it refuses or alters is named where it names
+/// files by Windows' rules (ADR-0170 Amendment 6).
 /// </summary>
 [TestClass]
 public sealed class RestoreHonestyServiceTests : IDisposable
@@ -589,6 +590,43 @@ public sealed class RestoreHonestyServiceTests : IDisposable
 
         Assert.AreEqual(2L, folded.Conflicts);
         Assert.Contains(line => line.Contains("Collides on this target", StringComparison.Ordinal), folded.ConflictSample ?? []);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Windows' own volumes cannot hold the name to back up")]
+    public async Task Plan_NamingAFolderOnAVolumeThatNamesByWindowsRules_NamesWhatTheyRefuse_ThoughItsPlatformDoesNot()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("what?.txt", "asked");
+        _harness.WriteSourceFile("fine.txt", "fine");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        await using var runtime = await StartAsync(availableBytes: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var destination = Path.Combine(_harness.WorkPath, "restored");
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        async Task<RestorePlanResult> PlanAsync()
+        {
+            Assert.IsInstanceOfType<RestorePlanResult>(
+                await handler.ExecuteAsync(
+                    new PlanRestoreCommand(snapshotId, null, OutputDirectory: destination, Source: source.SourceId),
+                    _timeout.Token),
+                out var plan);
+            return plan;
+        }
+
+        Assert.AreEqual(0L, (await PlanAsync()).Conflicts, "this platform's own volume makes the name");
+
+        // A FAT drive mounted where the run would write.
+        VolumeNaming.OfInFlow = _ => new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true);
+        var fat = await PlanAsync();
+
+        Assert.AreEqual(1L, fat.Conflicts);
+        Assert.Contains(
+            line => line.Contains("by Windows' rules", StringComparison.Ordinal) && line.Contains("what?.txt", StringComparison.Ordinal),
+            fat.ConflictSample ?? []);
     }
 
     private async Task<string> SnapshotIdAsync(ServiceCommandHandler handler)

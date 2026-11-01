@@ -186,9 +186,10 @@ public sealed record RestoreTargetProfile
     /// <summary>
     /// Whether the target names files by Windows' rules
     /// (<see cref="RestorePaths.IsWindowsName"/>), so a name another platform
-    /// wrote may be one it refuses or alters (ADR-0170). Stated rather than
-    /// taken from the running platform, so a plan for a Windows target can be
-    /// made, and tested, anywhere.
+    /// wrote may be one it refuses or alters (ADR-0170): Windows does, and so
+    /// does a FAT or exFAT drive wherever it is mounted (ADR-0170 Amendment
+    /// 6). Stated rather than taken from the running platform, so a plan for
+    /// a Windows target can be made, and tested, anywhere.
     /// </summary>
     public bool WindowsNamingRules { get; init; }
 
@@ -276,9 +277,11 @@ public sealed record RestoreTargetProfile
     /// <summary>
     /// This target as the volumes of <paramref name="directories"/> take
     /// names, where they say (ADR-0170 Amendment 5): case-sensitive only where
-    /// every one is, and taking a name's two forms for one where any does. A
-    /// volume that says nothing is taken to name as this target states, and
-    /// no folder leaves it as it is.
+    /// every one is, and taking a name's two forms for one where any does. It
+    /// names files by Windows' rules where any volume does, or where this
+    /// target already did, since a platform that names by them does so on
+    /// every volume (ADR-0170 Amendment 6). A volume that says nothing is
+    /// taken to name as this target states, and no folder leaves it as it is.
     /// </summary>
     /// <param name="directories">Each folder a restore writes to.</param>
     /// <returns>The target as written there.</returns>
@@ -287,6 +290,7 @@ public sealed record RestoreTargetProfile
         ThrowHelper.ThrowIfNull(directories);
         var caseSensitive = true;
         var normalisationInsensitive = false;
+        var windowsNames = WindowsNamingRules;
         var any = false;
         foreach (var directory in directories)
         {
@@ -294,18 +298,28 @@ public sealed record RestoreTargetProfile
             var naming = VolumeNaming.Of(directory) ?? new VolumeNaming(CaseSensitive, NormalisationInsensitive);
             caseSensitive &= naming.CaseSensitive;
             normalisationInsensitive |= naming.NormalisationInsensitive;
+            windowsNames |= naming.WindowsNames;
         }
 
-        return any ? this with { CaseSensitive = caseSensitive, NormalisationInsensitive = normalisationInsensitive } : this;
+        return any
+            ? this with
+            {
+                CaseSensitive = caseSensitive,
+                NormalisationInsensitive = normalisationInsensitive,
+                WindowsNamingRules = windowsNames,
+            }
+            : this;
     }
 
-    /// <summary>Whether <paramref name="other"/> takes names as this target does, by case and by normalisation.</summary>
+    /// <summary>Whether <paramref name="other"/> takes names as this target does: by case, by normalisation, and by Windows' rules or not.</summary>
     /// <param name="other">The other target.</param>
     /// <returns>Whether it does.</returns>
     public bool NamesAs(RestoreTargetProfile other)
     {
         ThrowHelper.ThrowIfNull(other);
-        return CaseSensitive == other.CaseSensitive && NormalisationInsensitive == other.NormalisationInsensitive;
+        return CaseSensitive == other.CaseSensitive
+            && NormalisationInsensitive == other.NormalisationInsensitive
+            && WindowsNamingRules == other.WindowsNamingRules;
     }
 }
 
@@ -467,7 +481,7 @@ public static class RestorePlanner
             }
             else if (target.WindowsNamingRules && !RestorePaths.IsWindowsName(name, out why))
             {
-                conflicts.Add(new RestoreConflict(item.Path, $"A Windows target cannot make this name: {why}."));
+                conflicts.Add(new RestoreConflict(item.Path, $"The target names files by Windows' rules, which this name breaks: {why}."));
             }
             else if (target.MaxNameBytes is { } maxName
                 && System.Text.Encoding.UTF8.GetByteCount(name) is var nameBytes && nameBytes > maxName)

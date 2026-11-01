@@ -39,6 +39,8 @@ Paths are the most common source of silent cross-platform data loss, so the rule
 
 > **2026-11 ([ADR-0170 Amendment 5](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-5-2026-11--the-plan-reads-how-the-volume-it-writes-to-takes-names)).** The plan now reads how the volume of each folder a restore writes to takes names, without writing to it: whether it distinguishes case, and whether it takes a name's two Unicode forms for one. A FAT drive or a share on Linux folds case, a casefolded folder folds both, and a case-sensitive folder on Windows keeps case apart.
 
+> **2026-11 ([ADR-0170 Amendment 6](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md#amendment-6-2026-11--a-fat-or-exfat-drive-names-by-windows-rules-wherever-it-is-mounted)).** The volume also says whether it names files by Windows' rules. A FAT or exFAT drive does wherever it is mounted, and a plan judges the names written to one on Linux as it would on Windows. A share's client on Linux maps the characters Windows refuses, so a share is not judged so.
+
 **Length and reserved names.** Record the source's limits in the snapshot's filesystem capability record. Windows reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`), trailing dots and spaces, and paths exceeding the target's limit are all restore-plan conflicts with an explicit resolution, not runtime failures.
 
 ## 3. Metadata matrix

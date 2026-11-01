@@ -1873,7 +1873,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
         }
 
         // Judged as the volumes the run would write to take names, where one
-        // takes them otherwise than this platform's (ADR-0170 Amendment 5).
+        // takes them otherwise than this platform's (ADR-0170 Amendments 5
+        // and 6).
         var rootSlices = SlicesOf(catalogue, snapshotId, plan, request);
         if (target.AsWrittenTo(rootSlices.Select(slice => slice.OutputDirectory)) is var written && !written.NamesAs(target))
         {

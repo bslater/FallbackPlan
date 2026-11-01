@@ -13,7 +13,9 @@ namespace FallbackPlan.Cli.Tests;
 /// A plan exported to a file is kept as JSON, the plan's own figures beside
 /// the run it was made for (ADR-0108). Two names the volume of the folder
 /// it would write to takes for one are named a collision, whatever its
-/// platform's volumes do (ADR-0170 Amendment 5).
+/// platform's volumes do (ADR-0170 Amendment 5), and a name that volume's
+/// rules refuse or alter is named where it names files by Windows' rules
+/// (ADR-0170 Amendment 6).
 /// </summary>
 /// <remarks>
 /// In direct mode the CLI makes the plan itself, as it runs the restore
@@ -61,6 +63,30 @@ public sealed class RestorePlanCommandTests : IDisposable
         var folded = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
 
         Assert.Contains("Collides on this target", folded.All, StringComparison.Ordinal);
+        Assert.IsFalse(Directory.Exists(destination), "a plan writes nothing, not even the folder");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Windows' own volumes cannot hold the name to back up")]
+    public async Task Plan_ToAFolderOnAVolumeThatNamesByWindowsRules_NamesWhatTheyRefuse_ThoughItsPlatformDoesNot()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/what?.txt", "asked");
+        _cli.WriteFile("tree/fine.txt", "fine");
+        var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+        Assert.AreEqual(0, backup.ExitCode, backup.All);
+        var snapshot = await FirstSnapshotAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        var own = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+        Assert.DoesNotContain("by Windows' rules", own.All, StringComparison.Ordinal);
+
+        // A FAT drive mounted where the run would write (ADR-0170 Amendment 6).
+        VolumeNaming.OfInFlow = _ => new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true);
+        var fat = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+
+        Assert.Contains("by Windows' rules", fat.All, StringComparison.Ordinal);
+        Assert.Contains("what?.txt", fat.All, StringComparison.Ordinal);
         Assert.IsFalse(Directory.Exists(destination), "a plan writes nothing, not even the folder");
     }
 
