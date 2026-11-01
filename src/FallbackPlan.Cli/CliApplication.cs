@@ -725,10 +725,12 @@ public static class CliApplication
                             output.WriteLine($"diagnostic     {diagnostic}");
                         }
 
+                        WriteFileFlags(output, fileVersion.Metadata.FileFlags);
                         break;
 
                     case ObjectType.TreeManifest:
                         var tree = TreeManifestCodec.Decode(read.Plaintext!);
+                        WriteFileFlags(output, tree.Metadata?.FileFlags ?? FileFlagBits.None);
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"entries        {tree.Entries.Count}"));
                         foreach (var treeEntry in tree.Entries)
                         {
@@ -1003,7 +1005,7 @@ public static class CliApplication
                 var streamsWritten = await WriteBackStreamsAsync(reader, outputPath, manifest.Metadata, cancellationToken)
                     .ConfigureAwait(false);
                 WriteBackMetadata(outputPath, manifest.Metadata, capturedHere, streamsWritten);
-                if (MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.CaptureDiagnostics)) is { } flags)
+                if (MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics)) is { } flags)
                 {
                     output.WriteLine(flags);
                 }
@@ -3891,6 +3893,19 @@ public static class CliApplication
     };
 
     /// <summary>One line of <c>snapshots</c>, as a service reports the snapshot.</summary>
+    /// <summary>
+    /// The flags a manifest's metadata key 11 keeps, a file's or a folder's,
+    /// on a line of their own (ADR-0180 Amendment 3). One that names them in
+    /// a diagnostic shows them there.
+    /// </summary>
+    private static void WriteFileFlags(TextWriter output, FileFlagBits flags)
+    {
+        if (flags != FileFlagBits.None)
+        {
+            output.WriteLine($"file flags     {string.Join(", ", MetadataRules.FileFlagNamesOf(flags))}");
+        }
+    }
+
     internal static string DescribeSnapshot(SnapshotDescriptor snapshot)
     {
         ThrowHelper.ThrowIfNull(snapshot);

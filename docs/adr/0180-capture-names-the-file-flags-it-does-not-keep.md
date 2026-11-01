@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics); FR-RST-003 and FR-RST-004 (amended by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back): the plan and the receipt name the flags a restore does not set; FR-RST-004 amended again by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too): so do the recovery tool and `restore-file`)
+**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics); FR-RST-003 and FR-RST-004 (amended by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back): the plan and the receipt name the flags a restore does not set; FR-RST-004 amended again by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too): so do the recovery tool and `restore-file`); FR-MAN-003 amended again by [Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too): from format 6 a file's and a folder's flags are kept in metadata key 11
 **Related:** [ADR-0026](0026-phase-1-capture-shapes.md) §2 (the `capture_diagnostics` vocabulary, which gains `file-flags:`), [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) (Windows' own attribute bits, which a format key keeps), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (immutable and system flags, and compression and encryption attributes, degraded and reported on Linux and macOS), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 13)
 
 **Built:**
@@ -35,9 +35,13 @@ On Linux a flag is read only where `stx_attributes_mask` says the volume reports
 
 The flags a file carries are named in its capture diagnostics (specification 06 §4.1 key 13), `file-flags: immutable, no-dump`, each by one name and in one order: immutable, append-only, no-dump, compressed, encrypted, hidden. Diagnostics are informational text every reader accepts, so this changes no format. A link and a special file are named alike. A folder is kept as a tree, which carries no diagnostics, so a folder's flags are not named.
 
+> **2026-11 ([Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)).** From format 6 publication keeps the flags in metadata key 11 rather than naming them, a folder's as well as a file's, and below format 6 names them as here.
+
 ### 3. A change of flags alone is a change
 
 An incremental passes over a file whose identity, size, modification time and metadata digest are unchanged, and re-emits its earlier manifest. Setting a file's flags moves its change time, not its modification time, so the digest must count them, or the earlier manifest would go on naming flags the file no longer carries, and a file backed up before this record would never have its flags named. The digest counts the flags a file's diagnostics name, and is the metadata's alone where it names none, so no file without flags is restated. A file whose flags changed gets a new manifest without its content being read again, keeping what the earlier one said of its read and naming the flags it carries now. The catalogue rebuilt from manifests, by projection or forensically, records the same digest, and the source comparer judges by it.
+
+> **2026-11 ([Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)).** The digest counts the flags key 11 keeps as it counts those a diagnostic names, so a manifest of either form digests alike.
 
 ### 4. What is named can be read back
 
@@ -54,6 +58,8 @@ An incremental passes over a file whose identity, size, modification time and me
 - **Keep the flags.** A restore gives none back. Keeping them is a format key, with the format version and refusal ADR-0014 asks of one.
 
   > **2026-11: the key is format 6's metadata key 11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** Nothing writes it yet: capture still names the flags among a file's diagnostics, and no restore gives one back.
+  >
+  > **2026-11: capture keeps them there from format 6 ([Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)).** No restore gives one back yet.
 - **Say so on restore.** The plan and the receipt do not yet name a file whose flags were not given back. That is the next record's.
 
   > **2026-10: taken up by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back)** for the engine's restore: its plan and its receipt name a file's flags. The recovery tool and `restore-file` do not yet.
@@ -62,6 +68,8 @@ An incremental passes over a file whose identity, size, modification time and me
 - **A folder's flags.** A tree carries no diagnostics.
 
   > **2026-11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** Format 6's key 11 is in the metadata map a tree carries too, so a folder's flags can be kept there. Nothing writes it yet.
+  >
+  > **2026-11: taken up by [Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)** from format 6. The plan and the receipt do not yet name a folder's flags.
 
 ## Alternatives considered
 
@@ -106,6 +114,53 @@ Amendment 1 left the recovery tool and `restore-file` silent: a file recovered w
 - `Repository.Tests/RecoveryHardLinkTests`: a later name of a group is noted as its first name is;
 - `Cli.Tests/InspectionCommandTests`: on Linux, `restore-file` of a file backed up with the no-dump flag says it was not given back.
 
+## Amendment 3 (2026-11) — format 6 keeps the flags, a folder's too
+
+[ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) gave a file's flags a key, metadata key 11, and nothing wrote it. Capture still named them in a diagnostic, which a restore can read but which no format guarantees. A folder's were not named at all, since a tree carries no diagnostics.
+
+**Decision.**
+
+- **From format 6, publication keeps the flags in key 11 and names them no more.**
+  - The scanner names them as before, a file's, a link's and a special file's.
+  - Publication moves them into the entry's metadata where the repository's effective version is 6 or later (`MetadataRules.KeepFileFlags`), so one rule decides for every entry.
+  - Below format 6 they stay named, since a reader of that format refuses key 11.
+- **A folder's flags are kept too.**
+  - The scanner names a folder's flags as it names a file's.
+  - From format 6 publication keeps them in the folder's tree, whose metadata is the same map.
+  - Below format 6 a folder's are written nowhere, as before.
+- **The flags count alike in the digest an incremental compares, wherever a manifest keeps them.**
+  - `FileVersionManifestCodec.MetadataDigest` counts the flags key 11 keeps as it counts the flags a diagnostic names. So a file captured before format 6 and the same file captured at 6 digest alike.
+  - An upgrade therefore restates no file for its flags. A flagged file's manifest goes on naming them until something about the file changes, and the manifest written then keeps them in key 11.
+  - The source comparer, the projected catalogue and the forensically rebuilt one need no word of the format.
+- **Every reader takes either form.**
+  - The plan, the receipt, the recovery tool and `restore-file` read the flags key 11 keeps and those a diagnostic names (`MetadataRules.FileFlagsOf`), and say what they did not give back in Amendments 1 and 2's words.
+  - The receipt's not-applied list still names none of them: they are named once, beside the item.
+- **`inspect-manifest` shows the flags key 11 keeps**, a file's and a folder's, on a line of their own.
+
+**Built:** `Domain/MetadataRules`; `Repository.Format/Manifests/FileVersionManifestCodec`; `Repository/SnapshotPublication`; `Filesystem.Local/LocalFileSystemSource`; `Restore/RestoreBlobSet`; `Restore/RestoreExecutor`; `Recovery/RecoverySession`; `Cli/CliApplication`:
+
+- `Domain.Tests/FileFlagsTests`:
+  - at format 6 the flags a diagnostic names move into key 11 and the other diagnostics stay;
+  - below format 6 nothing moves;
+  - an entry without flags is kept as it was;
+  - a reader takes the key's flags and a diagnostic's alike.
+- `Repository.Tests/ManifestCodecTests`: the flags digest alike whether key 11 keeps them or a diagnostic names them.
+- `Filesystem.Tests/LocalScanTests`: on Linux a folder carrying the no-dump flag names it, and a plain folder names none.
+- `Repository.Tests/FileFlagsCaptureTests`, on Linux:
+  - at format 6 a real file's and a real folder's no-dump flag are kept in key 11, and named nowhere;
+  - at format 5 the file's is named, and neither is kept.
+- `Repository.Tests/MetadataOnlyChangeTests`:
+  - at format 6 a file whose flags alone changed gets a new manifest keeping them, its content not read again, and one whose flags stayed is short-circuited;
+  - upgraded to format 6, a file whose flags stayed is not restated, and one whose flags changed keeps them in key 11 and names them no more;
+  - at format 6 the projected and the forensically rebuilt catalogue record the digest capture computed, and the comparer counts a flagged file unchanged and a change of flags a metadata change.
+- `Repository.Tests/RestoreMetadataHonestyTests`, `Repository.Tests/RecoveryMetadataTests`: at format 6 the plan declares the flags key 11 keeps, and the receipt and the recovery tool name them as before.
+- `Cli.Tests/InspectionCommandTests`: on Linux, `inspect-manifest` shows the no-dump flag a backed-up file's and folder's manifests keep, and no diagnostic names it.
+
+**Not done.**
+
+- **A restore gives no flag back.** That is the next record's.
+- **A folder's flags are neither declared in the plan nor named in the receipt.** The plan's facts are a file's and a link's, and a folder is given its metadata by ADR-0086's rule, which names nothing of its flags. That is the next record's too.
+
 ## Status history
 
 | Date | Status | Note |
@@ -114,3 +169,4 @@ Amendment 1 left the recovery tool and `restore-file` silent: a file recovered w
 | 2026-10 | Accepted (Amendment 1) | A restore names the file flags it does not give back: the plan on a line of its own on every target, naming each flag, and the receipt beside each file and link that carried them, a later hard-link name as its first; the item is still restored. `Domain/MetadataRules`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Restore/RestoreExecutor`; `Domain.Tests/FileFlagsTests`; `Repository.Tests/RestoreMetadataHonestyTests`; `Repository.Tests/RestoreHardLinkTests` |
 | 2026-10 | Accepted (Amendment 2) | The recovery tool notes the flags a file, a link or a later hard-link name carried, in the receipt's words, and still counts it restored; `restore-file` says so on a line of its own. `Recovery/RecoveryNote`; `Recovery/RecoverySession`; `Cli/CliApplication`; `Repository.Tests/RecoveryMetadataTests`; `Repository.Tests/RecoveryLinkTests`; `Repository.Tests/RecoveryHardLinkTests`; `Cli.Tests/InspectionCommandTests` |
 | 2026-11 | Accepted (related) | [ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) gives the flags a key, format 6's metadata key 11, which a tree's metadata carries too. Nothing writes it yet, so capture still names them among a file's diagnostics and no restore gives one back |
+| 2026-11 | Accepted (Amendment 3) | From format 6 publication keeps a file's and a folder's flags in metadata key 11 and names them no more, the scanner naming a folder's too; the digest counts them alike wherever kept, so an upgrade restates nothing; every reader takes either form, and `inspect-manifest` shows them. `Domain/MetadataRules`; `Repository.Format/Manifests/FileVersionManifestCodec`; `Repository/SnapshotPublication`; `Filesystem.Local/LocalFileSystemSource`; `Cli/CliApplication`; `Domain.Tests/FileFlagsTests`; `Repository.Tests/FileFlagsCaptureTests`; `Repository.Tests/MetadataOnlyChangeTests`; `Cli.Tests/InspectionCommandTests` |

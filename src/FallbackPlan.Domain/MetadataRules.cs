@@ -469,6 +469,36 @@ public static class MetadataRules
     }
 
     /// <summary>
+    /// The flags an entry carried: those metadata key 11 keeps, from format
+    /// 6, and those its capture diagnostics name, before it. A reader asks
+    /// both, so a manifest of either form reads alike (ADR-0180 Amendment 3).
+    /// </summary>
+    public static FileFlagBits FileFlagsOf(EntryMetadata metadata, IEnumerable<string> diagnostics)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+        return metadata.FileFlags | FileFlagsOf(diagnostics);
+    }
+
+    /// <summary>
+    /// The metadata and diagnostics an entry is written with in a repository
+    /// of <paramref name="formatVersion"/>. From format 6 the flags its
+    /// diagnostics name are kept in metadata key 11 and named no more; below
+    /// it no key keeps them, and a reader of that format refuses key 11, so
+    /// they stay named (ADR-0180 Amendment 3).
+    /// </summary>
+    public static (EntryMetadata Metadata, IReadOnlyList<string> Diagnostics) KeepFileFlags(
+        ushort formatVersion, EntryMetadata metadata, IReadOnlyList<string> diagnostics)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+        ThrowHelper.ThrowIfNull(diagnostics);
+
+        var named = FileFlagsOf(diagnostics);
+        return !FormatVersions.HasFileFlagsAndLinkForms(formatVersion) || named == FileFlagBits.None
+            ? (metadata, diagnostics)
+            : (metadata with { FileFlags = metadata.FileFlags | named }, WithFileFlags(diagnostics, FileFlagBits.None));
+    }
+
+    /// <summary>
     /// <paramref name="diagnostics"/> with the line that names a file's flags
     /// made to name <paramref name="flags"/>: a manifest restated for a file
     /// whose bytes did not change keeps what it said of its read, and says

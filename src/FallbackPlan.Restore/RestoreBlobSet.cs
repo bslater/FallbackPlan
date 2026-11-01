@@ -318,7 +318,7 @@ public static class RestoreBlobSet
                 MetadataRules.StreamsOutsideUserNamespace(manifest.Metadata),
                 MetadataRules.LongestStreamName(manifest.Metadata),
                 MetadataRules.LargestStream(manifest.Metadata),
-                MetadataRules.FileFlagsOf(manifest.CaptureDiagnostics));
+                MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics));
 
             // A lost segment makes the path missing whatever else of it is
             // archived, because no rehydration brings that segment back. The

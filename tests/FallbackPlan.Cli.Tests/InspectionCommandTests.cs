@@ -303,6 +303,42 @@ public sealed class InspectionCommandTests : IDisposable
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux keeps a file's and a folder's inode flags")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task InspectManifest_AFileAndAFolderBackedUpWithFlags_ShowTheFlagsKeyElevenKeeps()
+    {
+        // A repository is created at format 6, which keeps them in the
+        // manifest's metadata rather than naming them (ADR-0180 Amendment 3).
+        await _cli.InitAsync();
+        var source = _cli.WriteFile("inspect-flags/kept/a.txt", "inspect flags");
+        DiskFlags.AddOnLinux(source, DiskFlags.LinuxNoDump);
+        DiskFlags.AddOnLinux(Path.GetDirectoryName(source)!, DiskFlags.LinuxNoDump);
+        var backup = await _cli.RunAsync("backup", Path.GetDirectoryName(Path.GetDirectoryName(source))!);
+        Assert.IsTrue(backup.ExitCode == 0, backup.All);
+
+        var shown = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var blob in Directory.GetFiles(Path.Combine(_cli.RepositoryPath, "blobs", "meta"), "*", SearchOption.AllDirectories))
+        {
+            var listed = await _cli.RunAsync("inspect-blob", Path.GetRelativePath(_cli.RepositoryPath, blob).Replace('\\', '/'));
+            Assert.IsTrue(listed.ExitCode == 0, listed.All);
+            foreach (Match record in Regex.Matches(listed.Output, @"(FileVersionManifest|TreeManifest)\s.*\s([0-9a-f]{64})\s*$", RegexOptions.Multiline))
+            {
+                var inspect = await _cli.RunAsync("inspect-manifest", record.Groups[2].Value);
+                Assert.IsTrue(inspect.ExitCode == 0, inspect.All);
+                shown[record.Groups[2].Value] = inspect.Output;
+            }
+        }
+
+        Assert.ContainsSingle(shown.Values.Where(output =>
+            output.Contains("FileVersionManifest", StringComparison.Ordinal)
+            && output.Contains("file flags     no-dump", StringComparison.Ordinal)));
+        Assert.ContainsSingle(shown.Values.Where(output =>
+            output.Contains("TreeManifest", StringComparison.Ordinal)
+            && output.Contains("file flags     no-dump", StringComparison.Ordinal)));
+        Assert.DoesNotContain(output => output.Contains("diagnostic     file-flags:", StringComparison.Ordinal), shown.Values);
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "only Windows keeps alternate data streams")]
     [PlatformTrait(TestPlatforms.Windows)]
     public async Task RestoreFile_OnWindows_GivesTheFileItsAlternateStreamsBack_BeforeItsTimes()

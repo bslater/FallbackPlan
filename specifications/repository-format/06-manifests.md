@@ -129,6 +129,8 @@ Key 7 holds the owner, the group and the DACL, and the audit list (SACL) as well
 > - **A writer MUST NOT write either key below format 6.** A reader that predates format 6 rejects a manifest carrying either as an unknown key, so a repository such a reader is entitled to read never holds one.
 > - The metadata digest an incremental compares covers key 11 as it covers every key, so a file whose flags alone change gets a new version.
 
+> **2026-11 ([ADR-0180 Amendment 3](../../docs/adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)).** The product writes key 11 from format 6, for a file and a folder alike. Its metadata digest, which is the product's and no part of the format, counts the flags key 11 keeps as it counts those key 13's `file-flags:` names, so either form digests alike.
+
 ### 4.2 The whole-file hash
 
 `whole_file_hash` is computed over the **reconstructed plaintext file**, including materialised sparse extents as zeroes, using the repository's content-hash profile.

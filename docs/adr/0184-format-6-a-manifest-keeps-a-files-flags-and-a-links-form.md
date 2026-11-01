@@ -37,6 +37,8 @@ The metadata map gains key 11, `file_flags`, a `u32` whose bits are the flags AD
 - **A folder's too.** A tree manifest's metadata is this map, so key 11 can keep a folder's flags, which ADR-0180 could not name, since a tree carries no diagnostics.
 - **Counted in the metadata digest.** The digest an incremental compares covers the metadata map, so a file whose flags alone change gets a new version, as ADR-0180 §3 already has it.
 
+  > **2026-11 ([ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)).** The digest counts the flags key 11 keeps as it counts those a diagnostic names, rather than as part of the map, so a manifest of either form digests alike and an upgrade restates no flagged file.
+
 Windows' attribute bits stay in key 10. The two are kept apart because each platform's bits would be read as the other's ([ADR-0180](0180-capture-names-the-file-flags-it-does-not-keep.md), alternatives).
 
 ### 2 Manifest key 14 says that a link is a mount point
@@ -55,6 +57,8 @@ Format 6 changes what a manifest may say and nothing else. Its index is format 5
 ### 4 A writer writes neither key below format 6
 
 A reader that predates format 6 refuses a manifest carrying either key as an unknown key, and reports it as damage. So a repository such a reader is entitled to read must never hold one. `FormatVersions.HasFileFlagsAndLinkForms` is the gate the writers ask.
+
+> **2026-11: key 11 is written by [ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)** from format 6, for a file and a folder. No restore gives a flag back yet, and key 14 is still unwritten.
 
 Nothing writes either key yet. Capture still names a file's flags among its diagnostics and nowhere else, and still captures a mount point as a link with no form. The writers come with the restores that read them, one record each:
 
@@ -83,6 +87,8 @@ Publication, which builds each manifest, already holds the repository's effectiv
 ## What this record does not do
 
 - **Write either key.** Capture writes neither, and no restore reads either. The writers and the restores are the next records', under ADR-0180 and ADR-0183, and each will be held to format 6.
+
+  > **2026-11: key 11 is taken up by [ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too),** and every reader of a file's flags reads it.
 - **Keep a flag Windows names.** Windows' attribute bits stay in key 10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).
 - **Keep a placeholder a cloud provider leaves unfetched.** ADR-0183's other limit names no key here.
 
@@ -91,3 +97,4 @@ Publication, which builds each manifest, already holds the repository's effectiv
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first. Metadata key 11 keeps a file's or a folder's flags and manifest key 14 says that a link is a mount point, each refused where it names nothing, a reserved bit or an unassigned form, or sits on anything but a link with a target; a format-6 descriptor lists `0x0006`, and a repository is born at 6. Nothing writes either key yet. `Domain/FormatVersions`; `Domain/FormatLimits`; `Domain/LinkForm`; `Repository.Format/Manifests/FileVersionManifestCodec`; `Repository.Format/Descriptor/RepositoryDescriptorCodec`; `Repository/RepositoryLifecycle`; `Repository.Tests/ManifestCodecTests`; `Repository.Tests/RepositoryDescriptorCodecTests`; `Repository.Tests/RepositoryLifecycleTests`; `Domain.Tests/FormatVersionsTests`; `Hosts.Tests/CreatedFormatTests`; `Repository.ConformanceTests/FixtureRepositoryV6Tests` |
+| 2026-11 | Accepted (related) | [ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too) writes key 11 from format 6, a file's and a folder's flags, and counts them in the digest as it counts flags a diagnostic names. `Repository/SnapshotPublication`; `Repository.Format/Manifests/FileVersionManifestCodec` |

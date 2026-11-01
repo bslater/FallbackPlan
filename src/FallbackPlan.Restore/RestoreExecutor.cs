@@ -2163,7 +2163,7 @@ public sealed class RestoreExecutor(
     /// none.
     /// </summary>
     private static string? FlagsNotApplied(FileVersionManifest manifest) =>
-        MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.CaptureDiagnostics));
+        MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics));
 
     /// <summary>The parts of an item's detail there are, joined, or null when there are none.</summary>
     private static string? Joined(params string?[] parts) =>

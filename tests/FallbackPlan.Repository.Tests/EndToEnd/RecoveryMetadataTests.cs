@@ -285,6 +285,24 @@ public sealed class RecoveryMetadataTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AtFormatSix_RecoveryRestore_AFilesFlagsKeyElevenKeeps_AreNoted_AndTheFileStillRestores()
+    {
+        var source = new FakeFileSystemSource();
+        var flagged = source.AddFile("locked.bin", Deterministic(700, 13));
+        flagged.Metadata = new EntryMetadata { ModifiedAt = FileModified };
+        flagged.Diagnostics = ["file-flags: immutable, no-dump"];
+        source.AddFile("plain.bin", Deterministic(700, 14)).Metadata = new EntryMetadata { ModifiedAt = FileModified };
+
+        var (report, _) = await RestoreAsync(source, FormatVersions.FileFlagsAndLinkForms);
+
+        Assert.AreEqual((2, 0), (report.Restored, report.Failed));
+        var note = Assert.ContainsSingle(report.Notes);
+        Assert.AreEqual((RecoveryNoteKind.FlagsNotApplied, "locked.bin"), (note.Kind, note.Path));
+        Assert.AreEqual("locked.bin: file flag(s) not applied: immutable, no-dump (not set by a restore)", note.ToString());
+        Assert.IsNull(report.DescribeNotApplied(), "key 11 is not among the keys a restore counts not applied");
+    }
+
+    [TestMethod]
     public async Task RecoveryRestore_EverythingApplied_DescribesNothingNotApplied()
     {
         var source = new FakeFileSystemSource();
@@ -388,7 +406,7 @@ public sealed class RecoveryMetadataTests : IDisposable
             source,
             output,
             store => new InterruptingObjectStore(store, when: () => File.Exists(Path.Combine(docs, "a.bin")), act: stop.Cancel),
-            stop.Token));
+            cancellationToken: stop.Token));
 
         Assert.IsFalse(File.Exists(Path.Combine(output, "zzz.bin")), "the run was never stopped, so this proves nothing");
         Assert.AreEqual(Utc(FolderModified), Directory.GetLastWriteTimeUtc(docs));
@@ -429,10 +447,11 @@ public sealed class RecoveryMetadataTests : IDisposable
         return outside;
     }
 
-    private async Task<(RecoveryRestoreReport Report, string Output)> RestoreAsync(FakeFileSystemSource source)
+    private async Task<(RecoveryRestoreReport Report, string Output)> RestoreAsync(
+        FakeFileSystemSource source, ushort formatVersion = FormatVersions.SealedDataPlane)
     {
         var output = Path.Combine(_root, "restored");
-        return (await RestoreIntoAsync(source, output), output);
+        return (await RestoreIntoAsync(source, output, formatVersion: formatVersion), output);
     }
 
     /// <summary>
@@ -444,6 +463,7 @@ public sealed class RecoveryMetadataTests : IDisposable
         FakeFileSystemSource source,
         string output,
         Func<IObjectStore, InterruptingObjectStore>? wrap = null,
+        ushort formatVersion = FormatVersions.SealedDataPlane,
         CancellationToken cancellationToken = default)
     {
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "repo-" + Guid.NewGuid().ToString("n")));
@@ -466,7 +486,7 @@ public sealed class RecoveryMetadataTests : IDisposable
                     store,
                     new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
                     spool,
-                    FormatVersions.SealedDataPlane)
+                    formatVersion)
                 .PublishAsync(
                     new SnapshotJob
                     {

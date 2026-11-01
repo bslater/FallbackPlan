@@ -8,7 +8,8 @@ namespace FallbackPlan.Domain.Tests;
 /// with hidden besides. No format key holds them, so capture names them in a
 /// diagnostic, in one order, which reads back as the flags it named. A
 /// restore sets none of them, and says so in the same names (ADR-0180
-/// Amendment 1).
+/// Amendment 1). From format 6 a manifest keeps them in metadata key 11
+/// rather than naming them, and a reader takes either (ADR-0180 Amendment 3).
 /// </summary>
 [TestClass]
 public sealed class FileFlagsTests
@@ -92,5 +93,62 @@ public sealed class FileFlagsTests
 
         Assert.AreEqual(FileFlagBits.None, MetadataRules.FileFlagsOf([]));
         Assert.AreEqual(FileFlagBits.NoDump, MetadataRules.FileFlagsOf(["file-flags: no-dump, sideways"]), "a name no build knows is passed over");
+    }
+
+    [TestMethod]
+    public void AtFormatSix_TheFlagsNamedMoveIntoKeyEleven_AndTheOtherDiagnosticsStay()
+    {
+        var metadata = new EntryMetadata { ModifiedAt = 1_700_000_000_000, PosixMode = 0x1A4 };
+        IReadOnlyList<string> diagnostics = ["captured-inconsistent: 2", "file-flags: immutable, no-dump"];
+
+        var (kept, rest) = MetadataRules.KeepFileFlags(FormatVersions.FileFlagsAndLinkForms, metadata, diagnostics);
+
+        Assert.AreEqual(metadata with { FileFlags = FileFlagBits.Immutable | FileFlagBits.NoDump }, kept);
+        CollectionAssert.AreEqual(new[] { "captured-inconsistent: 2" }, rest.ToArray());
+    }
+
+    [TestMethod]
+    public void BelowFormatSix_TheFlagsStayNamed_AndNoKeyKeepsThem()
+    {
+        var metadata = new EntryMetadata { ModifiedAt = 1_700_000_000_000 };
+        IReadOnlyList<string> diagnostics = ["file-flags: hidden"];
+
+        foreach (var version in new[] { FormatVersions.RelocatableRecords, FormatVersions.DeltaCheckpoints })
+        {
+            var (kept, rest) = MetadataRules.KeepFileFlags(version, metadata, diagnostics);
+
+            Assert.AreEqual(metadata, kept, $"format {version}");
+            CollectionAssert.AreEqual(diagnostics.ToArray(), rest.ToArray(), $"format {version}");
+        }
+    }
+
+    [TestMethod]
+    public void AtFormatSix_AnEntryWithNoFlags_IsKeptAsItWas()
+    {
+        var metadata = new EntryMetadata { ModifiedAt = 1_700_000_000_000 };
+        IReadOnlyList<string> diagnostics = ["captured-inconsistent: 2"];
+
+        var (kept, rest) = MetadataRules.KeepFileFlags(FormatVersions.FileFlagsAndLinkForms, metadata, diagnostics);
+
+        Assert.AreEqual(metadata, kept);
+        Assert.AreEqual(FileFlagBits.None, kept.FileFlags);
+        CollectionAssert.AreEqual(diagnostics.ToArray(), rest.ToArray());
+    }
+
+    [TestMethod]
+    public void TheFlagsAnEntryCarried_AreThoseKeyElevenKeeps_AndThoseItsDiagnosticsName()
+    {
+        // A manifest written at format 6 keeps them in the key, one written
+        // before names them; a reader asks both, so it reads either alike.
+        Assert.AreEqual(
+            FileFlagBits.Immutable,
+            MetadataRules.FileFlagsOf(new EntryMetadata { FileFlags = FileFlagBits.Immutable }, []));
+        Assert.AreEqual(
+            FileFlagBits.NoDump,
+            MetadataRules.FileFlagsOf(EntryMetadata.Empty, ["file-flags: no-dump"]));
+        Assert.AreEqual(
+            FileFlagBits.Immutable | FileFlagBits.NoDump,
+            MetadataRules.FileFlagsOf(new EntryMetadata { FileFlags = FileFlagBits.Immutable }, ["file-flags: no-dump"]));
+        Assert.AreEqual(FileFlagBits.None, MetadataRules.FileFlagsOf(EntryMetadata.Empty, []));
     }
 }

@@ -57,7 +57,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// takes in an attribute's name or value (ADR-0179 Amendment 2). A file's
 /// flags, which capture names and no format key keeps, are set by no
 /// restore: the plan names them on every target, and the receipt beside
-/// each file and link that carried them (ADR-0180 Amendment 1).
+/// each file and link that carried them (ADR-0180 Amendment 1). A format-6
+/// manifest keeps them in metadata key 11 instead, and both say so alike
+/// (ADR-0180 Amendment 3).
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -391,6 +393,25 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         Assert.AreEqual("restored", item.Outcome, "a flag alone does not change what the content achieved");
         Assert.AreEqual("file flag(s) not applied: immutable, append-only (not set by a restore)", item.Detail);
         Assert.IsNull(item.NotApplied, "no metadata key holds a flag, so none is listed among them");
+        Assert.IsNull(receipt.Items.Single(candidate => candidate.Path == "data/plain.bin").Detail);
+    }
+
+    [TestMethod]
+    public async Task AtFormatSix_Receipt_AFilesFlagsKeyElevenKeeps_AreNamedNotApplied_AndTheFileIsRestored()
+    {
+        var source = new FakeFileSystemSource();
+        var flagged = source.AddFile("data/locked.bin", Deterministic(800, 58));
+        flagged.Metadata = new EntryMetadata { ModifiedAt = Modified };
+        flagged.Diagnostics = ["file-flags: immutable, append-only"];
+        source.AddFile("data/plain.bin", Deterministic(800, 59)).Metadata = new EntryMetadata { ModifiedAt = Modified };
+
+        var (receipt, _) = await PublishAndRestoreAsync(
+            source, 0xF5, RestoreTargetProfile.ForLocalPlatform(), FormatVersions.FileFlagsAndLinkForms);
+
+        var item = receipt.Items.Single(candidate => candidate.Path == "data/locked.bin");
+        Assert.AreEqual("restored", item.Outcome);
+        Assert.AreEqual("file flag(s) not applied: immutable, append-only (not set by a restore)", item.Detail);
+        Assert.IsNull(item.NotApplied);
         Assert.IsNull(receipt.Items.Single(candidate => candidate.Path == "data/plain.bin").Detail);
     }
 
@@ -1283,6 +1304,24 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task AtFormatSix_Probe_EachFile_CarriesTheFlagsKeyElevenKeeps_AndThePlanDeclaresThem()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/locked.bin", Deterministic(600, 60)).Diagnostics = ["file-flags: immutable, no-dump"];
+        source.AddFile("docs/plain.bin", Deterministic(600, 61));
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xF6, formatVersion: FormatVersions.FileFlagsAndLinkForms);
+
+        FileFlagBits FlagsOf(string path) => facts[plan.Items.Single(item => item.Path == path).ObjectId].Flags;
+        Assert.AreEqual(FileFlagBits.Immutable | FileFlagBits.NoDump, FlagsOf("docs/locked.bin"));
+        Assert.AreEqual(FileFlagBits.None, FlagsOf("docs/plain.bin"));
+
+        var flags = Assert.ContainsSingle(RestoreMetadata.Declare(plan, facts, Posix).Where(degradation => degradation.Capability == "file-flags"));
+        Assert.Contains("1 file(s)", flags.Detail, StringComparison.Ordinal);
+        Assert.Contains("immutable, no-dump", flags.Detail, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Plan_ATreeCarryingOnlyWhatTheTargetApplies_DeclaresNothingMore()
     {
         var source = new FakeFileSystemSource();
@@ -1476,7 +1515,8 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     };
 
     private async Task<(LocalFileSystemObjectStore Store, RepositoryKeySet Keys, CatalogueDb Catalogue)> PublishAsync(
-        FakeFileSystemSource source, byte seed, CapturePolicy? policy = null)
+        FakeFileSystemSource source, byte seed, CapturePolicy? policy = null,
+        ushort formatVersion = FormatVersions.SealedDataPlane)
     {
         var store = CreateStore();
         var keys = CreateKeys();
@@ -1486,16 +1526,17 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         await new PublicationOrchestrator(
                 policy ?? SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
                 new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, $"sequence-{seed:x2}.txt"))),
-                SpoolDirectory, FormatVersions.SealedDataPlane, observer: null, catalogue)
+                SpoolDirectory, formatVersion, observer: null, catalogue)
             .PublishAsync(Job(source, seed), CancellationToken.None);
 
         return (store, keys, catalogue);
     }
 
     private async Task<(RestoreReceipt Receipt, string Output)> PublishAndRestoreAsync(
-        FakeFileSystemSource source, byte seed, RestoreTargetProfile target)
+        FakeFileSystemSource source, byte seed, RestoreTargetProfile target,
+        ushort formatVersion = FormatVersions.SealedDataPlane)
     {
-        var (store, keys, catalogue) = await PublishAsync(source, seed);
+        var (store, keys, catalogue) = await PublishAsync(source, seed, formatVersion: formatVersion);
         using (keys)
         using (catalogue)
         {
@@ -1519,9 +1560,10 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     private async Task<(RestorePlan Plan, IReadOnlyDictionary<ObjectId, RestoreItemFacts> Facts)> PublishAndProbeAsync(
-        FakeFileSystemSource source, byte seed, CapturePolicy? policy = null)
+        FakeFileSystemSource source, byte seed, CapturePolicy? policy = null,
+        ushort formatVersion = FormatVersions.SealedDataPlane)
     {
-        var (store, keys, catalogue) = await PublishAsync(source, seed, policy);
+        var (store, keys, catalogue) = await PublishAsync(source, seed, policy, formatVersion);
         using (keys)
         using (catalogue)
         {

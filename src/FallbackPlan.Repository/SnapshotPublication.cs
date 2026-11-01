@@ -387,7 +387,7 @@ public sealed partial class PublicationOrchestrator
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, gated, sourceKeys,
                 hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, job.DeviceId, bound) : null,
-                reader, _logger);
+                reader, _repositoryFormatVersion, _logger);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -710,6 +710,7 @@ public sealed partial class PublicationOrchestrator
         SourceIdentityKeyDeriver sourceKeys,
         HintSource? hints,
         TargetedRecordReader? manifests,
+        ushort repositoryFormatVersion,
         ILogger logger)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
@@ -766,7 +767,7 @@ public sealed partial class PublicationOrchestrator
             switch (scanEvent)
             {
                 case ScanEvent.EnterDirectory enter:
-                    _frames.Push(new Frame(enter.Entry, []));
+                    _frames.Push(new Frame(Kept(enter.Entry), []));
                     break;
 
                 case ScanEvent.LeaveDirectory:
@@ -793,7 +794,7 @@ public sealed partial class PublicationOrchestrator
                     var publishedBefore = _files.Count;
                     try
                     {
-                        await PublishLeafAsync(leaf.Entry, cancellationToken).ConfigureAwait(false);
+                        await PublishLeafAsync(Kept(leaf.Entry), cancellationToken).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -886,6 +887,19 @@ public sealed partial class PublicationOrchestrator
             return TreeChainWriter.HeadIdOf(builder, frame.Entries, name, frame.Directory.NameNormalisation, kept) == prior.TreeId
                 ? kept
                 : metadata;
+        }
+
+        /// <summary>
+        /// The entry as this repository's format writes it: from format 6
+        /// with the flags its diagnostics name kept in its metadata, a
+        /// folder's as well as a file's, and named no more (ADR-0180
+        /// Amendment 3). Every manifest, tree and digest below is made from
+        /// what this returns.
+        /// </summary>
+        private ScanEntry Kept(ScanEntry entry)
+        {
+            var (metadata, diagnostics) = MetadataRules.KeepFileFlags(repositoryFormatVersion, entry.Metadata, entry.Diagnostics);
+            return ReferenceEquals(metadata, entry.Metadata) ? entry : entry with { Metadata = metadata, Diagnostics = diagnostics };
         }
 
         private async ValueTask PublishLeafAsync(ScanEntry entry, CancellationToken cancellationToken)
