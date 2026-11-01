@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one; by Amendment 5, judged as the volume of each folder a restore writes to takes names, where it says), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first)
+**Requirements:** FR-RST-003 (amended: the plan names every name the target cannot make, before any byte moves; by Amendment 1, a name longer in bytes than a Linux target holds; by Amendment 2, two paths are a collision only where the target takes them for one; by Amendment 5, judged as the volume of each folder a restore writes to takes names, where it says; by Amendment 6, by Windows' rules where a volume written to names files by them, as a FAT or exFAT drive does wherever it is mounted), FR-RST-005 (amended: a restore on Windows refuses a name Windows would not keep, rather than reporting it restored under another; by Amendment 3, where the volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside; by Amendment 4, the recovery tool refuses the second alike rather than replacing the first)
 **Related:** [ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md) (the executor's rule for where a repository's path is written, which the recovery tool shares), the [prior-art review](../review/2026-08-prior-art-learnings.md)'s T-7
 
 **Built:**
@@ -70,6 +70,8 @@ On Windows, `TryResolve` refuses such a component with a reason that names Windo
   > **2026-10 ([Amendment 3](#amendment-3-2026-10--a-run-never-moves-aside-what-it-restored-itself)).** A run no longer moves aside, replaces or fails unnamed over a file it restored itself where its volume takes two of the snapshot's names for one: the second fails, naming the first. The plan still judges by the platform.
 
   > **Built 2026-11 for case and normalisation ([Amendment 5](#amendment-5-2026-11--the-plan-reads-how-the-volume-it-writes-to-takes-names)).** The plan reads how the volume of each folder a restore writes to takes names, where the volume says, and judges collisions so. The other naming rules, Windows' and a name's byte limit, still follow the platform.
+
+  > **Built 2026-11 for Windows' rules ([Amendment 6](#amendment-6-2026-11--a-fat-or-exfat-drive-names-by-windows-rules-wherever-it-is-mounted)).** A FAT or exFAT drive names files by Windows' rules wherever it is mounted, and the plan judges the names written to one by them. A share does not, and a name's byte limit still follows the platform.
 
 ## Alternatives considered
 
@@ -227,6 +229,48 @@ On such a volume the plan named a collision that would not happen, or missed one
 - **A volume that stores a name in another form than it was given,** as HFS+ stores one decomposed, is still not judged.
 - **Windows' naming rules and a name's byte limit** still follow the platform.
 
+  > **2026-11: Windows' rules are taken up by [Amendment 6](#amendment-6-2026-11--a-fat-or-exfat-drive-names-by-windows-rules-wherever-it-is-mounted)** for a FAT or exFAT drive. A name's byte limit still follows the platform.
+
+## Amendment 6 (2026-11) — a FAT or exFAT drive names by Windows' rules wherever it is mounted
+
+Amendment 5 left Windows' naming rules with the platform. A FAT or exFAT drive is made by those rules, and Linux's drivers for the two hold to most of them:
+
+- they refuse the characters Windows refuses, `< > " | ? *` and the control characters;
+- they strip a trailing period, so `notes.` lands on `notes`;
+- they hold no name longer than 255 UTF-16 units.
+
+Some of the rest they write, such as a device's name, and the drive then holds a file Windows will not open by its name. A plan for a restore to such a drive on Linux judged by Linux's rules and named none of these. The run met each only after the plan was approved.
+
+**Decision.**
+
+- **`Domain/VolumeNaming` also says whether a volume names files by Windows' rules.**
+  - Windows' volumes do.
+  - On Linux, a FAT or exFAT drive does.
+  - A share served over SMB or CIFS does not. By default Linux's client maps the characters Windows refuses to ones the server takes, so a name lands there as written and reads back so.
+  - macOS's volumes are taken not to.
+- **The target names files by Windows' rules where any volume a restore writes to does,** or where its platform does, since Windows holds a name to them on every volume. The plan judges each name written there by `RestorePaths.IsWindowsName`, the rule a restore on Windows holds to. It names what that rule refuses or alters as a conflict, saying that the target names files by Windows' rules.
+- **The plan is made again where this differs from the platform,** as for case and normalisation, by the command line and by the service.
+- **The run is unchanged.** On Linux, the drive refuses at the write what its driver refuses, and the item fails, named.
+
+**Built:** `Domain/VolumeNaming`, `Restore/RestorePlan`:
+
+- `Domain.Tests/VolumeNamingTests`:
+  - the volume the tests write on names files by Windows' rules exactly where it strips a trailing period, which only Windows' own does;
+  - on Linux, FAT and exFAT name by them, and a share does not.
+- `Repository.Tests/RestorePlanTests` — plans for a stated POSIX target, written to folders whose volumes the flow states:
+  - a FAT drive names a device's name, a trailing period and a refused character, and an ext4 volume names none;
+  - written to both, the plan names them;
+  - a target that already names by Windows' rules keeps them on any volume;
+  - a volume that says nothing leaves the target as stated.
+- `Cli.Tests/RestorePlanCommandTests`, `Hosts.Tests/RestoreHonestyServiceTests` — on Linux and macOS, whose own volumes hold such a name to back up. A plan to a folder on a volume that names by Windows' rules names it, through the command line and through the service. Without that volume, the plan names none.
+
+**Not done.**
+
+- **A name the drive strips onto another the snapshot holds.** Where a snapshot holds `notes.` and `notes`, a run to a FAT drive on Linux still takes the second to land for a file that stood there. The run's rule for two names taken for one (Amendment 3) folds case and the two forms, not a trailing period.
+- **A name's byte limit** still follows the platform. exFAT on Linux holds a name of 255 UTF-16 units whatever its bytes, and the plan still names one longer than 255 bytes.
+- **macOS's FAT, exFAT and SMB volumes** are taken not to name by Windows' rules.
+- **NTFS mounted on Linux** is taken not to, as Linux's drivers write there names Windows refuses.
+
 ## Status history
 
 | Date | Status | Note |
@@ -237,3 +281,4 @@ On such a volume the plan named a collision that would not happen, or missed one
 | 2026-10 | Amended | Amendment 3: a run keeps each name it lands, and where its volume takes two of a snapshot's names for one, the second fails naming the first rather than moving it aside, replacing it or failing over it unnamed; under rename it lands beside. The plan is unchanged. `Domain/NamesLanded`, `Restore/RestoreExecutor`; `Domain.Tests/NamesLandedTests`, `Repository.Tests/RestorePlanTests` |
 | 2026-10 | Amended | Amendment 4: `NamesLanded` moved, unchanged, into Domain with a call that asks the disk, and the recovery tool refuses the second of two names its output takes for one, naming the first, rather than replacing it. `Domain/NamesLanded`, `Recovery/RecoverySession`, `Restore/RestoreExecutor`; `Domain.Tests/NamesLandedTests`, `Repository.Tests/RecoveryNamesTests` |
 | 2026-11 | Amended | Amendment 5: the plan reads how the volume of each folder a restore writes to takes names, without writing to it, and judges collisions so, case-sensitive only where every volume is and folding the two forms where any does; the run is unchanged. `Domain/VolumeNaming`, `Restore/RestorePlan`, `Cli/OperationGateway`, `Agent/ServiceCommandHandler`; `Domain.Tests/VolumeNamingTests`, `Repository.Tests/RestorePlanTests`, `Cli.Tests/RestorePlanCommandTests`, `Hosts.Tests/RestoreHonestyServiceTests` |
+| 2026-11 | Amended | Amendment 6: a volume says whether it names files by Windows' rules, as Windows' volumes do and a FAT or exFAT drive does wherever it is mounted, and the plan judges the names written there by them; a share does not; the run is unchanged. `Domain/VolumeNaming`, `Restore/RestorePlan`; `Domain.Tests/VolumeNamingTests`, `Repository.Tests/RestorePlanTests`, `Cli.Tests/RestorePlanCommandTests`, `Hosts.Tests/RestoreHonestyServiceTests` |

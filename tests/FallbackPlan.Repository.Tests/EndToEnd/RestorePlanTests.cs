@@ -36,7 +36,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// Windows and Linux (ADR-0170 Amendment 2). What a target takes for one
 /// name is read from the volume of each folder a restore writes to, where
 /// that volume says, so a FAT drive on Linux folds case and a case-sensitive
-/// folder on Windows does not (ADR-0170 Amendment 5). Where the volume a run writes
+/// folder on Windows does not (ADR-0170 Amendment 5). So is whether it names
+/// files by Windows' rules: a FAT drive on Linux does, and the plan names what
+/// those rules refuse or alter though Linux's own volumes take it (ADR-0170
+/// Amendment 6). Where the volume a run writes
 /// to takes two of a snapshot's names for one, whatever the plan judged, the
 /// second never displaces, replaces or fails vaguely over the first: it fails
 /// naming the name the run restored there, which keeps its own content, and
@@ -255,6 +258,60 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         Assert.IsTrue(PosixTarget().NamesAs(PosixTarget() with { MaxPathBytes = 1 }));
         Assert.IsFalse(PosixTarget().NamesAs(PosixTarget() with { CaseSensitive = false }));
         Assert.IsFalse(PosixTarget().NamesAs(PosixTarget() with { NormalisationInsensitive = true }));
+    }
+
+    [TestMethod]
+    public async Task RestorePlan_WrittenToAVolumeThatNamesByWindowsRules_IsJudgedByThem_ThoughItsPlatformIsNot()
+    {
+        string[] windowsRefuses = ["names/CON", "names/trailing.", "names/what?.txt"];
+        var source = new FakeFileSystemSource();
+        var seed = (byte)1;
+        foreach (var path in windowsRefuses.Append("names/fine.txt"))
+        {
+            source.AddFile(path, Deterministic(64, seed++));
+        }
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source, 0xA9), CancellationToken.None);
+        var snapshotId = Enumerable.Repeat((byte)0xA9, 16).ToArray();
+
+        string[] Refused(RestoreTargetProfile target) =>
+        [
+            .. RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target).Conflicts
+                .Where(conflict => conflict.Reason.Contains("by Windows' rules", StringComparison.Ordinal))
+                .Select(conflict => conflict.Path)
+                .Order(StringComparer.Ordinal),
+        ];
+
+        // The flow's own word for each folder: a FAT drive, an ext4 volume,
+        // and one nothing is said of.
+        var fat = Path.Combine(SpoolDirectory, "fat");
+        var ext4 = Path.Combine(SpoolDirectory, "ext4");
+        var unsaid = Path.Combine(SpoolDirectory, "unsaid");
+        VolumeNaming.OfInFlow = folder =>
+            folder == fat ? new VolumeNaming(CaseSensitive: false, NormalisationInsensitive: false, WindowsNames: true)
+            : folder == ext4 ? new VolumeNaming(CaseSensitive: true, NormalisationInsensitive: false)
+            : null;
+
+        // A FAT drive on Linux names by Windows' rules though Linux does not.
+        SequenceAssert.AreEqual(windowsRefuses, Refused(PosixTarget().AsWrittenTo([fat])));
+        Assert.IsEmpty(Refused(PosixTarget().AsWrittenTo([ext4])));
+
+        // Written to more than one volume, the plan judges by them where any
+        // volume names by them.
+        SequenceAssert.AreEqual(windowsRefuses, Refused(PosixTarget().AsWrittenTo([ext4, fat])));
+
+        // A platform that names by Windows' rules names by them on any
+        // volume, and a volume nothing is said of leaves the target as stated.
+        SequenceAssert.AreEqual(windowsRefuses, Refused((PosixTarget() with { WindowsNamingRules = true }).AsWrittenTo([ext4])));
+        SequenceAssert.AreEqual(windowsRefuses, Refused((PosixTarget() with { WindowsNamingRules = true }).AsWrittenTo([unsaid])));
+        Assert.IsEmpty(Refused(PosixTarget().AsWrittenTo([unsaid])));
+
+        // A plan is made again where how the target names files moved.
+        Assert.IsFalse(PosixTarget().NamesAs(PosixTarget() with { WindowsNamingRules = true }));
     }
 
     [TestMethod]
