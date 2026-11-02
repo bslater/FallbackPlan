@@ -62,7 +62,7 @@ public sealed class DestinationShipSink : IObjectStore
     /// <summary>This run's intersected capabilities; null outside a run.</summary>
     private StoreCapabilities? _capabilities;
     private bool _runActive;
-    private readonly Dictionary<string, string> _droppedThisRun = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (DestinationSyncState State, string Error)> _droppedThisRun = new(StringComparer.Ordinal);
     private readonly List<(string Name, DestinationSyncState State, string Error)> _skippedThisRun = [];
 
     // Every peer session this run opened, survivors and casualties alike. A
@@ -221,7 +221,7 @@ public sealed class DestinationShipSink : IObjectStore
         var lastCompleted = _runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
         var inScope = new List<Shipment>();
         var skipped = new List<(string, DestinationSyncState, string)>();
-        var dropped = new Dictionary<string, string>(StringComparer.Ordinal);
+        var dropped = new Dictionary<string, (DestinationSyncState State, string Error)>(StringComparer.Ordinal);
 
         foreach (var reference in set.Destinations)
         {
@@ -341,7 +341,7 @@ public sealed class DestinationShipSink : IObjectStore
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 Log.ShipDestinationDropped(_log, new LogLabel(destination.Name), exception.Message);
-                dropped[destination.Name] = exception.Message;
+                dropped[destination.Name] = (DroppedAs(exception), exception.Message);
             }
         }
 
@@ -359,16 +359,15 @@ public sealed class DestinationShipSink : IObjectStore
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 Log.ShipDestinationDropped(_log, new LogLabel(shipment.Name), exception.Message);
-                dropped[shipment.Name] = exception.Message;
+                dropped[shipment.Name] = (DroppedAs(exception), exception.Message);
             }
         }
 
         if (seeded.Count == 0)
         {
-            foreach (var (name, error) in dropped)
+            foreach (var (name, (state, error)) in dropped)
             {
-                _runtime.DestinationSync.RecordFailure(
-                    set.Id, name, DestinationSyncState.Failed, error, nowUnixMilliseconds);
+                _runtime.DestinationSync.RecordFailure(set.Id, name, state, error, nowUnixMilliseconds);
             }
 
             foreach (var (name, state, error) in skipped)
@@ -389,9 +388,9 @@ public sealed class DestinationShipSink : IObjectStore
                 [_metadata.Capabilities, .. seeded.Select(shipment => shipment.Store.Capabilities)]);
             _runActive = true;
             _droppedThisRun.Clear();
-            foreach (var (name, error) in dropped)
+            foreach (var (name, drop) in dropped)
             {
-                _droppedThisRun[name] = error;
+                _droppedThisRun[name] = drop;
             }
 
             _skippedThisRun.Clear();
@@ -503,7 +502,7 @@ public sealed class DestinationShipSink : IObjectStore
     public async ValueTask CompleteRunAsync(ulong nowUnixMilliseconds, bool succeeded = true)
     {
         List<Shipment> survivors;
-        List<(string Name, string Error)> dropped;
+        List<(string Name, DestinationSyncState State, string Error)> dropped;
         List<(string Name, DestinationSyncState State, string Error)> skipped;
         List<PeerShipStore> peers;
         long shipped;
@@ -511,7 +510,7 @@ public sealed class DestinationShipSink : IObjectStore
         lock (_gate)
         {
             survivors = [.. _inScope];
-            dropped = [.. _droppedThisRun.Select(pair => (pair.Key, pair.Value))];
+            dropped = [.. _droppedThisRun.Select(pair => (pair.Key, pair.Value.State, pair.Value.Error))];
             skipped = [.. _skippedThisRun];
             peers = [.. _peersThisRun];
             shipped = _shippedThisRun;
@@ -553,7 +552,7 @@ public sealed class DestinationShipSink : IObjectStore
                     string.Equals(candidate.Name, peer.DestinationName, StringComparison.Ordinal));
                 if (!dropped.Exists(entry => string.Equals(entry.Name, peer.DestinationName, StringComparison.Ordinal)))
                 {
-                    dropped.Add((peer.DestinationName, exception.Message));
+                    dropped.Add((peer.DestinationName, DroppedAs(exception), exception.Message));
                 }
             }
             finally
@@ -576,10 +575,9 @@ public sealed class DestinationShipSink : IObjectStore
             }
         }
 
-        foreach (var (name, error) in dropped)
+        foreach (var (name, state, error) in dropped)
         {
-            _runtime.DestinationSync.RecordFailure(
-                _setId, name, DestinationSyncState.Failed, error, nowUnixMilliseconds);
+            _runtime.DestinationSync.RecordFailure(_setId, name, state, error, nowUnixMilliseconds);
         }
 
         foreach (var (name, state, error) in skipped)
@@ -925,7 +923,7 @@ public sealed class DestinationShipSink : IObjectStore
             lock (_gate)
             {
                 _inScope.RemoveAll(candidate => string.Equals(candidate.Name, target.Name, StringComparison.Ordinal));
-                _droppedThisRun[target.Name] = exception.Message;
+                _droppedThisRun[target.Name] = (DroppedAs(exception), exception.Message);
                 anyLeft = _inScope.Count > 0;
             }
 
@@ -939,6 +937,14 @@ public sealed class DestinationShipSink : IObjectStore
             return PutOutcome.PreconditionFailed;
         }
     }
+
+    /// <summary>
+    /// How a destination dropped from a run reads: unavailable where its store
+    /// was full, busy or out of reach, a gap that closes itself as the
+    /// free-space floor's is (FR-QUOTA-001); failed for any other fault.
+    /// </summary>
+    private static DestinationSyncState DroppedAs(Exception exception) =>
+        exception is StoreUnavailableException ? DestinationSyncState.Unavailable : DestinationSyncState.Failed;
 
     /// <summary>
     /// Ensures a destination holds the repository's descriptor — what makes

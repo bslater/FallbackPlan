@@ -1010,13 +1010,23 @@ public static class FanOut
 
             // Paced for a background sync, both ways: the copy's writes and the
             // read-back's reads are the bytes the destination's limit governs.
+            Storage.Abstractions.IObjectStore replica = new LocalFileSystemObjectStore(replicaRoot);
+            replica = runtime.Options.ReplicaStoreDecorator?.Invoke(destination.Name, replica) ?? replica;
             await CopyToReplicaAsync(
                     runtime, set, destination, archive,
-                    PacedObjectStore.Over(new LocalFileSystemObjectStore(replicaRoot), limiter),
+                    PacedObjectStore.Over(replica, limiter),
                     replicaRootMissing,
                     () => DestinationCapacity.FloorShortfall(replicaRoot, AvailableBytesOn(replicaRoot)),
                     nowMs, userInitiated, cancellationToken)
                 .ConfigureAwait(false);
+        }
+        catch (Storage.Abstractions.StoreUnavailableException unavailable)
+        {
+            // A drive that filled part way through, as the floor turns one
+            // away before a copy starts: a gap that closes itself once room
+            // is made (FR-QUOTA-001).
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Unavailable, unavailable.Message, nowMs);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

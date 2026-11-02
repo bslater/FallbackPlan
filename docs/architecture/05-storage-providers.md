@@ -156,6 +156,8 @@ destination kind the day its provider exists.
 Durable file creation with explicit flush · atomic temp-to-final rename where the filesystem supports it · permissions hardening on the repository directory · removable-media detection · filesystem capability reporting · protection against path traversal and symlink redirection when the repository path is attacker-influenced.
 
 > **2026-11 ([ADR-0012 Amendment 6](../adr/0012-storage-provider-contract.md#amendment-6-2026-11--a-local-destination-on-a-drive-that-holds-no-links)).** The guard against a linked folder asks a folder for its link only where the folder carries the reparse-point attribute. A FAT32 or exFAT drive holds no links and refuses that request, so asking every folder failed every write into a folder that was already there; such a drive is now written and read as any other.
+>
+> **2026-11 ([ADR-0012 Amendment 7](../adr/0012-storage-provider-contract.md#amendment-7-2026-11--a-local-destination-with-no-room-left-says-so)).** A volume with no room left is refused as an object store with none is, naming the object and leaving nothing spooled, and the destination reads unavailable until room is made.
 
 ### 4.2 FallbackPlan peer
 
