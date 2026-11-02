@@ -19,6 +19,7 @@ public sealed class IndexState
         IReadOnlyList<ProvenancedEntry> allEntries,
         IReadOnlyList<DecodedDelta> deltas,
         IReadOnlyList<DecodedCheckpoint> checkpoints,
+        IReadOnlyCollection<(WriterId Writer, ulong Counter)> checkpointCounters,
         IReadOnlyList<(WriterId Writer, ulong Sequence)> unresolvedGaps,
         IReadOnlyList<DamageFinding> findings)
     {
@@ -26,6 +27,7 @@ public sealed class IndexState
         AllEntries = allEntries;
         Deltas = deltas;
         Checkpoints = checkpoints;
+        CheckpointCounters = checkpointCounters;
         UnresolvedGaps = unresolvedGaps;
         Findings = findings;
     }
@@ -41,6 +43,12 @@ public sealed class IndexState
 
     /// <summary>The applied checkpoints — all of them, at every generation (07 §6).</summary>
     public IReadOnlyList<DecodedCheckpoint> Checkpoints { get; }
+
+    /// <summary>
+    /// The writer and the number each applied checkpoint drew from that
+    /// writer's sequence, as its cleartext record prefix gives them (07 §5).
+    /// </summary>
+    public IReadOnlyCollection<(WriterId Writer, ulong Counter)> CheckpointCounters { get; }
 
     /// <summary>
     /// Sequence gaps not yet resolvable — neither delta, void, nor accounting
@@ -61,8 +69,9 @@ public sealed class IndexState
     /// this machine has handed out, and it is exactly as durable as the state
     /// directory holding it. This is the other half, and it is the half that
     /// travels: every applied delta carries its signed sequence, whether it
-    /// was read from its key or from a checkpoint carrying it (07 §§2, 5), so
-    /// any replica of the repository can say how far its writers had got. A
+    /// was read from its key or from a checkpoint carrying it (07 §§2, 5),
+    /// and every applied checkpoint the number it drew, bound into its seal,
+    /// so any replica of the repository can say how far its writers had got. A
     /// machine whose local state was lost or rolled back can therefore learn
     /// the truth from the repository rather than from a collision partway
     /// through its next backup.
@@ -84,6 +93,16 @@ public sealed class IndexState
             if (delta.Delta.WriterId == writer)
             {
                 head = Math.Max(head, delta.Delta.Sequence);
+            }
+        }
+
+        // A checkpoint draws its number after the deltas it carries, and until
+        // the writer's next run nothing else attests it (ADR-0008 Amendment 4).
+        foreach (var (checkpointWriter, counter) in CheckpointCounters)
+        {
+            if (checkpointWriter == writer)
+            {
+                head = Math.Max(head, counter);
             }
         }
 
@@ -351,7 +370,7 @@ public sealed class IndexLoader : IDisposable
         Log.IndexLoaded(
             _log, checked((uint)currentGeneration), deltas.Count, checkpoints.Count, findings.Count);
 
-        return new IndexState(resolved, allEntries, deltas, checkpoints, unresolved, findings);
+        return new IndexState(resolved, allEntries, deltas, checkpoints, checkpointCounters, unresolved, findings);
     }
 
     /// <summary>

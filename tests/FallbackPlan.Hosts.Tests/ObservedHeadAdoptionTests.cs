@@ -2,6 +2,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Index;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -94,6 +95,42 @@ public sealed class ObservedHeadAdoptionTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ArchiveOpen_TheSequenceFileIsGoneAfterACheckpoint_AdoptsPastTheCheckpointsOwnNumber()
+    {
+        // A backup that checkpoints draws one number more, after its delta,
+        // for the checkpoint. Until the set's next backup nothing else in the
+        // repository attests that number (ADR-0008 Amendment 4).
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/history.txt", new string('h', 40_000) + "the first era");
+
+        await using (var runtime = await StartAsync(checkpointThreshold: 1))
+        {
+            var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+            Assert.AreEqual(1, pass.Ran);
+            await pass.Transfers.WaitAsync(Timeout);
+        }
+
+        Assert.IsTrue(
+            Directory.EnumerateFiles(_harness.ArchivesRoot, "*", SearchOption.AllDirectories)
+                .Any(path => path.Replace('\\', '/').Contains("/index/checkpoint/", StringComparison.Ordinal)),
+            "the premise: the backup published a checkpoint");
+        var sequencePath = Assert.ContainsSingle(Directory.GetFiles(_harness.StateDirectory, "sequence-*.txt"));
+        var beforeLoss = new FileSequenceStateStore(sequencePath).Load().NextSequence;
+        File.Delete(sequencePath);
+
+        await using (var runtime = await StartAsync(checkpointThreshold: 1))
+        {
+            _ = await runtime.ExistingArchiveAsync(_harness.DocsSetId, Timeout);
+
+            Assert.AreEqual(
+                beforeLoss,
+                new FileSequenceStateStore(sequencePath).Load().NextSequence,
+                "the next number handed out must be past the checkpoint's own");
+        }
+    }
+
+    [TestMethod]
     public async Task ArchiveOpen_TheSequenceFileIsIntact_AdoptsNothingAndSaysNothing()
     {
         Directory.CreateDirectory(Vault);
@@ -144,7 +181,7 @@ public sealed class ObservedHeadAdoptionTests : IDisposable
         ],
     }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
 
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(int? checkpointThreshold = null)
     {
         await _harness.SetupAsync();
 
@@ -153,6 +190,7 @@ public sealed class ObservedHeadAdoptionTests : IDisposable
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                CheckpointThresholdOverride = checkpointThreshold,
             },
             Timeout);
     }

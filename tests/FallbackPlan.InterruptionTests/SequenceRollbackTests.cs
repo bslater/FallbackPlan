@@ -182,6 +182,41 @@ public sealed class SequenceRollbackTests : InterruptionHarness
     }
 
     [TestMethod]
+    public async Task ObservedHead_ACheckpointDrewTheWritersLastNumber_CountsIt()
+    {
+        // A checkpoint draws a number from the writer's sequence after the
+        // deltas it carries (ADR-0097). Until the writer's next run nothing
+        // else attests it: every delta's sequence is below it and no journal
+        // key is above it, so a head read from those alone hands it out again
+        // (ADR-0008 Amendment 4).
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        using (var source = new MemoryStream(BuildFile(seed: 1)))
+        {
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+        }
+
+        using (var checkpointer = new IndexCheckpointer(
+            store, Repo, Writer, credential, new WriterSequence(new FileSequenceStateStore(SequencePath))))
+        {
+            Assert.ContainsSingle(await checkpointer.CheckpointAsync(generation: 0, threshold: 1, CancellationToken.None));
+        }
+
+        var checkpointsNumber = new FileSequenceStateStore(SequencePath).Load().NextSequence - 1;
+        var index = await new IndexLoader(store, Repo, credential).LoadAsync(
+            currentGeneration: 0, gapPatienceGenerations: 0, isSequenceAccountedAsync: null,
+            blobState: null, CancellationToken.None);
+
+        Assert.AreEqual(checkpointsNumber, await ObservedHead.OfAsync(store, Writer, index, CancellationToken.None));
+
+        // The number is its writer's, and no other writer's head.
+        var stranger = WriterId.FromBytes(Convert.FromHexString("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf"));
+        Assert.AreEqual(0UL, await ObservedHead.OfAsync(store, stranger, index, CancellationToken.None));
+    }
+
+    [TestMethod]
     public async Task ObservedHead_AWriterAlreadyAhead_IsLeftAlone()
     {
         // Adoption only ever raises. A writer whose local state is ahead of
