@@ -498,11 +498,41 @@ public sealed class RecoverySession : IDisposable
     /// stands in for a platform that keeps streams.
     /// </param>
     /// <param name="cancellationToken">Stops the run.</param>
+    public ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
+        ObjectId rootTree,
+        string outputDirectory,
+        Func<string, string, bool>? makeLink,
+        IAlternateStreams? streams,
+        CancellationToken cancellationToken) =>
+        RestoreTreeAsync(rootTree, outputDirectory, makeLink, streams, junctions: null, cancellationToken);
+
+    /// <summary>
+    /// Restores a snapshot's tree under <paramref name="outputDirectory"/>,
+    /// as <see cref="RestoreTreeAsync(ObjectId, string, Func{string, string, bool}?, IAlternateStreams?, CancellationToken)"/>
+    /// does, making each junction through <paramref name="junctions"/>.
+    /// </summary>
+    /// <remarks>
+    /// A link captured as a Windows junction (<see cref="MountPoints.IsJunction"/>)
+    /// is made a junction where a junction maker is given or the platform
+    /// makes one, as the executor makes it (ADR-0183 Amendment 3). One the
+    /// maker refuses fails alone, noted in its words. Where none is made, it
+    /// is made a symbolic link to the same path, as before, and noted so.
+    /// </remarks>
+    /// <param name="rootTree">The snapshot's root tree.</param>
+    /// <param name="outputDirectory">Where the tree is restored.</param>
+    /// <param name="makeLink">Gives an existing file a further name: <see cref="HardLinks.TryCreate"/> where null.</param>
+    /// <param name="streams">Writes a file's alternate streams: in the form the platform keeps them in where null.</param>
+    /// <param name="junctions">
+    /// Makes a junction: the platform's calls where null, on Windows, which
+    /// alone makes one. A test stands in for a platform that makes them.
+    /// </param>
+    /// <param name="cancellationToken">Stops the run.</param>
     public async ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
         ObjectId rootTree,
         string outputDirectory,
         Func<string, string, bool>? makeLink,
         IAlternateStreams? streams,
+        IMountPoints? junctions,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(outputDirectory);
@@ -518,6 +548,7 @@ public sealed class RecoverySession : IDisposable
         var folders = new List<Folder>();
         var notApplied = new Dictionary<string, int>(StringComparer.Ordinal);
         var link = makeLink ?? HardLinks.TryCreate;
+        var junctionMaker = junctions ?? (MountPoints.CanMake ? MountPoints.OfThisPlatform : null);
 
         // Each hard-link group's first name landed: what a later name must
         // agree on, where it landed, and what it got (ADR-0156).
@@ -727,11 +758,17 @@ public sealed class RecoverySession : IDisposable
                     if (manifest.EntryKind == EntryKind.Symlink && SymbolicLinks.CanCreate
                         && manifest.LinkTarget is { } linkTarget)
                     {
-                        if (MakeLink(manifest, path, destination, Encoding.UTF8.GetString(linkTarget.Span), foldersHere))
+                        var targetText = Encoding.UTF8.GetString(linkTarget.Span);
+                        var junction = MountPoints.IsJunction(manifest.LinkForm, manifest.CaptureDiagnostics, targetText);
+                        if (MakeLink(manifest, path, destination, targetText, foldersHere, junction ? junctionMaker : null))
                         {
                             restored++;
                             landed.Add(path);
                             Flag(manifest, path, destination, EntryKind.Symlink);
+                            if (junction && junctionMaker is null)
+                            {
+                                notes.Add(new RecoveryNote(RecoveryNoteKind.JunctionMadeAsALink, path));
+                            }
                         }
                         else
                         {
@@ -853,23 +890,41 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
-        // The link's metadata goes onto the link, never through it. Windows
-        // resolves only its own separators in a link, and makes a folder's
-        // link apart from a file's.
-        bool MakeLink(FileVersionManifest manifest, string path, string destination, string target, HashSet<string> foldersHere)
+        // The link's metadata goes onto the link, never through it. A
+        // junction is made through the junction maker; one it refuses leaves
+        // nothing. Windows resolves only its own separators in a link, and
+        // makes a folder's link apart from a file's.
+        bool MakeLink(
+            FileVersionManifest manifest, string path, string destination, string target, HashSet<string> foldersHere, IMountPoints? junction)
         {
-            var made = OperatingSystem.IsWindows() ? SymbolicLinks.TargetOnWindows(target) : target;
-            var asFolder = OperatingSystem.IsWindows() && SymbolicLinks.PointsAtAFolder(
-                manifest.Metadata.FileAttributes,
-                () => SymbolicLinks.PathNamed(destination, made) is var named
-                    && (foldersHere.Contains(named) || Directory.Exists(named)));
-            if (!Placed(path, () =>
-                {
-                    Clear(destination);
-                    SymbolicLinks.Create(destination, made, asFolder);
-                }))
+            if (junction is not null)
             {
-                return false;
+                if (!Placed(path, () => Clear(destination)))
+                {
+                    return false;
+                }
+
+                if (junction.Make(destination, target) is { } refused)
+                {
+                    notes.Add(new RecoveryNote(RecoveryNoteKind.WriteFailed, path, Detail: refused));
+                    return false;
+                }
+            }
+            else
+            {
+                var made = OperatingSystem.IsWindows() ? SymbolicLinks.TargetOnWindows(target) : target;
+                var asFolder = OperatingSystem.IsWindows() && SymbolicLinks.PointsAtAFolder(
+                    manifest.Metadata.FileAttributes,
+                    () => SymbolicLinks.PathNamed(destination, made) is var named
+                        && (foldersHere.Contains(named) || Directory.Exists(named)));
+                if (!Placed(path, () =>
+                    {
+                        Clear(destination);
+                        SymbolicLinks.Create(destination, made, asFolder);
+                    }))
+                {
+                    return false;
+                }
             }
 
             Count(

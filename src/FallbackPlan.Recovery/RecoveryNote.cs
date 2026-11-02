@@ -1,3 +1,4 @@
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Storage.Abstractions;
 
@@ -41,6 +42,9 @@ public enum RecoveryNoteKind
 
     /// <summary>The flags a file or a link was captured with, which no restore sets; the item still restored (ADR-0180 Amendment 2).</summary>
     FlagsNotApplied = 11,
+
+    /// <summary>A link captured as a Windows junction, made a symbolic link to the same path where the platform makes no junction; it still restored (ADR-0183 Amendment 3).</summary>
+    JunctionMadeAsALink = 12,
 }
 
 /// <summary>
@@ -86,6 +90,7 @@ public sealed record RecoveryNote(
         RecoveryNoteKind.NotLinked => $"{Path}: restored as a file of its own, not linked to its group — {Reason}",
         RecoveryNoteKind.StreamNotWritten => $"{Path}: alternate stream {Reason}",
         RecoveryNoteKind.FlagsNotApplied => $"{Path}: {Reason}",
+        RecoveryNoteKind.JunctionMadeAsALink => $"{Path}: {MetadataRules.JunctionMadeAsALink}",
         _ => Kind.ToString(),
     };
 }
