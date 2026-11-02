@@ -1,4 +1,5 @@
 using Bodu;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -34,6 +35,10 @@ public sealed class ManifestBuilder : IAsyncDisposable
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
     private readonly byte[] _metadataClassKey;
     private readonly List<ArchivedBlob> _blobs = [];
+
+    // Each failure a metadata blob's seal or put raised, by reference, so a
+    // capture tells it apart from a read of its own.
+    private readonly ConcurrentDictionary<Exception, byte> _uploadFailures = new(ReferenceEqualityComparer.Instance);
     private readonly IIntentScope? _intentScope;
     private readonly ReusePredicate? _mayReuse;
     private readonly ILogger? _logger;
@@ -374,7 +379,28 @@ public sealed class ManifestBuilder : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="exception"/> is what a metadata blob's seal
+    /// or upload failed with. It surfaces through the capture whose manifest
+    /// filled the blob, and is the store's failure, never that file's
+    /// (ADR-0046 Amendment 3).
+    /// </summary>
+    public bool IsUploadFailure(Exception exception) => _uploadFailures.ContainsKey(exception);
+
     private async ValueTask SealAndUploadAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SealAndPutAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            _uploadFailures.TryAdd(exception, 0);
+            throw;
+        }
+    }
+
+    private async ValueTask SealAndPutAsync(CancellationToken cancellationToken)
     {
         var sealedBlob = await _writer!.SealAsync(cancellationToken).ConfigureAwait(false);
         await using (sealedBlob.ConfigureAwait(false))
