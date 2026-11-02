@@ -363,6 +363,8 @@ A key's first write into a new folder passed, because a folder not there yet is 
 
 **Not done.** exFAT is not tested; it answers the request as FAT32 does.
 
+> **2026-11: tested now.** `Storage.ContractTests/ExFatLocalFileSystemObjectStoreContractTests` runs the same contract, and the same second write, on an exFAT volume of its own, beside the FAT32 one; both stand on `Storage.ContractTests/MountedVolumeContractTests`.
+
 ## Status history
 
 | Date | Status | Note |
@@ -378,3 +380,4 @@ A key's first write into a new folder passed, because a folder not there yet is 
 | 2026-10 | Accepted (amended, related) | [ADR-0171 Amendment 2](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said): `DeleteResult` says how many bytes a store kept although it answered the delete, as a bucket that keeps versions does behind a delete marker, and is null where it kept none or does not say. An expected outcome, so a result rather than a fault. |
 | 2026-10 | Accepted (amended, related) | [ADR-0171 Amendment 4](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-4-2026-10--a-delete-an-account-keeps-under-soft-delete-is-counted-and-noticed-nowhere): `DeleteResult` also says whether the store keeps what it deleted only for a period of its own, as an account under soft delete does, and may leave the bytes unsaid beside it. |
 | 2026-11 | Accepted (amended) | Amendment 6: the local provider asks a folder for its link only where the folder carries the reparse-point attribute, so a FAT32 or exFAT drive, which refuses the request, is written and read as any other. `Storage.Local/LocalFileSystemObjectStore`; `Storage.ContractTests/Fat32LocalFileSystemObjectStoreContractTests` |
+| 2026-11 | Accepted (amended) | Amendment 6's exFAT is tested: the provider contract runs on an exFAT volume as on the FAT32 one, where an elevated Windows process runs it. `Storage.ContractTests/ExFatLocalFileSystemObjectStoreContractTests`; `Storage.ContractTests/MountedVolumeContractTests` |
