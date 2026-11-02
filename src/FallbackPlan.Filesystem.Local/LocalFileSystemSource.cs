@@ -501,6 +501,11 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
                 {
                     linkTarget = Encoding.UTF8.GetBytes(managed);
                 }
+
+                if (MetadataRules.LinkFormDiagnostic(ReparsePoints.FormOf(stat.ReparseTag, info.LinkTarget)) is { } form)
+                {
+                    diagnostics.Add(form);
+                }
             }
         }
 
@@ -626,8 +631,8 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
         // Only a reparse point's tag says whether it is a link or a file a
         // filter keeps, as deduplication does; read as a link,
         // such a file's content was never captured.
-        var mode = ReparsePoints.ModeOf(
-            attributes, (attributes & FileAttributes.ReparsePoint) != 0 ? WindowsInterop.ReparseTagOf(path) : null);
+        var tag = (attributes & FileAttributes.ReparsePoint) != 0 ? WindowsInterop.ReparseTagOf(path) : null;
+        var mode = ReparsePoints.ModeOf(attributes, tag);
 
         result = new StatResult(
             Device: device,
@@ -641,7 +646,8 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             CreatedAtMs: ToMilliseconds(info.CreationTimeUtc),
             AccessedAtMs: ToMilliseconds(info.LastAccessTimeUtc),
             RdevMajor: 0,
-            RdevMinor: 0);
+            RdevMinor: 0,
+            ReparseTag: tag);
         return true;
     }
 

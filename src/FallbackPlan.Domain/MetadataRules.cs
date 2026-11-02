@@ -500,6 +500,34 @@ public static class MetadataRules
             : (metadata with { FileFlags = metadata.FileFlags | named }, WithFileFlags(diagnostics, FileFlagBits.None));
     }
 
+    /// <summary>The capture diagnostic that names a link a mount point (ADR-0183 Amendment 1).</summary>
+    private const string MountPointDiagnostic = "link-form: mount-point";
+
+    /// <summary>
+    /// The capture diagnostic that names a link's <paramref name="form"/>
+    /// (<c>link-form: mount-point</c>), or null for a symbolic link, the form
+    /// a manifest that says nothing describes (ADR-0183 Amendment 1).
+    /// </summary>
+    public static string? LinkFormDiagnostic(LinkForm form) =>
+        form == LinkForm.MountPoint ? MountPointDiagnostic : null;
+
+    /// <summary>
+    /// The form and diagnostics a link is written with in a repository of
+    /// <paramref name="formatVersion"/>. From format 6 a mount point its
+    /// diagnostics name is kept in manifest key 14 and named no more; below
+    /// it no key keeps one, and a reader of that format refuses key 14, so it
+    /// stays named (ADR-0183 Amendment 1; ADR-0184 §4).
+    /// </summary>
+    public static (LinkForm Form, IReadOnlyList<string> Diagnostics) KeepLinkForm(
+        ushort formatVersion, IReadOnlyList<string> diagnostics)
+    {
+        ThrowHelper.ThrowIfNull(diagnostics);
+
+        return !FormatVersions.HasFileFlagsAndLinkForms(formatVersion) || !diagnostics.Contains(MountPointDiagnostic)
+            ? (LinkForm.SymbolicLink, diagnostics)
+            : (LinkForm.MountPoint, [.. diagnostics.Where(diagnostic => diagnostic != MountPointDiagnostic)]);
+    }
+
     /// <summary>
     /// <paramref name="diagnostics"/> with the line that names a file's flags
     /// made to name <paramref name="flags"/>: a manifest restated for a file

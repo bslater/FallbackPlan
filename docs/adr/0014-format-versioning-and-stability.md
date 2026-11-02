@@ -165,6 +165,10 @@ one restores only part of it (NFR-COMP-004 as amended).
 > manifests carrying a file's flags or a link's form, so a build that predates
 > it and opens an upgraded repository will refuse each such manifest, as
 > damage, and cannot restore that entry. Nothing writes either key yet.
+>
+> **2026-11.** Capture writes both from format 6: a file's and a folder's
+> flags ([ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too))
+> and a junction's form ([ADR-0183 Amendment 1](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-1-2026-11--capture-keeps-a-junctions-form)).
 
 ## Status history
 

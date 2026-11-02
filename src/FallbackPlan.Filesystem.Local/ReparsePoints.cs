@@ -1,3 +1,5 @@
+using FallbackPlan.Domain;
+
 namespace FallbackPlan.Filesystem.Local;
 
 /// <summary>
@@ -6,7 +8,7 @@ namespace FallbackPlan.Filesystem.Local;
 /// path, and capture keeps that path and never goes through it. Every other
 /// reparse point is how a filter keeps a file's or a folder's content, as
 /// deduplication does, and is read as the file or the folder it is, through
-/// the filter.
+/// the filter. A junction keeps its form (ADR-0183 Amendment 1).
 /// </summary>
 internal static class ReparsePoints
 {
@@ -38,4 +40,22 @@ internal static class ReparsePoints
         (attributes & FileAttributes.ReparsePoint) != 0 && tag is null or SymbolicLinkTag or MountPointTag
             ? LinkMode
             : (attributes & FileAttributes.Directory) != 0 ? FolderMode : FileMode;
+
+    /// <summary>
+    /// The form a link is captured with: a mount point where its tag says it
+    /// is one and it names a folder by its drive's path, as a junction does;
+    /// otherwise a symbolic link (ADR-0183 Amendment 1).
+    /// </summary>
+    /// <param name="tag">Its reparse tag, or null where none was read.</param>
+    /// <param name="target">The path it names, as capture reads it.</param>
+    /// <remarks>
+    /// A volume mounted on a folder carries the same tag and names the
+    /// volume, which belongs to the machine it was mounted on, so it keeps no
+    /// form, as a mount point that names nothing does. Only a junction is
+    /// something a restore elsewhere can make again.
+    /// </remarks>
+    public static LinkForm FormOf(uint? tag, string? target) =>
+        tag == MountPointTag && target is [>= 'A' and <= 'Z' or >= 'a' and <= 'z', ':', '\\', ..]
+            ? LinkForm.MountPoint
+            : LinkForm.SymbolicLink;
 }

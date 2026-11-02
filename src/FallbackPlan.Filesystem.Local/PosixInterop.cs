@@ -5,8 +5,9 @@ namespace FallbackPlan.Filesystem.Local;
 
 /// <summary>
 /// The stat result the scanner consumes, platform-neutral: identity,
-/// classification, times in Unix milliseconds, POSIX ownership, and the
-/// file's flags (ADR-0180). Public
+/// classification, times in Unix milliseconds, POSIX ownership, the
+/// file's flags (ADR-0180), and a Windows entry's reparse tag (ADR-0183).
+/// Public
 /// because pre/post-read revalidation (architecture 06 §1) is part of the
 /// capture contract the publisher consumes.
 /// </summary>
@@ -23,7 +24,8 @@ public readonly record struct StatResult(
     ulong? AccessedAtMs,
     uint RdevMajor,
     uint RdevMinor,
-    FileFlagBits Flags = FileFlagBits.None)
+    FileFlagBits Flags = FileFlagBits.None,
+    uint? ReparseTag = null)
 {
     private const uint TypeMask = 0xF000;
 
