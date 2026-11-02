@@ -1,3 +1,4 @@
+using FallbackPlan.Domain;
 using FallbackPlan.Filesystem.Local;
 
 namespace FallbackPlan.Filesystem.Tests;
@@ -8,7 +9,10 @@ namespace FallbackPlan.Filesystem.Tests;
 /// which name another path, and one whose tag could not be read, which is
 /// never followed. Any other reparse point is a file or a folder whose
 /// content a filter keeps, as a deduplicated file is, and
-/// is read as one.
+/// is read as one. A mount point that names a folder by its drive's path,
+/// as a junction does, is captured with that form; a symbolic link, and a
+/// mount point that names a volume or nothing, with none (ADR-0183
+/// Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class ReparsePointTests
@@ -49,5 +53,30 @@ public sealed class ReparsePointTests
     {
         Assert.AreEqual(mode, ReparsePoints.ModeOf(attributes, tag: null));
         Assert.AreEqual(mode, ReparsePoints.ModeOf(attributes, ReparsePoints.SymbolicLinkTag), "a tag means nothing without the bit");
+    }
+
+    [TestMethod]
+    [DataRow(@"C:\Users\Shared\Projects")]
+    [DataRow(@"d:\")]
+    public void FormOf_AMountPointNamingAFolderByItsDrivesPath_IsAMountPoint(string target) =>
+        Assert.AreEqual(LinkForm.MountPoint, ReparsePoints.FormOf(ReparsePoints.MountPointTag, target));
+
+    [TestMethod]
+    [DataRow(@"Volume{0b3c7a52-1f6e-4c1d-9a2b-6c8e2f4d7a10}\")]
+    [DataRow("")]
+    [DataRow(@"Projects\Shared")]
+    [DataRow(@"\\server\share\Projects")]
+    [DataRow(@"C:Projects")]
+    [DataRow(@"1:\Projects")]
+    public void FormOf_AMountPointThatNamesNoFolderByADrivesPath_HasNoForm(string target) =>
+        Assert.AreEqual(LinkForm.SymbolicLink, ReparsePoints.FormOf(ReparsePoints.MountPointTag, target));
+
+    [TestMethod]
+    public void FormOf_ASymbolicLink_AnUnreadTag_OrNoTarget_HasNoForm()
+    {
+        Assert.AreEqual(LinkForm.SymbolicLink, ReparsePoints.FormOf(ReparsePoints.SymbolicLinkTag, @"C:\Users\Shared"));
+        Assert.AreEqual(LinkForm.SymbolicLink, ReparsePoints.FormOf(tag: null, @"C:\Users\Shared"));
+        Assert.AreEqual(LinkForm.SymbolicLink, ReparsePoints.FormOf(DedupTag, @"C:\Users\Shared"));
+        Assert.AreEqual(LinkForm.SymbolicLink, ReparsePoints.FormOf(ReparsePoints.MountPointTag, target: null));
     }
 }

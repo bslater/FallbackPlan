@@ -61,6 +61,8 @@ A reader that predates format 6 refuses a manifest carrying either key as an unk
 > **2026-11: key 11 is written by [ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)** from format 6, for a file and a folder. No restore gives a flag back yet, and key 14 is still unwritten.
 >
 > **2026-11: and read by [ADR-0180 Amendment 4](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may),** whose restore gives the flags back where the platform and the account let it. Key 14 is still unwritten.
+>
+> **2026-11: key 14 is written by [ADR-0183 Amendment 1](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-1-2026-11--capture-keeps-a-junctions-form)** from format 6, for a junction. No restore reads it yet.
 
 Nothing writes either key yet. Capture still names a file's flags among its diagnostics and nowhere else, and still captures a mount point as a link with no form. The writers come with the restores that read them, one record each:
 
@@ -91,6 +93,8 @@ Publication, which builds each manifest, already holds the repository's effectiv
 - **Write either key.** Capture writes neither, and no restore reads either. The writers and the restores are the next records', under ADR-0180 and ADR-0183, and each will be held to format 6.
 
   > **2026-11: key 11 is taken up by [ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too),** and every reader of a file's flags reads it.
+>
+  > **2026-11: and key 14 by [ADR-0183 Amendment 1](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-1-2026-11--capture-keeps-a-junctions-form).** No restore reads it yet.
 - **Keep a flag Windows names.** Windows' attribute bits stay in key 10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).
 - **Keep a placeholder a cloud provider leaves unfetched.** ADR-0183's other limit names no key here.
 
@@ -101,3 +105,4 @@ Publication, which builds each manifest, already holds the repository's effectiv
 | 2026-11 | Accepted | Built in one slice, tests first. Metadata key 11 keeps a file's or a folder's flags and manifest key 14 says that a link is a mount point, each refused where it names nothing, a reserved bit or an unassigned form, or sits on anything but a link with a target; a format-6 descriptor lists `0x0006`, and a repository is born at 6. Nothing writes either key yet. `Domain/FormatVersions`; `Domain/FormatLimits`; `Domain/LinkForm`; `Repository.Format/Manifests/FileVersionManifestCodec`; `Repository.Format/Descriptor/RepositoryDescriptorCodec`; `Repository/RepositoryLifecycle`; `Repository.Tests/ManifestCodecTests`; `Repository.Tests/RepositoryDescriptorCodecTests`; `Repository.Tests/RepositoryLifecycleTests`; `Domain.Tests/FormatVersionsTests`; `Hosts.Tests/CreatedFormatTests`; `Repository.ConformanceTests/FixtureRepositoryV6Tests` |
 | 2026-11 | Accepted (related) | [ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too) writes key 11 from format 6, a file's and a folder's flags, and counts them in the digest as it counts flags a diagnostic names. `Repository/SnapshotPublication`; `Repository.Format/Manifests/FileVersionManifestCodec` |
 | 2026-11 | Accepted (related) | [ADR-0180 Amendment 4](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may) has the engine's restore give back the flags key 11 keeps, a file's, a folder's and a link's, where the platform and the account let it. `Domain/FileFlags`; `Restore/RestoreExecutor` |
+| 2026-11 | Accepted (related) | [ADR-0183 Amendment 1](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-1-2026-11--capture-keeps-a-junctions-form) writes key 14 from format 6 for a junction, a mount point naming a folder by its drive's path, which below 6 stays named among its diagnostics. `Filesystem.Local/ReparsePoints`; `Domain/MetadataRules`; `Repository/SnapshotPublication` |

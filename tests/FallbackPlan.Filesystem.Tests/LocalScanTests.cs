@@ -18,7 +18,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// is captured as a link, never followed, with its own security descriptor
 /// read through a handle opened on the link itself (FR-MAN-003, ADR-0182).
 /// A reparse point whose tag names no other path, as a deduplicated file's
-/// does, is captured as the file it is, never as a link (ADR-0183).
+/// does, is captured as the file it is, never as a link (ADR-0183). A
+/// directory junction is named a mount point, and a folder's symbolic link
+/// is not (ADR-0183 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed partial class LocalScanTests : IDisposable
@@ -216,6 +218,7 @@ public sealed partial class LocalScanTests : IDisposable
 
         var link = leaves.Single(leaf => leaf.Entry.RelativePath == "link").Entry;
         Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
+        Assert.DoesNotContain("link-form: mount-point", link.Diagnostics, "a folder's symbolic link is no mount point");
         Assert.ContainsSingle(leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal), leaves);
         Assert.DoesNotContain(Guests, Described(link).Accounts, "the folder it points at keeps its own");
         Assert.Contains(
@@ -603,7 +606,7 @@ public sealed partial class LocalScanTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "directory junctions are an NTFS reparse-point shape with no POSIX analogue")]
     [PlatformTrait(TestPlatforms.Windows)]
-    public async Task Scan_TreeContainsADirectoryJunction_CapturesItAsALinkAndDoesNotDescend()
+    public async Task Scan_TreeContainsADirectoryJunction_CapturesItAsAMountPointsLink_AndDoesNotDescend()
     {
         Write("target/secret.txt");
 
@@ -620,7 +623,7 @@ public sealed partial class LocalScanTests : IDisposable
         // link that way tested a shape the attacker cannot make and threw
         // "A required privilege is not held by the client" everywhere else.
         var junction = Path.Combine(_root, "junction");
-        Assert.IsTrue(CreateJunction(junction, Path.Combine(_root, "target")), "could not create a directory junction");
+        Assert.IsTrue(Junctions.Make(junction, Path.Combine(_root, "target")), "could not create a directory junction");
 
         var events = await ScanAsync();
         var link = events.OfType<ScanEvent.Leaf>()
@@ -629,33 +632,14 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.AreEqual(ScanEntryKind.Symlink, link.Kind);
         Assert.IsNotNull(link.LinkTarget);
 
+        // It is named a mount point, by the folder's path on its drive, which
+        // a restore needs to make a junction rather than a symbolic link
+        // (ADR-0183 Amendment 1).
+        Assert.Contains("link-form: mount-point", link.Diagnostics);
+        Assert.MatchesRegex(@"^[A-Za-z]:\\.*\\target$", Encoding.UTF8.GetString(link.LinkTarget.Value.Span));
+
         // Followed content would appear twice; it must appear exactly once.
         Assert.ContainsSingle(leaf => leaf.Entry.RelativePath.EndsWith("secret.txt", StringComparison.Ordinal), events.OfType<ScanEvent.Leaf>());
-    }
-
-    /// <summary>
-    /// Creates a directory junction at <paramref name="path"/>. <c>mklink</c>
-    /// is a <c>cmd</c> built-in, so it has to be run through the shell; there
-    /// is no managed API that makes a mount point rather than a symlink.
-    /// </summary>
-    private static bool CreateJunction(string path, string target)
-    {
-        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "cmd.exe",
-            ArgumentList = { "/c", "mklink", "/J", path, target },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        });
-
-        if (process is null)
-        {
-            return false;
-        }
-
-        process.WaitForExit(TimeSpan.FromSeconds(30));
-        return process.ExitCode == 0 && Directory.Exists(path);
     }
 
     [TestMethod]

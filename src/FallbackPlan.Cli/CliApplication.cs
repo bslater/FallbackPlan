@@ -726,6 +726,11 @@ public static class CliApplication
                         }
 
                         WriteFileFlags(output, fileVersion.Metadata.FileFlags);
+                        if (fileVersion.LinkForm == LinkForm.MountPoint)
+                        {
+                            output.WriteLine("link form      mount point");
+                        }
+
                         break;
 
                     case ObjectType.TreeManifest:

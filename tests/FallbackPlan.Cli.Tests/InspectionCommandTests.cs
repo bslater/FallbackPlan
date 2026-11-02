@@ -18,7 +18,9 @@ namespace FallbackPlan.Cli.Tests;
 /// that spool itself, so it needs no room in the temporary folder
 /// (FR-RST-002; ADR-0173 Amendment 3). It says which of a file's flags it
 /// did not give back, as the executor's receipt does (FR-RST-004; ADR-0180
-/// Amendment 2).
+/// Amendment 2). <c>inspect-manifest</c> shows the form manifest key 14
+/// keeps for a Windows directory junction (FR-MAN-003; ADR-0183
+/// Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class InspectionCommandTests : IDisposable
@@ -337,6 +339,39 @@ public sealed class InspectionCommandTests : IDisposable
             output.Contains("TreeManifest", StringComparison.Ordinal)
             && output.Contains("file flags     no-dump", StringComparison.Ordinal)));
         Assert.DoesNotContain(output => output.Contains("diagnostic     file-flags:", StringComparison.Ordinal), shown.Values);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows makes a directory junction")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public async Task InspectManifest_OnWindows_AJunctionBackedUp_ShowsTheMountPointKeyFourteenKeeps()
+    {
+        // A repository is created at format 6, which keeps the form in key
+        // 14 rather than naming it.
+        await _cli.InitAsync();
+        var kept = _cli.WriteFile("inspect-junction/projects/a.txt", "inspect a junction");
+        var root = Path.GetDirectoryName(Path.GetDirectoryName(kept))!;
+        Assert.IsTrue(Junctions.Make(Path.Combine(root, "junction"), Path.GetDirectoryName(kept)!), "the premise: a junction was made");
+        var backup = await _cli.RunAsync("backup", root);
+        Assert.IsTrue(backup.ExitCode == 0, backup.All);
+
+        var shown = new List<string>();
+        foreach (var blob in Directory.GetFiles(Path.Combine(_cli.RepositoryPath, "blobs", "meta"), "*", SearchOption.AllDirectories))
+        {
+            var listed = await _cli.RunAsync("inspect-blob", Path.GetRelativePath(_cli.RepositoryPath, blob).Replace('\\', '/'));
+            Assert.IsTrue(listed.ExitCode == 0, listed.All);
+            foreach (Match record in Regex.Matches(listed.Output, @"FileVersionManifest\s.*\s([0-9a-f]{64})\s*$", RegexOptions.Multiline))
+            {
+                var inspect = await _cli.RunAsync("inspect-manifest", record.Groups[1].Value);
+                Assert.IsTrue(inspect.ExitCode == 0, inspect.All);
+                shown.Add(inspect.Output);
+            }
+        }
+
+        var junction = Assert.ContainsSingle(shown.Where(output => output.Contains("name           junction", StringComparison.Ordinal)));
+        Assert.Contains("link form      mount point", junction, StringComparison.Ordinal);
+        Assert.DoesNotContain("link-form:", junction, StringComparison.Ordinal);
+        Assert.DoesNotContain(output => output.Contains("link form", StringComparison.Ordinal), shown.Where(output => output != junction));
     }
 
     [TestMethod]

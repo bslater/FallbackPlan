@@ -1310,22 +1310,34 @@ public sealed partial class PublicationOrchestrator
             };
         }
 
-        private FileVersionManifest ZeroContentVersion(ScanEntry entry, EntryKind kind) => new()
+        /// <summary>
+        /// A link's or a special entry's manifest. A link's form is kept as
+        /// this repository's format keeps it (ADR-0183 Amendment 1); only a
+        /// link carries one.
+        /// </summary>
+        private FileVersionManifest ZeroContentVersion(ScanEntry entry, EntryKind kind)
         {
-            EntryKind = kind,
-            Name = entry.NameBytes,
-            NameNormalisation = entry.NameNormalisation,
-            LogicalLength = 0,
-            SegmentReferences = [],
-            WholeFileHash = EmptyHash,
-            SegmentationProfile = 0,
-            Metadata = entry.Metadata,
-            LinkTarget = entry.LinkTarget,
-            HardlinkGroup = entry.Identity is { LinkCount: > 1 } identity
-                ? (ReadOnlyMemory<byte>?)grouper.Derive(job.DeviceId.Span, identity.FileId)
-                : null,
-            CaptureDiagnostics = entry.Diagnostics,
-        };
+            var (form, diagnostics) = kind == EntryKind.Symlink
+                ? MetadataRules.KeepLinkForm(repositoryFormatVersion, entry.Diagnostics)
+                : (LinkForm.SymbolicLink, entry.Diagnostics);
+            return new()
+            {
+                EntryKind = kind,
+                Name = entry.NameBytes,
+                NameNormalisation = entry.NameNormalisation,
+                LogicalLength = 0,
+                SegmentReferences = [],
+                WholeFileHash = EmptyHash,
+                SegmentationProfile = 0,
+                Metadata = entry.Metadata,
+                LinkTarget = entry.LinkTarget,
+                LinkForm = form,
+                HardlinkGroup = entry.Identity is { LinkCount: > 1 } identity
+                    ? (ReadOnlyMemory<byte>?)grouper.Derive(job.DeviceId.Span, identity.FileId)
+                    : null,
+                CaptureDiagnostics = diagnostics,
+            };
+        }
 
         /// <summary>
         /// Archives each named alternate stream as a single-segment record
