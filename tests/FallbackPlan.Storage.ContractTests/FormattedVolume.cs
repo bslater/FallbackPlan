@@ -3,20 +3,20 @@ using System.Diagnostics;
 namespace FallbackPlan.Storage.ContractTests;
 
 /// <summary>
-/// A FAT32 volume of a test's own: a virtual disk, formatted and mounted on
-/// an empty folder, gone again when disposed.
+/// A volume of a test's own, formatted with the file system it names: a
+/// virtual disk, mounted on an empty folder, gone again when disposed.
 /// </summary>
 /// <remarks>
-/// Only a real volume shows how FAT32 answers a call that asks a folder for
-/// the link it holds: it holds none and cannot say so, and refuses the call
-/// as a function it does not have. Making one needs Windows and an elevated
-/// process.
+/// Only a real volume shows how FAT32 or exFAT answers a call that asks a
+/// folder for the link it holds: it holds none and cannot say so, and
+/// refuses the call as a function it does not have. Making one needs Windows
+/// and an elevated process.
 /// </remarks>
-internal sealed class Fat32Volume : IDisposable
+internal sealed class FormattedVolume : IDisposable
 {
     private readonly string _disk;
 
-    private Fat32Volume(string disk, string mountedAt)
+    private FormattedVolume(string disk, string mountedAt)
     {
         _disk = disk;
         MountedAt = mountedAt;
@@ -25,10 +25,11 @@ internal sealed class Fat32Volume : IDisposable
     /// <summary>The folder the volume is mounted on.</summary>
     public string MountedAt { get; }
 
-    /// <summary>Makes, formats and mounts a FAT32 volume.</summary>
-    public static Fat32Volume Mount()
+    /// <summary>Makes, formats and mounts a volume.</summary>
+    /// <param name="fileSystem">What diskpart formats it as: <c>fat32</c> or <c>exfat</c>.</param>
+    public static FormattedVolume Mount(string fileSystem)
     {
-        var name = "fbp-fat32-" + Guid.NewGuid().ToString("n");
+        var name = $"fbp-{fileSystem}-" + Guid.NewGuid().ToString("n");
         var disk = Path.Combine(Path.GetTempPath(), name + ".vhd");
         var mountedAt = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), name)).FullName;
 
@@ -39,10 +40,10 @@ internal sealed class Fat32Volume : IDisposable
             $"select vdisk file=\"{disk}\"",
             "attach vdisk",
             "create partition primary",
-            "format fs=fat32 quick label=FBPFAT32",
+            $"format fs={fileSystem} quick label=FBP{fileSystem.ToUpperInvariant()}",
             $"assign mount=\"{mountedAt}\"");
 
-        return new Fat32Volume(disk, mountedAt);
+        return new FormattedVolume(disk, mountedAt);
     }
 
     /// <inheritdoc />
