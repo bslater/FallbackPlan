@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-MAN-003 (amended: on Windows a reparse point is captured as a link only where its tag names another path, and any other is captured as the file or folder it is, with its content; amended again by [Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form): from format 6 a junction's form is kept in manifest key 14)
+**Requirements:** FR-MAN-003 (amended: on Windows a reparse point is captured as a link only where its tag names another path, and any other is captured as the file or folder it is, with its content; amended again by [Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form): from format 6 a junction's form is kept in manifest key 14); FR-RST-004 and FR-RST-003 (amended by [Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again): a restore on Windows makes a junction a junction, and a target that makes none says so)
 **Related:** [architecture 06 §4.1](../architecture/06-filesystem-capture.md#41-links-are-classified-before-they-are-traversed) (links are classified before they are traversed), [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md) (a restore on Windows makes links), [ADR-0182](0182-capture-reads-a-links-own-security-descriptor-on-windows.md) (a link's own descriptor, read through a handle on the reparse point)
 
 **Built:**
@@ -57,6 +57,8 @@ The tag is read only where the bit is set, so an entry without a reparse point c
   > **2026-11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** Format 6's manifest key 14 says that a link is a mount point. Nothing writes it yet, so a junction is still captured as a link with no form.
   >
   > **2026-11: capture keeps it ([Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form)).** From format 6 a junction's manifest says it is a mount point, and below 6 its diagnostics name it. No restore reads it yet, so it still comes back as a folder's symbolic link.
+  >
+  > **2026-11: and a restore on Windows makes it a junction again ([Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again)).**
 - **A placeholder left unfetched.** A file a cloud provider has not brought down is read like any other, which fetches it. Leaving it as a placeholder would mean capturing it as one, which no format key keeps.
 
 ## Alternatives considered
@@ -84,6 +86,8 @@ The tag is read only where the bit is set, so an entry without a reparse point c
 **Not done.**
 
 - **No restore reads the form yet.** A junction still comes back as a folder's symbolic link where the account may make one ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)). On Linux or macOS it comes back as a symbolic link to a Windows path. Making a junction again is the next amendment's.
+
+  > **2026-11: taken up for the engine's restore by [Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again).** The recovery tool is the next.
 - **A volume mounted on a folder keeps no form.** Its target names a volume of the machine it was captured on, and no restore elsewhere could mount it.
 
 **Built:** `Filesystem.Local/ReparsePoints`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Local/PosixInterop` (the stat); `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Cli/CliApplication`:
@@ -104,6 +108,51 @@ The tag is read only where the bit is set, so an entry without a reparse point c
 - `Cli.Tests/InspectionCommandTests`: on Windows `inspect-manifest` shows the junction's form, and no other manifest shows one.
 - `TestSupport/Junctions` makes a junction for those tests.
 
+## Amendment 2 (2026-11) — a restore on Windows makes a junction again
+
+[Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form) had capture keep a junction's form: from format 6 in manifest key 14, and below it among its diagnostics. No restore read it, so a junction came back as a folder's symbolic link where the account may make one ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)), and on Linux or macOS as a symbolic link to a Windows path, with nothing said of it.
+
+The two are not alike. A junction is resolved on the machine that holds it, even when its folder is reached across the network, where a folder's symbolic link is resolved by whoever follows it. A program that tells them apart, as a backup tool or an installer may, sees a different thing.
+
+**Decision.** The engine's restore makes a junction a junction where the target makes one, and says where it does not.
+
+- **A junction is a link captured as a mount point that names a folder by its drive's path** (`Domain/MountPoints`).
+  - The form is read where either kind of manifest keeps it (`MetadataRules.LinkFormOf`): key 14 from format 6, or the capture diagnostic before it.
+  - A mount point whose target names no drive's folder is made what that target can be, a symbolic link, and nothing names it a junction. Capture never names one so.
+- **Windows makes one** as a folder carrying a mount-point reparse point, set through `FSCTL_SET_REPARSE_POINT` on a handle opened on the folder itself.
+  - The reparse point names the folder twice: under `\??\`, as the kernel resolves it, and as it is shown.
+  - A folder that is not there is named still, as a link to nothing is.
+  - Where Windows refuses one, nothing is left at its name. That item fails alone, in the refusal's words, as a link that cannot be made does.
+- **Its own metadata goes on as a link's does,** onto the junction and never through it ([ADR-0181 Amendments 2 and 3](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-2-2026-10--a-links-own-times-on-windows); [ADR-0182 Amendment 1](0182-capture-reads-a-links-own-security-descriptor-on-windows.md#amendment-1-2026-10--a-restore-writes-a-links-own-descriptor-back)). The existing-destination policy holds as for any link.
+- **A target that makes none makes a symbolic link to the same path,** as before, and now says so.
+  - The plan counts the links captured as junctions on a line of their own, `junctions`.
+  - The receipt says of each, `made as a symbolic link: this target makes no junction`.
+- **The profile carries the rule:** `RestoreTargetProfile.MakesJunctions`, set on Windows. It also hands the executor an `IMountPoints` seam, as flags and compression have, so the executor's cases run on every platform with a recorder in its place.
+
+**Not done.**
+
+- **The recovery tool.** It still makes a junction a folder's symbolic link. That is the next amendment's.
+- **An account that may make no symbolic link** skips a junction still, as it skips every link, though a junction needs no privilege. The planner judges links from the catalogue, which holds no form, so its line saying links will be skipped cannot tell a junction apart. Telling it is a change of its own.
+- **A volume mounted on a folder** keeps no form ([Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form)), so it comes back as a symbolic link.
+
+**Built:** `Domain/MountPoints`; `Domain/MetadataRules`; `Restore/RestorePlan` (the profile); `Restore/RestoreExecutor`; `Restore/RestoreMetadata` and `Restore/RestoreBlobSet` (the plan's facts and line):
+
+- `Domain.Tests/MountPointsTests`:
+  - a folder on a drive is named by its drive's path, and a volume, nothing, a relative path, a share, a drive with no root and a POSIX path are not;
+  - the form is what key 14 keeps or the diagnostics name, and a junction is a mount point naming a drive's folder however its form was kept;
+  - only Windows makes one, and off Windows the call says so and makes nothing;
+  - on Windows:
+    - a junction is made naming its folder, a mount point and no symbolic link, and what the folder holds is seen through it;
+    - one is made to a folder not there;
+    - none is made where something stands, which is left;
+    - a target too long for a reparse point is refused, and nothing is left at its name.
+- `Repository.Tests/RestoreJunctionTests`:
+  - a junction is made by the junction maker where the target makes them, named in key 14 or, below format 6, in its diagnostics, and a symbolic link beside it is made a symbolic link; the plan says nothing of junctions;
+  - one the maker refuses fails alone in the maker's words;
+  - a target that makes none makes it a symbolic link to the same path, and the plan's line and the receipt say so;
+  - a mount point naming no drive's folder is made a symbolic link, and nothing names it a junction;
+  - on Windows, a junction is restored a junction naming its folder, and a folder's symbolic link a symbolic link.
+
 ## Status history
 
 | Date | Status | Note |
@@ -111,3 +160,4 @@ The tag is read only where the bit is set, so an entry without a reparse point c
 | 2026-10 | Accepted | Built in one slice, tests first. On Windows a reparse point is captured as a link only where its tag is a symbolic link's or a mount point's; any other is the file or folder it is, its content read through the filter; one whose tag cannot be read is a link, never followed. `Filesystem.Local/ReparsePoints`; `Filesystem.Local/WindowsInterop`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Tests/ReparsePointTests`; `Filesystem.Tests/LocalScanTests` |
 | 2026-11 | Accepted (related) | [ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) gives a link's form a key, format 6's manifest key 14, whose one value names a mount point. Nothing writes it yet, so a junction is still captured as a link with no form |
 | 2026-11 | Accepted (Amendment 1) | Capture names a junction a mount point: a link whose tag is a mount point's and whose target names a folder by its drive's path. From format 6 publication keeps the form in manifest key 14 and names it no more; below 6 it stays named among the diagnostics. A symbolic link, and a volume mounted on a folder, keep no form; inspect-manifest shows it; no restore reads it yet. `Filesystem.Local/ReparsePoints`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Local/PosixInterop`; `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Cli/CliApplication`; `Filesystem.Tests/ReparsePointTests`; `Filesystem.Tests/LocalScanTests`; `Domain.Tests/LinkFormTests`; `Repository.Tests/LinkFormCaptureTests`; `Cli.Tests/InspectionCommandTests` |
+| 2026-11 | Accepted (Amendment 2) | The engine's restore makes a junction a junction where the target makes one: a link captured as a mount point, in key 14 or its diagnostics, that names a drive's folder. Windows makes it through a mount-point reparse point set on the folder; one refused fails alone, in the refusal's words, and leaves nothing. A target that makes none makes a symbolic link to the same path, and its plan and receipt say so. `Domain/MountPoints`; `Domain/MetadataRules`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Domain.Tests/MountPointsTests`; `Repository.Tests/RestoreJunctionTests` |

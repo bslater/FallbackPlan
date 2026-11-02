@@ -86,6 +86,11 @@ namespace FallbackPlan.Restore;
 /// a folder's from its tree's key 11 (ADR-0180 Amendments 1 and 3), which
 /// the plan declares where the target will not set them (Amendment 4).
 /// </param>
+/// <param name="Junction">
+/// Whether it is a link captured as a junction
+/// (<see cref="MountPoints.IsJunction"/>), which the plan declares where the
+/// target makes none (ADR-0183 Amendment 2).
+/// </param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -106,7 +111,8 @@ public sealed record RestoreItemFacts(
     int StreamsOutsideUserNamespace = 0,
     int LongestStreamName = 0,
     ulong LargestStream = 0,
-    FileFlagBits Flags = FileFlagBits.None);
+    FileFlagBits Flags = FileFlagBits.None,
+    bool Junction = false);
 
 /// <summary>
 /// The files and the folders a restore would open wider than they were
@@ -360,6 +366,11 @@ public static class RestoreMetadata
     /// A target that sets every flag an item carries says nothing of it.
     /// </para>
     /// <para>
+    /// The links captured as Windows junctions that a target making none
+    /// will make as symbolic links to the same path are declared on a line of
+    /// their own (ADR-0183 Amendment 2).
+    /// </para>
+    /// <para>
     /// What the planner already says is not said twice. On a target that
     /// applies no POSIX metadata, its line covers permissions and ownership.
     /// Its alternate-streams line covers streams. Symlinks on a target that
@@ -407,6 +418,7 @@ public static class RestoreMetadata
         var fileFlags = new Tally();
         var flagMask = FileFlagBits.None;
         var flagsNeedPrivilege = false;
+        var junctions = new Tally();
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -423,6 +435,11 @@ public static class RestoreMetadata
             if (link && !target.SupportsSymlinks)
             {
                 continue;
+            }
+
+            if (link && known.Junction && !target.MakesJunctions)
+            {
+                junctions.Add(item.Kind);
             }
 
             var flagsUnset = known.Flags & ~(link ? target.SettableLinkFlags : target.SettableFlags);
@@ -709,6 +726,8 @@ public static class RestoreMetadata
         Add("file-flags", fileFlags, string.Create(CultureInfo.InvariantCulture,
             $"File flags captured on {fileFlags} will not be applied: "
             + $"{string.Join(", ", MetadataRules.FileFlagNamesOf(flagMask))}. This target does not set them{flagsWhy}."));
+        Add("junctions", junctions, string.Create(CultureInfo.InvariantCulture,
+            $"{junctions} captured as Windows junctions will be made as symbolic links to the same path: this target makes no junction."));
 
         return declared;
     }

@@ -512,6 +512,25 @@ public static class MetadataRules
         form == LinkForm.MountPoint ? MountPointDiagnostic : null;
 
     /// <summary>
+    /// What a restore's receipt says of a junction made a symbolic link to
+    /// the same path, on a target that makes no junction (ADR-0183
+    /// Amendment 2).
+    /// </summary>
+    public const string JunctionMadeAsALink = "made as a symbolic link: this target makes no junction";
+
+    /// <summary>
+    /// The form a link was captured with: the one manifest key 14 keeps,
+    /// from format 6, or the one its capture diagnostics name, before it. A
+    /// reader asks both, so a manifest of either form reads alike (ADR-0183
+    /// Amendment 2).
+    /// </summary>
+    public static LinkForm LinkFormOf(LinkForm kept, IEnumerable<string> diagnostics)
+    {
+        ThrowHelper.ThrowIfNull(diagnostics);
+        return kept == LinkForm.MountPoint || diagnostics.Contains(MountPointDiagnostic) ? LinkForm.MountPoint : LinkForm.SymbolicLink;
+    }
+
+    /// <summary>
     /// The form and diagnostics a link is written with in a repository of
     /// <paramref name="formatVersion"/>. From format 6 a mount point its
     /// diagnostics name is kept in manifest key 14 and named no more; below

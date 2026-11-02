@@ -55,7 +55,5 @@ internal static class ReparsePoints
     /// something a restore elsewhere can make again.
     /// </remarks>
     public static LinkForm FormOf(uint? tag, string? target) =>
-        tag == MountPointTag && target is [>= 'A' and <= 'Z' or >= 'a' and <= 'z', ':', '\\', ..]
-            ? LinkForm.MountPoint
-            : LinkForm.SymbolicLink;
+        tag == MountPointTag && MountPoints.NamesAFolderOnADrive(target) ? LinkForm.MountPoint : LinkForm.SymbolicLink;
 }

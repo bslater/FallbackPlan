@@ -139,6 +139,20 @@ public sealed record RestoreTargetProfile
     public IFileFlags Flags { get; init; } = FileFlags.OfThisPlatform;
 
     /// <summary>
+    /// Whether the executor makes a junction a junction on this target:
+    /// Windows does (<see cref="MountPoints.CanMake"/>; ADR-0183 Amendment
+    /// 2). Elsewhere a junction is made a symbolic link to the same path,
+    /// and the plan and the receipt say so.
+    /// </summary>
+    public bool MakesJunctions { get; init; }
+
+    /// <summary>
+    /// The calls a junction is made through: the platform's unless a caller
+    /// says otherwise, as a case judged on a platform that makes none does.
+    /// </summary>
+    public IMountPoints Junctions { get; init; } = MountPoints.OfThisPlatform;
+
+    /// <summary>
     /// Whether the executor writes a file's and a folder's Windows security
     /// descriptor back on this target: Windows keeps one, and nothing else
     /// does (ADR-0176). It is what the plan predicts by, with
@@ -263,6 +277,7 @@ public sealed record RestoreTargetProfile
         NormalisationInsensitive = OperatingSystem.IsMacOS(),
         SupportsPosixMetadata = !OperatingSystem.IsWindows(),
         SupportsSymlinks = SymbolicLinks.CanCreate,
+        MakesJunctions = MountPoints.CanMake,
         WindowsNamingRules = OperatingSystem.IsWindows(),
 
         // The filesystems Linux commonly creates hold 255 bytes in a name.
