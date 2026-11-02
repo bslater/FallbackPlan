@@ -72,6 +72,11 @@ public sealed class ArchiveSession : IAsyncDisposable
     // stall in the design, and worst precisely where it matters most, on a slow
     // or remote destination.
     private readonly Channel<SealedBlob> _uploads;
+
+    // Each failure an upload worker died of, by reference: the drain
+    // rethrows the very object, which is how a capture tells it apart from
+    // a read of its own.
+    private readonly ConcurrentDictionary<Exception, byte> _uploadFailures = new(ReferenceEqualityComparer.Instance);
     private readonly Task[] _uploadWorkers;
     private readonly Lock _blobGate = new();
     private readonly ReusePredicate? _mayReuseSegment;
@@ -814,6 +819,14 @@ public sealed class ArchiveSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="exception"/> is what a blob upload failed
+    /// with. It surfaces through whichever capture next hands the session a
+    /// blob, and is the store's failure, never that file's (ADR-0046
+    /// Amendment 3).
+    /// </summary>
+    public bool IsUploadFailure(Exception exception) => _uploadFailures.ContainsKey(exception);
+
     private async Task UploadWorkerAsync()
     {
         try
@@ -823,8 +836,10 @@ public sealed class ArchiveSession : IAsyncDisposable
                 await UploadAsync(sealedBlob).ConfigureAwait(false);
             }
         }
-        catch
+        catch (Exception exception)
         {
+            _uploadFailures.TryAdd(exception, 0);
+
             // A dead worker must not leave the producer parked. Without this the
             // failing worker simply stops reading: once every worker has gone the
             // same way and the bounded channel is full, SealAndQueueAsync blocks

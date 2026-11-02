@@ -1003,7 +1003,7 @@ public sealed partial class PublicationOrchestrator
                 RecordSourceIdentity(entry, objectId);
                 LastArchive = null;
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            catch (Exception exception) when (IsTheFilesOwn(exception))
             {
                 RecordFailure(entry, ClassifyFailure(exception), exception.Message);
             }
@@ -1192,7 +1192,7 @@ public sealed partial class PublicationOrchestrator
                     }
                 }
                 catch (IOException exception)
-                    when (exception is not FileNotFoundException and not DirectoryNotFoundException)
+                    when (exception is not FileNotFoundException and not DirectoryNotFoundException && !IsUploadFailure(exception))
                 {
                     // A failing medium and a file being rewritten under the
                     // reader raise the same exception type, and only
@@ -1376,7 +1376,7 @@ public sealed partial class PublicationOrchestrator
                             Encoding.UTF8.GetBytes(streamName), record.ObjectId, record.Length));
                     }
                 }
-                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                catch (Exception exception) when (IsTheFilesOwn(exception))
                 {
                     _failures.Add(new CaptureFailure(
                         SplitPath(entry.RelativePath),
@@ -1401,6 +1401,19 @@ public sealed partial class PublicationOrchestrator
             || probe.Length != entry.Length
             || (probe.ModifiedAtMs is not null && entry.Metadata.ModifiedAt is not null &&
                 probe.ModifiedAtMs != entry.Metadata.ModifiedAt);
+
+        /// <summary>
+        /// Whether a failure raised while a file was captured is that file's:
+        /// an I/O or access failure, and not a blob the store would not take.
+        /// A blob is sealed and handed over inside whichever capture fills
+        /// it, so the store's failure surfaces there; it fails the run at
+        /// once, in the store's words (ADR-0046 Amendment 3).
+        /// </summary>
+        private bool IsTheFilesOwn(Exception exception) =>
+            exception is IOException or UnauthorizedAccessException && !IsUploadFailure(exception);
+
+        private bool IsUploadFailure(Exception exception) =>
+            session.IsUploadFailure(exception) || builder.IsUploadFailure(exception);
 
         /// <summary>Counts, logs and records one file's failure — the walker's single door out.</summary>
         private void RecordFailure(ScanEntry entry, CaptureFailureReason reason, string detail)

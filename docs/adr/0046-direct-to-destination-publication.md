@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** FR-DEST-002, FR-DEST-003, FR-DEST-013, FR-DEST-015, FR-DEST-016, NFR-PERF-001
+**Requirements:** FR-DEST-002, FR-DEST-003, FR-DEST-013, FR-DEST-015 (amended by [Amendment 3](#amendment-3-2026-11--a-blob-the-store-will-not-take-fails-the-run-at-once-never-a-file): a blob the store will not take fails the run at once, never a file), FR-DEST-016, NFR-PERF-001
 **Related:** [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0047](0047-backup-pool-and-priorities.md), [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0011](0011-commit-versus-replication-semantics.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0062](0062-the-destination-is-the-rollback-witness.md), [architecture 04 §5](../architecture/04-concurrency-and-publication.md)
 
 ---
@@ -62,6 +62,9 @@ blob key), the rename-manifest optimisation, and collision read-backs.
    — a journal intent nothing retired, exactly an interrupted copy's state,
    healed by the next catch-up. When the last destination fails, the run
    fails through the pipeline's ordinary interruption safety.
+
+   > **2026-11 ([Amendment 3](#amendment-3-2026-11--a-blob-the-store-will-not-take-fails-the-run-at-once-never-a-file)).** It failed only once it had read the whole source, having taken each refused blob for a file's own failure. It now fails at once.
+
 4. **No reachable destination refuses the capture.** The owner's accepted
    consequence of holding no local copy: with every destination away there
    is nowhere to write, and the run says so (a recoverable failure the next
@@ -239,6 +242,30 @@ gives up — that staging holds nothing a destination lacks — was never true
 of a set under retention, and asserting it only postponed the reckoning to
 a disk that had filled.
 
+## Amendment 3 (2026-11) — a blob the store will not take fails the run at once, never a file
+
+Decision 3 says that when the last destination fails, the run fails through the pipeline's ordinary interruption safety. It did fail, but only once it had read the whole source.
+
+- **Where the failure surfaced.** A blob is sealed inside whichever file's capture fills it, and handed to an upload worker. A worker that fails closes the queue, and the next seal rethrows its failure, inside the next file's capture.
+- **What took it.** That capture's handler takes any I/O failure for the file's own. So it recorded the file as not captured, logged "Could not capture", and went on, one more file blamed for each blob.
+- **When the run failed.** Only when the last seal drained the queue, at the end of the source.
+- **A metadata blob went the same way,** sealed and put inside the capture whose manifest filled it. The next file's manifest then reached a writer already disposed, and the run failed with an error naming neither the store nor any file.
+
+A direct-ship set whose only destination was a FAT32 drive met this ([ADR-0012 Amendment 6](../adr/0012-storage-provider-contract.md#amendment-6-2026-11--a-local-destination-on-a-drive-that-holds-no-links) is the drive's failure). Sixty-two photos were named as not captured, over five minutes of reading, before the run failed. A staging archive whose disk fills meets it the same way.
+
+**Decision.** A failure raised by a blob's seal or upload is the store's, never a file's: the capture lets it through, and the run fails at once, in the store's words.
+
+- **Each failure is kept by reference.** The archive session keeps each failure an upload worker died of. The manifest builder keeps each failure a metadata blob's seal or put raised. The drain rethrows the very object, which is how a capture tells it apart from a read of its own.
+- **Three places ask before blaming the file:** a file's capture, an alternate stream's, and a read that failed while revalidation said the file was changing. That last read is still the file's, as before, unless what failed is a blob the store would not take.
+- **The failure keeps its type.** A store that is full, busy or over a quota is still told apart wherever the run's failure is read.
+
+**Built:** `Repository/ArchiveSession`; `Repository/ManifestBuilder`; `Repository/SnapshotPublication`:
+
+- `Repository.Tests/UploadFailureTests`, a store that takes two blobs and refuses every one after:
+  - fails the run in the store's words, logs no file as not captured, and stops reading the source within a few blobs of the refusal;
+  - does the same where every file is changing under the reader;
+  - and where the blobs it refuses are metadata blobs.
+
 ## Status history
 
 | Date | Status | Note |
@@ -255,3 +282,4 @@ a disk that had filled.
 | 2026-09 | Amended (retirement gate regated) | Amendment 2: the migration row above recorded the gate as "every non-lifecycle object it holds is present in the union of the destinations", and that rule never terminates. Publication follows the snapshot graph, and under a per-destination policy the keep-set closure (FR-GC-010), so a staged blob that no live snapshot reaches — history a policy dropped, bytes an interrupted run left behind — is invisible to every pass that could carry it. The archive was then refused for ever and its disk space held hostage, which is the one thing retirement exists to release; a live install met this with twenty-nine such objects and a toast telling it to run a pass that could not help. The gate now refuses exactly while deletion would cost something: a blob reachable from a snapshot the repository still lists that no destination holds, or a non-blob object the flip's migration never carried into the metadata store (the metadata plane's own belt and braces). Everything else goes with the archive and is counted in the result. Refusals name example keys instead of a bare count. `Hosts.Tests/DirectShipMigrationTests` holds both directions |
 | 2026-09 | Built (console ceremonies corrected) | The "hardened" row above overclaimed: the restore gate did scan the metadata stores, but its two siblings in `Web/ConsoleRestoreGate` never learned to. Rebuilding an interrupted setup's recovery kit searched `<archives>/<set id>` alone, so an install whose every set ships direct — the default for new local-path sets since the previous row — answered every rebuild with "no archive of this installation exists yet" and could never leave the setup gate (FR-KIT-004). Write-only provisioning had the same blind spot with a quieter failure: finding no descriptor it took the *creation* branch, minting a fresh salt for a set whose repository already existed. Both now resolve repositories through one shared root list, and the kit searches the installation rather than a caller-supplied set list — one passphrase stamps every archive, so any descriptor is as good a witness. The service also stopped calling a direct-ship set's restore source "staging" |
 | 2026-09 | Amended (peer write adapter) | The last stated tail is discharged by [ADR-0058](0058-peer-write-adapter.md): `Agent/PeerShipStore` presents one live replication push session as an `IObjectStore`, so a peer is a shipment like any other — priority-ordered with its siblings, dropped by the same rule, recorded in the same ledger — and a set whose backups live at a friend's house and nowhere else captures without keeping a staging copy of them on the machine they exist to survive. `Agent/FanOut` gained the honest half: a pass with no evidence independent of the destination records no verification rather than stamping one drawn from the metadata plane it happens to keep locally. A peer-only set's default is unchanged and now has a reason rather than an incapacity behind it. `Hosts.Tests/DirectShipPeerTests` holds the shipping, `Hosts.Tests/DirectShipTests` the boundary |
+| 2026-11 | Amended (a store's failure fails the run) | Amendment 3: a failure raised by a blob's seal or upload is the store's, never a file's. The archive session and the manifest builder keep each such failure by reference, and a capture lets one through, so the run fails at once in the store's words instead of naming a file per blob as not captured and reading the rest of the source. `Repository/ArchiveSession`; `Repository/ManifestBuilder`; `Repository/SnapshotPublication`; `Repository.Tests/UploadFailureTests` |
