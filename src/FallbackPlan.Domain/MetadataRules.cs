@@ -439,15 +439,6 @@ public static class MetadataRules
         [.. FileFlagNames.Where(entry => flags.HasFlag(entry.Flag)).Select(entry => entry.Name)];
 
     /// <summary>
-    /// What a restore says of <paramref name="flags"/> a file carried, none
-    /// of which it sets, or null where there are none (ADR-0180 Amendment 1).
-    /// </summary>
-    public static string? FileFlagsNotApplied(FileFlagBits flags) =>
-        flags == FileFlagBits.None
-            ? null
-            : $"file flag(s) not applied: {string.Join(", ", FileFlagNamesOf(flags))} (not set by a restore)";
-
-    /// <summary>
     /// What a restore's receipt says of the <paramref name="wanted"/> flags
     /// an item was captured with, of which <paramref name="landed"/> were
     /// given back: each that was not, or null where every one was (ADR-0180

@@ -71,15 +71,6 @@ public sealed class FileFlagsTests
     }
 
     [TestMethod]
-    public void WhatARestoreDoesNotApply_NamesEachFlag_AndNothingWhereThereAreNone()
-    {
-        Assert.IsNull(MetadataRules.FileFlagsNotApplied(FileFlagBits.None));
-        Assert.AreEqual(
-            "file flag(s) not applied: immutable, no-dump (not set by a restore)",
-            MetadataRules.FileFlagsNotApplied(FileFlagBits.NoDump | FileFlagBits.Immutable));
-    }
-
-    [TestMethod]
     public void TheDiagnostic_ReadsBackAsTheFlagsItNamed_AmongOthers()
     {
         for (var flags = FileFlagBits.None; flags <= (FileFlagBits)0x3F; flags++)

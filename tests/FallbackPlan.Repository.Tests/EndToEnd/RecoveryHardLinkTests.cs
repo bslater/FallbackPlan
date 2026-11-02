@@ -55,7 +55,7 @@ public sealed class RecoveryHardLinkTests : IDisposable
     }
 
     [TestMethod]
-    public async Task RecoveryRestore_ALinkedName_NotesTheFlagsItsFileDidNotGet_AsTheFirstNameDoes()
+    public async Task RecoveryRestore_ALinkedName_NotesTheFlagsItsFileDidNotGet_AsTheFirstNameDoes_WhereThisPlatformSetsNone()
     {
         var source = new FakeFileSystemSource();
         var content = Deterministic(5_000, 7);
@@ -70,7 +70,9 @@ public sealed class RecoveryHardLinkTests : IDisposable
 
         AssertOneFile(Path.Combine(output, "docs", "a.bin"), Path.Combine(output, "docs", "b.bin"));
         CollectionAssert.AreEqual(
-            new[] { "docs/a.bin: file flag(s) not applied: no-dump (not set by a restore)", "docs/b.bin: file flag(s) not applied: no-dump (not set by a restore)" },
+            FileFlags.Settable(EntryKind.File).HasFlag(FileFlagBits.NoDump)
+                ? Array.Empty<string>()
+                : new[] { "docs/a.bin: file flag(s) not applied: no-dump", "docs/b.bin: file flag(s) not applied: no-dump" },
             report.Notes.Select(note => note.ToString()).ToArray());
     }
 

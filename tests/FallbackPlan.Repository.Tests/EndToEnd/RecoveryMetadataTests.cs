@@ -267,39 +267,55 @@ public sealed class RecoveryMetadataTests : IDisposable
     }
 
     [TestMethod]
-    public async Task RecoveryRestore_AFilesFlags_AreNoted_AndTheFileStillRestores()
+    public async Task RecoveryRestore_AFilesFlags_AreGivenBackWhereThisPlatformMay_TheRestNoted_AndTheFileStillRestores()
     {
+        // No-dump and hidden leave a file free to delete wherever they land.
         var source = new FakeFileSystemSource();
-        var flagged = source.AddFile("locked.bin", Deterministic(700, 11));
+        var flagged = source.AddFile("marked.bin", Deterministic(700, 11));
         flagged.Metadata = new EntryMetadata { ModifiedAt = FileModified };
-        flagged.Diagnostics = ["file-flags: immutable, no-dump"];
+        flagged.Diagnostics = ["file-flags: no-dump, hidden"];
         source.AddFile("plain.bin", Deterministic(700, 12)).Metadata = new EntryMetadata { ModifiedAt = FileModified };
 
         var (report, _) = await RestoreAsync(source);
 
         Assert.AreEqual((2, 0), (report.Restored, report.Failed));
-        var note = Assert.ContainsSingle(report.Notes);
-        Assert.AreEqual((RecoveryNoteKind.FlagsNotApplied, "locked.bin"), (note.Kind, note.Path));
-        Assert.AreEqual("locked.bin: file flag(s) not applied: immutable, no-dump (not set by a restore)", note.ToString());
+        AssertFlagsNoted(report, "marked.bin", FileFlagBits.NoDump | FileFlagBits.Hidden);
         Assert.IsNull(report.DescribeNotApplied(), "no metadata key holds a flag, so none is counted among them");
     }
 
     [TestMethod]
-    public async Task AtFormatSix_RecoveryRestore_AFilesFlagsKeyElevenKeeps_AreNoted_AndTheFileStillRestores()
+    public async Task AtFormatSix_RecoveryRestore_AFilesFlagsKeyElevenKeeps_AreGivenBackWhereThisPlatformMay_TheRestNoted()
     {
         var source = new FakeFileSystemSource();
-        var flagged = source.AddFile("locked.bin", Deterministic(700, 13));
+        var flagged = source.AddFile("marked.bin", Deterministic(700, 13));
         flagged.Metadata = new EntryMetadata { ModifiedAt = FileModified };
-        flagged.Diagnostics = ["file-flags: immutable, no-dump"];
+        flagged.Diagnostics = ["file-flags: no-dump, hidden"];
         source.AddFile("plain.bin", Deterministic(700, 14)).Metadata = new EntryMetadata { ModifiedAt = FileModified };
 
         var (report, _) = await RestoreAsync(source, FormatVersions.FileFlagsAndLinkForms);
 
         Assert.AreEqual((2, 0), (report.Restored, report.Failed));
-        var note = Assert.ContainsSingle(report.Notes);
-        Assert.AreEqual((RecoveryNoteKind.FlagsNotApplied, "locked.bin"), (note.Kind, note.Path));
-        Assert.AreEqual("locked.bin: file flag(s) not applied: immutable, no-dump (not set by a restore)", note.ToString());
+        AssertFlagsNoted(report, "marked.bin", FileFlagBits.NoDump | FileFlagBits.Hidden);
         Assert.IsNull(report.DescribeNotApplied(), "key 11 is not among the keys a restore counts not applied");
+    }
+
+    /// <summary>
+    /// That <paramref name="path"/>'s flags were given back where this
+    /// platform sets them, and noted where it does not: on Linux the hidden
+    /// flag, on Windows both (ADR-0180 Amendment 5).
+    /// </summary>
+    private static void AssertFlagsNoted(RecoveryRestoreReport report, string path, FileFlagBits wanted)
+    {
+        if (MetadataRules.FileFlagsNotApplied(wanted, wanted & FileFlags.Settable(EntryKind.File)) is { } words)
+        {
+            var note = Assert.ContainsSingle(report.Notes);
+            Assert.AreEqual((RecoveryNoteKind.FlagsNotApplied, path), (note.Kind, note.Path));
+            Assert.AreEqual($"{path}: {words}", note.ToString());
+        }
+        else
+        {
+            Assert.IsEmpty(report.Notes, "every flag was given back, so none is noted");
+        }
     }
 
     [TestMethod]

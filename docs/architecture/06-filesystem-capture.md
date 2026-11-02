@@ -110,6 +110,8 @@ For each metadata class and target platform: **preserve** it, **degrade** it and
 > **2026-11 ([ADR-0180 Amendment 3](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)).** From format 6 capture keeps them there, a folder's as well as a file's, and names them no more. A restore still gives none back.
 >
 > **2026-11 ([ADR-0180 Amendment 4](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may)).** The engine's restore gives them back where the platform and the account let it: on Linux no-dump, and immutable and append-only with `CAP_LINUX_IMMUTABLE`, none on a link; on macOS the owner's immutable, append-only, no-dump and hidden flags, a link's too. So the immutable-flags row is preserved where the target sets them and degraded and reported elsewhere. Compressed and encrypted are set by no restore. The recovery tool and `restore-file` do not yet give them back.
+>
+> **2026-11 ([ADR-0180 Amendment 5](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-5-2026-11--the-recovery-tool-and-the-single-file-restore-give-them-back-too)).** The recovery tool and `restore-file` give them back by the same rule, and name only those that did not land.
 
 > **2026-10 ([ADR-0178 Amendment 2](../adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-2-2026-10--the-console-asks-for-the-acknowledgement)).** The console asks too: its restore wizard says how many files a folder would open wider, and runs only once the person acknowledges it.
 
