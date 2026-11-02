@@ -283,7 +283,7 @@ public sealed class InspectionCommandTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Linux, "Linux keeps a file's inode flags")]
     [PlatformTrait(TestPlatforms.Linux)]
-    public async Task RestoreFile_AFileCapturedWithFlags_SaysItDidNotGiveThemBack()
+    public async Task RestoreFile_AFileCapturedWithFlags_GetsBackWhatThisPlatformMaySet_AndSaysNothingOfThem()
     {
         await _cli.InitAsync();
         var source = _cli.WriteFile("flags/a.txt", "restore-file flags");
@@ -299,7 +299,8 @@ public sealed class InspectionCommandTests : IDisposable
         var restore = await _cli.RunAsync("restore-file", "--snapshot", snapshot.Value, "--output", destination);
 
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
-        Assert.Contains("file flag(s) not applied: no-dump (not set by a restore)", restore.Output, StringComparison.Ordinal);
+        Assert.AreEqual(DiskFlags.LinuxNoDump, DiskFlags.OnLinux(destination) & DiskFlags.LinuxNoDump, restore.All);
+        Assert.DoesNotContain("file flag(s)", restore.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]

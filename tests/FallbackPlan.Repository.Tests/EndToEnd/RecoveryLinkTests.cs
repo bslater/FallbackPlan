@@ -74,7 +74,7 @@ public sealed class RecoveryLinkTests : IDisposable
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "a link needs no privilege to create only on a POSIX host")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task RecoveryRestore_ALinksFlags_AreNoted_AndTheLinkStillRestores()
+    public async Task RecoveryRestore_ALinksFlags_AreSetWhereThisPlatformSetsALinks_TheRestNoted_AndTheLinkStillRestores()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("data/target.bin", [1, 2, 3]);
@@ -83,10 +83,18 @@ public sealed class RecoveryLinkTests : IDisposable
 
         var report = await RestoreIntoAsync(source, output);
 
+        // macOS sets a link's own hidden flag; Linux sets nothing on a link.
         Assert.AreEqual((2, 0), (report.Restored, report.Failed));
-        var note = Assert.ContainsSingle(report.Notes);
-        Assert.AreEqual((RecoveryNoteKind.FlagsNotApplied, "link"), (note.Kind, note.Path));
-        Assert.AreEqual("link: file flag(s) not applied: hidden (not set by a restore)", note.ToString());
+        if (FileFlags.Settable(EntryKind.Symlink).HasFlag(FileFlagBits.Hidden))
+        {
+            Assert.IsEmpty(report.Notes);
+        }
+        else
+        {
+            var note = Assert.ContainsSingle(report.Notes);
+            Assert.AreEqual((RecoveryNoteKind.FlagsNotApplied, "link"), (note.Kind, note.Path));
+            Assert.AreEqual("link: file flag(s) not applied: hidden", note.ToString());
+        }
     }
 
     [TestMethod]

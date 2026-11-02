@@ -443,6 +443,16 @@ public sealed class RecoverySession : IDisposable
     /// (ADR-0086). A run that stops part way settles the folders it made.
     /// </para>
     /// <para>
+    /// Flags go on as the executor's do (ADR-0180 Amendment 5): a file's and
+    /// a link's once the whole tree has landed, because an immutable or
+    /// append-only file takes no further name and an immutable one no
+    /// further write, a hard-link group's file once under its first name,
+    /// and a folder's last in its settle. Each is set only onto what still
+    /// stands where it landed, reached through folders the tool made. A run
+    /// that stops part way sets none. Each item notes the flags that did not
+    /// land.
+    /// </para>
+    /// <para>
     /// The output folder is the person's choice and keeps its own, as a
     /// folder already in the output does. A write the target refuses leaves
     /// that attribute not applied and never fails the entry; the report
@@ -518,19 +528,40 @@ public sealed class RecoverySession : IDisposable
         // tool wrote there named (ADR-0170 Amendment 4).
         var landed = new NamesLanded();
 
+        // Each file and link landed with flags, in the order they landed, for
+        // the pass that sets them once nothing more lands.
+        var flagged = new List<(string Path, string Destination, FileFlagBits Wanted, EntryKind Kind, string? Shares)>();
+        var completed = false;
+
         try
         {
             await WalkAsync(rootTree, string.Empty, folder: null).ConfigureAwait(false);
+            completed = true;
         }
         finally
         {
+            if (completed)
+            {
+                SetFlags();
+            }
+
             foreach (var folder in folders.OrderByDescending(folder => Depth(folder.Path)))
             {
+                var settled = !folder.Found && IsStillTheFolderMade(root, folder.Path);
                 Count(
                     folder.Captured,
-                    !folder.Found && IsStillTheFolderMade(root, folder.Path)
+                    settled
                         ? writer.Write(folder.Destination, folder.Values, EntryKind.DirectoryPlaceholder).Applied
                         : CapturedMetadata.None);
+
+                // Its flags last: an immutable folder refuses its own times too.
+                if (completed)
+                {
+                    NoteFlags(
+                        folder.Path,
+                        folder.Values.FileFlags,
+                        settled ? writer.WriteFlags(folder.Destination, folder.Values.FileFlags, EntryKind.DirectoryPlaceholder) : FileFlagBits.None);
+                }
             }
         }
 
@@ -700,7 +731,7 @@ public sealed class RecoverySession : IDisposable
                         {
                             restored++;
                             landed.Add(path);
-                            NoteFlags(manifest, path);
+                            Flag(manifest, path, destination, EntryKind.Symlink);
                         }
                         else
                         {
@@ -739,7 +770,7 @@ public sealed class RecoverySession : IDisposable
                             restored++;
                             landed.Add(path);
                             Count(MetadataRules.Captured(manifest.Metadata), first.Applied);
-                            NoteFlags(manifest, path);
+                            Flag(manifest, path, destination, EntryKind.File, shares: first.Landing);
                             continue;
                         }
                         else
@@ -753,7 +784,7 @@ public sealed class RecoverySession : IDisposable
                     {
                         restored++;
                         landed.Add(path);
-                        NoteFlags(manifest, path);
+                        Flag(manifest, path, destination, EntryKind.File);
                         if (group is not null)
                         {
                             groups.TryAdd(group, (key!, destination, applied));
@@ -780,13 +811,45 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
-        // No restore sets a file's flags, so each item that carried them says
-        // so in the receipt's words (ADR-0180 Amendment 2).
-        void NoteFlags(FileVersionManifest manifest, string path)
+        // A later name of a hard-link group shares its first name's file,
+        // whose flags are set once.
+        void Flag(FileVersionManifest manifest, string path, string destination, EntryKind kind, string? shares = null)
         {
-            if (MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics)) is { } flags)
+            if (MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics) is var wanted && wanted != FileFlagBits.None)
             {
-                notes.Add(new RecoveryNote(RecoveryNoteKind.FlagsNotApplied, path, Reason: flags));
+                flagged.Add((path, destination, wanted, kind, shares));
+            }
+        }
+
+        // Once the tree has landed and before any folder settles. What stands
+        // where an item landed is held to what landed there, as a folder is
+        // before it settles, because the run has been long.
+        void SetFlags()
+        {
+            var given = new Dictionary<string, FileFlagBits>(StringComparer.Ordinal);
+            foreach (var (path, destination, wanted, kind, shares) in flagged)
+            {
+                FileFlagBits flags;
+                if (shares is { } first)
+                {
+                    flags = given.GetValueOrDefault(first) & wanted;
+                }
+                else
+                {
+                    flags = IsStillWhatLanded(root, path, destination, kind) ? writer.WriteFlags(destination, wanted, kind) : FileFlagBits.None;
+                    given[destination] = flags;
+                }
+
+                NoteFlags(path, wanted, flags);
+            }
+        }
+
+        // Each item notes, in the receipt's words, the flags that did not land.
+        void NoteFlags(string path, FileFlagBits wanted, FileFlagBits given)
+        {
+            if (MetadataRules.FileFlagsNotApplied(wanted, given) is { } words)
+            {
+                notes.Add(new RecoveryNote(RecoveryNoteKind.FlagsNotApplied, path, Reason: words));
             }
         }
 
@@ -1005,6 +1068,17 @@ public sealed class RecoverySession : IDisposable
 
     /// <summary>How many folders deep <paramref name="path"/> lies.</summary>
     private static int Depth(string path) => path.Count(character => character == '/');
+
+    /// <summary>
+    /// Whether what stands at <paramref name="destination"/> is still what
+    /// the tool landed there for <paramref name="path"/>: reached through
+    /// folders it made, none a link, and a file of its own or a link, as
+    /// <paramref name="kind"/> says it was.
+    /// </summary>
+    private static bool IsStillWhatLanded(string outputDirectory, string path, string destination, EntryKind kind) =>
+        (path.LastIndexOf('/') is var slash && (slash < 0 || IsStillTheFolderMade(outputDirectory, path[..slash])))
+        && new FileInfo(destination) is var info
+        && (kind == EntryKind.Symlink ? info.LinkTarget is not null : info is { Exists: true, LinkTarget: null });
 
     /// <summary>
     /// Whether every folder from <paramref name="outputDirectory"/> down to

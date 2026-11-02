@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics); FR-RST-003 and FR-RST-004 (amended by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back): the plan and the receipt name the flags a restore does not set; FR-RST-004 amended again by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too): so do the recovery tool and `restore-file`); FR-MAN-003 amended again by [Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too): from format 6 a file's and a folder's flags are kept in metadata key 11; FR-RST-003 and FR-RST-004 amended again by [Amendment 4](#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may): the engine's restore gives a file's, a folder's and a link's flags back where the target sets them, and names only those it does not
+**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics); FR-RST-003 and FR-RST-004 (amended by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back): the plan and the receipt name the flags a restore does not set; FR-RST-004 amended again by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too): so do the recovery tool and `restore-file`); FR-MAN-003 amended again by [Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too): from format 6 a file's and a folder's flags are kept in metadata key 11; FR-RST-003 and FR-RST-004 amended again by [Amendment 4](#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may): the engine's restore gives a file's, a folder's and a link's flags back where the target sets them, and names only those it does not; FR-RST-004 amended again by [Amendment 5](#amendment-5-2026-11--the-recovery-tool-and-the-single-file-restore-give-them-back-too): so do the recovery tool and `restore-file`
 **Related:** [ADR-0026](0026-phase-1-capture-shapes.md) §2 (the `capture_diagnostics` vocabulary, which gains `file-flags:`), [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) (Windows' own attribute bits, which a format key keeps), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (immutable and system flags, and compression and encryption attributes, degraded and reported on Linux and macOS), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 13)
 
 **Built:**
@@ -62,6 +62,8 @@ An incremental passes over a file whose identity, size, modification time and me
   > **2026-11: capture keeps them there from format 6 ([Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)).** No restore gives one back yet.
   >
   > **2026-11: the engine's restore gives them back where the platform and the account let it ([Amendment 4](#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may)).** The recovery tool and `restore-file` do not yet.
+  >
+  > **2026-11: and so do the recovery tool and `restore-file` ([Amendment 5](#amendment-5-2026-11--the-recovery-tool-and-the-single-file-restore-give-them-back-too)).**
 - **Say so on restore.** The plan and the receipt do not yet name a file whose flags were not given back. That is the next record's.
 
   > **2026-10: taken up by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back)** for the engine's restore: its plan and its receipt name a file's flags. The recovery tool and `restore-file` do not yet.
@@ -119,6 +121,8 @@ Amendment 1 left the recovery tool and `restore-file` silent: a file recovered w
 - `Repository.Tests/RecoveryLinkTests`: on a POSIX host, a link's flags are noted and the link restores;
 - `Repository.Tests/RecoveryHardLinkTests`: a later name of a group is noted as its first name is;
 - `Cli.Tests/InspectionCommandTests`: on Linux, `restore-file` of a file backed up with the no-dump flag says it was not given back.
+
+> **2026-11 ([Amendment 5](#amendment-5-2026-11--the-recovery-tool-and-the-single-file-restore-give-them-back-too)).** Both now give the flags back by Amendment 4's rule, and name only those that did not land, in words that no longer say no restore sets them.
 
 ## Amendment 3 (2026-11) — format 6 keeps the flags, a folder's too
 
@@ -199,6 +203,8 @@ Amendments 1 to 3 named the flags a restore did not give back, and it gave none 
 **Not done.**
 
 - **The recovery tool and `restore-file` give no flag back.** They still say so in Amendment 2's words. That is the next record's.
+
+  > **2026-11: taken up by [Amendment 5](#amendment-5-2026-11--the-recovery-tool-and-the-single-file-restore-give-them-back-too).**
 - **A folder that already stands keeps its own flags**, as it keeps the rest of its metadata ([ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md)).
 - **An immutable file at the destination is not cleared to replace it**, whether a person set it or an earlier restore did.
 
@@ -222,6 +228,34 @@ Amendments 1 to 3 named the flags a restore did not give back, and it gave none 
 - `Repository.Tests/RestoreMetadataHonestyTests`: the plan names only the flags the target will not set, counting only the files that carry them, says where the privilege is why, and names none where the target sets them all; at format 6 a folder's facts carry its tree's flags, which the plan counts; on a target that sets none, the receipt names each flag as before.
 - `Repository.Tests/RestoreHardLinkTests`: a later name of a group names what its first name names.
 
+## Amendment 5 (2026-11) — the recovery tool and the single-file restore give them back too
+
+Amendment 4 had the engine's restore give the flags back, and left the recovery tool and `restore-file` naming every flag as not applied, in Amendment 2's words that no restore sets them. Both write a file's metadata by the executor's rule (ADR-0149, ADR-0150), so they should give back what it gives back.
+
+**Decision.** Both set a file's, a folder's and a link's flags by Amendment 4's rule, through `MetadataWriter.WriteFlags`, onto this platform as the account running them, and name only those that did not land, in the receipt's words (`MetadataRules.FileFlagsNotApplied`).
+
+- **The recovery tool sets them as the executor does.**
+  - It notes each file and link it lands with flags, and sets them in one pass once the whole tree has landed, before any folder settles. A hard-link group's file is set once, under its first name, and every name notes what the file got.
+  - A folder's flags go on last in its settle, after its times, and only onto a folder the tool made that still stands where it made it.
+  - Each is set only onto what still stands where it landed, reached through folders the tool made. A link put in a file's place gets nothing, and the file's flags are noted.
+  - A run that stops part way sets none.
+  - The note, `FlagsNotApplied`, names only what did not land. The report's count of attributes not applied still names no flag.
+- **`restore-file` sets the file's flags last**, after the rest of its metadata, and prints a line only for those that did not land.
+- **The one-argument wording goes.** Nothing says any longer that no restore sets a flag.
+
+**Not done.** The consequences Amendment 4 records hold here too: a file given back immutable cannot be replaced by a later recovery or `restore-file` into the same place.
+
+**Built:** `Recovery/RecoverySession`; `Cli/CliApplication`; `Domain/MetadataRules`:
+
+- `Repository.Tests/RecoveryFileFlagsTests` (on Linux and macOS):
+  - a file, its hard-link group and a folder get back what this platform and the account may set, and each notes the rest; the group is still one file, and the folder has its times;
+  - none is set through a link put where a file landed, nor through one put where a folder above it landed, which the platform's call would follow, and the file's flags are noted;
+  - a run that stops part way sets no file's flag and no folder's.
+- `Repository.Tests/RecoveryMetadataTests`: a file's no-dump and hidden flags are given back where this platform sets them and noted where it does not, below format 6 and at it.
+- `Repository.Tests/RecoveryLinkTests`: on a POSIX host a link's hidden flag is set on macOS and noted on Linux.
+- `Repository.Tests/RecoveryHardLinkTests`: a later name of a group notes what its first name notes, which is nothing where this platform sets no-dump.
+- `Cli.Tests/InspectionCommandTests`: on Linux `restore-file` gives back the no-dump flag a file was backed up with, and says nothing of it.
+
 ## Status history
 
 | Date | Status | Note |
@@ -232,3 +266,4 @@ Amendments 1 to 3 named the flags a restore did not give back, and it gave none 
 | 2026-11 | Accepted (related) | [ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) gives the flags a key, format 6's metadata key 11, which a tree's metadata carries too. Nothing writes it yet, so capture still names them among a file's diagnostics and no restore gives one back |
 | 2026-11 | Accepted (Amendment 3) | From format 6 publication keeps a file's and a folder's flags in metadata key 11 and names them no more, the scanner naming a folder's too; the digest counts them alike wherever kept, so an upgrade restates nothing; every reader takes either form, and `inspect-manifest` shows them. `Domain/MetadataRules`; `Repository.Format/Manifests/FileVersionManifestCodec`; `Repository/SnapshotPublication`; `Filesystem.Local/LocalFileSystemSource`; `Cli/CliApplication`; `Domain.Tests/FileFlagsTests`; `Repository.Tests/FileFlagsCaptureTests`; `Repository.Tests/MetadataOnlyChangeTests`; `Cli.Tests/InspectionCommandTests` |
 | 2026-11 | Accepted (Amendment 4) | The engine's restore gives a file's, a folder's and a link's flags back where the platform and the account let it: Linux's no-dump, and immutable and append-only with `CAP_LINUX_IMMUTABLE`, none on a link; macOS's owner's four, a link's too; a file's and a link's once every item has landed, a folder's last in its settle, none by a stopped run; the plan names only the flags the target will not set, counting folders, and the receipt only those that did not land. `Domain/FileFlags`; `Domain/LinuxCapabilities`; `Domain/MetadataWriter`; `Domain/MetadataTarget`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Domain.Tests/FileFlagWriteTests`; `Repository.Tests/RestoreFileFlagsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
+| 2026-11 | Accepted (Amendment 5) | The recovery tool and `restore-file` give a file's, a folder's and a link's flags back by Amendment 4's rule: the tool sets a file's and a link's once the tree has landed, a group's once, a folder's last in its settle, none through a link put in a file's place, and none in a run that stops; each notes only what did not land, and `restore-file` prints only that. `Recovery/RecoverySession`; `Cli/CliApplication`; `Domain/MetadataRules`; `Repository.Tests/RecoveryFileFlagsTests`; `Repository.Tests/RecoveryMetadataTests`; `Repository.Tests/RecoveryLinkTests`; `Repository.Tests/RecoveryHardLinkTests`; `Cli.Tests/InspectionCommandTests` |

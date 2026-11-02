@@ -1005,7 +1005,11 @@ public static class CliApplication
                 var streamsWritten = await WriteBackStreamsAsync(reader, outputPath, manifest.Metadata, cancellationToken)
                     .ConfigureAwait(false);
                 WriteBackMetadata(outputPath, manifest.Metadata, capturedHere, streamsWritten);
-                if (MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics)) is { } flags)
+
+                // Its flags last, as the executor's go on (ADR-0180 Amendment 5).
+                var wanted = MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics);
+                var given = new MetadataWriter(MetadataTarget.ForLocalPlatform()).WriteFlags(outputPath, wanted, EntryKind.File);
+                if (MetadataRules.FileFlagsNotApplied(wanted, given) is { } flags)
                 {
                     output.WriteLine(flags);
                 }
