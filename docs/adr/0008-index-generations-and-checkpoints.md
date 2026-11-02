@@ -1,6 +1,6 @@
 # ADR-0008 — Index generations, deltas, and checkpoints
 
-**Status:** Accepted (amended 2026-08 after [pressure test](../review/2026-08-fix-pressure-test.md); amended 2026-10) · Partly built — see [implementation status](../implementation-status.md#0008-0017--the-deltas-are-built-format-5-checkpoints-them-and-two-writers-are-ranked-by-id)
+**Status:** Accepted (amended 2026-08 after [pressure test](../review/2026-08-fix-pressure-test.md); amended 2026-10 and 2026-11) · Partly built — see [implementation status](../implementation-status.md#0008-0017--the-deltas-are-built-format-5-checkpoints-them-and-two-writers-are-ranked-by-id)
 **Date:** 2026-08
 **Requirements:** FR-MAN-008, FR-MAN-013, NFR-SEC-005, NFR-PERF-005
 **Review finding:** [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)
@@ -210,6 +210,11 @@ built; that design comes next, under this record.
   the loader applies any checkpoint it finds. Only tests publish one.
 - **The rollback witness.** It reads the deltas' sequences and the journal
   keys. It would read checkpoint watermarks too, but none is ever written.
+
+  > **Amended 2026-11 ([Amendment 4](#amendment-4-2026-11--the-witness-counts-the-number-a-checkpoint-drew)).** Checkpoints are written from
+  > format 5 and carry deltas rather than watermarks. The witness counts the
+  > deltas a checkpoint carries and, since this amendment, the number the
+  > checkpoint itself drew.
 
 ### What is not built
 
@@ -450,10 +455,63 @@ lists ([ADR-0034](0034-hub-and-spoke-destinations.md) §6).
 > under the grant, the hub judges the peer's replica over retrieval by
 > ADR-0098 §1's rule and names what passes in the signed drop list.
 
+## Amendment 4 (2026-11) — the witness counts the number a checkpoint drew
+
+**Requirements:** NFR-SEC-005
+
+A checkpoint draws a number from its writer's sequence, as every record does,
+and draws it after the deltas it carries
+([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)). The witness
+read at archive open counted three things:
+- the deltas' sequences, carried or not;
+- the gaps still inside the patience;
+- the journal keys.
+
+Nothing counted the checkpoint's own number. So a backup that checkpointed
+left that number above everything else the repository attested for its
+writer, until the writer's next run wrote a journal key past it. A writer
+whose sequence file was lost or restored in that window adopted a head one
+short and handed the checkpoint's number out again. A sweep of the records
+found it: after a backup that checkpointed, the sequence file said 13, and
+the head adopted once it was lost said 12.
+
+Nothing collided. Every record's key is derived from a salt of its own as
+well as its counter, and the reissued number went to a journal key or a
+delta, under keys no checkpoint uses. But the witness promises that a writer
+never reissues a number its own history holds, and the proof obligation that
+says so was proved before any checkpoint was written.
+
+- **The loader keeps each checkpoint's writer and number.** It already read
+  them from the record's prefix, for gap accounting. The index it returns now
+  carries them.
+- **The head counts them.** A writer's observed head is the highest of its
+  deltas' sequences, its gaps still inside the patience and its checkpoints'
+  numbers, beside its journal keys. The number is bound into the checkpoint's
+  seal, since the record's key is derived from it, so a checkpoint that opens
+  attests it.
+- **A destination's witness is unchanged.** A fan-out pass reads the
+  destination's journal keys alone
+  ([ADR-0062](0062-the-destination-is-the-rollback-witness.md)). A rollback
+  it detects is healed from the destination, checkpoints included, and the
+  archive's next opening counts them.
+
+**Not done.** A state directory restored from an image taken during a run,
+after its delta and before its checkpoint, holds no checkpoint. A
+destination's journal keys say nothing that image does not, so nothing brings
+the checkpoint back before the next run reissues its number.
+
+**Built:** `Repository.Index/IndexLoader`, `Repository.Index/ObservedHead`:
+
+- `InterruptionTests/SequenceRollbackTests`: a checkpoint that drew a
+  writer's last number is counted in its head.
+- `Hosts.Tests/ObservedHeadAdoptionTests`: a set whose sequence file is lost
+  after a backup that checkpointed adopts past the checkpoint's number.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-11 | Partly built (amended) | [Amendment 4](#amendment-4-2026-11--the-witness-counts-the-number-a-checkpoint-drew): the rollback witness counts the number each checkpoint drew from its writer's sequence, so a writer whose sequence file is lost just after a backup that checkpointed adopts past it. `Repository.Index/IndexLoader` keeps each checkpoint's writer and number, and the head counts them (`InterruptionTests/SequenceRollbackTests`, `Hosts.Tests/ObservedHeadAdoptionTests`) |
 | 2026-10 | Partly built (amended) | Constraint 6 is met at a peer too, under a person's grant: the hub judges the peer's replica over retrieval and names what passes in the signed drop list ([ADR-0098 Amendment 1](0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant); `Hosts.Tests/PeerDeltaRetirementTests`) |
 | 2026-10 | Partly built (amended) | [Amendment 3](#amendment-3-2026-10--a-store-retires-what-its-own-checkpoints-carry): constraint 6 is met at staging, a metadata store, a local path and an object store, which each retire the deltas their own settled checkpoints carry; a reader lists deltas first and looks again for one gone ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md); `Repository.Index/DeltaRetirer`, `Repository.Index/IndexLoader`, `Agent/BackupRunner`, `Agent/FanOut`). A peer keeps every delta |
 | 2026-10 | Partly built (amended) | [Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six): format 5's checkpoint carries the deltas it subsumes, verbatim, and a load reads each carried delta from it and fetches only the rest ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md); `Repository.Index/CheckpointCodec`, `Repository.Index/IndexLoader`, `Repository.Index/IndexCheckpointer`). No watermark and no checkpoint entry is acted on. Constraints 1 to 5 are met; retirement, constraint 6, is not built |

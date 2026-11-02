@@ -37,7 +37,14 @@ or rolled-back **sequence file**.
 > **Note (2026-10, [ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)).**
 > No watermark is read now: a format-5 checkpoint carries deltas rather
 > than watermarks, and the witness reads the sequence of every delta a load
-> applies, carried or not, beside the journal keys. It could not close the case of a whole
+> applies, carried or not, beside the journal keys.
+
+> **Note (2026-11, [ADR-0008 Amendment 4](0008-index-generations-and-checkpoints.md#amendment-4-2026-11--the-witness-counts-the-number-a-checkpoint-drew)).**
+> It counts the number each checkpoint drew too. A backup's checkpoint holds
+> that number above every delta it carries until the writer's next run, and
+> nothing else attested it.
+
+It could not close the case of a whole
 state directory restored from an older copy, because for a direct-ship set
 ([ADR-0046](0046-direct-to-destination-publication.md)) the archive's
 metadata plane *is* the state directory: the catalogue, the sequence file,
