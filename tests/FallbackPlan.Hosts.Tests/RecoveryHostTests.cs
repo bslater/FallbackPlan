@@ -282,13 +282,14 @@ public sealed class RecoveryHostTests : IDisposable
 
         // Event ids, not prose: 3100 is the descriptor read and 3101 the
         // keys derived, and those are what an operator quotes back down a
-        // phone.
-        Assert.Contains("3100", result.Error, StringComparison.Ordinal);
-        Assert.Contains("3101", result.Error, StringComparison.Ordinal);
+        // phone. Each is matched as a word of its own: the repository id is
+        // random hex, and may hold either number inside it.
+        Assert.MatchesRegex(@"\b3100\b", result.Error);
+        Assert.MatchesRegex(@"\b3101\b", result.Error);
 
         // Diagnostics never contaminate the answer. `open` prints a report
         // somebody may be reading or redirecting.
-        Assert.DoesNotContain("3100", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotMatchRegex(@"\b3100\b", result.Output);
     }
 
     [TestMethod]
@@ -302,7 +303,7 @@ public sealed class RecoveryHostTests : IDisposable
         var result = await RunAsync(Arguments("open"));
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
-        Assert.DoesNotContain("3100", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotMatchRegex(@"\b3100\b", result.Error);
     }
 
     [TestMethod]
@@ -323,7 +324,7 @@ public sealed class RecoveryHostTests : IDisposable
             // The refusal itself still reaches the operator — that is the
             // tool's answer, not its log. What `none` silences is 3102.
             Assert.AreEqual(1, result.ExitCode);
-            Assert.DoesNotContain("3102", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotMatchRegex(@"\b3102\b", result.Error);
         }
         finally
         {
