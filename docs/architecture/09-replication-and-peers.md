@@ -17,6 +17,12 @@ through the ship sink (§4.1), which does not yet serve peer destinations —
 a peer on a direct-ship set is a stated `NotSupported` in the sync ledger,
 never a silent skip, until the peer write adapter lands.
 
+> **2026-09 ([ADR-0058](../adr/0058-peer-write-adapter.md)).** It has landed:
+> the ship sink serves a peer through a session it holds open for the run,
+> so a direct-ship set's captures write to its peers too. A set whose only
+> destinations are peers still defaults to staging
+> ([ADR-0046](../adr/0046-direct-to-destination-publication.md) §8).
+
 Exchange sequence:
 
 1. repository identity and compatible format capabilities;

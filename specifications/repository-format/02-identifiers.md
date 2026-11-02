@@ -87,6 +87,8 @@ The two advisory hint objects are records as well, and their types are assigned 
 
 The collector's three objects are assigned the same way: **lease** `0x0D`, **tombstone** `0x0E`, **audit-period record** `0x0F` ([11](11-lifecycle-objects.md)). Nothing writes them before phase 4; the values are fixed now so the collector is built against a format rather than establishing one.
 
+> **2026-10.** The collector exists, and it tombstones: `Retention/StagingSweep` writes a signed tombstone before it deletes ([ADR-0009](../../docs/adr/0009-garbage-collection-safety.md), [ADR-0055](../../docs/adr/0055-reclaim-authority.md)), and a person's request to delete a snapshot is one ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md)). Nothing takes a lease or writes an audit-period record.
+
 `0x10` is **reserved**. It was assigned to a set-configuration object ([ADR-0071](../../docs/adr/0071-recovering-operation-after-total-loss.md)) that was superseded before any build wrote one ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md)) and is withdrawn (2026-10). A reader MUST refuse `0x10` as an `object_type`, as it refuses any unassigned value, and it MUST NOT be assigned to another object: a record that once carried it, written by a build that implemented the withdrawn design, must never read as something else.
 
 The **source-identity pack** is `0x11` ([06 §11.5](06-manifests.md#115-the-pack), [ADR-0090](../../docs/adr/0090-a-backups-hints-are-one-pack.md)): a publication's source-identity hints in one object. It is advisory as the hints are.

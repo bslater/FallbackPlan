@@ -163,6 +163,8 @@ Durable file creation with explicit flush · atomic temp-to-final rename where t
 
 Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather than exposing raw filesystem access. Quota and authorisation controls, streamed uploads, ranged downloads, peer-side integrity verification, optional store-and-forward. A source device never receives unrestricted filesystem access to a destination ([`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)). A peer destination is served by fan-out and catch-up today; the ship sink does not yet write to peers — on a direct-ship set a peer is a stated `NotSupported` in the sync ledger until the peer write adapter lands ([ADR-0046](../adr/0046-direct-to-destination-publication.md)).
 
+> **2026-09 ([ADR-0058](../adr/0058-peer-write-adapter.md)).** It has landed. A direct-ship set ships to a peer through a session it holds open for the run, and a peer on such a set is written by its captures rather than recorded `NotSupported`. A set whose only destinations are peers still defaults to staging ([ADR-0046](../adr/0046-direct-to-destination-publication.md) §8).
+
 ### 4.3 Azure Blob Storage
 
 > **Rewritten 2026-10 ([ADR-0093](../adr/0093-an-azure-blob-destination.md)).**

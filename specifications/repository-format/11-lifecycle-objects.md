@@ -18,6 +18,8 @@ A fourth namespace, `/format-upgrade/<to-version>`, belongs to nobody in particu
 
 Nothing before phase 4 writes any of them — no component takes a lease, tombstones an object, or writes an audit period — so their shapes were deliberately left uninvented rather than guessed at ([Q17](../../docs/open-questions.md#closed)). They are specified here, ahead of the collector, so that the collector is written against a format instead of establishing one by accident.
 
+> **2026-10.** The collector exists, and it tombstones: `Retention/StagingSweep` writes a signed tombstone before it deletes ([ADR-0009](../../docs/adr/0009-garbage-collection-safety.md), [ADR-0055](../../docs/adr/0055-reclaim-authority.md)), and a person's request to delete a snapshot is one (§3.3) ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md)). Nothing takes a lease or writes an audit-period record.
+
 The collector's three are **standalone metadata records**: the `FBPKSREC` framing of [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1, sealed under the metadata key like an index delta or a journal record, with the object types [02 §3.1](02-identifiers.md#31-object-types) assigns — lease `0x0D`, tombstone `0x0E`, audit-period record `0x0F`.
 
 Two of the four are signed, and the difference is the point. A **tombstone authorises a deletion**, so it carries an Ed25519 signature and a reader verifies it before acting. The **format-upgrade record of §5** decides what a reader does, so it is signed for the same reason. A lease and an audit record authorise nothing; AEAD under the metadata key already establishes that a repository member wrote them, and a signature would imply an authority they do not have.
