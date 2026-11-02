@@ -21,6 +21,9 @@ public sealed class LocalStoreFullTests
 {
     private const int VolumeMegabytes = 16;
 
+    /// <summary>What the folders the refused put made may keep of the room.</summary>
+    private const long Slack = 1024 * 1024;
+
     private static readonly ObjectKey Large = ObjectKey.Parse("blobs/data/abcd/large");
 
     [TestMethod]
@@ -44,17 +47,41 @@ public sealed class LocalStoreFullTests
     {
         using var volume = SmallVolume();
         var store = new LocalFileSystemObjectStore(Path.Combine(volume.MountedAt, "repo"));
+
+        // Measured, not taken from the volume's size: a file system keeps some
+        // of a volume this small for itself, and need not give a deleted
+        // file's room back the instant it is deleted.
+        var room = FreeSpace.On(volume.MountedAt);
         await Assert.ThrowsExactlyAsync<StoreFullException>(async () =>
             await store.PutAsync(Large, ThreeTimesTheVolume, PutConditions.None, CancellationToken.None));
+        var givenBack = await RoomComesBackAsync(volume.MountedAt, room);
+        Assert.IsGreaterThanOrEqualTo(room - Slack, givenBack, $"{room} byte(s) free before the refused put");
 
-        // Half the volume: room only if the refused put gave its room back.
+        // Half the room: there only if the refused put gave its room back.
         var half = await store.PutAsync(
             ObjectKey.Parse("blobs/data/abcd/half"),
-            _ => ValueTask.FromResult<Stream>(new SyntheticStream(VolumeMegabytes / 2 * 1024L * 1024, seed: 2)),
+            _ => ValueTask.FromResult<Stream>(new SyntheticStream(room / 2, seed: 2)),
             PutConditions.None,
             CancellationToken.None);
 
         Assert.AreEqual(PutOutcome.Created, half.Outcome);
+    }
+
+    /// <summary>
+    /// The room free on the volume once it is back within <see cref="Slack"/>
+    /// of <paramref name="room"/>, or as it stands after a while if never.
+    /// </summary>
+    private static async Task<long> RoomComesBackAsync(string mountedAt, long room)
+    {
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        var free = FreeSpace.On(mountedAt);
+        while (free < room - Slack && waited.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+            free = FreeSpace.On(mountedAt);
+        }
+
+        return free;
     }
 
     private static ValueTask<Stream> ThreeTimesTheVolume(CancellationToken _) =>
