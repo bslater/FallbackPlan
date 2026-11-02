@@ -20,7 +20,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// link. A symbolic link beside it is made as before. Where the
 /// maker refuses one, that entry fails alone, noted in its words. A
 /// platform that makes none makes it a symbolic link to the same path, and
-/// notes so.
+/// notes so. An account that may make no symbolic link still makes a
+/// junction where a junction maker is to hand, and skips the symbolic link
+/// beside it (ADR-0183 Amendment 5).
 /// </summary>
 /// <remarks>
 /// The tool's cases stand a recorder in for the junction maker, so they hold
@@ -92,6 +94,57 @@ public sealed class RecoveryJunctionTests : IDisposable
         CollectionAssert.AreEqual(new[] { (Path.Combine(output, "junction"), FolderOnADrive) }, maker.Made);
         Assert.AreEqual(2, report.Restored, string.Join("; ", report.Notes));
         Assert.IsTrue(Directory.Exists(Path.Combine(output, "junction")), "what the maker made stands, not the file");
+    }
+
+    [TestMethod]
+    public async Task RecoveryRestore_AnAccountThatMayMakeNoSymbolicLink_StillMakesAJunction_AndSkipsTheSymbolicLink()
+    {
+        var output = Path.Combine(_root, "out");
+        var maker = new Maker();
+
+        var report = await RestoreIntoAsync(Linked(), output, FormatVersions.FileFlagsAndLinkForms, maker, mayMakeSymbolicLinks: false);
+
+        CollectionAssert.AreEqual(new[] { (Path.Combine(output, "junction"), FolderOnADrive) }, maker.Made);
+        Assert.AreEqual(1, report.Restored, string.Join("; ", report.Notes));
+        Assert.AreEqual(1, report.Skipped);
+        var skipped = Assert.ContainsSingle(report.Notes.Where(note => note.Kind == RecoveryNoteKind.SkippedSpecial));
+        Assert.AreEqual("link", skipped.Path);
+        Assert.IsFalse(Path.Exists(Path.Combine(output, "link")), "the symbolic link is not made");
+        Assert.DoesNotContain(note => note.Kind == RecoveryNoteKind.JunctionMadeAsALink, report.Notes);
+    }
+
+    [TestMethod]
+    public async Task RecoveryRestore_AnAccountThatMayMakeNoSymbolicLink_FailsAJunctionTheMakerRefuses_Alone()
+    {
+        var output = Path.Combine(_root, "out");
+
+        var report = await RestoreIntoAsync(
+            Linked(), output, FormatVersions.FileFlagsAndLinkForms, new Maker(refusal: "refused by the target (error 5)"), mayMakeSymbolicLinks: false);
+
+        var refused = Assert.ContainsSingle(report.Notes.Where(note => note.Kind == RecoveryNoteKind.WriteFailed));
+        Assert.AreEqual("junction", refused.Path);
+        Assert.AreEqual(1, report.Failed);
+        Assert.AreEqual(1, report.Skipped, "the symbolic link beside it is skipped");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Windows makes junctions")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task RecoveryRestore_OffWindows_AnAccountThatMayMakeNoSymbolicLink_SkipsAJunctionToo_AndSaysNothingOfALink()
+    {
+        // No junction maker is to hand, and a symbolic link to its path is
+        // what this account may not make.
+        var output = Path.Combine(_root, "out");
+
+        var report = await RestoreIntoAsync(Linked(), output, FormatVersions.FileFlagsAndLinkForms, junctions: null, mayMakeSymbolicLinks: false);
+
+        Assert.AreEqual(0, report.Restored);
+        Assert.AreEqual(2, report.Skipped);
+        CollectionAssert.AreEquivalent(
+            new[] { "junction", "link" },
+            report.Notes.Where(note => note.Kind == RecoveryNoteKind.SkippedSpecial).Select(note => note.Path).ToArray());
+        Assert.IsFalse(Path.Exists(Path.Combine(output, "junction")));
+        Assert.DoesNotContain(note => note.Kind == RecoveryNoteKind.JunctionMadeAsALink, report.Notes);
     }
 
     [TestMethod]
@@ -193,10 +246,12 @@ public sealed class RecoveryJunctionTests : IDisposable
     /// into a repository made from the passphrase, then restores its one
     /// snapshot into <paramref name="output"/> with the recovery session
     /// alone, making junctions through <paramref name="junctions"/>, or the
-    /// platform's own where it is null.
+    /// platform's own where it is null, and symbolic links where
+    /// <paramref name="mayMakeSymbolicLinks"/> says the account may, or the
+    /// platform says so where it is null.
     /// </summary>
     private async Task<RecoveryRestoreReport> RestoreIntoAsync(
-        FakeFileSystemSource source, string output, ushort formatVersion, IMountPoints? junctions)
+        FakeFileSystemSource source, string output, ushort formatVersion, IMountPoints? junctions, bool? mayMakeSymbolicLinks = null)
     {
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "repo-" + Guid.NewGuid().ToString("n")));
         using (var passphrase = Passphrase.Create(PassphraseText))
@@ -239,7 +294,8 @@ public sealed class RecoveryJunctionTests : IDisposable
         using var session = await RecoverySession.OpenAsync(open, store, CancellationToken.None);
         await session.LoadBlobsAsync(CancellationToken.None);
         var snapshot = Assert.ContainsSingle(await session.ListSnapshotsAsync(CancellationToken.None));
-        return await session.RestoreTreeAsync(snapshot.Manifest.RootTree, output, makeLink: null, streams: null, junctions, CancellationToken.None);
+        return await session.RestoreTreeAsync(
+            snapshot.Manifest.RootTree, output, makeLink: null, streams: null, junctions, mayMakeSymbolicLinks, CancellationToken.None);
     }
 
     /// <summary>
