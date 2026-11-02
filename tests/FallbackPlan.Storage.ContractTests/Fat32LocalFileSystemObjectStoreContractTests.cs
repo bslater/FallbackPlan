@@ -7,7 +7,7 @@ namespace FallbackPlan.Storage.ContractTests;
 /// <summary>
 /// Runs the full provider contract suite against
 /// <see cref="LocalFileSystemObjectStore"/> rooted on a FAT32 volume, as a
-/// removable drive often is (FR-DEST-001, FR-REP-002; ADR-0012 Amendment 6).
+/// removable drive often is (FR-DEST-001; ADR-0012 Amendment 6).
 /// FAT32 holds no links, and refuses the call that asks a folder for one; the
 /// store's guard against a linked folder asked every folder on a key's path,
 /// so every write into a folder an earlier write had made failed.
