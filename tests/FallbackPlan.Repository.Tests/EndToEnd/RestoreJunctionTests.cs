@@ -17,7 +17,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// it, and which names a folder by its drive's path. A symbolic link beside
 /// it is made as before. Where the maker refuses one, that item fails alone,
 /// in its words. A target that makes no junction makes it a symbolic link to
-/// the same path, and its plan and receipt say so (FR-RST-003).
+/// the same path, and its plan and receipt say so (FR-RST-003). An account
+/// that may make no symbolic link still makes a junction, which needs no
+/// privilege: the plan says only the links it will skip will be skipped, and
+/// holds such a junction to the rule a link it makes is held to (ADR-0183
+/// Amendment 4).
 /// </summary>
 /// <remarks>
 /// The executor's cases stand a recorder in for the junction maker, so they
@@ -144,6 +148,115 @@ public sealed class RestoreJunctionTests : ArchiveTestHarness
         Assert.DoesNotContain(degradation => degradation.Capability == "junctions", declared);
     }
 
+    [TestMethod]
+    public async Task Receipt_AnAccountThatMayMakeNoSymbolicLink_StillMakesAJunction_AndSkipsTheSymbolicLink()
+    {
+        var maker = new Maker();
+
+        var run = await PublishPlanAndRestoreAsync(Linked(), 0xC1, FormatVersions.FileFlagsAndLinkForms, WithoutLinks(maker));
+
+        CollectionAssert.AreEqual(new[] { (Path.Combine(run.Output, "junction"), FolderOnADrive) }, maker.Made);
+        Assert.AreEqual("restored", Item(run.Receipt, "junction").Outcome);
+        Assert.AreEqual("skipped", Item(run.Receipt, "link").Outcome);
+        Assert.AreEqual("symlinks are not supported on this target (declared in the plan)", Item(run.Receipt, "link").Detail);
+    }
+
+    [TestMethod]
+    public async Task Plan_AnAccountThatMayMakeNoSymbolicLink_SaysOnlyTheLinksItWillSkipWillBeSkipped()
+    {
+        // The planner judges links from the catalogue, which holds no form,
+        // so on a target that makes junctions it leaves the line to the facts.
+        var run = await PublishPlanAndRestoreAsync(Linked(), 0xC2, FormatVersions.FileFlagsAndLinkForms, WithoutLinks(new Maker()));
+
+        Assert.DoesNotContain(degradation => degradation.Capability == "symlinks", run.Plan.Degradations);
+        Assert.AreEqual(
+            "Symlinks cannot be created on this target; 1 symlink(s) will be reported as skipped.",
+            Assert.ContainsSingle(run.Declared.Where(degradation => degradation.Capability == "symlinks")).Detail);
+    }
+
+    [TestMethod]
+    public async Task Plan_WhereEveryLinkIsAJunctionTheTargetMakes_NoLinkIsSaidToBeSkipped()
+    {
+        var source = new FakeFileSystemSource();
+        AddLink(source, "junction", FolderOnADrive, ["link-form: mount-point"]);
+
+        var run = await PublishPlanAndRestoreAsync(source, 0xC3, FormatVersions.DeltaCheckpoints, WithoutLinks(new Maker()));
+
+        Assert.DoesNotContain(degradation => degradation.Capability == "symlinks", run.Plan.Degradations.Concat(run.Declared));
+        Assert.AreEqual("restored", Item(run.Receipt, "junction").Outcome);
+    }
+
+    [TestMethod]
+    public async Task Plan_ATargetThatMakesNeither_SaysEveryLinkWillBeSkipped_AsBefore_AndSkipsEveryOne()
+    {
+        var maker = new Maker();
+        var target = RestoreTargetProfile.ForLocalPlatform() with { SupportsSymlinks = false, MakesJunctions = false, Junctions = maker };
+
+        var run = await PublishPlanAndRestoreAsync(Linked(), 0xC4, FormatVersions.FileFlagsAndLinkForms, target);
+
+        Assert.AreEqual(
+            "Symlinks cannot be created on this target; they will be reported as skipped.",
+            Assert.ContainsSingle(run.Plan.Degradations.Concat(run.Declared).Where(degradation => degradation.Capability == "symlinks")).Detail);
+        Assert.IsEmpty(maker.Made);
+        Assert.AreEqual("skipped", Item(run.Receipt, "junction").Outcome);
+        Assert.AreEqual("skipped", Item(run.Receipt, "link").Outcome);
+    }
+
+    [TestMethod]
+    public async Task Plan_AJunctionMadeWithoutTheLinkPermission_IsHeldToTheRuleAJunctionMadeWithItIs()
+    {
+        var run = await PublishPlanAndRestoreAsync(JunctionCarryingWhatLinesName(), 0xC5, FormatVersions.FileFlagsAndLinkForms, WithoutLinks(new Maker()));
+        var withLinks = RestoreMetadata.Declare(run.Plan, run.Facts, WithoutLinks(new Maker()) with { SupportsSymlinks = true });
+
+        Assert.IsNotEmpty(withLinks, "the premise: some of what it carries is a line's");
+        CollectionAssert.AreEqual(
+            withLinks.Select(degradation => degradation.Detail).ToArray(),
+            run.Declared.Select(degradation => degradation.Detail).ToArray());
+    }
+
+    [TestMethod]
+    public async Task Plan_ATargetThatMakesNeither_DeclaresNothingOfWhatAJunctionCarries()
+    {
+        // The junction is skipped, as the planner's line says, so none of its
+        // metadata is lost to a link's rule.
+        var target = RestoreTargetProfile.ForLocalPlatform() with { SupportsSymlinks = false, MakesJunctions = false, Junctions = new Maker() };
+
+        var run = await PublishPlanAndRestoreAsync(JunctionCarryingWhatLinesName(), 0xC6, FormatVersions.FileFlagsAndLinkForms, target);
+
+        Assert.IsNotEmpty(RestoreMetadata.Declare(run.Plan, run.Facts, WithoutLinks(new Maker())), "the premise: where it is made, some of what it carries is a line's");
+        Assert.IsEmpty(run.Declared);
+        Assert.AreEqual("skipped", Item(run.Receipt, "junction").Outcome);
+    }
+
+    /// <summary>
+    /// A junction captured with what plan lines name: a creation time, its
+    /// attribute bits and an extended attribute, which each platform's rule
+    /// for a link gives back or not in its own way.
+    /// </summary>
+    private static FakeFileSystemSource JunctionCarryingWhatLinesName()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "junction",
+            Kind = ScanEntryKind.Symlink,
+            LinkTarget = Encoding.UTF8.GetBytes(FolderOnADrive),
+            Metadata = new EntryMetadata
+            {
+                ModifiedAt = Modified,
+                CreatedAt = Modified,
+                FileAttributes = 0x412,
+                ExtendedAttributes = [new ExtendedAttributeEntry("user.label"u8.ToArray(), new byte[] { 1, 2, 3 })],
+            },
+            Diagnostics = ["link-form: mount-point"],
+        });
+        return source;
+    }
+
+    /// <summary>The local target, for an account that may make no symbolic link but makes junctions through <paramref name="maker"/>.</summary>
+    private static RestoreTargetProfile WithoutLinks(Maker maker) =>
+        RestoreTargetProfile.ForLocalPlatform() with { SupportsSymlinks = false, MakesJunctions = true, Junctions = maker };
+
     /// <summary>A junction to a folder on a drive, named a mount point as capture names one, and a symbolic link.</summary>
     private static FakeFileSystemSource Linked()
     {
@@ -193,6 +306,17 @@ public sealed class RestoreJunctionTests : ArchiveTestHarness
     private async Task<(IReadOnlyList<MetadataDegradation> Declared, RestoreReceipt Receipt, string Output)> PublishAndRestoreAsync(
         FakeFileSystemSource source, byte seed, ushort formatVersion, RestoreTargetProfile target)
     {
+        var run = await PublishPlanAndRestoreAsync(source, seed, formatVersion, target);
+        return (run.Declared, run.Receipt, run.Output);
+    }
+
+    /// <summary>
+    /// As <see cref="PublishAndRestoreAsync"/>, answering the plan and the
+    /// facts it was declared over too.
+    /// </summary>
+    private async Task<Run> PublishPlanAndRestoreAsync(
+        FakeFileSystemSource source, byte seed, ushort formatVersion, RestoreTargetProfile target)
+    {
         var store = CreateStore();
         using var keys = CreateKeys();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"junctions-{seed:x2}.db"), Repo);
@@ -206,8 +330,8 @@ public sealed class RestoreJunctionTests : ArchiveTestHarness
         }
 
         var plan = RestorePlanner.Plan(catalogue, SnapshotOf(seed), string.Empty, target);
-        var declared = RestoreMetadata.Declare(
-            plan, (await RestoreBlobSet.ResolveAsync(catalogue, plan, store, Repo, keys, CancellationToken.None)).Facts, target);
+        var facts = (await RestoreBlobSet.ResolveAsync(catalogue, plan, store, Repo, keys, CancellationToken.None)).Facts;
+        var declared = RestoreMetadata.Declare(plan, facts, target);
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var output = Path.Combine(SpoolDirectory, $"restored-{seed:x2}");
@@ -220,8 +344,16 @@ public sealed class RestoreJunctionTests : ArchiveTestHarness
                 NowUnixMilliseconds = 1_722_700_000_000,
             },
             CancellationToken.None);
-        return (declared, receipt, output);
+        return new Run(plan, facts, declared, receipt, output);
     }
+
+    /// <summary>What a run planned, the facts its plan was declared over, what it declared, its receipt, and where it landed.</summary>
+    private sealed record Run(
+        RestorePlan Plan,
+        IReadOnlyDictionary<FallbackPlan.Domain.Identifiers.ObjectId, RestoreItemFacts> Facts,
+        IReadOnlyList<MetadataDegradation> Declared,
+        RestoreReceipt Receipt,
+        string Output);
 
     /// <summary>
     /// Stands in for the platform's junction maker: records each junction

@@ -160,6 +160,8 @@ A link is a link whatever it points at. An object carrying both a directory mark
 > **2026-11 ([ADR-0183 Amendment 2](../adr/0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again)).** The engine's restore makes a junction a junction again on Windows. Elsewhere it makes a symbolic link to the same path, and the plan and the receipt say so.
 >
 > **2026-11 ([ADR-0183 Amendment 3](../adr/0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too)).** So does the recovery tool, which notes a junction it made a symbolic link.
+>
+> **2026-11 ([ADR-0183 Amendment 4](../adr/0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-4-2026-11--an-account-that-may-make-no-symbolic-link-makes-a-junction-still)).** The engine's restore makes a junction even for an account that may make no symbolic link, which a junction does not need, and its plan counts only the links it will skip.
 
 **The traversal is handle-relative on POSIX.** Each directory is held open, and every operation on its children — listing, stat, descent, opening content, reading a link target — is performed against that descriptor with the child's raw name bytes, opening with `O_NOFOLLOW`. A name is therefore never turned back into a path to be resolved a second time, which is what closes the time-of-check-to-time-of-use gap: the object that was classified is the object that is read, because a descriptor names an inode and nothing can move it to another one. Revalidation stats the same handle, so it compares the read object to itself rather than to whatever the name means afterwards.
 
