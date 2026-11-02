@@ -2,7 +2,7 @@
 
 **Status:** Accepted (amended) · Partly implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
-**Requirements:** NFR-PORT-004, NFR-REL-005, NFR-COMP-005, FR-REP-002, FR-QUOTA-001; FR-DEST-001 (amended by [Amendment 6](#amendment-6-2026-11--a-local-destination-on-a-drive-that-holds-no-links): a local destination on a FAT32 or exFAT drive is written and read as any other)
+**Requirements:** NFR-PORT-004, NFR-REL-005, NFR-COMP-005, FR-REP-002, FR-QUOTA-001 (amended by [Amendment 7](#amendment-7-2026-11--a-local-destination-with-no-room-left-says-so): a local destination with no room left says so); FR-DEST-001 (amended by [Amendment 6](#amendment-6-2026-11--a-local-destination-on-a-drive-that-holds-no-links): a local destination on a FAT32 or exFAT drive is written and read as any other)
 **Review finding:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
 ---
@@ -365,6 +365,31 @@ A key's first write into a new folder passed, because a folder not there yet is 
 
 > **2026-11: tested now.** `Storage.ContractTests/ExFatLocalFileSystemObjectStoreContractTests` runs the same contract, and the same second write, on an exFAT volume of its own, beside the FAT32 one; both stand on `Storage.ContractTests/MountedVolumeContractTests`.
 
+## Amendment 7 (2026-11) — a local destination with no room left says so
+
+Amendment 5 told a store with no room apart for the two network providers: `Storage.Abstractions/StoreFullException`, unavailable until room is made (FR-QUOTA-001). The local provider never answered so.
+
+- **Before a run,** a local destination under the free-space floor is turned away and read unavailable, saying how much is free (FR-DEST-010).
+- **Part way through,** a drive that filled answered as any fault did: the platform's own words in a bare I/O failure. A staging set's sync read failed. A direct-ship run dropped the destination as failed, as for a fault a person must fix.
+
+**Decision.** The local provider answers a volume with no room as an object store with none does.
+
+- **The refusal.** A put the volume has no room for is `Storage.Abstractions/StoreFullException`, naming the object and the volume's root, with the platform's words after. No room is ENOSPC on Linux and macOS, and Windows' disk-full and handle-disk-full errors.
+- **Nothing is left behind.** What the put spooled is removed first, so the room it took is there again (FR-QUOTA-002).
+- **How a destination reads.** A local destination a store with no room refuses reads unavailable, in the store's words, as the floor's does: at a staging sync, and when a direct-ship run drops it, at seeding or at any later put. Any other fault still reads failed. A direct-ship drop for an unreachable or busy store reads unavailable the same way.
+- **A test can stand a store in.** The staging sync's local store passes through the service's store decorator, as the direct-ship sink's always has.
+
+**Not done.** A local quota is not told apart: a volume's user quota still reads as any fault does. No served install was seen to meet one.
+
+**Built:** `Storage.Local/LocalFileSystemObjectStore`; `Agent/FanOut`; `Agent/DestinationShipSink`:
+
+- `Storage.ContractTests/LocalStoreFullTests`, on a real volume of a test's own: a small virtual disk where an elevated Windows process runs it, a memory-backed one where Linux's root may mount one.
+  - A put larger than the room left is `Storage.Abstractions/StoreFullException` naming the object, and leaves no object and nothing spooled.
+  - A put of half the volume after it lands, in the room the refused put gave back.
+- `Hosts.Tests/LocalDestinationFullTests`, with a store that answers as a full one does:
+  - a staging sync to a local destination that fills reads unavailable, in the store's words;
+  - a direct-ship run drops such a destination as unavailable, whether it filled part way through or was full before its first byte.
+
 ## Status history
 
 | Date | Status | Note |
@@ -381,3 +406,4 @@ A key's first write into a new folder passed, because a folder not there yet is 
 | 2026-10 | Accepted (amended, related) | [ADR-0171 Amendment 4](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-4-2026-10--a-delete-an-account-keeps-under-soft-delete-is-counted-and-noticed-nowhere): `DeleteResult` also says whether the store keeps what it deleted only for a period of its own, as an account under soft delete does, and may leave the bytes unsaid beside it. |
 | 2026-11 | Accepted (amended) | Amendment 6: the local provider asks a folder for its link only where the folder carries the reparse-point attribute, so a FAT32 or exFAT drive, which refuses the request, is written and read as any other. `Storage.Local/LocalFileSystemObjectStore`; `Storage.ContractTests/Fat32LocalFileSystemObjectStoreContractTests` |
 | 2026-11 | Accepted (amended) | Amendment 6's exFAT is tested: the provider contract runs on an exFAT volume as on the FAT32 one, where an elevated Windows process runs it. `Storage.ContractTests/ExFatLocalFileSystemObjectStoreContractTests`; `Storage.ContractTests/MountedVolumeContractTests` |
+| 2026-11 | Accepted (amended) | Amendment 7: a local destination's volume with no room is `Storage.Abstractions/StoreFullException`, naming the object, with nothing spooled left; such a destination reads unavailable, at a staging sync and when a direct-ship run drops it, as the free-space floor's does. `Storage.Local/LocalFileSystemObjectStore`; `Agent/FanOut`; `Agent/DestinationShipSink`; `Storage.ContractTests/LocalStoreFullTests`; `Hosts.Tests/LocalDestinationFullTests` |

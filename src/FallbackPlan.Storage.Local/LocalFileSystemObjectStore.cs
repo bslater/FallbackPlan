@@ -33,6 +33,10 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
 {
     private const string SpoolDirectoryName = ".fbp-tmp";
 
+    private const int NoSpaceErrno = 28;
+    private const int DiskFullHResult = unchecked((int)0x80070070);
+    private const int HandleDiskFullHResult = unchecked((int)0x80070027);
+
     private readonly string _root;
     private readonly string _spool;
     private readonly ILogger _log;
@@ -152,11 +156,11 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
             return new PutResult(PutOutcome.AlreadyExists);
         }
 
-        Directory.CreateDirectory(_spool);
         var tempPath = Path.Combine(_spool, Guid.NewGuid().ToString("n"));
 
         try
         {
+            Directory.CreateDirectory(_spool);
             var content = await openContent(cancellationToken).ConfigureAwait(false);
             await using (content.ConfigureAwait(false))
             {
@@ -196,16 +200,34 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
             Log.ObjectPut(_log, key, bytes);
             return new PutResult(PutOutcome.Created);
         }
-        catch
+        catch (Exception exception)
         {
             if (File.Exists(tempPath))
             {
                 File.Delete(tempPath);
             }
 
+            // A volume with no room is the store's answer, not a fault: it
+            // is told apart as an object store's is, and what was spooled is
+            // gone, so the room it took is there again (FR-QUOTA-001,
+            // FR-QUOTA-002; ADR-0012 Amendment 7).
+            if (exception is IOException io && IsNoRoom(io))
+            {
+                throw new StoreFullException(
+                    Strings.FormatLocalFileSystemObjectStore_NoRoomFor(key, _root, io.Message), io);
+            }
+
             throw;
         }
     }
+
+    /// <summary>
+    /// Whether the platform said the volume has no room: ENOSPC, which Linux
+    /// and macOS both number 28, or Windows' disk-full and handle-disk-full
+    /// errors, as the exception carries each.
+    /// </summary>
+    private static bool IsNoRoom(IOException exception) =>
+        exception.HResult is NoSpaceErrno or DiskFullHResult or HandleDiskFullHResult;
 
     /// <inheritdoc />
     public async IAsyncEnumerable<ObjectEntry> ListAsync(

@@ -58,6 +58,9 @@
   <data name="LocalFileSystemObjectStore_KeyResolvesOutsideStoreRoot" xml:space="preserve">
     <value>Key '{0}' resolves outside the store root.</value>
   </data>
+  <data name="LocalFileSystemObjectStore_NoRoomFor" xml:space="preserve">
+    <value>No room for '{0}' on the volume holding '{1}': {2}</value>
+  </data>
   <data name="LocalFileSystemObjectStore_ObjectKeyEmpty" xml:space="preserve">
     <value>The object key is empty.</value>
   </data>

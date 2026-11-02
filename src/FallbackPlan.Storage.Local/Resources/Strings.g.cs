@@ -34,6 +34,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, LocalFileSystemObjectStore_KeyResolvesOutsideStoreRoot, arg0);
 
     /// <summary>
+    /// No room for '{0}' on the volume holding '{1}': {2}
+    /// </summary>
+    private static string LocalFileSystemObjectStore_NoRoomFor => Get(nameof(LocalFileSystemObjectStore_NoRoomFor));
+
+    /// <summary>
+    /// No room for '{0}' on the volume holding '{1}': {2}
+    /// </summary>
+    internal static string FormatLocalFileSystemObjectStore_NoRoomFor(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, LocalFileSystemObjectStore_NoRoomFor, arg0, arg1, arg2);
+
+    /// <summary>
     /// The object key is empty.
     /// </summary>
     internal static string LocalFileSystemObjectStore_ObjectKeyEmpty => Get(nameof(LocalFileSystemObjectStore_ObjectKeyEmpty));
