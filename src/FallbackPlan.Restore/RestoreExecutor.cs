@@ -1328,6 +1328,7 @@ public sealed class RestoreExecutor(
                     // at the destination unconditionally, which made Preserve
                     // a policy the run only mostly followed.
                     var targetText = System.Text.Encoding.UTF8.GetString(linkTarget.Span);
+                    var junction = MountPoints.IsJunction(manifest.LinkForm, manifest.CaptureDiagnostics, targetText);
                     var linkLanding = destination;
                     string? linkWrittenAs = null;
                     try
@@ -1378,16 +1379,30 @@ public sealed class RestoreExecutor(
                             }
                         }
 
-                        // Windows resolves only its own separators in a link,
-                        // and makes a folder's link apart from a file's.
-                        var made = OperatingSystem.IsWindows() ? SymbolicLinks.TargetOnWindows(targetText) : targetText;
-                        SymbolicLinks.Create(
-                            linkLanding,
-                            made,
-                            OperatingSystem.IsWindows() && SymbolicLinks.PointsAtAFolder(
-                                manifest.Metadata.FileAttributes,
-                                () => SymbolicLinks.PathNamed(linkLanding, made) is var named
-                                    && (folderDestinations.Value.Contains(named) || Directory.Exists(named))));
+                        if (junction && target.MakesJunctions)
+                        {
+                            if (target.Junctions.Make(linkLanding, targetText) is { } refused)
+                            {
+                                items.Add(new ReceiptItem
+                                {
+                                    Path = item.Path, Outcome = "failed", Bytes = 0, Detail = refused,
+                                });
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            // Windows resolves only its own separators in a link,
+                            // and makes a folder's link apart from a file's.
+                            var made = OperatingSystem.IsWindows() ? SymbolicLinks.TargetOnWindows(targetText) : targetText;
+                            SymbolicLinks.Create(
+                                linkLanding,
+                                made,
+                                OperatingSystem.IsWindows() && SymbolicLinks.PointsAtAFolder(
+                                    manifest.Metadata.FileAttributes,
+                                    () => SymbolicLinks.PathNamed(linkLanding, made) is var named
+                                        && (folderDestinations.Value.Contains(named) || Directory.Exists(named))));
+                        }
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
@@ -1407,7 +1422,7 @@ public sealed class RestoreExecutor(
                     items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = 0, WrittenAs = linkWrittenAs,
-                        Detail = linkWritten.Detail,
+                        Detail = Joined(linkWritten.Detail, junction && !target.MakesJunctions ? MetadataRules.JunctionMadeAsALink : null),
                         NotApplied = MetadataRules.NotApplied(MetadataRules.Captured(manifest.Metadata), linkWritten.Applied),
                     }));
                     break;

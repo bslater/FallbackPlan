@@ -47,6 +47,8 @@ Only a link is read this way. A file's and a folder's descriptor is read by its 
   > **2026-10: taken up by [Amendment 1](#amendment-1-2026-10--a-restore-writes-a-links-own-descriptor-back).**
 - **Junctions.** A junction is read as a link, so its own descriptor is captured too. It still comes back as a folder's symbolic link (ADR-0181).
 
+  > **2026-11 ([ADR-0183 Amendment 2](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again)).** The engine's restore makes it a junction again, and writes its own descriptor onto it as onto a link.
+
 ## Alternatives considered
 
 - **Leave the read as it was, since nothing restores a link's descriptor.** Rejected. The manifest would go on naming a target's accounts as the link's, and the restore that writes it back would inherit that.

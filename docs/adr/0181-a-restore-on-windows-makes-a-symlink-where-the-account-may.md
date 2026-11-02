@@ -68,6 +68,8 @@ Nothing more than before. No call on Windows sets a link's own times, and its at
   > **2026-10: taken up by [Amendment 2](#amendment-2-2026-10--a-links-own-times-on-windows).**
 - **A junction.** A directory junction captured on Windows comes back as a folder's symbolic link to the same target, not as a junction.
 
+  > **2026-11: taken up by [ADR-0183 Amendment 2](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again)** for the engine's restore: from a backup that names its form, a junction comes back a junction.
+
 ## Alternatives considered
 
 - **Probe each destination's volume.** Rejected for now. The account decides whether a link may be made, and a volume that keeps none refuses at the write, which the item says.
