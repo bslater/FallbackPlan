@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-MAN-003 (amended: on Windows a reparse point is captured as a link only where its tag names another path, and any other is captured as the file or folder it is, with its content; amended again by [Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form): from format 6 a junction's form is kept in manifest key 14); FR-RST-004 and FR-RST-003 (amended by [Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again): a restore on Windows makes a junction a junction, and a target that makes none says so); FR-RST-005 (amended by [Amendment 3](#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too): so does the recovery tool); FR-RST-004 and FR-RST-003 (amended again by [Amendment 4](#amendment-4-2026-11--an-account-that-may-make-no-symbolic-link-makes-a-junction-still): an account that may make no symbolic link still makes a junction, and the plan says only the links it will skip will be)
+**Requirements:** FR-MAN-003 (amended: on Windows a reparse point is captured as a link only where its tag names another path, and any other is captured as the file or folder it is, with its content; amended again by [Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form): from format 6 a junction's form is kept in manifest key 14); FR-RST-004 and FR-RST-003 (amended by [Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again): a restore on Windows makes a junction a junction, and a target that makes none says so); FR-RST-005 (amended by [Amendment 3](#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too): so does the recovery tool); FR-RST-005 (amended again by [Amendment 5](#amendment-5-2026-11--the-recovery-tool-makes-a-junction-without-the-link-permission-too): the recovery tool makes a junction even for an account that may make no symbolic link); FR-RST-004 and FR-RST-003 (amended again by [Amendment 4](#amendment-4-2026-11--an-account-that-may-make-no-symbolic-link-makes-a-junction-still): an account that may make no symbolic link still makes a junction, and the plan says only the links it will skip will be)
 **Related:** [architecture 06 §4.1](../architecture/06-filesystem-capture.md#41-links-are-classified-before-they-are-traversed) (links are classified before they are traversed), [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md) (a restore on Windows makes links), [ADR-0182](0182-capture-reads-a-links-own-security-descriptor-on-windows.md) (a link's own descriptor, read through a handle on the reparse point)
 
 **Built:**
@@ -174,6 +174,8 @@ The two are not alike. A junction is resolved on the machine that holds it, even
 **Not done.** Amendment 2's other limits hold here too. An account that may make no symbolic link skips a junction, as the tool skips every link there, and a volume mounted on a folder keeps no form.
 
 > **2026-11 ([Amendment 4](#amendment-4-2026-11--an-account-that-may-make-no-symbolic-link-makes-a-junction-still)).** The engine's restore makes such a junction now; the recovery tool still does not.
+>
+> **2026-11 ([Amendment 5](#amendment-5-2026-11--the-recovery-tool-makes-a-junction-without-the-link-permission-too)).** The recovery tool makes one too.
 
 **Built:** `Recovery/RecoverySession`; `Recovery/RecoveryNote`:
 
@@ -200,6 +202,8 @@ The two are not alike. A junction is resolved on the machine that holds it, even
 
 **Not done.** The recovery tool still skips a junction where the account may make no symbolic link. Its link permission is the platform's answer, which a case cannot stand in for, so taking it up needs a seam of its own; that is the next amendment.
 
+> **2026-11: taken up by [Amendment 5](#amendment-5-2026-11--the-recovery-tool-makes-a-junction-without-the-link-permission-too).**
+
 **Built:** `Restore/RestoreExecutor`; `Restore/RestorePlan` (the planner's line); `Restore/RestoreMetadata` (the counted line and the rule):
 
 - `Repository.Tests/RestoreJunctionTests`, on every platform with a recorder in the junction maker's place:
@@ -208,6 +212,23 @@ The two are not alike. A junction is resolved on the machine that holds it, even
   - where every link is a junction, nothing says a link will be skipped;
   - a target that makes neither says every link will be skipped, as before, and skips every one, declaring nothing of what a junction it skips carries;
   - a junction made without the link permission is declared exactly as one made with it.
+
+## Amendment 5 (2026-11) — the recovery tool makes a junction without the link permission too
+
+[Amendment 4](#amendment-4-2026-11--an-account-that-may-make-no-symbolic-link-makes-a-junction-still) had the engine's restore make a junction for an account that may make no symbolic link, and left the recovery tool skipping one. The tool made every link only where the platform said the account may make a symbolic link (`SymbolicLinks.CanCreate`). No case could stand in for that answer: on Linux and macOS every account may, and CI's Windows account holds the privilege.
+
+**Decision.** The recovery tool makes a junction wherever a junction maker is to hand, whether or not the account may make a symbolic link, as the executor does.
+
+- **A link is made** where the account may make a symbolic link, as before, or where it is a junction by Amendment 2's rule and a junction maker is to hand.
+- **Where the account may not,** a symbolic link is skipped as before, noted as a special entry skipped. So is a junction no maker can make, since a symbolic link to its path is what the account may not make; nothing notes it a junction made a link.
+- **The account's answer can be given.** `RecoverySession.RestoreTreeAsync` gains an overload that takes whether the account may make a symbolic link, as it takes a junction maker, so a case can stand in for an account that may not. Given none, it is the platform's answer, as before.
+
+**Built:** `Recovery/RecoverySession`:
+
+- `Repository.Tests/RecoveryJunctionTests`, with a recorder in the junction maker's place and an account that may make no symbolic link:
+  - a junction is still made, and the symbolic link beside it skipped;
+  - one the maker refuses fails alone, and the symbolic link beside it is skipped;
+  - off Windows, where no junction maker is to hand, the junction is skipped too, and nothing notes it made a link.
 
 ## Status history
 
@@ -219,3 +240,4 @@ The two are not alike. A junction is resolved on the machine that holds it, even
 | 2026-11 | Accepted (Amendment 2) | The engine's restore makes a junction a junction where the target makes one: a link captured as a mount point, in key 14 or its diagnostics, that names a drive's folder. Windows makes it through a mount-point reparse point set on the folder; one refused fails alone, in the refusal's words, and leaves nothing. A target that makes none makes a symbolic link to the same path, and its plan and receipt say so. `Domain/MountPoints`; `Domain/MetadataRules`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Domain.Tests/MountPointsTests`; `Repository.Tests/RestoreJunctionTests` |
 | 2026-11 | Accepted (Amendment 3) | The recovery tool makes a junction by Amendment 2's rule, through the platform's calls or a junction maker its caller gives; one refused fails that entry alone, noted in the maker's words, and leaves nothing; a platform that makes none makes a symbolic link to the same path and notes it. `Recovery/RecoverySession`; `Recovery/RecoveryNote`; `Repository.Tests/RecoveryJunctionTests` |
 | 2026-11 | Accepted (Amendment 4) | The engine's restore makes a junction where the target makes junctions, whether or not the account may make a symbolic link. On such a target the planner no longer says every link will be skipped; the metadata's declaration counts the links it will skip, a link whose facts were not read among them, and holds a junction made without the permission to the rule a link is. The recovery tool still skips one. `Restore/RestoreExecutor`; `Restore/RestorePlan`; `Restore/RestoreMetadata`; `Repository.Tests/RestoreJunctionTests` |
+| 2026-11 | Accepted (Amendment 5) | The recovery tool makes a junction wherever a junction maker is to hand, whether or not the account may make a symbolic link; where it may not, a symbolic link is skipped as before, as is a junction no maker can make. Whether the account may can be given to the tool, so a case stands in for one that may not. `Recovery/RecoverySession`; `Repository.Tests/RecoveryJunctionTests` |

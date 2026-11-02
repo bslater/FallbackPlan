@@ -527,12 +527,46 @@ public sealed class RecoverySession : IDisposable
     /// alone makes one. A test stands in for a platform that makes them.
     /// </param>
     /// <param name="cancellationToken">Stops the run.</param>
+    public ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
+        ObjectId rootTree,
+        string outputDirectory,
+        Func<string, string, bool>? makeLink,
+        IAlternateStreams? streams,
+        IMountPoints? junctions,
+        CancellationToken cancellationToken) =>
+        RestoreTreeAsync(rootTree, outputDirectory, makeLink, streams, junctions, mayMakeSymbolicLinks: null, cancellationToken);
+
+    /// <summary>
+    /// Restores a snapshot's tree under <paramref name="outputDirectory"/>,
+    /// as <see cref="RestoreTreeAsync(ObjectId, string, Func{string, string, bool}?, IAlternateStreams?, IMountPoints?, CancellationToken)"/>
+    /// does, making a symbolic link only where
+    /// <paramref name="mayMakeSymbolicLinks"/> says the account may.
+    /// </summary>
+    /// <remarks>
+    /// A junction needs no privilege, so one is made wherever a junction
+    /// maker is to hand, whether or not the account may make a symbolic link
+    /// (ADR-0183 Amendment 5). Where it may not, a symbolic link is skipped,
+    /// as is a junction no maker can make, since a symbolic link to its path
+    /// is what the account may not make.
+    /// </remarks>
+    /// <param name="rootTree">The snapshot's root tree.</param>
+    /// <param name="outputDirectory">Where the tree is restored.</param>
+    /// <param name="makeLink">Gives an existing file a further name: <see cref="HardLinks.TryCreate"/> where null.</param>
+    /// <param name="streams">Writes a file's alternate streams: in the form the platform keeps them in where null.</param>
+    /// <param name="junctions">Makes a junction: the platform's calls where null, on Windows, which alone makes one.</param>
+    /// <param name="mayMakeSymbolicLinks">
+    /// Whether the account may make a symbolic link:
+    /// <see cref="SymbolicLinks.CanCreate"/> where null. A test stands in for
+    /// an account that may not, which no account on Linux or macOS is.
+    /// </param>
+    /// <param name="cancellationToken">Stops the run.</param>
     public async ValueTask<RecoveryRestoreReport> RestoreTreeAsync(
         ObjectId rootTree,
         string outputDirectory,
         Func<string, string, bool>? makeLink,
         IAlternateStreams? streams,
         IMountPoints? junctions,
+        bool? mayMakeSymbolicLinks,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(outputDirectory);
@@ -549,6 +583,7 @@ public sealed class RecoverySession : IDisposable
         var notApplied = new Dictionary<string, int>(StringComparer.Ordinal);
         var link = makeLink ?? HardLinks.TryCreate;
         var junctionMaker = junctions ?? (MountPoints.CanMake ? MountPoints.OfThisPlatform : null);
+        var symbolicLinks = mayMakeSymbolicLinks ?? SymbolicLinks.CanCreate;
 
         // Each hard-link group's first name landed: what a later name must
         // agree on, where it landed, and what it got (ADR-0156).
@@ -754,12 +789,15 @@ public sealed class RecoverySession : IDisposable
                     }
 
                     // A link is made where the account may make one, as the
-                    // executor makes one (ADR-0155; ADR-0181 Amendment 1).
-                    if (manifest.EntryKind == EntryKind.Symlink && SymbolicLinks.CanCreate
-                        && manifest.LinkTarget is { } linkTarget)
+                    // executor makes one (ADR-0155; ADR-0181 Amendment 1). A
+                    // junction asks no privilege, so a junction maker makes
+                    // one whatever the account may (ADR-0183 Amendment 5).
+                    if (manifest.EntryKind == EntryKind.Symlink
+                        && manifest.LinkTarget is { } linkTarget
+                        && Encoding.UTF8.GetString(linkTarget.Span) is var targetText
+                        && MountPoints.IsJunction(manifest.LinkForm, manifest.CaptureDiagnostics, targetText) is var junction
+                        && (symbolicLinks || (junction && junctionMaker is not null)))
                     {
-                        var targetText = Encoding.UTF8.GetString(linkTarget.Span);
-                        var junction = MountPoints.IsJunction(manifest.LinkForm, manifest.CaptureDiagnostics, targetText);
                         if (MakeLink(manifest, path, destination, targetText, foldersHere, junction ? junctionMaker : null))
                         {
                             restored++;
