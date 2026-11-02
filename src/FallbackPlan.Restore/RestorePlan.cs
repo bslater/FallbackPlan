@@ -610,7 +610,10 @@ public static class RestorePlanner
                 "posix-metadata", "POSIX mode and ownership will not be applied on this target."));
         }
 
-        if (!target.SupportsSymlinks && items.Any(item => item.Kind == EntryKind.Symlink))
+        // A target that makes junctions makes them without the link
+        // permission, and only an item's facts say which link is one, so
+        // there the line is the metadata's to declare (ADR-0183 Amendment 4).
+        if (!target.SupportsSymlinks && !target.MakesJunctions && items.Any(item => item.Kind == EntryKind.Symlink))
         {
             degradations.Add(new MetadataDegradation(
                 "symlinks", "Symlinks cannot be created on this target; they will be reported as skipped."));

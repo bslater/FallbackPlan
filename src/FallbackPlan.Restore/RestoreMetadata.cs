@@ -255,13 +255,17 @@ public static class RestoreMetadata
     /// Windows; and its attribute bits and its security descriptor where the
     /// target writes them and the platform sets a link's own, on Windows.
     /// </summary>
-    private static CapturedMetadata AppliedToALink(RestoreTargetProfile target)
-    {
-        if (!target.SupportsSymlinks)
-        {
-            return CapturedMetadata.None;
-        }
+    private static CapturedMetadata AppliedToALink(RestoreTargetProfile target) =>
+        target.SupportsSymlinks ? OntoALink(target) : CapturedMetadata.None;
 
+    /// <summary>
+    /// What the platform's calls write onto a link the executor makes, as
+    /// <see cref="AppliedToALink"/> says, whether or not the account may
+    /// make a symbolic link: a junction it makes without that permission is
+    /// a link all the same (ADR-0183 Amendment 4).
+    /// </summary>
+    private static CapturedMetadata OntoALink(RestoreTargetProfile target)
+    {
         var applied = CapturedMetadata.None;
         if (SymlinkMetadata.CanSetTimes)
         {
@@ -419,10 +423,20 @@ public static class RestoreMetadata
         var flagMask = FileFlagBits.None;
         var flagsNeedPrivilege = false;
         var junctions = new Tally();
+        var skippedLinks = new Tally();
         var names = new Names();
 
         foreach (var item in plan.Items)
         {
+            // Where the account may make no symbolic link but the target
+            // makes junctions, a link is skipped unless its facts say it is
+            // a junction; the planner, which cannot tell, says nothing.
+            var junctionMade = target.MakesJunctions && facts.TryGetValue(item.ObjectId, out var linkFacts) && linkFacts.Junction;
+            if (item.Kind == EntryKind.Symlink && !target.SupportsSymlinks && target.MakesJunctions && !junctionMade)
+            {
+                skippedLinks.Add(item.Kind);
+            }
+
             if (item.Kind is not (EntryKind.File or EntryKind.DirectoryPlaceholder or EntryKind.Symlink)
                 || !facts.TryGetValue(item.ObjectId, out var known))
             {
@@ -430,9 +444,11 @@ public static class RestoreMetadata
             }
 
             // A link the target cannot make is skipped, which the planner's
-            // own line says. One it makes is held to the rule a file is.
+            // own line or the one above says. One it makes, a junction made
+            // without the link permission among them, is held to the rule a
+            // file is.
             var link = item.Kind == EntryKind.Symlink;
-            if (link && !target.SupportsSymlinks)
+            if (link && !target.SupportsSymlinks && !junctionMade)
             {
                 continue;
             }
@@ -451,7 +467,7 @@ public static class RestoreMetadata
             }
 
             var (given, unresolved) = Ownership(known.Owner, known.Group, target, names);
-            var applied = Applied(item.Kind, target);
+            var applied = link ? OntoALink(target) : Applied(item.Kind, target);
             if (link
                 && (applied & CapturedMetadata.PosixMode) != 0
                 && known.Mode is { } linkMode
@@ -726,6 +742,8 @@ public static class RestoreMetadata
         Add("file-flags", fileFlags, string.Create(CultureInfo.InvariantCulture,
             $"File flags captured on {fileFlags} will not be applied: "
             + $"{string.Join(", ", MetadataRules.FileFlagNamesOf(flagMask))}. This target does not set them{flagsWhy}."));
+        Add("symlinks", skippedLinks, string.Create(CultureInfo.InvariantCulture,
+            $"Symlinks cannot be created on this target; {skippedLinks} will be reported as skipped."));
         Add("junctions", junctions, string.Create(CultureInfo.InvariantCulture,
             $"{junctions} captured as Windows junctions will be made as symbolic links to the same path: this target makes no junction."));
 

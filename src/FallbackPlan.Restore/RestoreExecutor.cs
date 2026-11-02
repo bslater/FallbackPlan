@@ -1321,7 +1321,8 @@ public sealed class RestoreExecutor(
                     break;
                 }
 
-                case EntryKind.Symlink when target.SupportsSymlinks && manifest.LinkTarget is { } linkTarget:
+                case EntryKind.Symlink when manifest.LinkTarget is { } linkTarget
+                    && (target.SupportsSymlinks || MadeAJunction(manifest, linkTarget, target)):
                 {
                     // The existing-destination policy applies here exactly as
                     // it does to files — this case once deleted whatever stood
@@ -2269,6 +2270,16 @@ public sealed class RestoreExecutor(
         && (entry.Kind == EntryKind.Symlink ? info.LinkTarget is not null : info is { Exists: true, LinkTarget: null });
 
     /// <summary>The parts of an item's detail there are, joined, or null when there are none.</summary>
+    /// <summary>
+    /// Whether <paramref name="target"/> makes the link
+    /// <paramref name="manifest"/> describes as a junction, which it does
+    /// whether or not the account may make a symbolic link: a junction needs
+    /// no privilege (ADR-0183 Amendment 4).
+    /// </summary>
+    private static bool MadeAJunction(FileVersionManifest manifest, ReadOnlyMemory<byte> linkTarget, RestoreTargetProfile target) =>
+        target.MakesJunctions
+        && MountPoints.IsJunction(manifest.LinkForm, manifest.CaptureDiagnostics, System.Text.Encoding.UTF8.GetString(linkTarget.Span));
+
     private static string? Joined(params string?[] parts) =>
         parts.Where(part => part is not null).ToList() is { Count: > 0 } present ? string.Join("; ", present) : null;
 
