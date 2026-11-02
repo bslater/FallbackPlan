@@ -155,6 +155,8 @@ destination kind the day its provider exists.
 
 Durable file creation with explicit flush · atomic temp-to-final rename where the filesystem supports it · permissions hardening on the repository directory · removable-media detection · filesystem capability reporting · protection against path traversal and symlink redirection when the repository path is attacker-influenced.
 
+> **2026-11 ([ADR-0012 Amendment 6](../adr/0012-storage-provider-contract.md#amendment-6-2026-11--a-local-destination-on-a-drive-that-holds-no-links)).** The guard against a linked folder asks a folder for its link only where the folder carries the reparse-point attribute. A FAT32 or exFAT drive holds no links and refuses that request, so asking every folder failed every write into a folder that was already there; such a drive is now written and read as any other.
+
 ### 4.2 FallbackPlan peer
 
 Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather than exposing raw filesystem access. Quota and authorisation controls, streamed uploads, ranged downloads, peer-side integrity verification, optional store-and-forward. A source device never receives unrestricted filesystem access to a destination ([`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)). A peer destination is served by fan-out and catch-up today; the ship sink does not yet write to peers — on a direct-ship set a peer is a stated `NotSupported` in the sync ledger until the peer write adapter lands ([ADR-0046](../adr/0046-direct-to-destination-publication.md)).

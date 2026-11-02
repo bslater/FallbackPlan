@@ -359,10 +359,17 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
         // Walk every ancestor up to the root, not stopping at levels that do
         // not exist yet: the symlinked component may sit above a directory the
         // put would otherwise create through it.
+        //
+        // Only a folder carrying the reparse-point attribute is asked for its
+        // link. A link always carries it (a Unix symlink is reported with it
+        // too), and a FAT or exFAT folder never can: that volume refuses the
+        // call that asks for the link as a function it lacks, and
+        // ResolveLinkTarget throws on the refusal where NTFS answers "none".
         var directory = Path.GetDirectoryName(path);
         while (directory is not null && directory.Length > _root.Length)
         {
             if (Directory.Exists(directory) &&
+                File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint) &&
                 Directory.ResolveLinkTarget(directory, returnFinalTarget: false) is not null)
             {
                 throw new IOException(Strings.FormatLocalFileSystemObjectStore_RefusingTraverseSymlinkedDirectoryInside(directory));

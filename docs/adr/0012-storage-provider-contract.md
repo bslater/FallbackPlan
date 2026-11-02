@@ -2,7 +2,7 @@
 
 **Status:** Accepted (amended) · Partly implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
-**Requirements:** NFR-PORT-004, NFR-REL-005, NFR-COMP-005, FR-REP-002, FR-QUOTA-001
+**Requirements:** NFR-PORT-004, NFR-REL-005, NFR-COMP-005, FR-REP-002, FR-QUOTA-001; FR-DEST-001 (amended by [Amendment 6](#amendment-6-2026-11--a-local-destination-on-a-drive-that-holds-no-links): a local destination on a FAT32 or exFAT drive is written and read as any other)
 **Review finding:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
 ---
@@ -345,6 +345,24 @@ namespace sorts `/` before every other character. The one listing the
 product resumes against a store is a sweep's listing of blobs, whose keys
 all have the same shape, so the two orders agree on them.
 
+## Amendment 6 (2026-11) — a local destination on a drive that holds no links
+
+The local provider refuses a key whose path runs through a linked folder inside its root (Amendment 1; [05 §4.1](../architecture/05-storage-providers.md#41-local-filesystem)). It asked each folder on the path that exists for the link it holds, through `Directory.ResolveLinkTarget`. A FAT32 or exFAT volume holds no links and cannot say so: Windows refuses the request as a function the volume lacks ("Incorrect function"), and .NET throws on that refusal where an NTFS folder answers that it holds none.
+
+A key's first write into a new folder passed, because a folder not there yet is not asked. The next write into the same folder failed. A set may have a removable drive as its only destination (FR-DEST-001), and such a drive is often formatted FAT32. On one, every backup dropped the destination at its second blob, and nothing could be read back from it, since a read takes the same path.
+
+**Decision.** The provider asks a folder for its link only where the folder carries the reparse-point attribute.
+
+- Every link carries it, and .NET reports a Unix symlink with it too, so the guard refuses what it refused before.
+- A FAT or exFAT folder never carries it, so it is not asked.
+
+**Built:** `Storage.Local/LocalFileSystemObjectStore`:
+
+- `Storage.ContractTests/Fat32LocalFileSystemObjectStoreContractTests` runs the whole provider contract on a FAT32 volume of its own, a virtual disk mounted on a folder, with a second write into a folder an earlier write made. It runs where an elevated Windows process runs it, as CI's Windows runner is, and is skipped by name elsewhere. Before the change, every case that wrote twice failed.
+- `Storage.ContractTests/LocalFileSystemSecurityTests` still refuses a write through a linked folder, on every platform.
+
+**Not done.** exFAT is not tested; it answers the request as FAT32 does.
+
 ## Status history
 
 | Date | Status | Note |
@@ -359,3 +377,4 @@ all have the same shape, so the two orders agree on them.
 | 2026-10 | Accepted (amended, related) | [ADR-0103](0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md): `ObjectMetadata` says whether a store holds an object only in an archival tier, a read of one is refused with `Storage.Abstractions/StoreObjectArchivedException`, and both cloud providers declare `ArchivalTiers`. |
 | 2026-10 | Accepted (amended, related) | [ADR-0171 Amendment 2](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said): `DeleteResult` says how many bytes a store kept although it answered the delete, as a bucket that keeps versions does behind a delete marker, and is null where it kept none or does not say. An expected outcome, so a result rather than a fault. |
 | 2026-10 | Accepted (amended, related) | [ADR-0171 Amendment 4](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-4-2026-10--a-delete-an-account-keeps-under-soft-delete-is-counted-and-noticed-nowhere): `DeleteResult` also says whether the store keeps what it deleted only for a period of its own, as an account under soft delete does, and may leave the bytes unsaid beside it. |
+| 2026-11 | Accepted (amended) | Amendment 6: the local provider asks a folder for its link only where the folder carries the reparse-point attribute, so a FAT32 or exFAT drive, which refuses the request, is written and read as any other. `Storage.Local/LocalFileSystemObjectStore`; `Storage.ContractTests/Fat32LocalFileSystemObjectStoreContractTests` |
