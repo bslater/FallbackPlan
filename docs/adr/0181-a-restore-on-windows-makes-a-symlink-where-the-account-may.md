@@ -69,6 +69,8 @@ Nothing more than before. No call on Windows sets a link's own times, and its at
 - **A junction.** A directory junction captured on Windows comes back as a folder's symbolic link to the same target, not as a junction.
 
   > **2026-11: taken up by [ADR-0183 Amendment 2](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again)** for the engine's restore: from a backup that names its form, a junction comes back a junction.
+  >
+  > **2026-11: and for the recovery tool by [ADR-0183 Amendment 3](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too).**
 
 ## Alternatives considered
 

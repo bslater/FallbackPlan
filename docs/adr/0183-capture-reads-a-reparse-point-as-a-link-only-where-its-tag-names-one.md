@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-MAN-003 (amended: on Windows a reparse point is captured as a link only where its tag names another path, and any other is captured as the file or folder it is, with its content; amended again by [Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form): from format 6 a junction's form is kept in manifest key 14); FR-RST-004 and FR-RST-003 (amended by [Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again): a restore on Windows makes a junction a junction, and a target that makes none says so)
+**Requirements:** FR-MAN-003 (amended: on Windows a reparse point is captured as a link only where its tag names another path, and any other is captured as the file or folder it is, with its content; amended again by [Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form): from format 6 a junction's form is kept in manifest key 14); FR-RST-004 and FR-RST-003 (amended by [Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again): a restore on Windows makes a junction a junction, and a target that makes none says so); FR-RST-005 (amended by [Amendment 3](#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too): so does the recovery tool)
 **Related:** [architecture 06 §4.1](../architecture/06-filesystem-capture.md#41-links-are-classified-before-they-are-traversed) (links are classified before they are traversed), [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md) (a restore on Windows makes links), [ADR-0182](0182-capture-reads-a-links-own-security-descriptor-on-windows.md) (a link's own descriptor, read through a handle on the reparse point)
 
 **Built:**
@@ -88,6 +88,8 @@ The tag is read only where the bit is set, so an entry without a reparse point c
 - **No restore reads the form yet.** A junction still comes back as a folder's symbolic link where the account may make one ([ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md)). On Linux or macOS it comes back as a symbolic link to a Windows path. Making a junction again is the next amendment's.
 
   > **2026-11: taken up for the engine's restore by [Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again).** The recovery tool is the next.
+  >
+  > **2026-11: and for the recovery tool by [Amendment 3](#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too).**
 - **A volume mounted on a folder keeps no form.** Its target names a volume of the machine it was captured on, and no restore elsewhere could mount it.
 
 **Built:** `Filesystem.Local/ReparsePoints`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Local/PosixInterop` (the stat); `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Cli/CliApplication`:
@@ -132,6 +134,8 @@ The two are not alike. A junction is resolved on the machine that holds it, even
 **Not done.**
 
 - **The recovery tool.** It still makes a junction a folder's symbolic link. That is the next amendment's.
+
+  > **2026-11: taken up by [Amendment 3](#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too).**
 - **An account that may make no symbolic link** skips a junction still, as it skips every link, though a junction needs no privilege. The planner judges links from the catalogue, which holds no form, so its line saying links will be skipped cannot tell a junction apart. Telling it is a change of its own.
 - **A volume mounted on a folder** keeps no form ([Amendment 1](#amendment-1-2026-11--capture-keeps-a-junctions-form)), so it comes back as a symbolic link.
 
@@ -153,6 +157,30 @@ The two are not alike. A junction is resolved on the machine that holds it, even
   - a mount point naming no drive's folder is made a symbolic link, and nothing names it a junction;
   - on Windows, a junction is restored a junction naming its folder, and a folder's symbolic link a symbolic link.
 
+## Amendment 3 (2026-11) — the recovery tool makes a junction again too
+
+[Amendment 2](#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again) had the engine's restore make a junction a junction, and left the recovery tool making it a folder's symbolic link. The tool makes a link as the executor makes one ([ADR-0181 Amendment 1](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too)), so it should make a junction as the executor does.
+
+**Decision.** The recovery tool makes a junction by Amendment 2's rule, through the same `Domain/MountPoints`, and notes what it could not make.
+
+- **A junction is what Amendment 2 says it is** (`MountPoints.IsJunction`): a link captured as a mount point, in key 14 or its diagnostics, that names a drive's folder.
+- **Windows makes one,** through the platform's calls. A caller may stand its own in (`RecoverySession.RestoreTreeAsync`'s junction maker), as it may for hard links and streams.
+- **One the maker refuses fails that entry alone,** noted in the maker's words as a link the output would not take is, and nothing is left at its name.
+- **Its own metadata goes on as a link's does,** onto the junction and never through it. Whatever stands at its name is cleared first, as for any link.
+- **A platform that makes none makes a symbolic link to the same path,** as before, and notes it: `made as a symbolic link: this target makes no junction` (`RecoveryNoteKind.JunctionMadeAsALink`), in the receipt's words.
+
+**Not done.** Amendment 2's other limits hold here too. An account that may make no symbolic link skips a junction, as the tool skips every link there, and a volume mounted on a folder keeps no form.
+
+**Built:** `Recovery/RecoverySession`; `Recovery/RecoveryNote`:
+
+- `Repository.Tests/RecoveryJunctionTests`:
+  - a junction is made by the junction maker, named in key 14 or, below format 6, in its diagnostics, and a symbolic link beside it is made a symbolic link;
+  - a file standing at a junction's name is cleared first, as at any link's;
+  - one the maker refuses fails that entry alone, noted in the maker's words, and leaves nothing;
+  - off Windows, the platform's own makes none, and the junction is made a symbolic link to its path and noted so;
+  - a mount point naming no drive's folder is made a symbolic link, and nothing names it a junction;
+  - on Windows, a junction is restored a junction naming its folder, and a folder's symbolic link a symbolic link.
+
 ## Status history
 
 | Date | Status | Note |
@@ -161,3 +189,4 @@ The two are not alike. A junction is resolved on the machine that holds it, even
 | 2026-11 | Accepted (related) | [ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) gives a link's form a key, format 6's manifest key 14, whose one value names a mount point. Nothing writes it yet, so a junction is still captured as a link with no form |
 | 2026-11 | Accepted (Amendment 1) | Capture names a junction a mount point: a link whose tag is a mount point's and whose target names a folder by its drive's path. From format 6 publication keeps the form in manifest key 14 and names it no more; below 6 it stays named among the diagnostics. A symbolic link, and a volume mounted on a folder, keep no form; inspect-manifest shows it; no restore reads it yet. `Filesystem.Local/ReparsePoints`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Local/PosixInterop`; `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Cli/CliApplication`; `Filesystem.Tests/ReparsePointTests`; `Filesystem.Tests/LocalScanTests`; `Domain.Tests/LinkFormTests`; `Repository.Tests/LinkFormCaptureTests`; `Cli.Tests/InspectionCommandTests` |
 | 2026-11 | Accepted (Amendment 2) | The engine's restore makes a junction a junction where the target makes one: a link captured as a mount point, in key 14 or its diagnostics, that names a drive's folder. Windows makes it through a mount-point reparse point set on the folder; one refused fails alone, in the refusal's words, and leaves nothing. A target that makes none makes a symbolic link to the same path, and its plan and receipt say so. `Domain/MountPoints`; `Domain/MetadataRules`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Domain.Tests/MountPointsTests`; `Repository.Tests/RestoreJunctionTests` |
+| 2026-11 | Accepted (Amendment 3) | The recovery tool makes a junction by Amendment 2's rule, through the platform's calls or a junction maker its caller gives; one refused fails that entry alone, noted in the maker's words, and leaves nothing; a platform that makes none makes a symbolic link to the same path and notes it. `Recovery/RecoverySession`; `Recovery/RecoveryNote`; `Repository.Tests/RecoveryJunctionTests` |

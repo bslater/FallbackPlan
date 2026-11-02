@@ -99,6 +99,8 @@ Publication, which builds each manifest, already holds the repository's effectiv
   > **2026-11: and key 14 by [ADR-0183 Amendment 1](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-1-2026-11--capture-keeps-a-junctions-form).** No restore reads it yet.
 >
   > **2026-11: and read by [ADR-0183 Amendment 2](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again)** for the engine's restore.
+  >
+  > **2026-11: and by [ADR-0183 Amendment 3](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too)** for the recovery tool.
 - **Keep a flag Windows names.** Windows' attribute bits stay in key 10 ([ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md)).
 - **Keep a placeholder a cloud provider leaves unfetched.** ADR-0183's other limit names no key here.
 
@@ -111,3 +113,4 @@ Publication, which builds each manifest, already holds the repository's effectiv
 | 2026-11 | Accepted (related) | [ADR-0180 Amendment 4](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may) has the engine's restore give back the flags key 11 keeps, a file's, a folder's and a link's, where the platform and the account let it. `Domain/FileFlags`; `Restore/RestoreExecutor` |
 | 2026-11 | Accepted (related) | [ADR-0183 Amendment 1](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-1-2026-11--capture-keeps-a-junctions-form) writes key 14 from format 6 for a junction, a mount point naming a folder by its drive's path, which below 6 stays named among its diagnostics. `Filesystem.Local/ReparsePoints`; `Domain/MetadataRules`; `Repository/SnapshotPublication` |
 | 2026-11 | Accepted (related) | [ADR-0183 Amendment 2](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-2-2026-11--a-restore-on-windows-makes-a-junction-again) reads key 14, and the diagnostic before format 6: the engine's restore makes a junction a junction on Windows, and elsewhere a symbolic link it names as one. `Domain/MountPoints`; `Restore/RestoreExecutor` |
+| 2026-11 | Accepted (related) | [ADR-0183 Amendment 3](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-3-2026-11--the-recovery-tool-makes-a-junction-again-too) reads key 14, and the diagnostic before format 6, in the recovery tool, which makes a junction a junction on Windows as the engine's restore does. `Recovery/RecoverySession` |
