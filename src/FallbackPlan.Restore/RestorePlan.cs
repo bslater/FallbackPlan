@@ -113,6 +113,32 @@ public sealed record RestoreTargetProfile
     public bool SupportsCompression { get; init; }
 
     /// <summary>
+    /// The flags the executor gives a file and a folder back on this target
+    /// (<see cref="FileFlags.Settable"/>; ADR-0180 Amendment 4): no-dump on
+    /// Linux, with immutable and append-only for an account holding
+    /// <c>CAP_LINUX_IMMUTABLE</c>; the owner's immutable, append-only,
+    /// no-dump and hidden flags on macOS; none on Windows, and none for a
+    /// target no case names. The plan names the rest.
+    /// </summary>
+    public FileFlagBits SettableFlags { get; init; }
+
+    /// <summary>The flags the executor gives a link's own back, as <see cref="SettableFlags"/> are a file's: macOS's, and none on Linux.</summary>
+    public FileFlagBits SettableLinkFlags { get; init; }
+
+    /// <summary>
+    /// The flags this target would set for an account with the privilege
+    /// this one lacks: Linux's immutable and append-only without
+    /// <c>CAP_LINUX_IMMUTABLE</c>. The plan says so where it names them.
+    /// </summary>
+    public FileFlagBits FlagsNeedingPrivilege { get; init; }
+
+    /// <summary>
+    /// The calls flags are set through: the platform's unless a caller says
+    /// otherwise, as a case judged on a platform that keeps none does.
+    /// </summary>
+    public IFileFlags Flags { get; init; } = FileFlags.OfThisPlatform;
+
+    /// <summary>
     /// Whether the executor writes a file's and a folder's Windows security
     /// descriptor back on this target: Windows keeps one, and nothing else
     /// does (ADR-0176). It is what the plan predicts by, with
@@ -220,6 +246,9 @@ public sealed record RestoreTargetProfile
         SupportsSecurityDescriptors = SupportsSecurityDescriptors,
         SupportsAlternateStreams = SupportsAlternateStreams,
         SupportsCompression = SupportsCompression,
+        SettableFlags = SettableFlags,
+        SettableLinkFlags = SettableLinkFlags,
+        Flags = Flags,
         KnowsAccount = KnowsAccount,
         HoldsRestorePrivilege = HoldsRestorePrivilege,
         HoldsSecurityPrivilege = HoldsSecurityPrivilege,
@@ -250,6 +279,9 @@ public sealed record RestoreTargetProfile
         MaxAttributeNameBytes = ExtendedAttributes.MaxNameBytes,
         MaxAttributeValueBytes = ExtendedAttributes.MaxValueBytes,
         SupportsCompression = FileCompression.CanSet,
+        SettableFlags = FileFlags.Settable(EntryKind.File),
+        SettableLinkFlags = FileFlags.Settable(EntryKind.Symlink),
+        FlagsNeedingPrivilege = FileFlags.NeedingPrivilege,
         InheritedAccessAt = WindowsAccess.InheritedByAFileAt,
         InheritedFolderAccessAt = WindowsAccess.InheritedByAFolderAt,
         Account = RestoreAccount.OfThisProcess(),

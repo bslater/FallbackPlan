@@ -868,6 +868,10 @@ public sealed class RestoreExecutor(
         // a later name can be made that file again (ADR-0102).
         var groups = new Dictionary<string, LandedName>(StringComparer.Ordinal);
 
+        // Each file and link the run landed with flags, in the order it
+        // landed them, for the pass that sets them once nothing more lands.
+        var flagged = new List<Flagged>();
+
         var existingPolicy = options.ExistingDestination.ToString();
         Log.RestoreStarting(_logger, plan.Items.Count, new LogPath(root), new LogLabel(existingPolicy));
 
@@ -1099,6 +1103,11 @@ public sealed class RestoreExecutor(
                         }
                         else if (Link(item, destination, first, chosen, displaced, options) is { } linked)
                         {
+                            if (linked.LinkedTo is not null)
+                            {
+                                Flag(flagged, items.Count, item.Path, linked.WrittenAs, first.Landing, WantedFlags(manifest), EntryKind.File, shares: first.Landing);
+                            }
+
                             items.Add(linked);
                             continue;
                         }
@@ -1131,9 +1140,10 @@ public sealed class RestoreExecutor(
                             notLinked, foundInPlace: true, keptStreams);
                         if (!keptDegraded && group is not null && notLinked is null)
                         {
-                            groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, standing, keptNotApplied, FlagsNotApplied(manifest)));
+                            groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, standing, keptNotApplied));
                         }
 
+                        Flag(flagged, items.Count, item.Path, kept.WrittenAs, standing, WantedFlags(manifest), EntryKind.File);
                         items.Add(kept);
                         break;
                     }
@@ -1303,9 +1313,10 @@ public sealed class RestoreExecutor(
                         streamsLeft, resumedAt: (ulong)result.Resumed);
                     if (!degraded && group is not null && notLinked is null)
                     {
-                        groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, landing, notApplied, FlagsNotApplied(manifest)));
+                        groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, landing, notApplied));
                     }
 
+                    Flag(flagged, items.Count, item.Path, writtenAs, landing, WantedFlags(manifest), EntryKind.File);
                     items.Add(settled);
                     break;
                 }
@@ -1392,10 +1403,11 @@ public sealed class RestoreExecutor(
 
                     // Onto the link the run just made, never through it.
                     var linkWritten = _metadata.Write(linkLanding, manifest.Metadata, EntryKind.Symlink);
+                    Flag(flagged, items.Count, item.Path, linkWrittenAs, linkLanding, WantedFlags(manifest), EntryKind.Symlink);
                     items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = 0, WrittenAs = linkWrittenAs,
-                        Detail = Joined(linkWritten.Detail, FlagsNotApplied(manifest)),
+                        Detail = linkWritten.Detail,
                         NotApplied = MetadataRules.NotApplied(MetadataRules.Captured(manifest.Metadata), linkWritten.Applied),
                     }));
                     break;
@@ -1419,6 +1431,11 @@ public sealed class RestoreExecutor(
             }
         }
 
+        // A stopped run sets no flag: a resume writes into the folders it
+        // made and onto the files it landed, which an immutable flag refuses.
+        var stopped = cancellationToken.IsCancellationRequested;
+        SetFlags(root, flagged, items, stopped);
+
         // A folder's own metadata goes on last, deepest folder first, once
         // nothing more will land in it (ADR-0086). Every item written into a
         // folder moves its modification time, and permissions that forbid
@@ -1427,7 +1444,7 @@ public sealed class RestoreExecutor(
         // each is in the receipt, and its item says what it was given.
         foreach (var folder in folders.OrderByDescending(folder => Depth(folder.Item.Path)))
         {
-            items[folder.Receipt] = ReadAroundOf([folder.Item.ObjectId], Settle(root, folder, items[folder.Receipt]));
+            items[folder.Receipt] = ReadAroundOf([folder.Item.ObjectId], Settle(root, folder, items[folder.Receipt], stopped));
         }
 
         var receipt = new RestoreReceipt
@@ -1504,7 +1521,6 @@ public sealed class RestoreExecutor(
         // not applied; it does not undo content that landed and verified
         // (ADR-0084).
         var written = _metadata.Write(landing, manifest.Metadata);
-        var flags = FlagsNotApplied(manifest);
         var streamsWritten = (target.SupportsAlternateStreams || _streamsAsAttributes) && streamsLeft is null;
         var notApplied = MetadataRules.NotApplied(
             MetadataRules.Captured(manifest.Metadata),
@@ -1518,7 +1534,7 @@ public sealed class RestoreExecutor(
             return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
             {
                 Path = item.Path, Outcome = "degraded", Bytes = length, WrittenAs = writtenAs,
-                Detail = Joined(notLinked, streamsLeft, written.Detail, flags),
+                Detail = Joined(notLinked, streamsLeft, written.Detail),
                 NotApplied = notApplied,
                 FoundInPlace = foundInPlace,
                 ResumedAt = resumedAt,
@@ -1534,8 +1550,7 @@ public sealed class RestoreExecutor(
                     notLinked,
                     $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
                         + "and not written back on this target (declared in the plan)"
-                        + (written.Detail is { } left ? $"; {left}" : string.Empty),
-                    flags),
+                        + (written.Detail is { } left ? $"; {left}" : string.Empty)),
                 NotApplied = notApplied,
                 FoundInPlace = foundInPlace,
                 ResumedAt = resumedAt,
@@ -1545,7 +1560,7 @@ public sealed class RestoreExecutor(
         return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
         {
             Path = item.Path, Outcome = "restored", Bytes = length, WrittenAs = writtenAs,
-            Detail = Joined(notLinked, written.Detail, flags), NotApplied = notApplied,
+            Detail = Joined(notLinked, written.Detail), NotApplied = notApplied,
             FoundInPlace = foundInPlace, ResumedAt = resumedAt,
         }), notApplied, false);
     }
@@ -1785,7 +1800,7 @@ public sealed class RestoreExecutor(
     /// of the one the run made. Either way nothing captured was applied, and
     /// the item lists all of it.
     /// </remarks>
-    private ReceiptItem Settle(string root, Folder folder, ReceiptItem made)
+    private ReceiptItem Settle(string root, Folder folder, ReceiptItem made, bool stopped)
     {
         if (folder.Values is not { } values)
         {
@@ -1810,10 +1825,13 @@ public sealed class RestoreExecutor(
             };
         }
 
+        // Its flags last: an immutable folder refuses its own times too.
         var written = _metadata.Write(folder.Destination, values, EntryKind.DirectoryPlaceholder);
+        var flags = stopped ? FileFlagBits.None : _metadata.WriteFlags(folder.Destination, values.FileFlags, EntryKind.DirectoryPlaceholder);
         return made with
         {
-            Detail = written.Detail, NotApplied = MetadataRules.NotApplied(folder.Captured, written.Applied),
+            Detail = Joined(written.Detail, MetadataRules.FileFlagsNotApplied(values.FileFlags, flags)),
+            NotApplied = MetadataRules.NotApplied(folder.Captured, written.Applied),
         };
     }
 
@@ -2153,17 +2171,87 @@ public sealed class RestoreExecutor(
         return new ReceiptItem
         {
             Path = item.Path, Outcome = "restored", Bytes = (ulong)new FileInfo(landing).Length, WrittenAs = writtenAs,
-            Detail = first.FlagsNotApplied, NotApplied = first.NotApplied, LinkedTo = first.Path,
+            NotApplied = first.NotApplied, LinkedTo = first.Path,
         };
     }
 
     /// <summary>
-    /// What an item's detail says of the file flags its manifest names, none
-    /// of which a restore sets (ADR-0180 Amendment 1), or null where it names
-    /// none.
+    /// The flags <paramref name="manifest"/> keeps in metadata key 11 or names
+    /// in its capture diagnostics (ADR-0180 Amendments 1 and 3).
     /// </summary>
-    private static string? FlagsNotApplied(FileVersionManifest manifest) =>
-        MetadataRules.FileFlagsNotApplied(MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics));
+    private static FileFlagBits WantedFlags(FileVersionManifest manifest) =>
+        MetadataRules.FileFlagsOf(manifest.Metadata, manifest.CaptureDiagnostics);
+
+    /// <summary>
+    /// Notes in <paramref name="flagged"/> that the item about to be the
+    /// receipt's <paramref name="receipt"/>th landed at
+    /// <paramref name="landing"/> with <paramref name="wanted"/> flags, for
+    /// <see cref="SetFlags"/>. A later name of a hard-link group
+    /// <paramref name="shares"/> its first name's file, whose flags are set
+    /// once.
+    /// </summary>
+    private static void Flag(
+        List<Flagged> flagged, int receipt, string path, string? writtenAs, string landing, FileFlagBits wanted, EntryKind kind,
+        string? shares = null)
+    {
+        if (wanted != FileFlagBits.None)
+        {
+            flagged.Add(new Flagged(receipt, path, writtenAs, landing, wanted, kind, shares));
+        }
+    }
+
+    /// <summary>
+    /// Gives each file and link the run landed the flags it was captured
+    /// with, as far as the target sets them, and says beside each item which
+    /// did not land (ADR-0180 Amendment 4).
+    /// </summary>
+    /// <remarks>
+    /// Once every item has landed and before any folder settles: an immutable
+    /// or append-only file takes no further name, and an immutable one no
+    /// further write. A later name of a hard-link group says what its first
+    /// name's file was given. What stands where an item landed is held to
+    /// what it landed as, reached without leaving the root through a link,
+    /// as a folder is before it settles, because the run has been long.
+    /// </remarks>
+    private void SetFlags(string root, List<Flagged> flagged, List<ReceiptItem> items, bool stopped)
+    {
+        var given = new Dictionary<string, FileFlagBits>(StringComparer.Ordinal);
+        foreach (var entry in flagged)
+        {
+            FileFlagBits landed;
+            if (stopped)
+            {
+                landed = FileFlagBits.None;
+            }
+            else if (entry.Shares is { } first)
+            {
+                landed = given.GetValueOrDefault(first) & entry.Wanted;
+            }
+            else
+            {
+                landed = IsStillWhatLanded(root, entry)
+                    ? _metadata.WriteFlags(entry.Landing, entry.Wanted, entry.Kind)
+                    : FileFlagBits.None;
+                given[entry.Landing] = landed;
+            }
+
+            var item = items[entry.Receipt];
+            items[entry.Receipt] = item with { Detail = Joined(item.Detail, MetadataRules.FileFlagsNotApplied(entry.Wanted, landed)) };
+        }
+    }
+
+    /// <summary>
+    /// Whether what stands where <paramref name="entry"/> landed is still
+    /// what the run landed there: reached without leaving the root through a
+    /// link, beside where its path resolves, and a file of its own or a
+    /// link, as it was.
+    /// </summary>
+    private static bool IsStillWhatLanded(string root, Flagged entry) =>
+        TryResolve(root, entry.Path, out var resolved, out _)
+        && string.Equals(Path.GetDirectoryName(resolved), Path.GetDirectoryName(entry.Landing), StringComparison.Ordinal)
+        && (entry.WrittenAs is not null || string.Equals(resolved, entry.Landing, StringComparison.Ordinal))
+        && new FileInfo(entry.Landing) is var info
+        && (entry.Kind == EntryKind.Symlink ? info.LinkTarget is not null : info is { Exists: true, LinkTarget: null });
 
     /// <summary>The parts of an item's detail there are, joined, or null when there are none.</summary>
     private static string? Joined(params string?[] parts) =>
@@ -2174,6 +2262,16 @@ public sealed class RestoreExecutor(
     /// <param name="Path">Its path in the snapshot.</param>
     /// <param name="Landing">Where it landed.</param>
     /// <param name="NotApplied">What its file did not get back, which every name of it shares.</param>
-    /// <param name="FlagsNotApplied">What its item's detail says of its file's flags, which every name of it shares too.</param>
-    private sealed record LandedName(string Key, string Path, string Landing, IReadOnlyList<string>? NotApplied, string? FlagsNotApplied);
+    private sealed record LandedName(string Key, string Path, string Landing, IReadOnlyList<string>? NotApplied);
+
+    /// <summary>A file or link the run landed with flags, which <see cref="SetFlags"/> gives them.</summary>
+    /// <param name="Receipt">Its item's place in the receipt.</param>
+    /// <param name="Path">Its path in the snapshot.</param>
+    /// <param name="WrittenAs">The name it was written beside under, or null.</param>
+    /// <param name="Landing">Where it landed.</param>
+    /// <param name="Wanted">The flags it was captured with.</param>
+    /// <param name="Kind">A file or a link.</param>
+    /// <param name="Shares">Where its hard-link group's first name landed, whose file it is, or null.</param>
+    private sealed record Flagged(
+        int Receipt, string Path, string? WrittenAs, string Landing, FileFlagBits Wanted, EntryKind Kind, string? Shares);
 }

@@ -448,6 +448,17 @@ public static class MetadataRules
             : $"file flag(s) not applied: {string.Join(", ", FileFlagNamesOf(flags))} (not set by a restore)";
 
     /// <summary>
+    /// What a restore's receipt says of the <paramref name="wanted"/> flags
+    /// an item was captured with, of which <paramref name="landed"/> were
+    /// given back: each that was not, or null where every one was (ADR-0180
+    /// Amendment 4).
+    /// </summary>
+    public static string? FileFlagsNotApplied(FileFlagBits wanted, FileFlagBits landed) =>
+        (wanted & ~landed) is var left && left == FileFlagBits.None
+            ? null
+            : $"file flag(s) not applied: {string.Join(", ", FileFlagNamesOf(left))}";
+
+    /// <summary>
     /// The flags the capture <paramref name="diagnostics"/> name
     /// (<see cref="FileFlagsDiagnostic"/>); a name no build knows is passed
     /// over.
