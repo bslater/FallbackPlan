@@ -1907,6 +1907,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
         var conflicts = RestorePlanFigures.Conflicts(plan);
         conflicts.AddRange(RestoreInTheWay.HeldByFlags(slices, RestoreDestinationMode.InPlace, existing, target.Flags)
             .Select(held => RestoreInTheWay.Describe(held, existing)));
+        conflicts.AddRange(RestoreInTheWay.FoldersHeld(slices, RestoreDestinationMode.InPlace, existing, target.Flags)
+            .Select(RestoreInTheWay.Describe));
         var destinationOf = RestoreMetadata.DestinationsOf(slices);
         var degradations = RestorePlanFigures.Degradations(plan, probed, target, destinationOf);
         var wider = RestoreMetadata.OpenedWider(plan, probed.Facts, target, destinationOf);

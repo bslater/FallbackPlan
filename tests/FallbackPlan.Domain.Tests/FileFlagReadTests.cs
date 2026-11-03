@@ -6,8 +6,10 @@ namespace FallbackPlan.Domain.Tests;
 /// A restore reads the flags of a file already where it would write, so its
 /// plan can name one a flag keeps where it stands (FR-RST-003; ADR-0180
 /// Amendment 6). Linux's are its inode flags, which a link cannot be opened
-/// for, and macOS's its <c>st_flags</c>, a link's its own. Where nothing
-/// stands, or the platform keeps no flags, there are none.
+/// for, and macOS's its <c>st_flags</c>, a link's its own. A folder's are
+/// read as a file's, for the folders the run would write into (ADR-0180
+/// Amendment 8). Where nothing stands, or the platform keeps no flags, there
+/// are none.
 /// </summary>
 [TestClass]
 public sealed class FileFlagReadTests
@@ -69,6 +71,36 @@ public sealed class FileFlagReadTests
         {
             DiskFlags.ClearUnder(root);
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a folder's flags as a file's")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public void AFoldersFlags_AreReadAsAFilesAre()
+    {
+        // A plan reads the folders the run would write into (ADR-0180
+        // Amendment 8). The owner may set no-dump on both platforms.
+        var folder = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "fbp-flag-reads", Guid.NewGuid().ToString("n"))).FullName;
+        try
+        {
+            Assert.AreEqual(FileFlagBits.None, FileFlags.OfThisPlatform.Read(folder));
+
+            if (OperatingSystem.IsMacOS())
+            {
+                DiskFlags.SetOnMacOs(folder, DiskFlags.DarwinNoDump);
+            }
+            else
+            {
+                DiskFlags.AddOnLinux(folder, DiskFlags.LinuxNoDump);
+            }
+
+            Assert.AreEqual(FileFlagBits.NoDump, FileFlags.OfThisPlatform.Read(folder));
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(folder);
+            Directory.Delete(folder);
         }
     }
 
