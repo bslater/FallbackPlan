@@ -18,10 +18,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a file cannot be renamed into place from its spool, nor its spool removed
 /// after. Each fails that item with the platform's words, and a spool the
 /// folder will not let go is named. A run whose own folder cannot be made is
-/// refused before anything is written. A move aside refused leaves nothing of
-/// its own under the displaced folder, neither a copy the platform made at
-/// its refuge nor the folders it made, and the run keeps those a move that
-/// landed made (ADR-0180 Amendment 10).
+/// refused before anything is written. A move aside is a rename onto a refuge
+/// nothing stands at, so one refused leaves nothing of its own under the
+/// displaced folder, neither a copy at its refuge nor the folders it made,
+/// and the run keeps those a move that landed made (ADR-0180 Amendment 10).
 /// </summary>
 /// <remarks>
 /// The flags are set for real, as this platform and the account running the
@@ -128,30 +128,27 @@ public sealed class RestoreRefusedWhereItStandsTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a file's immutable flag")]
+    [PlatformCondition(TestPlatforms.Posix, "the executor's cases here restore to a POSIX target")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task AMoveAsideRefused_LeavesWhatAlreadyStoodAtItsRefuge()
+    public async Task AMoveAside_NeverReplacesWhatAlreadyStandsAtItsRefuge()
     {
-        // A file the run's name already holds at the refuge is not the
-        // move's own: the move is refused for it, and it stays.
-        RequireImmutable();
+        // The move is a rename, which would replace its refuge, so it looks
+        // first: a file the run's name already holds there stays, and the
+        // file in the way stays where it stood. No flag is needed for this.
         var source = new FakeFileSystemSource();
         source.AddFile("b/kept.txt", Content(12));
         var output = Path.Combine(SpoolDirectory, "live-b8");
-        Hold(Standing(output, "b/kept.txt", "kept"));
+        var inTheWay = Standing(output, "b/kept.txt", "in the way");
         var earlier = Standing(output, ".fbp-displaced/refused-b8/b/kept.txt", "moved aside before");
 
-        try
-        {
-            var receipt = await PublishAndRestoreAsync(source, 0xB8, output, RestoreDestinationMode.InPlace, ExistingDestinationPolicy.Preserve);
+        var receipt = await PublishAndRestoreAsync(source, 0xB8, output, RestoreDestinationMode.InPlace, ExistingDestinationPolicy.Preserve);
 
-            Assert.AreEqual("failed", Item(receipt, "b/kept.txt").Outcome);
-            Assert.AreEqual("moved aside before", File.ReadAllText(earlier));
-        }
-        finally
-        {
-            DiskFlags.ClearUnder(output);
-        }
+        var item = Item(receipt, "b/kept.txt");
+        Assert.AreEqual("failed", item.Outcome);
+        Assert.StartsWith("what stands here was not moved aside: ", item.Detail!, StringComparison.Ordinal);
+        Assert.AreEqual("moved aside before", File.ReadAllText(earlier));
+        Assert.AreEqual("in the way", File.ReadAllText(inTheWay));
+        Assert.IsEmpty(receipt.Displaced);
     }
 
     [TestMethod]

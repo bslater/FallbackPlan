@@ -2335,30 +2335,42 @@ public sealed class RestoreExecutor(
     /// Moves what stands at <paramref name="destination"/> aside to
     /// <paramref name="refuge"/>, making its folders first, and says what the
     /// platform said where it refused. A refused move leaves nothing of its
-    /// own under the displaced folder (ADR-0180 Amendment 10): not a copy at
-    /// the refuge, which a move that falls back to copying can make before the
-    /// removal of what stands is refused, nor the folders it made, deepest
-    /// first. One another move made, or that holds anything, stays.
+    /// own under the displaced folder (ADR-0180 Amendment 10).
     /// </summary>
+    /// <remarks>
+    /// The move is a rename onto a refuge nothing stands at. A move that may
+    /// not replace its refuge links it first and copies where the link is
+    /// refused, so a flag that then refuses the removal of what stands left
+    /// the copy behind, flags and all on macOS. Across volumes a rename is a
+    /// copy still, and a copy the move made is removed where it can be. So are
+    /// the folders the move made, deepest first; one another move made, or
+    /// that holds anything, stays.
+    /// </remarks>
     private static string? MoveAside(string destination, string refuge)
     {
+        // What already stands at this run's refuge is not the move's to
+        // replace.
+        if (Stands(refuge))
+        {
+            return $"something already stands at its refuge, {refuge}";
+        }
+
         var made = new List<string>();
         for (var folder = Path.GetDirectoryName(refuge); folder is not null && !Directory.Exists(folder); folder = Path.GetDirectoryName(folder))
         {
             made.Add(folder);
         }
 
-        var stoodThere = Stands(refuge);
         var refused = Refusal(() =>
         {
             Directory.CreateDirectory(Path.GetDirectoryName(refuge)!);
-            File.Move(destination, refuge);
+            File.Move(destination, refuge, overwrite: true);
         });
         if (refused is not null)
         {
-            // What stands is still where it stood, so the copy is only ever
-            // the move's own.
-            if (!stoodThere && Stands(refuge) && Stands(destination))
+            // What stands is still where it stood, so a copy at the refuge is
+            // only ever the move's own.
+            if (Stands(refuge) && Stands(destination))
             {
                 _ = Refusal(() => File.Delete(refuge));
             }

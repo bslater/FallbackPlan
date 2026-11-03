@@ -405,11 +405,12 @@ Amendment 7 left `restore-file` removing its spool unguarded. Reading it showed 
 
 **Requirements:** FR-RST-004 (amended: a move aside the platform refuses leaves nothing of its own under the displaced folder).
 
-Amendment 7 made a refused move aside fail its item, and left the empty folders made for the move under the displaced folder. Reading it found more than folders. A move that cannot rename what stands falls back to copying it to the refuge and then removing it where it stood. A flag refuses the removal, so on Linux a copy of the person's file stayed under the displaced folder, though the receipt named nothing displaced.
+Amendment 7 made a refused move aside fail its item, and left the empty folders made for the move under the displaced folder. Reading it found more than folders. The move was one that may not replace its refuge: it links what stands to the refuge, and where a flag refuses the link, it copies it there instead, then removes it where it stood. The flag refuses the removal too, so a copy of the person's file stayed under the displaced folder, though the receipt named nothing displaced. On macOS the copy kept the flag, so not even the run could take it away.
 
 **Decision.** A move aside the platform refuses leaves nothing of its own under the displaced folder (`Restore/RestoreExecutor`).
 
-- **The copy goes.** A copy at the refuge is the move's own when nothing stood there before and what it would have moved still stands where it stood. It is removed.
+- **The move is a rename onto a refuge nothing stands at.** A rename the platform refuses is refused whole, and leaves no copy. What already stands at the refuge is not replaced: the move is refused for it, as it was.
+- **A copy the move made goes.** Across volumes a rename is a copy still. A copy at the refuge, while what it would have moved still stands where it stood, is the move's own, and is removed where it can be.
 - **The folders go.** The folders the move made for its refuge are removed, deepest first. One another move made, or one that holds anything, stays.
 - **Every move aside alike.** A file's, a link's and a hard link's later name each move aside through it, and each, refused, fails with `what stands here was not moved aside:` and the platform's words, as a file's did.
 
@@ -418,7 +419,7 @@ Amendment 7 made a refused move aside fail its item, and left the empty folders 
 - `Repository.Tests/RestoreRefusedWhereItStandsTests`, setting the flags for real, so inconclusive on CI's Linux runner:
   - a file an immutable flag keeps, refused its move aside, leaves no displaced folder at all;
   - in one run, a file moved aside keeps its refuge and the folders made for it. A file, a link and a hard link's later name, each refused, leave no copy and no folder, and each says it was not moved aside.
-  - a file the run's name already held at the refuge stays when the move is refused.
+  - a move aside never replaces what already stands at its refuge, and leaves the file in the way where it stood, with no flag set.
 
 ## Status history
 
@@ -435,4 +436,4 @@ Amendment 7 made a refused move aside fail its item, and left the empty folders 
 | 2026-11 | Accepted (Amendment 7) | What the platform refuses where something already stands fails the item it meets, and the run goes on to its receipt: a move aside a flag refuses, a folder or a file's folder that cannot be made, and an append-only folder's rename, whose spool the item names; a run whose own folder cannot be made writes nothing and says why on each item. The recovery tool names a spool its folder keeps. `Restore/RestoreExecutor`; `Recovery/RecoverySession`; `Repository.Tests/RestoreRefusedWhereItStandsTests`; `Repository.Tests/RecoveryFileFlagsTests`; `Cli.Tests/RestoreHonestyCommandTests` |
 | 2026-11 | Accepted (Amendment 8) | A plan names each folder already standing that the run would write into and that a flag keeps, once, with how many items it fails: an immutable one every item whose first new name it would take, an append-only one each file landing in it and whatever would be moved aside or replaced there, whatever the policy; a quarantined run afresh only by an immutable output. `Restore/RestoreInTheWay`; `Agent/ServiceCommandHandler`; `Cli/OperationGateway`; `Repository.Tests/RestoreFolderHeldTests`; `Domain.Tests/FileFlagReadTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Cli.Tests/RestoreHonestyCommandTests` |
 | 2026-11 | Accepted (Amendment 9) | Every verb ends an access refusal with the platform's words, as it ends an I/O fault, where it had ended with the exception and its stack; `restore-file` says what the platform refused at its output, leaves what stood there as it was, and names a spool its folder keeps. `Cli/CliApplication`; `Cli.Tests/InspectionCommandTests`; `Cli.Tests/CommandTests` |
-| 2026-11 | Accepted (Amendment 10) | A move aside the platform refuses leaves nothing of its own under the displaced folder: the copy a move that falls back to copying made at the refuge, where nothing stood and what it would have moved still stands, and the folders it made, deepest first; a file's, a link's and a hard link's later name alike, each saying it was not moved aside. `Restore/RestoreExecutor`; `Repository.Tests/RestoreRefusedWhereItStandsTests` |
+| 2026-11 | Accepted (Amendment 10) | A move aside is a rename onto a refuge nothing stands at, so one the platform refuses leaves nothing of its own under the displaced folder: no copy, which the move had made where a flag refused its link, and none of the folders it made, deepest first; a file's, a link's and a hard link's later name alike, each saying it was not moved aside. `Restore/RestoreExecutor`; `Repository.Tests/RestoreRefusedWhereItStandsTests` |

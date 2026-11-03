@@ -5310,15 +5310,16 @@ rename's refusal. Every verb now ends an access refusal as it ends an I/O
 fault, and `restore-file` says what the platform refused and names a spool
 its folder keeps.
 
-Amendment 10 tidies a refused move aside. A move that cannot rename what
-stands falls back to copying it to the refuge and removing it where it
-stood, and a flag refuses the removal, so a copy of the person's file
-stayed under the displaced folder, with the folders made for it, though
-the receipt named nothing displaced. The move now takes away its own copy,
-where nothing stood at the refuge and what it would have moved still
-stands, and the folders it made, deepest first. A file's, a link's and a
-hard link's later name each move aside the same way, and each, refused,
-says it was not moved aside.
+Amendment 10 tidies a refused move aside. The move was one that may not
+replace its refuge, which links what stands there and copies it where a
+flag refuses the link, then removes it where it stood. The flag refuses
+the removal too, so a copy of the person's file stayed under the
+displaced folder, with the folders made for it, though the receipt named
+nothing displaced; on macOS the copy kept the flag. The move is now a
+rename onto a refuge nothing stands at, which a flag refuses whole, and it
+takes away the folders it made, deepest first, and a copy it made across
+volumes where it can. A file's, a link's and a hard link's later name each
+move aside the same way, and each, refused, says it was not moved aside.
 
 ### 0181 — Windows links
 
