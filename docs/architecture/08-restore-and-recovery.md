@@ -145,6 +145,8 @@ The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a f
 
 > **2026-10 ([ADR-0152 Amendment 4](../adr/0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md#amendment-4-2026-10--an-entry-a-snapshot-names-at-a-files-spool-is-refused)).** A file's spool name is the writer's own. An entry a snapshot names there, or below it, is the plan's conflict, and the executor fails it and the recovery tool refuses it, each saying which file spools there. Restored, it had been removed when the file spooled, after the receipt had counted it.
 
+> **2026-11 ([ADR-0180 Amendment 7](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-7-2026-11--a-refusal-where-something-stands-fails-the-item-it-meets-not-the-run)).** What the platform refuses where something already stands fails the item it meets, and the run goes on to its receipt. That covers a file a flag keeps from being moved aside, a folder a flag keeps from taking a new name, and an append-only folder that takes a spool but refuses its rename into place. A spool the folder will not let go is named on its item, by the executor and the recovery tool alike. A run whose own folder cannot be made writes nothing and says why. Each had ended the run with no receipt.
+
 ### 3.1 Quarantine by default
 
 Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006
