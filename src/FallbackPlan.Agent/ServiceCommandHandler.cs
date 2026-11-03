@@ -949,9 +949,13 @@ public sealed partial class ServiceCommandHandler(
                     $"{need.Directory} — the restore would not fit: it {need.Describe()}"));
 
                 // So is a file in the run's way that a flag keeps where it
-                // stands, which the run would fail (ADR-0180 Amendment 6).
+                // stands, which the run would fail (ADR-0180 Amendment 6),
+                // and a folder a flag keeps from taking what the run would
+                // put there (ADR-0180 Amendment 8).
                 conflicts.AddRange(RestoreInTheWay.HeldByFlags(measured, mode, policy, target.Flags)
                     .Select(held => RestoreInTheWay.Describe(held, policy)));
+                conflicts.AddRange(RestoreInTheWay.FoldersHeld(measured, mode, policy, target.Flags)
+                    .Select(RestoreInTheWay.Describe));
             }
 
             return new RestorePlanResult(

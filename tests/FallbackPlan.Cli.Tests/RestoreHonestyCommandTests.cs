@@ -15,7 +15,9 @@ namespace FallbackPlan.Cli.Tests;
 /// apart (ADR-0178 Amendment 4). Its plan names a file in the run's way that
 /// an immutable or append-only flag keeps where it stands, unless the run
 /// keeps both (ADR-0180 Amendment 6), and its run fails such a file alone
-/// and keeps its receipt (ADR-0180 Amendment 7).
+/// and keeps its receipt (ADR-0180 Amendment 7). Its plan names a folder in
+/// the run's way that a flag keeps, whatever the policy (ADR-0180
+/// Amendment 8).
 /// </summary>
 /// <remarks>
 /// The disk is the flow's own: <c>DirectGateway.AvailableBytesInFlow</c>
@@ -89,6 +91,45 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
             var keepingBoth = await _cli.RunAsync("restore", snapshot, "--output", destination, "--existing", "rename", "--plan");
             Assert.DoesNotContain("immutable", keepingBoth.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(destination);
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a folder's immutable flag")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Plan_NamesAFolderInItsWayThatAFlagKeeps_WhateverThePolicy()
+    {
+        if (!FileFlags.Settable(EntryKind.DirectoryPlaceholder).HasFlag(FileFlagBits.Immutable))
+        {
+            Assert.Inconclusive("This account may not set a folder immutable: Linux needs CAP_LINUX_IMMUTABLE.");
+        }
+
+        var snapshot = await BackUpAsync();
+        var destination = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "live")).FullName;
+        var locked = Directory.CreateDirectory(Path.Combine(destination, "nested")).FullName;
+        try
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                DiskFlags.SetOnMacOs(locked, DiskFlags.DarwinImmutable);
+            }
+            else
+            {
+                DiskFlags.AddOnLinux(locked, DiskFlags.LinuxImmutable);
+            }
+
+            foreach (var existing in new[] { "rename", "overwrite" })
+            {
+                var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--existing", existing, "--plan");
+                var named = plan.Output.Split('\n').SingleOrDefault(line => line.Contains(locked + " ", StringComparison.Ordinal));
+                Assert.IsNotNull(named, plan.All);
+                Assert.Contains("immutable", named, StringComparison.Ordinal);
+                Assert.Contains("1 item(s)", named, StringComparison.Ordinal);
+            }
         }
         finally
         {

@@ -31,7 +31,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// Amendment 5), and a name it refuses or alters is named where it names
 /// files by Windows' rules (ADR-0170 Amendment 6). A plan in place names a
 /// file in its way that an immutable or append-only flag keeps where it
-/// stands, unless the run keeps both (ADR-0180 Amendment 6).
+/// stands, unless the run keeps both (ADR-0180 Amendment 6), and a folder
+/// in its way that a flag keeps, whatever the policy (ADR-0180 Amendment 8).
 /// </summary>
 [TestClass]
 public sealed class RestoreHonestyServiceTests : IDisposable
@@ -525,6 +526,58 @@ public sealed class RestoreHonestyServiceTests : IDisposable
                     _timeout.Token),
                 out var keepingBoth);
             Assert.IsEmpty((keepingBoth.ConflictSample ?? []).Where(line => line.Contains(inTheWay, StringComparison.Ordinal)));
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(destination);
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a folder's immutable flag")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Plan_InPlace_NamesAFolderInItsWayThatAFlagKeeps_WhateverThePolicy()
+    {
+        if (!FileFlags.Settable(EntryKind.DirectoryPlaceholder).HasFlag(FileFlagBits.Immutable))
+        {
+            Assert.Inconclusive("This account may not set a folder immutable: Linux needs CAP_LINUX_IMMUTABLE.");
+        }
+
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("docs/report.txt", "the report as it was backed up");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+        var destination = Directory.CreateDirectory(Path.Combine(_harness.WorkPath, "live")).FullName;
+        var locked = Directory.CreateDirectory(Path.Combine(destination, "docs")).FullName;
+        await using var runtime = await StartAsync(availableBytes: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        try
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                DiskFlags.SetOnMacOs(locked, DiskFlags.DarwinImmutable);
+            }
+            else
+            {
+                DiskFlags.AddOnLinux(locked, DiskFlags.LinuxImmutable);
+            }
+
+            foreach (var existing in new string?[] { null, "rename" })
+            {
+                Assert.IsInstanceOfType<RestorePlanResult>(
+                    await handler.ExecuteAsync(
+                        new PlanRestoreCommand(
+                            snapshotId, null, OutputDirectory: destination, Source: source.SourceId, Existing: existing, InPlace: true),
+                        _timeout.Token),
+                    out var plan);
+                var named = Assert.ContainsSingle(
+                    (plan.ConflictSample ?? []).Where(line => line.StartsWith(locked + " ", StringComparison.Ordinal)),
+                    existing ?? "moving aside");
+                Assert.Contains("immutable", named, StringComparison.Ordinal);
+                Assert.Contains("1 item(s)", named, StringComparison.Ordinal);
+            }
         }
         finally
         {

@@ -31,6 +31,8 @@ A plan is constructed **before** any transfer, and it is the mechanism by which 
 
   > **Built 2026-11 ([ADR-0180 Amendment 6](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-6-2026-11--a-plan-names-a-file-in-its-way-that-a-flag-keeps-where-it-stands)).** A file in the way that an immutable or append-only flag keeps where it stands is named, where the policy would move it aside or replace it, since the platform refuses either and the run fails it. No flag is cleared.
 
+  > **Built 2026-11 ([ADR-0180 Amendment 8](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-8-2026-11--a-plan-names-a-folder-in-its-way-that-a-flag-keeps)).** So is a folder in the run's way that a flag keeps, once, with how many items it fails. An immutable one takes nothing the run would make in it. An append-only one refuses a file's rename into place and anything moved aside or replaced there. No policy spares either.
+
 - **path and case collisions** ([`06-filesystem-capture.md` §2](06-filesystem-capture.md#2-path-handling));
 
   > **Built 2026-10 ([ADR-0170](../adr/0170-a-restore-plan-judges-names-by-the-targets-naming-rules.md)).** Names too: a name no target restores, and, for a target that names by Windows' rules, a name Windows would refuse or alter (a device's name, a refused character, a trailing space or period, a component over 255 UTF-16 units). The rules are the target's, stated in its profile rather than taken from the host, so a plan for Windows is made the same anywhere. A restore that runs on Windows refuses such a name rather than letting Windows write it under another.
