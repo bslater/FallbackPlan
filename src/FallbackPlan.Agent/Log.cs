@@ -263,6 +263,11 @@ internal static partial class Log
     internal static partial void RetirementDeferred(ILogger logger, LogLabel set, Exception exception);
 
     [LoggerMessage(
+        EventId = 3798, Level = LogLevel.Warning,
+        Message = "Set {Set}: where the change journal stood before this backup was not kept, so the next walks in full")]
+    internal static partial void JournalPlacesNotKept(ILogger logger, LogLabel set, Exception exception);
+
+    [LoggerMessage(
         EventId = 3795, Level = LogLevel.Debug,
         Message = "Set {Set}: no index delta retired this run, because a sync, sweep or retention pass holds the set")]
     internal static partial void RetirementSkippedBusy(ILogger logger, LogLabel set);

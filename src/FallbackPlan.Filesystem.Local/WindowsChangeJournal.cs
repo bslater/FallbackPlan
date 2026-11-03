@@ -186,25 +186,12 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
             return null;
         }
 
-        // A file's every name is in a folder its records may not name.
-        var folders = new HashSet<ulong>(changes.Folders);
-        foreach (var file in changes.Files)
-        {
-            if (changes.Gone.Contains(file))
-            {
-                continue;
-            }
-
-            if (LinkParentsOf(hint, file, out doubt) is not { } parents)
-            {
-                return null;
-            }
-
-            folders.UnionWith(parents);
-        }
-
+        // Folders first, so that only a file changed in one of the set's
+        // folders is opened to find its other names: a file another program
+        // is writing elsewhere on the volume is never held open under it.
         var named = new HashSet<ChangedFolder>();
-        foreach (var folder in folders)
+        var inTheSet = new HashSet<ulong>();
+        foreach (var folder in changes.Folders)
         {
             if (changes.Gone.Contains(folder))
             {
@@ -217,27 +204,61 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
                 return null;
             }
 
-            Name(path);
+            if (Name(path))
+            {
+                inTheSet.Add(folder);
+            }
+        }
+
+        // A file's every name is in a folder its records may not name.
+        foreach (var file in changes.FilesIn(inTheSet.Contains).ToList())
+        {
+            if (changes.Gone.Contains(file))
+            {
+                continue;
+            }
+
+            if (LinkParentsOf(hint, file, out doubt) is not { } parents)
+            {
+                return null;
+            }
+
+            foreach (var folder in parents.Where(parent => !inTheSet.Contains(parent)))
+            {
+                if (PathOfId(hint, folder, out var error) is not { } path)
+                {
+                    doubt = string.Create(CultureInfo.InvariantCulture, $"finding folder {folder:X}: error {error}");
+                    return null;
+                }
+
+                Name(path);
+            }
         }
 
         return [.. named];
 
-        void Name(string found)
+        // Whether the folder is in the set: under one of its roots.
+        bool Name(string found)
         {
             var path = found.TrimEnd('\\');
+            var inside = false;
             foreach (var (root, onVolume) in spelled)
             {
                 if (string.Equals(path, onVolume, StringComparison.OrdinalIgnoreCase))
                 {
                     named.Add(new ChangedFolder(root, string.Empty));
+                    inside = true;
                 }
                 else if (path.Length > onVolume.Length + 1
                     && path.StartsWith(onVolume, StringComparison.OrdinalIgnoreCase)
                     && path[onVolume.Length] == '\\')
                 {
                     named.Add(new ChangedFolder(root, path[(onVolume.Length + 1)..].Replace('\\', '/')));
+                    inside = true;
                 }
             }
+
+            return inside;
         }
     }
 

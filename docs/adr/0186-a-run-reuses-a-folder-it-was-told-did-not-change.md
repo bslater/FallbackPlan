@@ -76,6 +76,8 @@ The count a run takes before capture, for progress, walks the same folders. It c
 ## What this does not do
 
 - **Tell a run what changed.** No change source exists yet, so every production run is told nothing and walks every folder. The Windows change journal is the next record, with a full walk on a per-set schedule, daily by default, and after any break in the journal.
+
+  > **2026-11: done on Windows ([ADR-0187](0187-a-volumes-change-journal-names-the-folders-that-changed.md), [ADR-0188](0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md)).** The volume's change journal names what changed, and the service tells each backup what it names since the set's last, walking in full at least once a day and on any doubt.
 - **Say in the snapshot whether it was walked in full.** The change source owns its schedule, so it keeps when it last walked in full.
 - **Reuse a folder whose tree was written as a chain.** Such a folder, and every folder above it, is walked.
 - **Reuse a folder under other rules or other folders.** The first run after a change to either walks in full.

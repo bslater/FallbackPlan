@@ -5,6 +5,8 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Filesystem;
+using FallbackPlan.Filesystem.Local;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
@@ -121,6 +123,14 @@ public sealed record ServiceOptions
     /// run's own cancellation path. Null, the production value, holds nothing.
     /// </summary>
     internal Func<string, CancellationToken, ValueTask>? EnteredScanning { get; init; }
+
+    /// <summary>
+    /// What says which of a set's folders changed between its backups
+    /// (ADR-0188): on Windows the volume's change journal, and elsewhere
+    /// none, so every backup walks in full. A test harness gives its own.
+    /// </summary>
+    internal IChangeJournal? ChangeJournal { get; init; } =
+        OperatingSystem.IsWindows() ? new WindowsChangeJournal() : null;
 
     /// <summary>
     /// Awaited by every backup run of a format-5 set as it begins to

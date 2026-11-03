@@ -407,6 +407,12 @@ public sealed class SetChangeTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
                 EnteredScanning = enteredScanning,
+
+                // These count the files a run walks, which a change journal
+                // shortens to the folders it names (ADR-0188). They hold the
+                // rules for a set's edits and for a full backup, so every run
+                // here walks in full.
+                ChangeJournal = null,
             },
             _timeout.Token);
     }

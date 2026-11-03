@@ -164,6 +164,13 @@ public static class BackupRunner
                 : archive.Catalogue.EnumerateSnapshots()
                     .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
+            // What the change journal says changed since the set's last
+            // backup, and where it stands now, before this one walks
+            // (ADR-0188).
+            var journalPlaces = new JournalPlaceStore(runtime.Options.StateDirectory);
+            var hints = ChangeHints.Plan(
+                runtime.Options.ChangeJournal, journalPlaces.Read(set.Id), set, prior?.SnapshotId, nowMs, full);
+
             var generation =
                 archive.Repository.CurrentDataGeneration.Value >= archive.Repository.CurrentMetadataGeneration.Value
                     ? archive.Repository.CurrentDataGeneration
@@ -214,6 +221,7 @@ public static class BackupRunner
                     SnapshotId = snapshotId,
                     ParentSnapshots = prior is null ? [] : [prior.SnapshotId],
                     PriorSnapshotId = prior?.SnapshotId,
+                    ChangedFolders = hints.ChangedFolders,
                     NowUnixMilliseconds = nowMs,
                     // The pass clock above keeps schedule derivation pure; the
                     // capture-completion stamp wants the time capture actually
@@ -232,6 +240,18 @@ public static class BackupRunner
                 },
                 cancellationToken).ConfigureAwait(false);
 
+            // Kept for the next backup only once this one published. A place
+            // not kept costs the next a full walk, and so does one an earlier
+            // backup kept, since it names a backup that is no longer the last.
+            try
+            {
+                journalPlaces.Keep(set.Id, ChangeHints.Kept(hints, snapshotId, nowMs));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Log.JournalPlacesNotKept(runtime.LoggerFor<JournalPlaceStore>(), new Domain.Diagnostics.LogLabel(set.Name), exception);
+            }
+
             // The pass's clock, not the wall clock. This transition writes the
             // anchor the scheduler reads back as "last completed", so reading it
             // from UtcNow while due-ness is judged against the caller's `now`
@@ -248,7 +268,8 @@ public static class BackupRunner
             // Always an explicit detail: Transition keeps the prior detail on
             // null, and a preempted run's prior detail is "resumed" — which
             // must not survive onto the terminal record a person reads.
-            var summary = $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged";
+            var summary = $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged"
+                + (published.FoldersReused > 0 ? $", {published.FoldersReused} folder(s) not walked" : string.Empty);
             try
             {
                 // Inside the run, so a direct-ship set's checkpoint reaches its
