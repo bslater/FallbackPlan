@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them)
+**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing)
 **Related:** [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup), [ADR-0026](0026-phase-1-capture-shapes.md) (the capture failure reasons), [ADR-0183](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) (a file a filter keeps is read through the filter)
 
 **Built:**
@@ -57,6 +57,8 @@ A file not fetched is in no snapshot this run publishes, so the next run finds n
 
 - **Fetch in the person's own session.** The service, which runs as the system account by default, asks as any program does. Whether a provider serves that account is the provider's choice.
 - **Put a fetched file back.** A file the run fetched stays on the device as the provider leaves it. The owner has chosen that a backup should put back a file it fetched, and that is a later record.
+
+  > **2026-11: done ([Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again)).** A file the run fetched and read whole is freed from the device again, unless the person pinned it.
 - **Leave the provider's state out of a file's metadata.** A file's attributes carry the provider's bits. A change between online-only and on the device is therefore a metadata change, recorded with no fetch, and a restore names those bits as not applied.
 
   > **2026-11: done ([Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept)).** The provider's bits are no longer kept, so going between online-only and on the device is no change, and a restore names none of them.
@@ -94,9 +96,45 @@ Whether a file is online-only is still read from its attributes at the scan, bef
 - The first backup after this record writes a new version of each file and folder whose metadata kept one of the bits. That is one manifest or tree each, with no fetch, and it happens once.
 - A restore never gives a file the provider's state, which only the provider can, and no longer says so.
 
+## Amendment 2 (2026-11) — a file the run fetched is freed again
+
+**Requirements:** FR-SNP-009 (amended: a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing)
+
+### Context
+
+A run that fetches an online-only file leaves it on the device. The provider may free it again later, when space runs short, but until then it takes the room its content needs. A backup that takes in a folder of such files therefore fills the disk with what the person had kept off it. Every changed file fetched later adds to that.
+
+The owner chose that a backup should leave such a file as it found it.
+
+### Decision
+
+**A file the run fetched is unpinned once it is read whole.** On Windows the run asks the cloud files platform to unpin the file. Any program may make that request, through a handle that can read the file's data. The platform then has the provider free the content, in its own time.
+
+**Only what the run itself fetched, read whole as the scan found it.**
+- The file was online-only at the scan, so reading it was the fetch.
+- The read finished as the scan found it: same identity, same length, same modification time.
+- A file changed while it was read, or replaced at its name, is left alone. Freeing it would act on something the run did not read whole.
+- A file not fetched is left as it is: one unchanged since the last backup, one the provider failed to deliver, and a file already on the device.
+
+**A file the person pinned is never asked.** Pinned says they want it kept on the device. A file pinned between the scan and the read keeps that wish.
+
+**A refusal fails nothing.** The backup has the file whole. That the device keeps it as well is the provider's to settle, and it costs only space. The run logs the refusal, with the platform's words, and goes on.
+
+### Consequences
+
+- A backup asks for an online-only file it fetched to be freed as soon as it has read it. The disk keeps the file only until its provider frees it, not until the person does.
+- A later backup of an unchanged file fetches nothing, so it frees nothing. Whatever the person did with the file since is theirs.
+- On Linux and macOS nothing is freed, since nothing there is named online-only.
+
+### What this does not do
+
+- **Wait for the provider to free the file.** The platform frees it in its own time, and a run does not check that it did.
+- **Show a refusal in the console.** It is in the log.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first. On Windows a file whose attributes carry offline, recall on open or recall on data access is online-only. The first such file whose fetch fails stops the run opening any other: each is an error-manifest entry naming the file that failed and why, and the next backup fetches it again. A file gone, refused, or on the device that will not read stops nothing. `Domain/MetadataRules`; `Filesystem.Local/LocalFileSystemSource`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests` |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a backup keeps none of the five bits a cloud provider keeps on an entry (offline, recall on open, recall on data access, pinned, unpinned). Publication drops them before a manifest, tree or digest is made, so going between online-only and on the device is no change, and a restore names none of them. `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Domain.Tests/FileAttributesWriteBackTests` |
+| 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is unpinned so its provider frees it from the device again. A file changed or replaced while read, one not fetched, and one the person pinned are left alone. A refusal is logged and fails nothing. `Filesystem/ScanModel`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Local/WindowsInterop`; `Agent/PacedFileSystemSource`; `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests`; `Hosts.Tests/PacedFileSystemSourceTests` |

@@ -7,7 +7,9 @@ namespace FallbackPlan.Domain.Tests;
 /// unpinned say only what the person wants kept, and a reparse point only
 /// that a filter keeps the file; neither makes it online-only. None of the
 /// provider's five bits is kept with a file or a folder, or named by a restore
-/// as one it did not give back (ADR-0185 Amendment 1).
+/// as one it did not give back (ADR-0185 Amendment 1). A file pinned to the
+/// device is one the person wants kept there, which no backup frees
+/// (ADR-0185 Amendment 2).
 /// </summary>
 [TestClass]
 public sealed class OnlineOnlyAttributesTests
@@ -36,6 +38,15 @@ public sealed class OnlineOnlyAttributesTests
     [DataRow(Archive | ReparsePoint | Unpinned)]
     public void IsOnlineOnly_WhereNoBitSaysSo_IsFalse(uint attributes) =>
         Assert.IsFalse(MetadataRules.IsOnlineOnly(attributes));
+
+    [TestMethod]
+    [DataRow(Pinned, true)]
+    [DataRow(Archive | ReparsePoint | Pinned, true)]
+    [DataRow(Archive | ReparsePoint | Unpinned, false)]
+    [DataRow(Archive, false)]
+    [DataRow(0u, false)]
+    public void IsPinned_IsWhetherThePersonWantsItKeptHere(uint attributes, bool pinned) =>
+        Assert.AreEqual(pinned, MetadataRules.IsPinned(attributes));
 
     [TestMethod]
     public void IsOnlineOnly_WithNoAttributesCaptured_IsFalse() =>

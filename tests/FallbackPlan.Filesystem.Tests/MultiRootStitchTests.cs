@@ -36,6 +36,8 @@ public sealed class MultiRootStitchTests
 
         public ulong? DeviceOf(string path) => null;
 
+        public string? FreeAgain(ScanEntry entry) => null;
+
         public RevalidationProbe? Revalidate(ScanEntry entry) => throw new NotSupportedException();
 
         public Stream OpenRead(ScanEntry entry) => throw new NotSupportedException();

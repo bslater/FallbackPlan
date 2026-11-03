@@ -22,7 +22,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// directory junction is named a mount point, and a folder's symbolic link
 /// is not (ADR-0183 Amendment 1). A file whose Windows attributes say its
 /// content is not on this device is named online-only, and an ordinary file
-/// is not (FR-SNP-009, ADR-0185).
+/// is not (FR-SNP-009, ADR-0185). Freeing a file again does nothing on Linux
+/// and macOS; on Windows a file no provider keeps is refused and left as it
+/// was, and a file the person pinned is never asked (ADR-0185 Amendment 2).
 /// </summary>
 [TestClass]
 public sealed partial class LocalScanTests : IDisposable
@@ -324,6 +326,65 @@ public sealed partial class LocalScanTests : IDisposable
         var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
 
         Assert.IsTrue(entry.OnlineOnly);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "only Windows keeps a cloud provider's placeholders to free")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task FreeAgain_OnLinuxAndMacOs_DoesNothing()
+    {
+        var path = Write("here.txt");
+
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.IsNull(_source.FreeAgain(entry));
+        Assert.AreEqual("content", File.ReadAllText(path));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a cloud provider's placeholders to free")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task FreeAgain_OnWindows_AFileNoProviderKeeps_IsRefusedAndLeftAsItWas()
+    {
+        var path = Write("kept-by-no-provider.txt");
+        var before = File.GetAttributes(path);
+
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+        var refusal = _source.FreeAgain(entry);
+
+        Assert.IsNotNull(refusal, "a file under no provider's folder has no provider to free it");
+        Assert.AreEqual(before, File.GetAttributes(path));
+        Assert.AreEqual("content", File.ReadAllText(path));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps a cloud provider's placeholders to free")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task FreeAgain_OnWindows_AFileThePersonPinned_IsLeftAlone()
+    {
+        const FileAttributes pinned = (FileAttributes)0x8_0000;
+        var path = Write("pinned.txt");
+        try
+        {
+            File.SetAttributes(path, File.GetAttributes(path) | pinned);
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException)
+        {
+            Assert.Inconclusive($"this volume takes no pinned bit on a plain file: {exception.Message}");
+        }
+
+        if ((File.GetAttributes(path) & pinned) == 0)
+        {
+            Assert.Inconclusive("this volume keeps no pinned bit on a plain file");
+        }
+
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        // Not refused, as a file under no provider's folder is: never asked.
+        Assert.IsNull(_source.FreeAgain(entry), "the person asked to keep it here");
+        Assert.IsTrue((File.GetAttributes(path) & pinned) != 0);
     }
 
     [TestMethod]

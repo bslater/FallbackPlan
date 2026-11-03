@@ -123,6 +123,46 @@ internal static partial class WindowsInterop
     private static partial bool GetKernelObjectSecurity(
         SafeFileHandle handle, uint requestedInformation, byte[]? descriptor, uint length, out uint lengthNeeded);
 
+    private const int CloudPinStateUnpinned = 2;
+    private const int CloudSetPinFlagNone = 0;
+
+    [LibraryImport("cldapi")]
+    private static partial int CfSetPinState(SafeFileHandle handle, int pinState, int pinFlags, nint overlapped);
+
+    /// <summary>
+    /// Unpins the file at <paramref name="path"/>, which asks the cloud
+    /// provider that keeps it to free its content from the device, or null
+    /// where the person pinned it, whose wish to keep it here stands.
+    /// </summary>
+    /// <returns>Null where it was asked or left alone; otherwise the platform's words.</returns>
+    /// <remarks>
+    /// Any program may unpin a placeholder, through a handle that can read
+    /// its data. The provider frees the content later, on its own time, so a
+    /// call that succeeds has asked and not yet freed.
+    /// </remarks>
+    public static string? FreeAgain(string path)
+    {
+        try
+        {
+            if (MetadataRules.IsPinned((uint)File.GetAttributes(path)))
+            {
+                return null;
+            }
+
+            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var result = CfSetPinState(handle, CloudPinStateUnpinned, CloudSetPinFlagNone, 0);
+            return result >= 0
+                ? null
+                : Marshal.GetExceptionForHR(result)?.Message
+                    ?? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"0x{result:X8}");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or DllNotFoundException or EntryPointNotFoundException)
+        {
+            return exception.Message;
+        }
+    }
+
     /// <summary>Identity via volume serial + file index; false when the handle cannot open.</summary>
     public static bool TryGetIdentity(string path, out ulong device, out ulong fileId, out uint linkCount)
     {
