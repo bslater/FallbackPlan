@@ -425,9 +425,37 @@ public static class CliApplication
                 error.WriteLine($"error: {exception.Message}");
                 return 1;
             }
+            catch (UnauthorizedAccessException exception)
+            {
+                // The platform's refusal, a flag's or a folder's permissions,
+                // is the operator's to resolve, as an I/O fault is (ADR-0180
+                // Amendment 9).
+                error.WriteLine($"error: {exception.Message}");
+                return 1;
+            }
         }
 
         static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();
+
+        // Removes a spool that did not become its file, and says what the
+        // platform said where its folder will not let it go: null when it is
+        // gone (ADR-0180 Amendment 9).
+        static string? Unspool(string spool)
+        {
+            try
+            {
+                if (File.Exists(spool))
+                {
+                    File.Delete(spool);
+                }
+
+                return null;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return exception.Message;
+            }
+        }
 
         // Which pinned peer to expect. A claimant that has just paired knows
         // the fingerprint, but asking for it is friction at the worst moment —
@@ -982,27 +1010,39 @@ public static class CliApplication
                 // (ADR-0173 Amendment 3).
                 var spool = RestorePaths.SpoolBeside(outputPath, "restore");
                 RestoreResult result;
+                string? stays = null;
                 try
                 {
-                    File.Delete(spool);
-                    result = await new RestoreEngine(reader).AssembleFileAsync(manifest, spool, cancellationToken).ConfigureAwait(false);
-
-                    if (result.Success)
-                    {
-                        RestorePaths.MoveOver(spool, outputPath);
-                    }
-                }
-                finally
-                {
-                    if (File.Exists(spool))
+                    try
                     {
                         File.Delete(spool);
+                        result = await new RestoreEngine(reader).AssembleFileAsync(manifest, spool, cancellationToken).ConfigureAwait(false);
+
+                        if (result.Success)
+                        {
+                            RestorePaths.MoveOver(spool, outputPath);
+                        }
                     }
+                    finally
+                    {
+                        stays = Unspool(spool);
+                    }
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // What the platform refused is what failed the restore,
+                    // and a spool its folder keeps, as an append-only folder
+                    // does, is named beside it (ADR-0180 Amendment 9).
+                    throw new CliFailureException(
+                        stays is null ? exception.Message : Strings.FormatCliApplication_SpoolStays(exception.Message, Path.GetFileName(spool), stays),
+                        exception);
                 }
 
                 if (!result.Success)
                 {
-                    throw new CliFailureException(Strings.FormatCliApplication_RestoreRefused(result.FailureDetail));
+                    var refused = Strings.FormatCliApplication_RestoreRefused(result.FailureDetail);
+                    throw new CliFailureException(
+                        stays is null ? refused : Strings.FormatCliApplication_SpoolStays(refused, Path.GetFileName(spool), stays));
                 }
 
                 output.WriteLine(string.Create(CultureInfo.InvariantCulture,

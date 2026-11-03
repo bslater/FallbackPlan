@@ -1,3 +1,6 @@
+using FallbackPlan.Domain;
+using FallbackPlan.TestSupport;
+
 namespace FallbackPlan.Cli.Tests;
 
 /// <summary>
@@ -7,6 +10,8 @@ namespace FallbackPlan.Cli.Tests;
 /// it. Each test asserts the exit code and the observable effect, not the
 /// exact prose of a message. A rebuild of the catalogue over a store that
 /// holds no repository refuses, and leaves no catalogue behind (FR-MAN-002).
+/// A write the platform refuses ends a verb with its words and no stack, as
+/// an I/O fault does (FR-RST-002; ADR-0180 Amendment 9).
 /// </summary>
 [TestClass]
 public sealed class CommandTests : IDisposable
@@ -268,6 +273,44 @@ public sealed class CommandTests : IDisposable
 
         Assert.AreNotEqual(0, result.ExitCode);
         Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a folder's immutable flag")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Command_ThePlatformRefusesAWrite_FailsWithItsWordsAndNoStackTrace()
+    {
+        // Linux reports a flag's refusal as an access refusal, not an I/O
+        // fault; either is the operator's to resolve (ADR-0180 Amendment 9).
+        if (!FileFlags.Settable(EntryKind.DirectoryPlaceholder).HasFlag(FileFlagBits.Immutable))
+        {
+            Assert.Inconclusive("This account may not set a folder immutable: Linux needs CAP_LINUX_IMMUTABLE.");
+        }
+
+        var locked = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "locked")).FullName;
+        if (OperatingSystem.IsMacOS())
+        {
+            DiskFlags.SetOnMacOs(locked, DiskFlags.DarwinImmutable);
+        }
+        else
+        {
+            DiskFlags.AddOnLinux(locked, DiskFlags.LinuxImmutable);
+        }
+
+        try
+        {
+            // A repository is made in a folder that takes no new name.
+            var result = await CliHarness.RunRawAsync(
+                "init", "--acknowledge-loss", "--repo", Path.Combine(locked, "repo"), "--passphrase-env", "FBP_TEST_PASSPHRASE");
+
+            Assert.AreEqual(1, result.ExitCode, result.All);
+            Assert.Contains("error:", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(locked);
+        }
     }
 
     [TestMethod]
