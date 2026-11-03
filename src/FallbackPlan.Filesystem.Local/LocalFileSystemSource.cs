@@ -533,6 +533,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             Diagnostics = diagnostics,
             FullPath = fullPath,
             ContentHandle = content,
+            OnlineOnly = kind == ScanEntryKind.File && MetadataRules.IsOnlineOnly(metadata.FileAttributes),
         };
     }
 

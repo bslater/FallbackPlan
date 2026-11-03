@@ -296,4 +296,26 @@ internal static class Strings
     /// This store declares no ranged reads, and opening a blob needs three of them before a single record is read. Refused rather than guessed (ADR-0012).
     /// </summary>
     internal static string StoreAdmission_NoRangedReads => Get(nameof(StoreAdmission_NoRangedReads));
+
+    /// <summary>
+    /// online-only, and fetching it failed: {0}
+    /// </summary>
+    private static string TreeWalkPublisher_OnlineOnlyFetchFailed => Get(nameof(TreeWalkPublisher_OnlineOnlyFetchFailed));
+
+    /// <summary>
+    /// online-only, and fetching it failed: {0}
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_OnlineOnlyFetchFailed(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyFetchFailed, arg0);
+
+    /// <summary>
+    /// online-only, and not fetched, since fetching {0} failed earlier in this run: {1}
+    /// </summary>
+    private static string TreeWalkPublisher_OnlineOnlyNotFetched => Get(nameof(TreeWalkPublisher_OnlineOnlyNotFetched));
+
+    /// <summary>
+    /// online-only, and not fetched, since fetching {0} failed earlier in this run: {1}
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_OnlineOnlyNotFetched(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyNotFetched, arg0, arg1);
 }

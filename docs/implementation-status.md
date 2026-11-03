@@ -209,6 +209,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0182](adr/0182-capture-reads-a-links-own-security-descriptor-on-windows.md) | Capture reads a link's own security descriptor on Windows: through a handle opened on the reparse point, with the audit list's right asked only where SeSecurityPrivilege is enabled for the read; files and folders are read by their path as before. Amendment 1: a restore writes it back onto the link through a handle of the same kind, by ADR-0176's rule | **Built** | `Filesystem.Local/WindowsInterop` · `Filesystem.Local/LocalFileSystemSource` · `Domain/WindowsSecurity` · `Domain/MetadataWriter` · `Restore/RestoreMetadata` · `Filesystem.Tests/LocalScanTests` · `Domain.Tests/SecurityDescriptorWriteBackTests` · `Repository.Tests/RestoreWindowsLinkTests` · `TestSupport/LinkSecurity` · [notes](#0182--a-links-descriptor) |
 | [0183](adr/0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) | Capture reads a reparse point as a link only where its tag names one: the tag is read through a handle on the reparse point where the bit is set; a symbolic link or a mount point is a link, any other the file or folder a filter keeps, read through the filter, and one whose tag cannot be read a link, never followed. Amendment 1: capture names a junction, a mount point naming a folder by its drive's path, a mount point, kept in manifest key 14 from format 6 and named below it; a symbolic link and a volume mounted on a folder keep no form. Amendment 2: the engine's restore makes a junction a junction on Windows, through a mount-point reparse point; elsewhere a symbolic link to the same path, which the plan and the receipt say. Amendment 3: so does the recovery tool, which notes a junction made a symbolic link. Amendment 4: the engine's restore makes a junction even for an account that may make no symbolic link, and its plan counts only the links it will skip. Amendment 5: so does the recovery tool | **Built** | `Filesystem.Local/ReparsePoints` · `Filesystem.Local/WindowsInterop` · `Filesystem.Local/LocalFileSystemSource` · `Filesystem.Local/PosixInterop` · `Domain/MetadataRules` · `Repository/SnapshotPublication` · `Cli/CliApplication` · `Filesystem.Tests/ReparsePointTests` · `Filesystem.Tests/LocalScanTests` · `Domain.Tests/LinkFormTests` · `Repository.Tests/EndToEnd/LinkFormCaptureTests` · `Cli.Tests/InspectionCommandTests` · `TestSupport/Junctions` · `Domain/MountPoints` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/MountPointsTests` · `Repository.Tests/EndToEnd/RestoreJunctionTests` · `Recovery/RecoverySession` · `Recovery/RecoveryNote` · `Repository.Tests/EndToEnd/RecoveryJunctionTests` · [notes](#0183--reparse-points) |
 | [0184](adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) | Format 6: a manifest's metadata key 11 keeps a file's or a folder's flags and its key 14 says that a link is a mount point, each absent where it would say nothing and refused with a reserved bit, an unassigned form, or a form on anything but a link with a target; a repository is born at 6 and lists feature 0x0006; capture writes key 11 from ADR-0180 Amendment 3, and key 14 from ADR-0183 Amendment 1, which Amendment 2's restore reads | **Built** | `Domain/FormatVersions`, `Domain/FormatLimits` · `Domain/LinkForm`, `Domain/EntryMetadata` · `Repository.Format/Manifests/FileVersionManifestCodec` (keys 11 and 14) · `Repository.Format/Descriptor/RepositoryDescriptorCodec` (feature 0x0006) · `Repository/RepositoryLifecycle` · `Repository.Tests/Format/ManifestCodecTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests`, `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Domain.Tests/FormatVersionsTests`, `Hosts.Tests/CreatedFormatTests`, `Repository.FuzzTests/FuzzCorpus`, `Repository.ConformanceTests/FixtureRepositoryV6Tests` · the writers are ADR-0180 Amendment 3's and ADR-0183 Amendment 1's · [notes](#0184--format-6) |
+| [0185](adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) | A run stops fetching online-only files after the first that does not come: on Windows offline, recall on open or recall on data access make a file online-only; the first whose fetch fails stops the run opening any other, each named with the file that failed and why, and the next backup fetches it again; a file gone, refused, or on the device stops nothing | **Built** | `Domain/MetadataRules` · `Filesystem.Local/LocalFileSystemSource` · `Repository/SnapshotPublication` · `Repository.Tests/OnlineOnlyCaptureTests`, `Domain.Tests/OnlineOnlyAttributesTests`, `Filesystem.Tests/LocalScanTests` · [notes](#0185--online-only-files) |
 
 ---
 
@@ -5504,3 +5505,36 @@ What remains is recorded rather than done:
 - an older build that opens an upgraded repository will report a manifest
   carrying either key as an object it cannot read, ADR-0066's price, once
   a writer keeps one there.
+
+### 0185 — online-only files
+
+Built in one slice. A cloud provider can keep a file's content off the
+device and fetch it when the file is read. Capture already read such a
+file only when it was new or changed, but each one whose fetch did not
+come waited out the platform's time-out, about two minutes in a report
+from the field, before failing alone.
+
+**Named at the scan.** `Domain/MetadataRules` holds the three Windows
+bits that say the content is not on the device: offline, recall on open
+and recall on data access. `Filesystem.Local/LocalFileSystemSource` sets
+the entry's online-only mark from them. Pinned, unpinned and a reparse
+point do not make a file online-only.
+
+**Stopped at the first that does not come.**
+`Repository/SnapshotPublication` keeps the first online-only file whose
+open or read raised an I/O fault, and why. From then on it opens no
+online-only file: each is an error-manifest entry, reason I/O error,
+naming that file and the platform's words. A file gone or refused, or a
+file on the device, fails alone as before. The next backup finds no prior
+version for a file not fetched, so it reads it.
+
+What remains is recorded rather than done:
+
+- a file the run fetched stays on the device; the owner chose that a
+  backup puts it back, which is a later record;
+- the provider's bits are part of a file's attributes, so a file going
+  between online-only and on the device is a metadata change, recorded
+  without a fetch, and a restore names the bits as not applied;
+- the run does not say before it starts how much it must fetch;
+- macOS names no online-only file, and its walk opens each file it
+  classifies, which may itself fetch one.

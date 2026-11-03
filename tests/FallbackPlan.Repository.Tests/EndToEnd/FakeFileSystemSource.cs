@@ -88,6 +88,15 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
         /// <summary>How many times this node's content has been opened.</summary>
         public int Opens { get; set; }
+
+        /// <summary>
+        /// How many times opening this node's content was asked for, a
+        /// refused open included, which <see cref="Opens"/> does not count.
+        /// </summary>
+        public int OpenAttempts { get; set; }
+
+        /// <summary>Whether the scan reports this node's content as not on this device (an online-only file).</summary>
+        public bool OnlineOnly { get; set; }
     }
 
     private readonly Dictionary<string, Node> _nodes = [];
@@ -247,6 +256,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
                         .Select(pair => (pair.Key, (long)pair.Value.Length)).ToList(),
                     Diagnostics = node.Diagnostics,
                     FullPath = childPath,
+                    OnlineOnly = node.OnlineOnly,
                 });
             }
             else
@@ -293,6 +303,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
             throw new FileNotFoundException("The node is no longer present.", entry.FullPath);
         }
 
+        node.OpenAttempts++;
         if (node.OpenFailure is not null)
         {
             throw node.OpenFailure;

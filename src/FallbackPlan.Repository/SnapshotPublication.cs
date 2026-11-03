@@ -723,6 +723,12 @@ public sealed partial class PublicationOrchestrator
         private readonly List<(ObjectId TreeId, ulong AccessedAt)> _accessTimes = [];
         private readonly Dictionary<SourceKey, SourceIdentityPackEntry?> _hints = [];
 
+        /// <summary>
+        /// The online-only file whose fetch failed, and why: from then on the
+        /// run fetches no other (ADR-0185).
+        /// </summary>
+        private (string Path, string Reason)? _notDelivered;
+
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
         public ObjectId? RootTreeId { get; private set; }
@@ -956,6 +962,17 @@ public sealed partial class PublicationOrchestrator
                 return;
             }
 
+            // A provider that failed to deliver one file is not asked for
+            // another in this run: each would wait out the same time-out.
+            if (entry.OnlineOnly && _notDelivered is { } notDelivered)
+            {
+                RecordFailure(
+                    entry,
+                    CaptureFailureReason.IoError,
+                    Strings.FormatTreeWalkPublisher_OnlineOnlyNotFetched(notDelivered.Path, notDelivered.Reason));
+                return;
+            }
+
             try
             {
                 var manifest = entry.Kind switch
@@ -1005,6 +1022,19 @@ public sealed partial class PublicationOrchestrator
             }
             catch (Exception exception) when (IsTheFilesOwn(exception))
             {
+                // Gone or refused is the file's own state, not the provider
+                // failing to deliver it.
+                if (entry.OnlineOnly && ClassifyFailure(exception) == CaptureFailureReason.IoError)
+                {
+                    _notDelivered = (entry.RelativePath, exception.Message);
+                    Log.OnlineOnlyNotDelivered(logger, new LogPath(entry.RelativePath), exception.Message);
+                    RecordFailure(
+                        entry,
+                        CaptureFailureReason.IoError,
+                        Strings.FormatTreeWalkPublisher_OnlineOnlyFetchFailed(exception.Message));
+                    return;
+                }
+
                 RecordFailure(entry, ClassifyFailure(exception), exception.Message);
             }
         }
