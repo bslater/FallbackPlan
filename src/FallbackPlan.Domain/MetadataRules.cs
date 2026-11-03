@@ -88,6 +88,28 @@ public static class MetadataRules
     /// </summary>
     public const uint OnlineOnlyFileAttributes = 0x1000 | 0x4_0000 | 0x40_0000;
 
+    /// <summary>
+    /// The bits a cloud provider keeps on an entry: whether its content is
+    /// on this device (offline, recall on open, recall on data access) and
+    /// whether the person wants it kept here (pinned, unpinned). They say how
+    /// the provider holds the entry, not what it is, so a backup keeps none
+    /// of them and a restore names none (ADR-0185 Amendment 1).
+    /// </summary>
+    public const uint ProviderFileAttributes = OnlineOnlyFileAttributes | 0x8_0000 | 0x10_0000;
+
+    /// <summary>
+    /// <paramref name="metadata"/> without the bits a cloud provider keeps on
+    /// the entry, or the same instance where it carries none.
+    /// </summary>
+    /// <param name="metadata">An entry's captured metadata.</param>
+    public static EntryMetadata WithoutProviderBits(EntryMetadata metadata)
+    {
+        ThrowHelper.ThrowIfNull(metadata);
+        return (metadata.FileAttributes & ProviderFileAttributes) is > 0
+            ? metadata with { FileAttributes = metadata.FileAttributes & ~ProviderFileAttributes }
+            : metadata;
+    }
+
     /// <summary>Whether <paramref name="fileAttributes"/> say the content is not on this device.</summary>
     /// <param name="fileAttributes">An entry's Windows attribute bits, or null where none were captured.</param>
     public static bool IsOnlineOnly(uint? fileAttributes) => (fileAttributes & OnlineOnlyFileAttributes) is > 0;
@@ -121,7 +143,7 @@ public static class MetadataRules
     /// <param name="captured">An entry's captured attribute bits.</param>
     /// <param name="compresses">Whether the target gives this entry its compression.</param>
     public static uint UnsetFileAttributeBits(uint captured, bool compresses = false) =>
-        captured & ~(WrittenFileAttributes | EntryFileAttributes | (compresses ? CompressedFileAttribute : 0));
+        captured & ~(WrittenFileAttributes | EntryFileAttributes | ProviderFileAttributes | (compresses ? CompressedFileAttribute : 0));
 
     /// <summary>
     /// The bits to set on an entry standing with <paramref name="standing"/>
