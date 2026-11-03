@@ -1268,16 +1268,12 @@ public sealed class RestoreExecutor(
                             // A flag on the file, or on its folder, refuses
                             // the move, which fails this item alone (ADR-0180
                             // Amendment 7).
-                            if (Refusal(() =>
-                                {
-                                    Directory.CreateDirectory(Path.GetDirectoryName(refuge)!);
-                                    File.Move(destination, refuge);
-                                }) is { } notMoved)
+                            if (MoveAside(destination, refuge) is { } notMoved)
                             {
                                 items.Add(new ReceiptItem
                                 {
                                     Path = item.Path, Outcome = "failed", Bytes = 0,
-                                    Detail = Joined($"what stands here was not moved aside: {notMoved}", LeftBehind(spool)),
+                                    Detail = Joined(NotMovedAside(notMoved), LeftBehind(spool)),
                                 });
                                 continue;
                             }
@@ -1372,8 +1368,15 @@ public sealed class RestoreExecutor(
                                         continue;
                                     }
 
-                                    Directory.CreateDirectory(Path.GetDirectoryName(linkRefuge)!);
-                                    File.Move(destination, linkRefuge);
+                                    if (MoveAside(destination, linkRefuge) is { } linkNotMoved)
+                                    {
+                                        items.Add(new ReceiptItem
+                                        {
+                                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = NotMovedAside(linkNotMoved),
+                                        });
+                                        continue;
+                                    }
+
                                     displaced.Add(item.Path);
                                     break;
 
@@ -2168,8 +2171,11 @@ public sealed class RestoreExecutor(
                             return new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = refusal };
                         }
 
-                        Directory.CreateDirectory(Path.GetDirectoryName(refuge)!);
-                        File.Move(destination, refuge);
+                        if (MoveAside(destination, refuge) is { } notMoved)
+                        {
+                            return new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = NotMovedAside(notMoved) };
+                        }
+
                         displaced.Add(item.Path);
                         Log.DisplacedExisting(_logger, new LogPath(destination), new LogPath(refuge));
                         break;
@@ -2324,6 +2330,69 @@ public sealed class RestoreExecutor(
         File.Exists(spool) && Refusal(() => File.Delete(spool)) is { } refused
             ? $"its spool {Path.GetFileName(spool)} stays beside it: {refused}"
             : null;
+
+    /// <summary>
+    /// Moves what stands at <paramref name="destination"/> aside to
+    /// <paramref name="refuge"/>, making its folders first, and says what the
+    /// platform said where it refused. A refused move leaves nothing of its
+    /// own under the displaced folder (ADR-0180 Amendment 10).
+    /// </summary>
+    /// <remarks>
+    /// The move is a rename onto a refuge nothing stands at. A move that may
+    /// not replace its refuge links it first and copies where the link is
+    /// refused, so a flag that then refuses the removal of what stands left
+    /// the copy behind, flags and all on macOS. Across volumes a rename is a
+    /// copy still, and a copy the move made is removed where it can be. So are
+    /// the folders the move made, deepest first; one another move made, or
+    /// that holds anything, stays.
+    /// </remarks>
+    private static string? MoveAside(string destination, string refuge)
+    {
+        // What already stands at this run's refuge is not the move's to
+        // replace.
+        if (Stands(refuge))
+        {
+            return $"something already stands at its refuge, {refuge}";
+        }
+
+        var made = new List<string>();
+        for (var folder = Path.GetDirectoryName(refuge); folder is not null && !Directory.Exists(folder); folder = Path.GetDirectoryName(folder))
+        {
+            made.Add(folder);
+        }
+
+        var refused = Refusal(() =>
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(refuge)!);
+            File.Move(destination, refuge, overwrite: true);
+        });
+        if (refused is not null)
+        {
+            // What stands is still where it stood, so a copy at the refuge is
+            // only ever the move's own.
+            if (Stands(refuge) && Stands(destination))
+            {
+                _ = Refusal(() => File.Delete(refuge));
+            }
+
+            foreach (var folder in made)
+            {
+                if (Refusal(() => Directory.Delete(folder)) is not null)
+                {
+                    break;
+                }
+            }
+        }
+
+        return refused;
+    }
+
+    /// <summary>Whether a file, a folder or a link, followed or not, stands at <paramref name="path"/>.</summary>
+    private static bool Stands(string path) =>
+        File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget is not null;
+
+    /// <summary>The item's reason when what stands at its destination was not moved aside.</summary>
+    private static string NotMovedAside(string refusal) => $"what stands here was not moved aside: {refusal}";
 
     /// <summary>A whole run's refusal, when its own folder could not be made.</summary>
     private static string NothingWritten(string refusal) =>
