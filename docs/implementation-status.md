@@ -210,6 +210,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0183](adr/0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) | Capture reads a reparse point as a link only where its tag names one: the tag is read through a handle on the reparse point where the bit is set; a symbolic link or a mount point is a link, any other the file or folder a filter keeps, read through the filter, and one whose tag cannot be read a link, never followed. Amendment 1: capture names a junction, a mount point naming a folder by its drive's path, a mount point, kept in manifest key 14 from format 6 and named below it; a symbolic link and a volume mounted on a folder keep no form. Amendment 2: the engine's restore makes a junction a junction on Windows, through a mount-point reparse point; elsewhere a symbolic link to the same path, which the plan and the receipt say. Amendment 3: so does the recovery tool, which notes a junction made a symbolic link. Amendment 4: the engine's restore makes a junction even for an account that may make no symbolic link, and its plan counts only the links it will skip. Amendment 5: so does the recovery tool | **Built** | `Filesystem.Local/ReparsePoints` · `Filesystem.Local/WindowsInterop` · `Filesystem.Local/LocalFileSystemSource` · `Filesystem.Local/PosixInterop` · `Domain/MetadataRules` · `Repository/SnapshotPublication` · `Cli/CliApplication` · `Filesystem.Tests/ReparsePointTests` · `Filesystem.Tests/LocalScanTests` · `Domain.Tests/LinkFormTests` · `Repository.Tests/EndToEnd/LinkFormCaptureTests` · `Cli.Tests/InspectionCommandTests` · `TestSupport/Junctions` · `Domain/MountPoints` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/MountPointsTests` · `Repository.Tests/EndToEnd/RestoreJunctionTests` · `Recovery/RecoverySession` · `Recovery/RecoveryNote` · `Repository.Tests/EndToEnd/RecoveryJunctionTests` · [notes](#0183--reparse-points) |
 | [0184](adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) | Format 6: a manifest's metadata key 11 keeps a file's or a folder's flags and its key 14 says that a link is a mount point, each absent where it would say nothing and refused with a reserved bit, an unassigned form, or a form on anything but a link with a target; a repository is born at 6 and lists feature 0x0006; capture writes key 11 from ADR-0180 Amendment 3, and key 14 from ADR-0183 Amendment 1, which Amendment 2's restore reads | **Built** | `Domain/FormatVersions`, `Domain/FormatLimits` · `Domain/LinkForm`, `Domain/EntryMetadata` · `Repository.Format/Manifests/FileVersionManifestCodec` (keys 11 and 14) · `Repository.Format/Descriptor/RepositoryDescriptorCodec` (feature 0x0006) · `Repository/RepositoryLifecycle` · `Repository.Tests/Format/ManifestCodecTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests`, `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Domain.Tests/FormatVersionsTests`, `Hosts.Tests/CreatedFormatTests`, `Repository.FuzzTests/FuzzCorpus`, `Repository.ConformanceTests/FixtureRepositoryV6Tests` · the writers are ADR-0180 Amendment 3's and ADR-0183 Amendment 1's · [notes](#0184--format-6) |
 | [0185](adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) | A run stops fetching online-only files after the first that does not come: on Windows offline, recall on open or recall on data access make a file online-only; the first whose fetch fails stops the run opening any other, each named with the file that failed and why, and the next backup fetches it again; a file gone, refused, or on the device stops nothing. Amendment 1: a backup keeps none of the five bits a provider keeps on an entry, so going between online-only and on the device is no change, and a restore names none. Amendment 2: a file the run fetched and read whole is freed again, unless pinned; a refusal fails nothing | **Built** | `Domain/MetadataRules` · `Filesystem.Local/LocalFileSystemSource` · `Repository/SnapshotPublication` · `Repository.Tests/OnlineOnlyCaptureTests`, `Domain.Tests/OnlineOnlyAttributesTests`, `Domain.Tests/FileAttributesWriteBackTests`, `Filesystem.Tests/LocalScanTests`, `Hosts.Tests/PacedFileSystemSourceTests` · `Filesystem.Local/WindowsInterop` · `Agent/PacedFileSystemSource` · [notes](#0185--online-only-files) |
+| [0186](adr/0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) | A run reuses a folder it was told did not change: told which folders changed since its prior snapshot, it walks only those and the folders above them, and takes every other folder's tree as that snapshot held it; a folder holding a path the prior snapshot failed, one it does not hold, and one whose tree is a chain are walked, and nothing is reused under other rules or other folders; a reused folder's rows are recorded again after the run's row. No change source tells a run yet | **Built** | `Repository/FolderReuse` · `Repository/SnapshotPublication` · `Repository/TargetedRecordReader` · `Repository.Catalogue/Catalogue` · `Filesystem/ScanModel` · `Filesystem/MultiRootScan` · `Filesystem.Local/LocalFileSystemSource` · `Repository.Tests/FolderReuseTests`, `Filesystem.Tests/LocalScanTests`, `Filesystem.Tests/MultiRootStitchTests` · [notes](#0186--folder-reuse) |
 
 ---
 
@@ -5561,3 +5562,39 @@ failing anything. A file changed or replaced while read, one not fetched,
 and one not online-only are never asked. The test of a real unpin needs a
 provider's folder, which no CI runner has; on Windows, a file no provider
 keeps is refused and left as it was.
+
+### 0186 — folder reuse
+
+Built in one slice, the engine half of architecture 06 §4. Every backup
+walked every folder, listing each and reading each entry's metadata, so
+that walk was the floor of every run however little changed. A change
+journal can say which folders changed, but nothing could take a folder
+without walking it.
+
+**Told, the run walks less.** A job may name the folders that changed
+since its prior snapshot. `Repository/FolderReuse` walks each named
+folder and every folder above it, each folder holding a path the prior
+snapshot failed, read through `Repository/TargetedRecordReader`, each
+folder the prior snapshot does not hold, and each whose tree, or a tree
+below it, was written as a chain. It reuses every other folder. The
+walk asks it of each folder through `Filesystem/ScanModel`;
+`Filesystem.Local/LocalFileSystemSource` does not enter a folder it
+reuses, and `Filesystem/MultiRootScan` names it under its label.
+
+**A reused folder is the prior snapshot's.** `Repository/SnapshotPublication`
+names the prior tree in the parent's tree, counts every tree below it in
+the new snapshot's make-up, and records its rows again after its own row.
+`Repository.Catalogue/Catalogue` reads those rows in one read, so a
+forget on another connection lands wholly before it or after.
+
+**Nothing is reused where the set changed.** The run reads the prior
+snapshot's recorded configuration, and reuses nothing where its include
+or exclude rules, or its folders or labels, differ from the job's.
+
+What remains is recorded rather than done:
+
+- no change source tells a run yet, so every production run walks in
+  full; the Windows change journal and a per-set full walk, daily by
+  default, are next;
+- a folder whose tree was written as a chain is always walked;
+- a snapshot does not say whether it was walked in full.

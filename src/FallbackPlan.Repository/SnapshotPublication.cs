@@ -88,6 +88,15 @@ public sealed record SnapshotJob
     /// </summary>
     public ReadOnlyMemory<byte>? PriorSnapshotId { get; init; }
 
+    /// <summary>
+    /// The folders, by their path in the snapshot, in which anything may have
+    /// changed since <see cref="PriorSnapshotId"/>, or whose own metadata may
+    /// have; the root is the empty string. Every other folder is taken as that
+    /// snapshot held it, without being walked (ADR-0186). Null walks every
+    /// folder.
+    /// </summary>
+    public IReadOnlyCollection<string>? ChangedFolders { get; init; }
+
     /// <summary>Wall-clock now, epoch milliseconds.</summary>
     public required ulong NowUnixMilliseconds { get; init; }
 
@@ -169,7 +178,11 @@ public sealed record PublishedTreeSnapshot(
     IReadOnlyList<PublishedFileVersion> Files,
     IReadOnlyList<CaptureFailure> Failures,
     IReadOnlyList<ArchivedBlob> ContentBlobs,
-    IReadOnlyList<ArchivedBlob> MetadataBlobs);
+    IReadOnlyList<ArchivedBlob> MetadataBlobs)
+{
+    /// <summary>How many folders the run took as its prior snapshot held them, without walking them (ADR-0186).</summary>
+    public int FoldersReused { get; init; }
+}
 
 /// <summary>
 /// The multi-file publication path: the same canonical nine-step order as
@@ -253,6 +266,27 @@ public sealed partial class PublicationOrchestrator
         }
 
         var options = job.ScanOptions with { Rules = rules };
+
+        // One targeted reader serves both things this publication reads back:
+        // a renamed file's prior manifest (architecture 06 §4.2) and the
+        // verify-on-reuse confirmation (ADR-0006). Both want the same blob
+        // cache, and neither exists without a catalogue to resolve a location.
+        // Every catalogue call made while the pipeline is running goes
+        // through one gate, because the pipeline is concurrent and a SQLite
+        // connection is not (CatalogueGate).
+        var gated = _catalogue is { } concurrentCatalogue ? new CatalogueGate(concurrentCatalogue) : null;
+
+        using var reader = gated is not null
+            ? new TargetedRecordReader(_store, _repositoryId, _keys, gated)
+            : null;
+
+        // Told what changed, the run takes every other folder as the prior
+        // snapshot held it, for the count as for the capture (ADR-0186).
+        var reuse = await FolderReuse.ForAsync(job, gated, reader, cancellationToken).ConfigureAwait(false);
+        if (reuse is not null)
+        {
+            options = options with { Unchanged = reuse.IsUnchanged };
+        }
 
         var reporter = new PublicationProgress(_progress, job.SnapshotId);
         reporter.Enter(JobState.Scanning);
@@ -342,18 +376,6 @@ public sealed partial class PublicationOrchestrator
             _policy, _repositoryId, _writerId, _generation, _keys, _store, scope, _spoolDirectory,
             _repositoryFormatVersion, scope, _logger);
 
-        // One targeted reader serves both things this publication reads back:
-        // a renamed file's prior manifest (architecture 06 §4.2) and the
-        // verify-on-reuse confirmation (ADR-0006). Both want the same blob
-        // cache, and neither exists without a catalogue to resolve a location.
-        // Every catalogue call made while the pipeline is running goes
-        // through one gate, because the pipeline is concurrent and a SQLite
-        // connection is not (CatalogueGate).
-        var gated = _catalogue is { } concurrentCatalogue ? new CatalogueGate(concurrentCatalogue) : null;
-
-        using var reader = gated is not null
-            ? new TargetedRecordReader(_store, _repositoryId, _keys, gated)
-            : null;
 
         // The reuse decision, trust domain included (09 §5; FR-DED-002).
         // Without a catalogue there is no index to reuse from at all, so the
@@ -387,7 +409,7 @@ public sealed partial class PublicationOrchestrator
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, gated, sourceKeys,
                 hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, job.DeviceId, bound) : null,
-                reader, _repositoryFormatVersion, _logger);
+                reader, _repositoryFormatVersion, _logger, reuse);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -589,7 +611,10 @@ public sealed partial class PublicationOrchestrator
                 walker.Files,
                 walker.Failures,
                 session.Blobs,
-                builder.Blobs);
+                builder.Blobs)
+            {
+                FoldersReused = reuse?.Reused ?? 0,
+            };
         }
     }
 
@@ -711,7 +736,8 @@ public sealed partial class PublicationOrchestrator
         HintSource? hints,
         TargetedRecordReader? manifests,
         ushort repositoryFormatVersion,
-        ILogger logger)
+        ILogger logger,
+        FolderReuse? reuse = null)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -811,6 +837,24 @@ public sealed partial class PublicationOrchestrator
 
                 case ScanEvent.Failure failure:
                     _failures.Add(ToCaptureFailure(failure.Detail));
+                    break;
+
+                case ScanEvent.UnchangedDirectory unchanged:
+                    // Taken as the prior snapshot held it: its tree, and every
+                    // tree below it, are this snapshot's too (ADR-0186). Its
+                    // folders are recorded again with the walked ones, as a
+                    // forget may let go of them before this snapshot's row
+                    // reaches them (ADR-0151 §4).
+                    var subtree = (reuse ?? throw new InvalidOperationException(
+                        Strings.FormatFrame_UnknownScanEvent(scanEvent.GetType().Name))).Take(unchanged.Entry.RelativePath);
+                    _frames.Peek().Entries.Add(new TreeEntry(unchanged.Entry.NameBytes, subtree.TreeId, EntryKind.DirectoryPlaceholder));
+                    foreach (var (treeId, entries) in subtree.Folders)
+                    {
+                        _trees.Add(treeId);
+                        _folders.Add((treeId, entries));
+                    }
+
+                    _accessTimes.AddRange(subtree.AccessTimes);
                     break;
 
                 default:

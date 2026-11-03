@@ -278,6 +278,15 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
                     continue;
                 }
 
+                // As the snapshot spells the folder, which the rules' subject
+                // does not: that is normalised, and a tree keeps the name as found.
+                if (options.Unchanged?.Invoke(
+                        options.SubjectPrefix is null ? relativePath : options.SubjectPrefix + "/" + relativePath) == true)
+                {
+                    yield return new ScanEvent.UnchangedDirectory(directoryEntry);
+                    continue;
+                }
+
                 Log.EnteringDirectory(_logger, new LogPath(relativePath));
                 yield return new ScanEvent.EnterDirectory(directoryEntry);
                 await foreach (var scanEvent in WalkAsync(
