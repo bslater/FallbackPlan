@@ -211,6 +211,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0184](adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) | Format 6: a manifest's metadata key 11 keeps a file's or a folder's flags and its key 14 says that a link is a mount point, each absent where it would say nothing and refused with a reserved bit, an unassigned form, or a form on anything but a link with a target; a repository is born at 6 and lists feature 0x0006; capture writes key 11 from ADR-0180 Amendment 3, and key 14 from ADR-0183 Amendment 1, which Amendment 2's restore reads | **Built** | `Domain/FormatVersions`, `Domain/FormatLimits` · `Domain/LinkForm`, `Domain/EntryMetadata` · `Repository.Format/Manifests/FileVersionManifestCodec` (keys 11 and 14) · `Repository.Format/Descriptor/RepositoryDescriptorCodec` (feature 0x0006) · `Repository/RepositoryLifecycle` · `Repository.Tests/Format/ManifestCodecTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests`, `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Domain.Tests/FormatVersionsTests`, `Hosts.Tests/CreatedFormatTests`, `Repository.FuzzTests/FuzzCorpus`, `Repository.ConformanceTests/FixtureRepositoryV6Tests` · the writers are ADR-0180 Amendment 3's and ADR-0183 Amendment 1's · [notes](#0184--format-6) |
 | [0185](adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) | A run stops fetching online-only files after the first that does not come: on Windows offline, recall on open or recall on data access make a file online-only; the first whose fetch fails stops the run opening any other, each named with the file that failed and why, and the next backup fetches it again; a file gone, refused, or on the device stops nothing. Amendment 1: a backup keeps none of the five bits a provider keeps on an entry, so going between online-only and on the device is no change, and a restore names none. Amendment 2: a file the run fetched and read whole is freed again, unless pinned; a refusal fails nothing | **Built** | `Domain/MetadataRules` · `Filesystem.Local/LocalFileSystemSource` · `Repository/SnapshotPublication` · `Repository.Tests/OnlineOnlyCaptureTests`, `Domain.Tests/OnlineOnlyAttributesTests`, `Domain.Tests/FileAttributesWriteBackTests`, `Filesystem.Tests/LocalScanTests`, `Hosts.Tests/PacedFileSystemSourceTests` · `Filesystem.Local/WindowsInterop` · `Agent/PacedFileSystemSource` · [notes](#0185--online-only-files) |
 | [0186](adr/0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) | A run reuses a folder it was told did not change: told which folders changed since its prior snapshot, it walks only those and the folders above them, and takes every other folder's tree as that snapshot held it; a folder holding a path the prior snapshot failed, one it does not hold, and one whose tree is a chain are walked, and nothing is reused under other rules or other folders; a reused folder's rows are recorded again after the run's row. No change source tells a run yet | **Built** | `Repository/FolderReuse` · `Repository/SnapshotPublication` · `Repository/TargetedRecordReader` · `Repository.Catalogue/Catalogue` · `Filesystem/ScanModel` · `Filesystem/MultiRootScan` · `Filesystem.Local/LocalFileSystemSource` · `Repository.Tests/FolderReuseTests`, `Filesystem.Tests/LocalScanTests`, `Filesystem.Tests/MultiRootStitchTests` · [notes](#0186--folder-reuse) |
+| [0187](adr/0187-a-volumes-change-journal-names-the-folders-that-changed.md) | A volume's change journal names the folders that changed: on Windows, since a place in an NTFS volume's journal, the folder holding each entry changed, a folder whose own metadata changed, and every folder holding a name of a changed file, under the roots asked of; another journal, records let go of, a record of another version, a root on another volume, or a folder it cannot find is no answer. Nothing asks it yet | **Built** | `Filesystem/ChangeJournal` · `Filesystem.Local/UsnRecords` · `Filesystem.Local/WindowsChangeJournal` · `Filesystem.Tests/UsnRecordsTests`, `Filesystem.Tests/WindowsChangeJournalTests` · [notes](#0187--change-journal) |
 
 ---
 
@@ -5598,3 +5599,37 @@ What remains is recorded rather than done:
   default, are next;
 - a folder whose tree was written as a chain is always walked;
 - a snapshot does not say whether it was walked in full.
+
+### 0187 — change journal
+
+Built in one slice, the first change source for folder reuse (ADR-0186).
+Windows keeps a change journal on each NTFS volume, recording every change
+with the entry's identity and its folder's, whether or not anything is
+listening.
+
+**A place, and what changed since.** `Filesystem/ChangeJournal` names a
+place in a journal: the volume by its volume name, the journal's identity,
+and the next record's number. `Filesystem.Local/WindowsChangeJournal`
+reads the records since a place through a handle to the volume, and
+`Filesystem.Local/UsnRecords` takes each read apart and says which folders
+and files its records name. Each folder is found by its identity and named
+under the root it is in, as the volume spells it; each changed file's every
+name is found, so a file with several names names every folder holding one.
+
+**No answer where in doubt.** Another journal, a place older than the
+journal holds or one it has not reached, a record of another version, a
+root on another volume, a folder that cannot be found and was not
+deleted, or more than 200,000 entries named: each is no answer, and the
+caller walks in full.
+
+**Tested on a real journal.** The Windows CI job makes a change journal on
+the volume its temporary folder is on, the runner's local disk, which
+keeps none by default. A Windows test that finds no place for any reason
+but a volume keeping no journal fails, naming the step and the error.
+
+What remains is recorded rather than done:
+
+- nothing asks the journal yet; the service's use of it, keeping a place
+  before each walk and walking in full daily, is next;
+- ReFS's journal, whose records carry longer identities, is not read;
+- macOS and Linux have no change source yet.

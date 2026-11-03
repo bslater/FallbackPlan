@@ -62,6 +62,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path $temp | Out-Null
           "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # The change journal tests read the journal of the volume TEMP is on,
+      # which on these runners is the local disk, and it keeps none until
+      # one is made. Making one where one exists only sets its size.
+      - name: Keep a change journal on the test volume (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $drive = Split-Path -Qualifier $env:RUNNER_TEMP
+          fsutil usn createjournal m=33554432 a=4194304 $drive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          fsutil usn queryjournal $drive
       # Locked mode: the committed packages.lock.json files are the restore
       # (NFR-SUP-003). A dependency change that forgot to update them fails
       # here rather than silently resolving something new.
