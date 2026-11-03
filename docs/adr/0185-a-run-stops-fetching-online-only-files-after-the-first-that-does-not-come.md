@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched)
+**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them)
 **Related:** [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup), [ADR-0026](0026-phase-1-capture-shapes.md) (the capture failure reasons), [ADR-0183](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) (a file a filter keeps is read through the filter)
 
 **Built:**
@@ -58,6 +58,8 @@ A file not fetched is in no snapshot this run publishes, so the next run finds n
 - **Fetch in the person's own session.** The service, which runs as the system account by default, asks as any program does. Whether a provider serves that account is the provider's choice.
 - **Put a fetched file back.** A file the run fetched stays on the device as the provider leaves it. The owner has chosen that a backup should put back a file it fetched, and that is a later record.
 - **Leave the provider's state out of a file's metadata.** A file's attributes carry the provider's bits. A change between online-only and on the device is therefore a metadata change, recorded with no fetch, and a restore names those bits as not applied.
+
+  > **2026-11: done ([Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept)).** The provider's bits are no longer kept, so going between online-only and on the device is no change, and a restore names none of them.
 - **Say before a run how much it must fetch.**
 - **Name an online-only file on macOS.** There, the walk opens each file it classifies, which may itself fetch one. Linux has no such marker.
 
@@ -68,8 +70,33 @@ A file not fetched is in no snapshot this run publishes, so the next run finds n
 - **Stop per provider rather than per run.** Telling providers apart needs each provider's interface. The run stopping whole is simpler and loses nothing.
 - **Stop after several failures.** One failure is the evidence there is, and each further one costs a full time-out.
 
+## Amendment 1 (2026-11) — a provider's bits are not kept
+
+**Requirements:** FR-SNP-009 (amended: a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them)
+
+### Context
+
+A file's attributes, captured whole on Windows, carried five bits a cloud provider keeps on the entry: offline, recall on open and recall on data access, which say whether the content is on the device, and pinned and unpinned, which say whether the person wants it kept there.
+
+They change whenever the provider fetches a file, frees it, or the person asks it kept. Each change made the file's metadata differ from its prior version's. The next backup then wrote a new version from the prior manifest. That cost no fetch, but every such version said nothing about the file. A folder's tree changed the same way, and so did every tree above it. A restore then named the bits it could not set, offline among them, as not applied, though no restore could set them and nothing was lost.
+
+### Decision
+
+**A backup keeps none of the five.** Publication drops them from a file's and a folder's metadata before anything is built from it: the manifest, the tree, and the digest an incremental compares. Going between online-only and on the device, or being pinned or unpinned, is therefore no change, and the prior version stands.
+
+**A restore names none of them.** They are left out of the bits a restore names as not given back, so a backup taken before this record, which kept them, restores with no such note.
+
+Whether a file is online-only is still read from its attributes at the scan, before they are dropped, so the run's stop (Decision 2) is unchanged.
+
+### Consequences
+
+- A file the provider fetches or frees, or the person pins, keeps its version and costs nothing. A folder keeps its tree.
+- The first backup after this record writes a new version of each file and folder whose metadata kept one of the bits. That is one manifest or tree each, with no fetch, and it happens once.
+- A restore never gives a file the provider's state, which only the provider can, and no longer says so.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first. On Windows a file whose attributes carry offline, recall on open or recall on data access is online-only. The first such file whose fetch fails stops the run opening any other: each is an error-manifest entry naming the file that failed and why, and the next backup fetches it again. A file gone, refused, or on the device that will not read stops nothing. `Domain/MetadataRules`; `Filesystem.Local/LocalFileSystemSource`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests` |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a backup keeps none of the five bits a cloud provider keeps on an entry (offline, recall on open, recall on data access, pinned, unpinned). Publication drops them before a manifest, tree or digest is made, so going between online-only and on the device is no change, and a restore names none of them. `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Domain.Tests/FileAttributesWriteBackTests` |

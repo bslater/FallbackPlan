@@ -899,12 +899,14 @@ public sealed partial class PublicationOrchestrator
         /// The entry as this repository's format writes it: from format 6
         /// with the flags its diagnostics name kept in its metadata, a
         /// folder's as well as a file's, and named no more (ADR-0180
-        /// Amendment 3). Every manifest, tree and digest below is made from
-        /// what this returns.
+        /// Amendment 3), and without the bits a cloud provider keeps on it
+        /// (ADR-0185 Amendment 1). Every manifest, tree and digest below is
+        /// made from what this returns.
         /// </summary>
         private ScanEntry Kept(ScanEntry entry)
         {
-            var (metadata, diagnostics) = MetadataRules.KeepFileFlags(repositoryFormatVersion, entry.Metadata, entry.Diagnostics);
+            var (metadata, diagnostics) = MetadataRules.KeepFileFlags(
+                repositoryFormatVersion, MetadataRules.WithoutProviderBits(entry.Metadata), entry.Diagnostics);
             return ReferenceEquals(metadata, entry.Metadata) ? entry : entry with { Metadata = metadata, Diagnostics = diagnostics };
         }
 

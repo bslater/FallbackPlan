@@ -19,7 +19,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// fetched, with the file that failed and why, and the next backup fetches it
 /// again. An unchanged online-only file is never fetched at all
 /// (NFR-PERF-003). A file gone or refused, or a file on this device that will
-/// not read, is not the provider failing and stops nothing.
+/// not read, is not the provider failing and stops nothing. The provider's
+/// bits, which say whether the content is here and whether the person wants
+/// it kept here, are not kept with a file or a folder, so going between
+/// online-only and on the device is no change (ADR-0185 Amendment 1).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -192,6 +195,92 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         Assert.AreEqual(1, kept.OpenAttempts, "an unchanged online-only file is not fetched again");
         Assert.IsTrue(Assert.ContainsSingle(published.Files).Reused);
     }
+
+    [TestMethod]
+    public async Task AFileGoingBetweenOnlineOnlyAndOnTheDevice_IsNoChange()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "doc.bin", 1);
+        doc.Metadata = doc.Metadata with
+        {
+            FileAttributes = Archive | ReparsePoint | Offline | RecallOnDataAccess | Unpinned,
+        };
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        // The person keeps it on the device now.
+        doc.OnlineOnly = false;
+        doc.Metadata = doc.Metadata with { FileAttributes = Archive | ReparsePoint | Pinned };
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, 0xB2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray(),
+                    ParentSnapshots = [Enumerable.Repeat((byte)0xA1, 16).ToArray()],
+                },
+                CancellationToken.None);
+
+        var kept = Assert.ContainsSingle(second.Files);
+        Assert.IsTrue(kept.Reused, "where the provider keeps the content is not a change to the file");
+        Assert.AreEqual(Assert.ContainsSingle(first.Files).ObjectId, kept.ObjectId);
+        Assert.AreEqual(1, doc.OpenAttempts);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var read = await reader.ReadSegmentAsync(kept.ObjectId, CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
+        Assert.AreEqual(
+            Archive | ReparsePoint,
+            FileVersionManifestCodec.Decode(read.Plaintext!).Metadata.FileAttributes,
+            "the provider's bits are not kept");
+    }
+
+    [TestMethod]
+    public async Task AFolderGoingBetweenOnlineOnlyAndOnTheDevice_IsNoChange()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/a.bin", Deterministic(4_000, 1));
+        source.Folders["docs"] = new EntryMetadata
+        {
+            ModifiedAt = 1_722_000_000_000,
+            FileAttributes = Directory | RecallOnOpen | Unpinned,
+        };
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        source.Folders["docs"] = source.Folders["docs"] with { FileAttributes = Directory | Pinned };
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, 0xB2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray(),
+                    ParentSnapshots = [Enumerable.Repeat((byte)0xA1, 16).ToArray()],
+                },
+                CancellationToken.None);
+
+        Assert.AreEqual(first.RootTreeObjectId, second.RootTreeObjectId, "the folder's tree is the one it had");
+    }
+
+    private const uint Archive = 0x20;
+    private const uint Directory = 0x10;
+    private const uint ReparsePoint = 0x400;
+    private const uint Offline = 0x1000;
+    private const uint RecallOnOpen = 0x4_0000;
+    private const uint Pinned = 0x8_0000;
+    private const uint Unpinned = 0x10_0000;
+    private const uint RecallOnDataAccess = 0x40_0000;
 
     private static FakeFileSystemSource.Node Online(
         FakeFileSystemSource source, string path, byte seed, int length = 4_000)

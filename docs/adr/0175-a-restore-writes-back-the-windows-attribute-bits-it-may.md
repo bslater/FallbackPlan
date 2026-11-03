@@ -34,6 +34,8 @@ A bit that is neither written back nor what an entry is, as compressed, encrypte
 
 > **2026-10 ([Amendment 2](#amendment-2-2026-10--a-restore-gives-a-file-and-a-folder-their-compression-back)).** Compressed is no longer one: where the target keeps compression, the writer gives an entry the compression it was captured with by a call of its own. Encrypted, temporary and offline still are.
 
+> **2026-11 ([ADR-0185 Amendment 1](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-1-2026-11--a-providers-bits-are-not-kept)).** Offline is no longer one either. It is among the five bits a cloud provider keeps on an entry, with recall on open, recall on data access, pinned and unpinned. A backup keeps none of them, and a restore names none of them.
+
 ### 3. The bits go on last, and only on Windows
 
 A read-only file refuses a stream written onto it, so the bits are the last write for an entry, after its streams, times and creation time. Off Windows .NET maps the same calls onto permissions and file flags of its own, so the writer writes none there whatever a target says, and a target keeps them only on Windows.
@@ -122,3 +124,4 @@ Encryption is still named and not set, for the reason this record gives.
 | 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--a-restore-gives-a-file-and-a-folder-their-compression-back): a file and a folder get their NTFS compression back through its own call, before the times, as captured; a refusal is named; encryption is still named and not set. `Domain/FileCompression`; `Domain/MetadataWriter`; `Domain/MetadataRules`; `Domain/MetadataTarget`; `Restore/RestoreMetadata`; `Restore/RestorePlan`; `Domain.Tests/FileCompressionTests`; `Repository.Tests/RestoreFileAttributesTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-10 | Accepted (related) | [ADR-0181](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md): a restore on Windows makes a link where the account may; its bits are still not written onto it, and are declared and listed as not applied. |
 | 2026-10 | Accepted (related) | [ADR-0181 Amendment 3](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-3-2026-10--a-links-own-attribute-bits-on-windows): a link made on Windows gets its bits back by this record's rule, through a handle opened on the link itself. |
+| 2026-11 | Accepted (related) | [ADR-0185 Amendment 1](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-1-2026-11--a-providers-bits-are-not-kept): offline, with the other four bits a cloud provider keeps on an entry, is no longer kept by a backup or named by a restore |

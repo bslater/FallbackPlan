@@ -5,7 +5,9 @@ namespace FallbackPlan.Domain.Tests;
 /// so that reading it asks a cloud provider to fetch it (ADR-0185,
 /// FR-SNP-009): offline, recall on open and recall on data access. Pinned and
 /// unpinned say only what the person wants kept, and a reparse point only
-/// that a filter keeps the file; neither makes it online-only.
+/// that a filter keeps the file; neither makes it online-only. None of the
+/// provider's five bits is kept with a file or a folder, or named by a restore
+/// as one it did not give back (ADR-0185 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class OnlineOnlyAttributesTests
@@ -38,4 +40,39 @@ public sealed class OnlineOnlyAttributesTests
     [TestMethod]
     public void IsOnlineOnly_WithNoAttributesCaptured_IsFalse() =>
         Assert.IsFalse(MetadataRules.IsOnlineOnly(null));
+
+    [TestMethod]
+    [DataRow(Offline)]
+    [DataRow(RecallOnOpen)]
+    [DataRow(RecallOnDataAccess)]
+    [DataRow(Pinned)]
+    [DataRow(Unpinned)]
+    [DataRow(Archive | ReparsePoint | Offline | RecallOnOpen | RecallOnDataAccess | Pinned | Unpinned)]
+    public void UnsetFileAttributes_OfAProvidersBits_IsNone(uint captured) =>
+        Assert.IsEmpty(MetadataRules.UnsetFileAttributes(captured));
+
+    [TestMethod]
+    public void WithoutProviderBits_DropsTheProvidersBitsAndKeepsTheRest()
+    {
+        var metadata = new EntryMetadata
+        {
+            ModifiedAt = 1_722_000_000_000,
+            FileAttributes = Archive | ReparsePoint | Offline | RecallOnOpen | RecallOnDataAccess | Pinned | Unpinned,
+        };
+
+        var kept = MetadataRules.WithoutProviderBits(metadata);
+
+        Assert.AreEqual(Archive | ReparsePoint, kept.FileAttributes);
+        Assert.AreEqual(metadata.ModifiedAt, kept.ModifiedAt);
+    }
+
+    [TestMethod]
+    public void WithoutProviderBits_OfMetadataCarryingNone_IsTheSameMetadata()
+    {
+        var plain = new EntryMetadata { ModifiedAt = 1_722_000_000_000, FileAttributes = Archive };
+        var none = new EntryMetadata { ModifiedAt = 1_722_000_000_000 };
+
+        Assert.AreSame(plain, MetadataRules.WithoutProviderBits(plain));
+        Assert.AreSame(none, MetadataRules.WithoutProviderBits(none));
+    }
 }

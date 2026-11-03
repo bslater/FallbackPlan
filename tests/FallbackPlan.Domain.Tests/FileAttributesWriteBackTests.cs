@@ -47,7 +47,8 @@ public sealed class FileAttributesWriteBackTests : IDisposable
         CollectionAssert.AreEqual(
             new[] { "Compressed", "Encrypted" },
             MetadataRules.UnsetFileAttributes(Archive | Compressed | Encrypted).ToArray());
-        CollectionAssert.AreEqual(new[] { "Temporary", "Offline" }, MetadataRules.UnsetFileAttributes(0x100 | 0x1000).ToArray());
+        // Offline is a cloud provider's, which no restore names (ADR-0185 Amendment 1).
+        CollectionAssert.AreEqual(new[] { "Temporary" }, MetadataRules.UnsetFileAttributes(0x100 | 0x1000).ToArray());
         Assert.AreEqual("0x00800000", Assert.ContainsSingle(MetadataRules.UnsetFileAttributes(0x800000)));
     }
 
