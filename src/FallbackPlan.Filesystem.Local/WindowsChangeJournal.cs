@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32.SafeHandles;
@@ -52,6 +53,10 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
     private const int ErrorPathNotFound = 3;
     private const int ErrorInvalidParameter = 87;
     private const int ErrorDeletePending = 303;
+    private const uint FileReadAttributes = 0x80;
+    private const int FileHardLinkInformation = 46;
+    private const int StatusBufferOverflow = unchecked((int)0x8000_0005);
+    private const int StatusBufferTooSmall = unchecked((int)0xC000_0023);
 
     /// <inheritdoc />
     public JournalPosition? PositionOf(string folder) => Locate(folder, out _);
@@ -97,16 +102,27 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
 
         why = null;
         return new JournalPosition(volume, journal.Id, journal.Next);
-
-        static string Failed(string step) =>
-            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{step}: error {Marshal.GetLastPInvokeError()}");
     }
 
+    /// <summary>A step that failed, with the error the last platform call raised.</summary>
+    private static string Failed(string step) =>
+        string.Create(CultureInfo.InvariantCulture, $"{step}: error {Marshal.GetLastPInvokeError()}");
+
     /// <inheritdoc />
-    public IReadOnlyList<ChangedFolder>? ChangedSince(JournalPosition since, IReadOnlyCollection<string> roots)
+    public IReadOnlyList<ChangedFolder>? ChangedSince(JournalPosition since, IReadOnlyCollection<string> roots) =>
+        ChangedSince(since, roots, out _);
+
+    /// <summary>
+    /// As <see cref="ChangedSince(JournalPosition, IReadOnlyCollection{string})"/>,
+    /// and where there is no answer, why: the step that doubted, with the
+    /// platform's error where one was raised.
+    /// </summary>
+    internal static IReadOnlyList<ChangedFolder>? ChangedSince(
+        JournalPosition since, IReadOnlyCollection<string> roots, out string? doubt)
     {
         ArgumentNullException.ThrowIfNull(since);
         ArgumentNullException.ThrowIfNull(roots);
+        doubt = null;
         if (roots.Count == 0)
         {
             return [];
@@ -117,9 +133,15 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
         var spelled = new List<(string Root, string OnVolume)>();
         foreach (var root in roots)
         {
-            if (!string.Equals(VolumeOf(root), since.Volume, StringComparison.OrdinalIgnoreCase)
-                || FinalPathOf(root) is not { } onVolume)
+            if (!string.Equals(VolumeOf(root), since.Volume, StringComparison.OrdinalIgnoreCase))
             {
+                doubt = $"{root} is not on {since.Volume}";
+                return null;
+            }
+
+            if (FinalPathOf(root) is not { } onVolume)
+            {
+                doubt = Failed($"finding {root} on its volume");
                 return null;
             }
 
@@ -127,36 +149,45 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
         }
 
         using var device = OpenVolume(since.Volume);
-        if (device.IsInvalid || Query(device) is not { } journal
-            || !JournalCoverage.Covers(since, journal.Id, journal.LowestValid, journal.Next)
-            || Read(device, since, journal.Next) is not { } changes
-            || changes.Folders.Count + changes.Files.Count > MostEntriesNamed)
+        if (device.IsInvalid)
         {
+            doubt = Failed($"opening {since.Volume}");
+            return null;
+        }
+
+        if (Query(device) is not { } journal)
+        {
+            doubt = Failed($"asking {since.Volume} for its journal");
+            return null;
+        }
+
+        if (!JournalCoverage.Covers(since, journal.Id, journal.LowestValid, journal.Next))
+        {
+            doubt = "the journal does not hold every record since the place";
+            return null;
+        }
+
+        if (Read(device, since, journal.Next) is not { } changes)
+        {
+            doubt = Failed("reading the journal");
+            return null;
+        }
+
+        if (changes.Folders.Count + changes.Files.Count > MostEntriesNamed)
+        {
+            doubt = "it names more entries than a walk would cost";
             return null;
         }
 
         using var hint = OpenDirectory(spelled[0].OnVolume);
         if (hint.IsInvalid)
         {
+            doubt = Failed($"opening {spelled[0].OnVolume}");
             return null;
         }
 
-        var named = new HashSet<ChangedFolder>();
-        foreach (var folder in changes.Folders)
-        {
-            if (changes.Gone.Contains(folder))
-            {
-                continue;
-            }
-
-            if (PathOfId(hint, folder, out _) is not { } path)
-            {
-                return null;
-            }
-
-            Name(path);
-        }
-
+        // A file's every name is in a folder its records may not name.
+        var folders = new HashSet<ulong>(changes.Folders);
         foreach (var file in changes.Files)
         {
             if (changes.Gone.Contains(file))
@@ -164,15 +195,29 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
                 continue;
             }
 
-            if (FoldersHolding(hint, file) is not { } folders)
+            if (LinkParentsOf(hint, file, out doubt) is not { } parents)
             {
                 return null;
             }
 
-            foreach (var folder in folders)
+            folders.UnionWith(parents);
+        }
+
+        var named = new HashSet<ChangedFolder>();
+        foreach (var folder in folders)
+        {
+            if (changes.Gone.Contains(folder))
             {
-                Name(folder);
+                continue;
             }
+
+            if (PathOfId(hint, folder, out var error) is not { } path)
+            {
+                doubt = string.Create(CultureInfo.InvariantCulture, $"finding folder {folder:X}: error {error}");
+                return null;
+            }
+
+            Name(path);
         }
 
         return [.. named];
@@ -265,78 +310,61 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
     }
 
     /// <summary>
-    /// Every folder holding a name of the file whose identity is
-    /// <paramref name="fileId"/>: none for a file gone since, and null where
-    /// it cannot be told.
+    /// The folders holding the names of a file with several, by identity:
+    /// none for a file with one, whose folder is its record's, or one gone
+    /// since; and null, with why, where they cannot be told.
     /// </summary>
-    private static List<string>? FoldersHolding(SafeFileHandle hint, ulong fileId)
+    private static unsafe List<ulong>? LinkParentsOf(SafeFileHandle hint, ulong fileId, out string? doubt)
     {
-        if (PathOfId(hint, fileId, out var error) is not { } path)
+        doubt = null;
+        var descriptor = new FileIdDescriptor { Size = (uint)Marshal.SizeOf<FileIdDescriptor>(), Type = 0, FileId = fileId };
+        using var handle = OpenFileById(hint, ref descriptor, FileReadAttributes, ShareAll, 0, FileFlagBackupSemantics);
+        if (handle.IsInvalid)
         {
-            return error is ErrorFileNotFound or ErrorPathNotFound or ErrorInvalidParameter or ErrorDeletePending ? [] : null;
-        }
+            var error = Marshal.GetLastPInvokeError();
+            if (error is ErrorFileNotFound or ErrorPathNotFound or ErrorInvalidParameter or ErrorDeletePending)
+            {
+                return [];
+            }
 
-        if (VolumePathOf(path) is not { } volumeRoot)
-        {
+            doubt = string.Create(CultureInfo.InvariantCulture, $"opening file {fileId:X}: error {error}");
             return null;
         }
 
-        // A name comes back from the volume's root, without the volume.
-        var prefix = volumeRoot.TrimEnd('\\');
-        var folders = new List<string>();
-        foreach (var name in NamesOf(path))
+        if (!GetFileInformationByHandle(handle, out var information))
         {
-            if (Path.GetDirectoryName(prefix + name) is { } folder)
+            doubt = Failed(string.Create(CultureInfo.InvariantCulture, $"counting the names of file {fileId:X}"));
+            return null;
+        }
+
+        if (information.NumberOfLinks <= 1)
+        {
+            return [];
+        }
+
+        var buffer = new byte[4096];
+        for (var attempt = 0; ; attempt++)
+        {
+            int status;
+            fixed (byte* links = buffer)
             {
-                folders.Add(folder);
+                status = NtQueryInformationFile(handle, out _, links, (uint)buffer.Length, FileHardLinkInformation);
             }
-        }
 
-        return folders.Count == 0 ? null : folders;
-    }
-
-    /// <summary>Every name of the file at <paramref name="path"/>, each from its volume's root.</summary>
-    private static unsafe List<string> NamesOf(string path)
-    {
-        var names = new List<string>();
-        var buffer = new char[1024];
-        var length = (uint)buffer.Length;
-        nint find;
-        fixed (char* name = buffer)
-        {
-            find = FindFirstFileName(path, 0, ref length, name);
-        }
-
-        if (find == -1)
-        {
-            return names;
-        }
-
-        try
-        {
-            do
+            if ((status == StatusBufferOverflow || status == StatusBufferTooSmall) && attempt < 4)
             {
-                names.Add(new string(buffer, 0, (int)Math.Max(0, length - 1)));
-                length = (uint)buffer.Length;
-                bool more;
-                fixed (char* name = buffer)
-                {
-                    more = FindNextFileName(find, ref length, name);
-                }
-
-                if (!more)
-                {
-                    break;
-                }
+                buffer = new byte[Math.Max(BinaryPrimitives.ReadUInt32LittleEndian(buffer), (uint)buffer.Length * 2)];
+                continue;
             }
-            while (true);
-        }
-        finally
-        {
-            FindClose(find);
-        }
 
-        return names;
+            if (status < 0 || HardLinks.ParentsOf(buffer) is not { } parents)
+            {
+                doubt = string.Create(CultureInfo.InvariantCulture, $"listing the names of file {fileId:X}: status 0x{status:X8}");
+                return null;
+            }
+
+            return [.. parents];
+        }
     }
 
     /// <summary>The path of the entry whose identity is <paramref name="id"/>, or null with the platform's error.</summary>
@@ -462,14 +490,19 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
     [return: MarshalAs(UnmanagedType.Bool)]
     private static unsafe partial bool GetVolumeNameForVolumeMountPoint(string mountPoint, char* volumeName, uint length);
 
-    [LibraryImport("kernel32", EntryPoint = "FindFirstFileNameW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
-    private static unsafe partial nint FindFirstFileName(string fileName, uint flags, ref uint length, char* linkName);
-
-    [LibraryImport("kernel32", EntryPoint = "FindNextFileNameW", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static unsafe partial bool FindNextFileName(nint find, ref uint length, char* linkName);
-
     [LibraryImport("kernel32", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool FindClose(nint find);
+    private static partial bool GetFileInformationByHandle(SafeFileHandle handle, out ByHandleFileInformation information);
+
+    [LibraryImport("ntdll")]
+    private static unsafe partial int NtQueryInformationFile(
+        SafeFileHandle handle, out IoStatusBlock ioStatus, void* information, uint length, int informationClass);
+
+    /// <summary><c>IO_STATUS_BLOCK</c>: a status or pointer, and a count, each pointer-wide.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatusBlock
+    {
+        public nint Status;
+        public nint Information;
+    }
 }

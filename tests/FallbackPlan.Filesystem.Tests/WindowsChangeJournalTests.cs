@@ -281,8 +281,8 @@ public sealed partial class WindowsChangeJournalTests : IDisposable
     [SupportedOSPlatform("windows")]
     private string[] Changed(WindowsChangeJournal journal, JournalPosition since)
     {
-        var changed = journal.ChangedSince(since, [_root]);
-        Assert.IsNotNull(changed, "the journal could say");
+        var changed = WindowsChangeJournal.ChangedSince(since, [_root], out var doubt);
+        Assert.IsNotNull(changed, $"the journal could not say: {doubt}");
         Assert.IsTrue(changed.All(folder => folder.Root == _root), "every folder under the root it was asked of");
         return [.. changed.Select(folder => folder.Path)];
     }

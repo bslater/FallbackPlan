@@ -130,3 +130,47 @@ internal static class JournalCoverage
     public static bool Covers(JournalPosition since, ulong journalId, long lowestValid, long next) =>
         since.JournalId == journalId && since.Usn >= lowestValid && since.Usn <= next;
 }
+
+/// <summary>
+/// Takes apart <c>FILE_LINKS_INFORMATION</c> (ADR-0187): how many bytes it
+/// needs, how many entries it holds, then each entry, eight-byte aligned,
+/// giving the offset to the next, the identity of the folder holding the
+/// name, and the name.
+/// </summary>
+/// <remarks>A layout, read the same everywhere and tested everywhere.</remarks>
+internal static class HardLinks
+{
+    /// <summary>An entry up to its name: the next entry's offset, padding, the folder's identity, the name's length.</summary>
+    private const int EntryHeaderLength = 20;
+
+    /// <summary>The folder holding each name, or null where an entry does not fit.</summary>
+    public static IReadOnlyList<ulong>? ParentsOf(ReadOnlySpan<byte> buffer)
+    {
+        if (buffer.Length < 8)
+        {
+            return null;
+        }
+
+        var entries = BinaryPrimitives.ReadUInt32LittleEndian(buffer[4..]);
+        var parents = new List<ulong>();
+        var at = 8;
+        for (var entry = 0u; entry < entries; entry++)
+        {
+            if (at < 0 || at + EntryHeaderLength > buffer.Length)
+            {
+                return null;
+            }
+
+            var next = BinaryPrimitives.ReadUInt32LittleEndian(buffer[at..]);
+            parents.Add(BinaryPrimitives.ReadUInt64LittleEndian(buffer[(at + 8)..]));
+            if (next == 0)
+            {
+                return entry + 1 == entries ? parents : null;
+            }
+
+            at += (int)next;
+        }
+
+        return parents;
+    }
+}

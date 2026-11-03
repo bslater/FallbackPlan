@@ -127,6 +127,53 @@ public sealed class UsnRecordsTests
         Assert.Contains(0x5ul, changes.Folders);
     }
 
+    [TestMethod]
+    public void HardLinks_TheFolderHoldingEachName_IsRead()
+    {
+        var links = Links((0x5, "a.txt"), (0x9, "a-too.txt"));
+
+        CollectionAssert.AreEqual(new ulong[] { 0x5, 0x9 }, HardLinks.ParentsOf(links)!.ToArray());
+    }
+
+    [TestMethod]
+    public void HardLinks_AnEntryPastTheBuffer_IsNotRead()
+    {
+        var links = Links((0x5, "a.txt"), (0x9, "a-too.txt"));
+        BinaryPrimitives.WriteUInt32LittleEndian(links.AsSpan(4), 3);
+
+        Assert.IsNull(HardLinks.ParentsOf(links), "three entries said, two there");
+        Assert.IsNull(HardLinks.ParentsOf(links.AsSpan(0, 12)), "an entry cut short");
+    }
+
+    /// <summary>
+    /// A <c>FILE_LINKS_INFORMATION</c>: bytes needed, entries, then each
+    /// <c>FILE_LINK_ENTRY_INFORMATION</c> eight-byte aligned, the last
+    /// with no next.
+    /// </summary>
+    private static byte[] Links(params (ulong Parent, string Name)[] names)
+    {
+        var entries = names.Select(name =>
+        {
+            var nameBytes = Encoding.Unicode.GetBytes(name.Name);
+            var entry = new byte[(20 + nameBytes.Length + 7) / 8 * 8];
+            BinaryPrimitives.WriteUInt64LittleEndian(entry.AsSpan(8), name.Parent);
+            BinaryPrimitives.WriteUInt32LittleEndian(entry.AsSpan(16), (uint)nameBytes.Length);
+            nameBytes.CopyTo(entry, 20);
+            return entry;
+        }).ToList();
+        for (var i = 0; i < entries.Count - 1; i++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(entries[i], (uint)entries[i].Length);
+        }
+
+        var buffer = new List<byte>(new byte[8]);
+        entries.ForEach(buffer.AddRange);
+        var bytes = buffer.ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, (uint)bytes.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), (uint)entries.Count);
+        return bytes;
+    }
+
     private static byte[] Buffer(long nextUsn, params byte[][] records)
     {
         var buffer = new List<byte>(BitConverter.GetBytes(nextUsn));
