@@ -54,18 +54,52 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
     private const int ErrorDeletePending = 303;
 
     /// <inheritdoc />
-    public JournalPosition? PositionOf(string folder)
+    public JournalPosition? PositionOf(string folder) => Locate(folder, out _);
+
+    /// <summary>
+    /// Why the volume holding <paramref name="folder"/> gives no place: the
+    /// step that failed and the platform's error, or null where it gives one.
+    /// Error 1179 is a volume that keeps no journal.
+    /// </summary>
+    internal static string? WhyNoPosition(string folder)
+    {
+        Locate(folder, out var why);
+        return why;
+    }
+
+    private static JournalPosition? Locate(string folder, out string? why)
     {
         ArgumentNullException.ThrowIfNull(folder);
-        if (!Directory.Exists(folder) || VolumeOf(folder) is not { } volume)
+        if (!Directory.Exists(folder))
         {
+            why = "no folder there";
+            return null;
+        }
+
+        if (VolumeOf(folder) is not { } volume)
+        {
+            why = Failed("naming its volume");
             return null;
         }
 
         using var device = OpenVolume(volume);
-        return device.IsInvalid || Query(device) is not { } journal
-            ? null
-            : new JournalPosition(volume, journal.Id, journal.Next);
+        if (device.IsInvalid)
+        {
+            why = Failed($"opening {volume}");
+            return null;
+        }
+
+        if (Query(device) is not { } journal)
+        {
+            why = Failed($"asking {volume} for its journal");
+            return null;
+        }
+
+        why = null;
+        return new JournalPosition(volume, journal.Id, journal.Next);
+
+        static string Failed(string step) =>
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{step}: error {Marshal.GetLastPInvokeError()}");
     }
 
     /// <inheritdoc />

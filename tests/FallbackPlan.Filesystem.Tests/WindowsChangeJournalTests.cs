@@ -242,8 +242,7 @@ public sealed partial class WindowsChangeJournalTests : IDisposable
     {
         for (var attempt = 0; attempt < 50; attempt++)
         {
-            var since = journal.PositionOf(_root)
-                ?? throw new AssertInconclusiveException($"no change journal on the volume holding {_root}");
+            var since = journal.PositionOf(_root) ?? throw NoPlace();
             Thread.Sleep(100);
             if (journal.ChangedSince(since, [_root]) is { Count: 0 })
             {
@@ -253,6 +252,16 @@ public sealed partial class WindowsChangeJournalTests : IDisposable
 
         throw new AssertFailedException($"the folder {_root} never went quiet");
     }
+
+    /// <summary>
+    /// A volume that keeps no journal is a machine this cannot be tested on.
+    /// Any other reason there is no place is this reader failing.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private Exception NoPlace() => WindowsChangeJournal.WhyNoPosition(_root) is { } why
+        && !why.EndsWith("error 1179", StringComparison.Ordinal)
+        ? new AssertFailedException($"no place in the journal of the volume holding {_root}, {why}")
+        : new AssertInconclusiveException($"the volume holding {_root} keeps no change journal");
 
     private static void AssertNamed(string[] changed, string[] named, string[] notNamed)
     {

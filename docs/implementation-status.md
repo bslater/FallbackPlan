@@ -5622,6 +5622,11 @@ root on another volume, a folder that cannot be found and was not
 deleted, or more than 200,000 entries named: each is no answer, and the
 caller walks in full.
 
+**Tested on a real journal.** The Windows CI job makes a change journal on
+the volume its temporary folder is on, the runner's local disk, which
+keeps none by default. A Windows test that finds no place for any reason
+but a volume keeping no journal fails, naming the step and the error.
+
 What remains is recorded rather than done:
 
 - nothing asks the journal yet; the service's use of it, keeping a place
