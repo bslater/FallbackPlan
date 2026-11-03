@@ -63,6 +63,8 @@ Reading a journal takes a handle to the volume, which the system account and an 
 ## What this does not do
 
 - **Tell a run what changed.** The service's use of the journal is the next record. It keeps a place before each walk and walks in full on a schedule, daily by default.
+
+  > **2026-11: done ([ADR-0188](0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md)).** A backup keeps the journal's places before it walks, and the next asks from there; a set is walked in full at least once a day.
 - **Read ReFS's journal,** whose records carry longer identities. A set there walks in full.
 - **Name changes on macOS or Linux.** The owner has asked for them once Windows works, each from its own platform's source.
 
