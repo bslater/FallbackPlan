@@ -149,6 +149,8 @@ The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a f
 
 > **2026-11 ([ADR-0180 Amendment 7](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-7-2026-11--a-refusal-where-something-stands-fails-the-item-it-meets-not-the-run)).** What the platform refuses where something already stands fails the item it meets, and the run goes on to its receipt. That covers a file a flag keeps from being moved aside, a folder a flag keeps from taking a new name, and an append-only folder that takes a spool but refuses its rename into place. A spool the folder will not let go is named on its item, by the executor and the recovery tool alike. A run whose own folder cannot be made writes nothing and says why. Each had ended the run with no receipt.
 
+> **2026-11 ([ADR-0180 Amendment 10](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-10-2026-11--a-refused-move-aside-leaves-nothing-of-its-own-behind)).** A move aside the platform refuses leaves nothing of its own under the displaced folder. That means neither the copy a move that falls back to copying made at its refuge, nor the folders it made.
+
 ### 3.1 Quarantine by default
 
 Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006

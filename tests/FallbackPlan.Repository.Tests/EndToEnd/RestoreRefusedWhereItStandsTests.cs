@@ -18,7 +18,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// a file cannot be renamed into place from its spool, nor its spool removed
 /// after. Each fails that item with the platform's words, and a spool the
 /// folder will not let go is named. A run whose own folder cannot be made is
-/// refused before anything is written.
+/// refused before anything is written. A move aside refused leaves nothing of
+/// its own under the displaced folder, neither a copy the platform made at
+/// its refuge nor the folders it made, and the run keeps those a move that
+/// landed made (ADR-0180 Amendment 10).
 /// </summary>
 /// <remarks>
 /// The flags are set for real, as this platform and the account running the
@@ -65,11 +68,89 @@ public sealed class RestoreRefusedWhereItStandsTests : ArchiveTestHarness
                 Assert.IsEmpty(receipt.Displaced, $"{policy}: nothing was moved aside");
                 Assert.AreEqual("as it stands", File.ReadAllText(kept), $"{policy}");
                 Assert.IsFalse(File.Exists(RestorePaths.SpoolBeside(kept, "restore")), $"{policy}: the folder lets its spool go");
+                Assert.IsFalse(Directory.Exists(Path.Combine(output, ".fbp-displaced")), $"{policy}: no copy, and no folder, made for a move refused");
             }
             finally
             {
                 DiskFlags.ClearUnder(output);
             }
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a file's immutable flag, and a link needs no privilege")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task AMoveAsideRefused_LeavesNoFolderItMade_AndKeepsThoseAMoveThatLandedMade()
+    {
+        // Moving aside makes the file's folders under the displaced folder
+        // first. A file, a link and a hard link's later name are each moved
+        // aside their own way, and a flag refuses each; a.txt moves.
+        RequireImmutable();
+        var source = new FakeFileSystemSource();
+        source.AddFile("a/ok.txt", Content(9));
+        source.AddFile("b/kept.txt", Content(10));
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "c/link",
+            Kind = ScanEntryKind.Symlink,
+            LinkTarget = "../a/ok.txt"u8.ToArray(),
+            Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000 },
+        });
+        var linked = Content(11);
+        source.AddFile("d/one.bin", linked, linkCount: 2, fileId: 900);
+        source.AddFile("d/two.bin", linked, linkCount: 2, fileId: 900);
+        var output = Path.Combine(SpoolDirectory, "live-b7");
+        Standing(output, "a/ok.txt", "mine");
+        foreach (var path in new[] { "b/kept.txt", "c/link", "d/two.bin" })
+        {
+            Hold(Standing(output, path, "kept"));
+        }
+
+        try
+        {
+            var receipt = await PublishAndRestoreAsync(source, 0xB7, output, RestoreDestinationMode.InPlace, ExistingDestinationPolicy.Preserve);
+
+            Assert.AreEqual("a/ok.txt", Assert.ContainsSingle(receipt.Displaced));
+            var displaced = Path.Combine(output, ".fbp-displaced", "refused-b7");
+            Assert.AreEqual("mine", File.ReadAllText(Path.Combine(displaced, "a", "ok.txt")), "the move that landed keeps its folders");
+            foreach (var path in new[] { "b/kept.txt", "c/link", "d/two.bin" })
+            {
+                var item = Item(receipt, path);
+                Assert.AreEqual("failed", item.Outcome, path);
+                Assert.StartsWith("what stands here was not moved aside: ", item.Detail!, StringComparison.Ordinal, path);
+                Assert.IsFalse(Directory.Exists(Path.Combine(displaced, path[..1])), $"{path}: no copy, and no folder, made for a move refused");
+            }
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(output);
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a file's immutable flag")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task AMoveAsideRefused_LeavesWhatAlreadyStoodAtItsRefuge()
+    {
+        // A file the run's name already holds at the refuge is not the
+        // move's own: the move is refused for it, and it stays.
+        RequireImmutable();
+        var source = new FakeFileSystemSource();
+        source.AddFile("b/kept.txt", Content(12));
+        var output = Path.Combine(SpoolDirectory, "live-b8");
+        Hold(Standing(output, "b/kept.txt", "kept"));
+        var earlier = Standing(output, ".fbp-displaced/refused-b8/b/kept.txt", "moved aside before");
+
+        try
+        {
+            var receipt = await PublishAndRestoreAsync(source, 0xB8, output, RestoreDestinationMode.InPlace, ExistingDestinationPolicy.Preserve);
+
+            Assert.AreEqual("failed", Item(receipt, "b/kept.txt").Outcome);
+            Assert.AreEqual("moved aside before", File.ReadAllText(earlier));
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(output);
         }
     }
 
