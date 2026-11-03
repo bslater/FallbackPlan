@@ -52,4 +52,6 @@ internal sealed class PacedFileSystemSource : IFileSystemSource
 
     /// <inheritdoc />
     public ulong? DeviceOf(string path) => _inner.DeviceOf(path);
+
+    public string? FreeAgain(ScanEntry entry) => _inner.FreeAgain(entry);
 }

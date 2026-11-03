@@ -292,6 +292,8 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
 
         public ulong? DeviceOf(string path) => inner.DeviceOf(path);
 
+        public string? FreeAgain(ScanEntry entry) => inner.FreeAgain(entry);
+
         public IAsyncEnumerable<ScanEvent> ScanAsync(
             string rootPath, ScanOptions options, CancellationToken cancellationToken) =>
             inner.ScanAsync(rootPath, options, cancellationToken);

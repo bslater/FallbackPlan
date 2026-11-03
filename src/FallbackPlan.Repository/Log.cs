@@ -109,6 +109,12 @@ internal static partial class Log
             + "file, names each it passes, and the next backup tries them again")]
     internal static partial void OnlineOnlyNotDelivered(ILogger logger, LogPath path, string reason);
 
+    [LoggerMessage(
+        EventId = 2014, Level = LogLevel.Warning,
+        Message = "The online-only file {Path} was fetched and backed up, but freeing it from the device again was "
+            + "refused: {Reason} — it stays on the device until its provider frees it")]
+    internal static partial void OnlineOnlyNotFreed(ILogger logger, LogPath path, string reason);
+
     // ---------------------------------------------------------------- blobs
 
     [LoggerMessage(

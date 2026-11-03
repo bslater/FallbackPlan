@@ -1314,6 +1314,12 @@ public sealed partial class PublicationOrchestrator
             {
                 diagnostics.Add($"captured-inconsistent: {attempts}");
             }
+            else if (entry.OnlineOnly && job.Source.FreeAgain(entry) is { } notFreed)
+            {
+                // The backup has the file whole; that the device keeps it too
+                // is the provider's to settle, and costs only the space.
+                Log.OnlineOnlyNotFreed(logger, new LogPath(entry.RelativePath), notFreed);
+            }
 
             LastArchive = archive;
 

@@ -1036,6 +1036,8 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         public ulong? DeviceOf(string path) => inner.DeviceOf(path);
 
+        public string? FreeAgain(ScanEntry entry) => inner.FreeAgain(entry);
+
         public RevalidationProbe? Revalidate(ScanEntry entry) => inner.Revalidate(entry);
 
         public async IAsyncEnumerable<ScanEvent> ScanAsync(

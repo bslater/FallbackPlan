@@ -226,4 +226,15 @@ public interface IFileSystemSource
     /// this interface exists to provide.
     /// </summary>
     ulong? DeviceOf(string path);
+
+    /// <summary>
+    /// Asks whatever keeps an online-only entry's content to free it from
+    /// this device again, after the run fetched it (ADR-0185 Amendment 2).
+    /// </summary>
+    /// <param name="entry">The entry the run fetched and read whole.</param>
+    /// <returns>
+    /// Null where it was asked, or where there was nothing to ask, as for an
+    /// entry the person pinned; otherwise the platform's words for the refusal.
+    /// </returns>
+    string? FreeAgain(ScanEntry entry);
 }

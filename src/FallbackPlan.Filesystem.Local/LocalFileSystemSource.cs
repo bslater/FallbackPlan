@@ -594,6 +594,17 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
     /// <inheritdoc />
     public ulong? DeviceOf(string path) => TryStat(path, out var stat) ? stat.Device : null;
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Only Windows names an entry online-only, so only there is anything to
+    /// free.
+    /// </remarks>
+    public string? FreeAgain(ScanEntry entry)
+    {
+        ThrowHelper.ThrowIfNull(entry);
+        return OperatingSystem.IsWindows() ? WindowsInterop.FreeAgain(entry.FullPath) : null;
+    }
+
     /// <summary>
     /// The revalidation stat (architecture 06 §1): size, mtime, identity —
     /// compared before and after a read to detect mid-read change.

@@ -22,7 +22,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// not read, is not the provider failing and stops nothing. The provider's
 /// bits, which say whether the content is here and whether the person wants
 /// it kept here, are not kept with a file or a folder, so going between
-/// online-only and on the device is no change (ADR-0185 Amendment 1).
+/// online-only and on the device is no change (ADR-0185 Amendment 1). A
+/// file the run fetched, and read whole as the scan found it, is freed from
+/// the device again; one not fetched, or changed while it was read, is not,
+/// and a refusal to free it fails nothing (ADR-0185 Amendment 2).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -271,6 +274,94 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
                 CancellationToken.None);
 
         Assert.AreEqual(first.RootTreeObjectId, second.RootTreeObjectId, "the folder's tree is the one it had");
+    }
+
+    [TestMethod]
+    public async Task AFileTheRunFetched_IsFreedAgain_AndNoOtherIs()
+    {
+        var source = new FakeFileSystemSource();
+        Online(source, "fetched.bin", 1);
+        source.AddFile("local.bin", Deterministic(4_000, 2));
+        Online(source, "unfetched.bin", 3).OpenFailure = new IOException(TimedOut);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        // Only what the run itself fetched. A file on the device was never
+        // the provider's to free, and one not fetched is as it was.
+        Assert.AreEqual("fetched.bin", Assert.ContainsSingle(source.FreedPaths));
+    }
+
+    [TestMethod]
+    public async Task AnUnchangedOnlineOnlyFile_IsNotFreedAgainByALaterBackup()
+    {
+        var source = new FakeFileSystemSource();
+        Online(source, "kept.bin", 1);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, 0xB2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray(),
+                    ParentSnapshots = [Enumerable.Repeat((byte)0xA1, 16).ToArray()],
+                },
+                CancellationToken.None);
+
+        // The later backup fetched nothing, so it has nothing to give back:
+        // whatever the person did with the file since is theirs.
+        Assert.AreEqual("kept.bin", Assert.ContainsSingle(source.FreedPaths));
+    }
+
+    [TestMethod]
+    public async Task AFileThatChangedOrWasReplacedWhileFetched_IsNotFreedAgain()
+    {
+        // Freeing one the person was writing, or another object at its name,
+        // would act on something the run did not read whole.
+        var source = new FakeFileSystemSource();
+        Online(source, "edited.bin", 1).RevalidationChangesRemaining = 5;
+        Online(source, "replaced.bin", 2).SubstitutedIdentity = new ScanIdentity(Device: 7, FileId: 9_999, LinkCount: 1);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var published = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        Assert.HasCount(2, published.Files);
+        Assert.IsEmpty(source.FreedPaths);
+    }
+
+    [TestMethod]
+    public async Task AFreeingRefused_FailsNothing()
+    {
+        var source = new FakeFileSystemSource();
+        Online(source, "kept-here.bin", 1).FreeRefusal = "The cloud file provider is not running.";
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var published = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        Assert.AreEqual("kept-here.bin", Assert.ContainsSingle(published.Files).RelativePath);
+        Assert.IsEmpty(published.Failures);
+        Assert.AreEqual("kept-here.bin", Assert.ContainsSingle(source.FreedPaths));
     }
 
     private const uint Archive = 0x20;

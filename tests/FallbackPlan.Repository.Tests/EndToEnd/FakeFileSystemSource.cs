@@ -97,6 +97,9 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
         /// <summary>Whether the scan reports this node's content as not on this device (an online-only file).</summary>
         public bool OnlineOnly { get; set; }
+
+        /// <summary>When set, freeing this node again is refused with these words.</summary>
+        public string? FreeRefusal { get; set; }
     }
 
     private readonly Dictionary<string, Node> _nodes = [];
@@ -115,6 +118,9 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
     /// <summary>Every path whose content was opened — the short-circuit oracle (NFR-PERF-003).</summary>
     public List<string> OpenedPaths { get; } = [];
+
+    /// <summary>Every path the run asked to free again (ADR-0185 Amendment 2).</summary>
+    public List<string> FreedPaths { get; } = [];
 
     /// <summary>
     /// A folder's own captured metadata, by its path; the root's is under the
@@ -152,6 +158,12 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
     /// <summary>One fake volume: every node reports the device its identities carry.</summary>
     public ulong? DeviceOf(string path) => 7;
+
+    public string? FreeAgain(ScanEntry entry)
+    {
+        FreedPaths.Add(entry.FullPath);
+        return _nodes.TryGetValue(entry.FullPath, out var node) ? node.FreeRefusal : null;
+    }
 
     public RevalidationProbe? Revalidate(ScanEntry entry)
     {
