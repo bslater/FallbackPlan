@@ -92,14 +92,26 @@ internal static class UsnRecords
 internal sealed class JournalChanges
 {
     private readonly HashSet<ulong> _folders = [];
-    private readonly HashSet<ulong> _files = [];
+    private readonly Dictionary<ulong, HashSet<ulong>> _files = [];
     private readonly HashSet<ulong> _gone = [];
 
     /// <summary>The folders whose listing or own metadata changed, by identity.</summary>
     public IReadOnlySet<ulong> Folders => _folders;
 
     /// <summary>The files changed, by identity.</summary>
-    public IReadOnlySet<ulong> Files => _files;
+    public IReadOnlyCollection<ulong> Files => _files.Keys;
+
+    /// <summary>
+    /// The files changed through a name in a folder <paramref name="inTheSet"/>
+    /// holds. Only those are opened to find their other names, so a file
+    /// another program is writing elsewhere on the volume is never held open
+    /// under it.
+    /// </summary>
+    public IEnumerable<ulong> FilesIn(Func<ulong, bool> inTheSet)
+    {
+        ArgumentNullException.ThrowIfNull(inTheSet);
+        return _files.Where(file => file.Value.Any(inTheSet)).Select(static file => file.Key);
+    }
 
     /// <summary>The entries deleted, folders and files, by identity.</summary>
     public IReadOnlySet<ulong> Gone => _gone;
@@ -110,7 +122,19 @@ internal sealed class JournalChanges
         // Whatever changed, the folder holding the entry lists it, and its
         // tree names the entry's version.
         _folders.Add(record.ParentId);
-        (record.IsDirectory ? _folders : _files).Add(record.FileId);
+        if (record.IsDirectory)
+        {
+            _folders.Add(record.FileId);
+        }
+        else if (_files.TryGetValue(record.FileId, out var holding))
+        {
+            holding.Add(record.ParentId);
+        }
+        else
+        {
+            _files[record.FileId] = [record.ParentId];
+        }
+
         if (record.IsDeleted)
         {
             _gone.Add(record.FileId);

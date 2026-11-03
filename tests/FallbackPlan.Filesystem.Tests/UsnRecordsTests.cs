@@ -12,8 +12,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// as long as it says. A record of any other version, or one that runs past
 /// the buffer, makes the read unreadable, so the run walks in full. Every
 /// record names the folder holding its entry; a folder's own record names
-/// the folder too; and an entry deleted is known gone, so that not finding
-/// it, or a record from inside it, is not a doubt.
+/// the folder too; an entry deleted is known gone, so that not finding it,
+/// or a record from inside it, is not a doubt; and only a file changed in
+/// the set's folders is to be opened to find its other names.
 /// </summary>
 /// <remarks>
 /// The buffers are built here byte by byte, so this runs on every platform:
@@ -102,6 +103,20 @@ public sealed class UsnRecordsTests
         CollectionAssert.AreEquivalent(new ulong[] { 0x5 }, changes.Folders.ToArray());
         CollectionAssert.AreEquivalent(new ulong[] { 0x11 }, changes.Files.ToArray(), "a file may have other names, in other folders");
         Assert.IsEmpty(changes.Gone);
+    }
+
+    [TestMethod]
+    public void Changes_OnlyAFileChangedInTheSetsFolders_IsToBeOpened()
+    {
+        var changes = new JournalChanges();
+        changes.Add(new UsnRecord(1, 0x11, 0x5, DataExtend, 0x20, "ours.txt"));
+        changes.Add(new UsnRecord(2, 0x21, 0x7, DataExtend, 0x20, "another-programs.tmp"));
+        changes.Add(new UsnRecord(3, 0x31, 0x7, FileCreate, 0x20, "moved-in.txt"));
+        changes.Add(new UsnRecord(4, 0x31, 0x5, FileCreate, 0x20, "moved-in.txt"));
+
+        CollectionAssert.AreEquivalent(
+            new ulong[] { 0x11, 0x31 }, changes.FilesIn(folder => folder == 0x5).ToArray(),
+            "a file with any name in the set's folders, and no other");
     }
 
     [TestMethod]

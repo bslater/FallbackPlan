@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-011 (new: on Windows, the folders of a set that changed on an NTFS volume since a place in its change journal are named from the journal, every name of a changed file counted, and a place the journal cannot answer for certain is no answer)
+**Requirements:** FR-SNP-011 (new: on Windows, the folders of a set that changed on an NTFS volume since a place in its change journal are named from the journal, every name of a changed file counted, and a place the journal cannot answer for certain is no answer); FR-SNP-011 (amended by [Amendment 1](#amendment-1-2026-11--only-a-file-in-the-sets-folders-is-opened): only a file changed in the set's folders is opened to find its other names)
 **Related:** [architecture 06 §4](../architecture/06-filesystem-capture.md#4-change-detection) (journals are hints only, and a full walk follows any break in one), [ADR-0186](0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) (a run told which folders changed walks only those)
 
 **Built:**
@@ -73,3 +73,19 @@ Reading a journal takes a handle to the volume, which the system account and an 
 - **Watch for changes while the service runs.** A watcher misses everything while the service is not running, and overflows under load. The journal is the volume's own, and keeps what a watcher would miss.
 - **Move a place up to the oldest record the journal holds.** The records between are gone, so what changed then is unknown. A full walk is the only honest answer.
 - **Name only the folder a record names.** A file changed through one of its names would keep its old version under the others, until a full walk.
+
+## Amendment 1 (2026-11) — only a file in the set's folders is opened
+
+### Context
+
+Once the service asked the journal on Windows (ADR-0188), backups in the suites failed with "access to the path is denied" while other backups on the same volume asked it too. Each answer opened every file the journal named anywhere on the volume, to count its names. A program replacing or deleting a file while another holds it open is refused, so the answer for one set could fail another program's write.
+
+### Decision
+
+The folders the records name are found first. Only a file changed through a name in one of the set's folders is opened to find its other names. A file elsewhere on the volume is never opened.
+
+### Consequences
+
+- **A backup's answer opens only the set's own files**, which the backup reads anyway, and folders, briefly, to find where they are.
+- **A file with one name inside the set and another outside it, changed through the outside one, is not named.** The next full walk, at least daily, finds it.
+- **A folder elsewhere is still opened for a moment** to find its path. A program deleting that folder at that moment sees it gone once the handle closes.
