@@ -14,7 +14,8 @@ namespace FallbackPlan.Cli.Tests;
 /// on (ADR-0178 Amendment 1), and that counts a folder the run would make
 /// apart (ADR-0178 Amendment 4). Its plan names a file in the run's way that
 /// an immutable or append-only flag keeps where it stands, unless the run
-/// keeps both (ADR-0180 Amendment 6).
+/// keeps both (ADR-0180 Amendment 6), and its run fails such a file alone
+/// and keeps its receipt (ADR-0180 Amendment 7).
 /// </summary>
 /// <remarks>
 /// The disk is the flow's own: <c>DirectGateway.AvailableBytesInFlow</c>
@@ -88,6 +89,45 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
             var keepingBoth = await _cli.RunAsync("restore", snapshot, "--output", destination, "--existing", "rename", "--plan");
             Assert.DoesNotContain("immutable", keepingBoth.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(destination);
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a file's immutable flag")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Restore_OverAFileAFlagKeepsWhereItStands_FailsThatFileAlone_AndKeepsItsReceipt()
+    {
+        if (!FileFlags.Settable(EntryKind.File).HasFlag(FileFlagBits.Immutable))
+        {
+            Assert.Inconclusive("This account may not set a file immutable: Linux needs CAP_LINUX_IMMUTABLE.");
+        }
+
+        var snapshot = await BackUpAsync();
+        var destination = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "live")).FullName;
+        var inTheWay = Path.Combine(destination, "one.txt");
+        await File.WriteAllTextAsync(inTheWay, "as it stands");
+        try
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                DiskFlags.SetOnMacOs(inTheWay, DiskFlags.DarwinImmutable);
+            }
+            else
+            {
+                DiskFlags.AddOnLinux(inTheWay, DiskFlags.LinuxImmutable);
+            }
+
+            var restore = await _cli.RunAsync("restore", snapshot, "--output", destination);
+
+            Assert.AreNotEqual(0, restore.ExitCode, restore.All);
+            Assert.Contains("failed one.txt", restore.Output, StringComparison.Ordinal);
+            Assert.Contains("receipt:", restore.Output, StringComparison.Ordinal);
+            Assert.AreEqual("second", await File.ReadAllTextAsync(Path.Combine(destination, "nested", "two.txt")), "the run goes on");
+            Assert.AreEqual("as it stands", await File.ReadAllTextAsync(inTheWay));
         }
         finally
         {

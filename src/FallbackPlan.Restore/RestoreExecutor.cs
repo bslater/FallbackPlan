@@ -813,7 +813,14 @@ public sealed class RestoreExecutor(
         ThrowHelper.ThrowIfNull(options);
 
         using var activity = FallbackPlan.Domain.Diagnostics.EngineDiagnostics.Activities.StartActivity("restore");
-        Directory.CreateDirectory(outputDirectory);
+
+        // A run whose own folder cannot be made writes nothing, and says why
+        // of each item rather than ending without a receipt (ADR-0180
+        // Amendment 7).
+        if (Refusal(() => Directory.CreateDirectory(outputDirectory)) is { } outputRefused)
+        {
+            return Refused(plan, Path.GetFullPath(outputDirectory), options, NothingWritten(outputRefused));
+        }
 
         // Resolved once, and every destination is checked against it. A
         // repository is not a trusted source of path text: the threat model
@@ -847,7 +854,11 @@ public sealed class RestoreExecutor(
                 $"{quarantineRefusal}, at the run's quarantine folder {options.QuarantineDirectory}/{quarantineRun}");
         }
 
-        Directory.CreateDirectory(root);
+        if (Refusal(() => Directory.CreateDirectory(root)) is { } rootRefused)
+        {
+            return Refused(plan, root, options, NothingWritten(rootRefused));
+        }
+
         var engine = new RestoreEngine(reader);
         var spools = RestorePlanner.SpoolsOf(plan.Items);
         var items = new List<ReceiptItem>();
@@ -1013,7 +1024,12 @@ public sealed class RestoreExecutor(
                 // Whatever already stands here keeps its own metadata: no
                 // existing-file policy reaches a folder (ADR-0086).
                 var found = Directory.Exists(destination);
-                Directory.CreateDirectory(destination);
+                if (Refusal(() => Directory.CreateDirectory(destination)) is { } folderRefused)
+                {
+                    items.Add(new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = folderRefused });
+                    continue;
+                }
+
                 items.Add(new ReceiptItem { Path = item.Path, Outcome = "restored", Bytes = 0 });
                 folders.Add(new Folder(
                     items.Count - 1, item, destination, found,
@@ -1065,7 +1081,11 @@ public sealed class RestoreExecutor(
             }
 
             var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            if (Refusal(() => Directory.CreateDirectory(Path.GetDirectoryName(destination)!)) is { } parentRefused)
+            {
+                items.Add(new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = parentRefused });
+                continue;
+            }
 
             // A volume that takes two of the snapshot's names for one finds
             // the first standing where the second lands. That is the run's
@@ -1174,14 +1194,9 @@ public sealed class RestoreExecutor(
                         // destination, and the run carries on. A folder at
                         // the spool's name is refused as unauthorised, not
                         // as an I/O fault.
-                        if (File.Exists(spool))
-                        {
-                            File.Delete(spool);
-                        }
-
                         items.Add(new ReceiptItem
                         {
-                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message,
+                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = Joined(exception.Message, LeftBehind(spool)),
                         });
                         continue;
                     }
@@ -1192,20 +1207,15 @@ public sealed class RestoreExecutor(
                         // and the receipt still accounts for what landed. The
                         // break leaves the switch; the check at the top of the
                         // loop ends the run.
-                        if (File.Exists(spool))
-                        {
-                            File.Delete(spool);
-                        }
-
+                        _ = LeftBehind(spool);
                         break;
                     }
 
                     if (!result.Success)
                     {
-                        File.Delete(spool);
                         items.Add(new ReceiptItem
                         {
-                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = result.FailureDetail,
+                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = Joined(result.FailureDetail, LeftBehind(spool)),
                         });
                         continue;
                     }
@@ -1218,11 +1228,10 @@ public sealed class RestoreExecutor(
                     // the run instead of failing the item.
                     if (Directory.Exists(destination))
                     {
-                        File.Delete(spool);
                         items.Add(new ReceiptItem
                         {
                             Path = item.Path, Outcome = "failed", Bytes = 0,
-                            Detail = "a directory occupies this destination; no existing-file policy applies to a directory",
+                            Detail = Joined("a directory occupies this destination; no existing-file policy applies to a directory", LeftBehind(spool)),
                         });
                         continue;
                     }
@@ -1233,11 +1242,10 @@ public sealed class RestoreExecutor(
                     {
                         if (options.ExistingDestination == ExistingDestinationPolicy.Fail)
                         {
-                            File.Delete(spool);
                             items.Add(new ReceiptItem
                             {
                                 Path = item.Path, Outcome = "failed", Bytes = 0,
-                                Detail = "a file is already at this destination and the policy is to fail",
+                                Detail = Joined("a file is already at this destination and the policy is to fail", LeftBehind(spool)),
                             });
                             continue;
                         }
@@ -1250,16 +1258,30 @@ public sealed class RestoreExecutor(
                             // not ours to destroy.
                             if (!TryDisplace(chosen, item.Path, options, out var refuge, out var displacedRefusal))
                             {
-                                File.Delete(spool);
                                 items.Add(new ReceiptItem
                                 {
-                                    Path = item.Path, Outcome = "failed", Bytes = 0, Detail = displacedRefusal,
+                                    Path = item.Path, Outcome = "failed", Bytes = 0, Detail = Joined(displacedRefusal, LeftBehind(spool)),
                                 });
                                 continue;
                             }
 
-                            Directory.CreateDirectory(Path.GetDirectoryName(refuge)!);
-                            File.Move(destination, refuge);
+                            // A flag on the file, or on its folder, refuses
+                            // the move, which fails this item alone (ADR-0180
+                            // Amendment 7).
+                            if (Refusal(() =>
+                                {
+                                    Directory.CreateDirectory(Path.GetDirectoryName(refuge)!);
+                                    File.Move(destination, refuge);
+                                }) is { } notMoved)
+                            {
+                                items.Add(new ReceiptItem
+                                {
+                                    Path = item.Path, Outcome = "failed", Bytes = 0,
+                                    Detail = Joined($"what stands here was not moved aside: {notMoved}", LeftBehind(spool)),
+                                });
+                                continue;
+                            }
+
                             displaced.Add(item.Path);
                             Log.DisplacedExisting(_logger, new LogPath(destination), new LogPath(refuge));
                         }
@@ -1273,10 +1295,9 @@ public sealed class RestoreExecutor(
                             // construction.
                             if (!TryBesideName(destination, options.NowUnixMilliseconds, target, out landing, out var besideRefusal))
                             {
-                                File.Delete(spool);
                                 items.Add(new ReceiptItem
                                 {
-                                    Path = item.Path, Outcome = "failed", Bytes = 0, Detail = besideRefusal,
+                                    Path = item.Path, Outcome = "failed", Bytes = 0, Detail = Joined(besideRefusal, LeftBehind(spool)),
                                 });
                                 continue;
                             }
@@ -1295,14 +1316,9 @@ public sealed class RestoreExecutor(
                         // The landing itself can fault — something raced into
                         // the checked path, or the platform refused the write.
                         // Contained like every other per-item fault.
-                        if (File.Exists(spool))
-                        {
-                            File.Delete(spool);
-                        }
-
                         items.Add(new ReceiptItem
                         {
-                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message,
+                            Path = item.Path, Outcome = "failed", Bytes = 0, Detail = Joined(exception.Message, LeftBehind(spool)),
                         });
                         continue;
                     }
@@ -2279,6 +2295,39 @@ public sealed class RestoreExecutor(
     private static bool MadeAJunction(FileVersionManifest manifest, ReadOnlyMemory<byte> linkTarget, RestoreTargetProfile target) =>
         target.MakesJunctions
         && MountPoints.IsJunction(manifest.LinkForm, manifest.CaptureDiagnostics, System.Text.Encoding.UTF8.GetString(linkTarget.Span));
+
+    /// <summary>
+    /// What the platform said in refusing <paramref name="write"/>, or null
+    /// when it was done: a refusal where something already stands fails the
+    /// item it meets, not the run (ADR-0180 Amendment 7).
+    /// </summary>
+    private static string? Refusal(Action write)
+    {
+        try
+        {
+            write();
+            return null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return exception.Message;
+        }
+    }
+
+    /// <summary>
+    /// Removes the spool a failed item wrote, and names it where its folder
+    /// will not let it go: an append-only folder lets a name be made in it
+    /// and none removed, so the person who clears the flag knows what to take
+    /// away (ADR-0180 Amendment 7).
+    /// </summary>
+    private static string? LeftBehind(string spool) =>
+        File.Exists(spool) && Refusal(() => File.Delete(spool)) is { } refused
+            ? $"its spool {Path.GetFileName(spool)} stays beside it: {refused}"
+            : null;
+
+    /// <summary>A whole run's refusal, when its own folder could not be made.</summary>
+    private static string NothingWritten(string refusal) =>
+        $"nothing was written, since the run's folder could not be made: {refusal}";
 
     private static string? Joined(params string?[] parts) =>
         parts.Where(part => part is not null).ToList() is { Count: > 0 } present ? string.Join("; ", present) : null;

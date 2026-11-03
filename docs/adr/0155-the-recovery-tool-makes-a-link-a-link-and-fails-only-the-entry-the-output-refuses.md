@@ -43,6 +43,8 @@ The output's own calls are each contained to the entry they serve:
 
 Where the output refuses one, the entry fails with a note naming it and the platform's words, and the recovery continues. A folder that cannot be made fails with the subtree it would have held.
 
+> **2026-11 ([ADR-0180 Amendment 7](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-7-2026-11--a-refusal-where-something-stands-fails-the-item-it-meets-not-the-run)).** Removing a file's spool on its way out was not contained. An append-only folder lets the spool be made and neither renamed into place nor removed, so the recovery ended there. The file now fails alone, and its note names the spool the folder keeps.
+
 A store's fault is not contained. It is an I/O error too, but it says the archive cannot be read, not that one name cannot be written. It still ends the run, as it did.
 
 ## Consequences
@@ -73,3 +75,4 @@ A store's fault is not contained. It is an I/O error too, but it says the archiv
 | 2026-10 | Accepted | Built in one slice, tests first. The recovery tool makes a symlink a link where links can be made, replacing a file or link at its name and giving it its own metadata onto the link. A write the output refuses at an entry's name fails that entry alone, with a note, where it ended the run. |
 | 2026-10 | Accepted | Noted by [ADR-0156](0156-the-recovery-tool-gives-a-hard-link-group-back-as-one-file-by-the-executors-rule.md): the tool now gives a hard-link group back as one file. |
 | 2026-10 | Accepted (related) | [ADR-0181 Amendment 1](0181-a-restore-on-windows-makes-a-symlink-where-the-account-may.md#amendment-1-2026-10--the-recovery-tool-makes-a-link-on-windows-too): the tool makes a link on Windows where the account may, as the executor does, and skips it with its note where it may not. |
+| 2026-11 | Accepted | Noted by [ADR-0180 Amendment 7](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-7-2026-11--a-refusal-where-something-stands-fails-the-item-it-meets-not-the-run): a spool the output will not let go no longer ends the recovery; the file fails alone and its note names the spool. |

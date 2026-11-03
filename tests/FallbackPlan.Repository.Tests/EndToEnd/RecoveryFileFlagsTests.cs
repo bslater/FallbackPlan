@@ -18,6 +18,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// later name of a hard-link group is made before its file can refuse one,
 /// and a folder's last in its settle, after its times. Nothing is set
 /// through a link put where a file landed, and nothing by a run that stops.
+/// A file whose spool an append-only folder keeps fails alone, and its note
+/// names the spool (ADR-0180 Amendment 7).
 /// </summary>
 /// <remarks>
 /// The tool has no target but this platform, so these cases set flags for
@@ -170,6 +172,37 @@ public sealed class RecoveryFileFlagsTests : IDisposable
 
         Assert.AreEqual(FileFlagBits.None, OnDisk(Path.Combine(output, "docs", "a.bin")), "the file landed, and its flag waits");
         Assert.AreEqual(FileFlagBits.None, OnDisk(Path.Combine(output, "docs")));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux's append-only folder lets a name be made in it but none renamed or removed")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task RecoveryRestore_IntoAnAppendOnlyFolder_FailsTheFileAlone_AndNotesTheSpoolItKeeps()
+    {
+        // The file's spool is made in the folder, and neither renamed into
+        // place nor removed after: the file fails alone, as any write the
+        // output refuses does (ADR-0155; ADR-0180 Amendment 7).
+        if (!FileFlags.HoldsImmutableCapability)
+        {
+            Assert.Inconclusive("This process may not set a folder append-only: Linux needs CAP_LINUX_IMMUTABLE.");
+        }
+
+        var source = new FakeFileSystemSource();
+        source.AddFile("logs/new.txt", Deterministic(700, 7));
+        source.AddFile("free/c.txt", Deterministic(700, 8));
+        var output = Path.Combine(_root, "restored");
+        var logs = Directory.CreateDirectory(Path.Combine(output, "logs")).FullName;
+        DiskFlags.AddOnLinux(logs, DiskFlags.LinuxAppendOnly);
+
+        var report = await RestoreIntoAsync(source, output);
+
+        var note = report.Notes.Single(note => note.Kind == RecoveryNoteKind.WriteFailed);
+        Assert.AreEqual("logs/new.txt", note.Path);
+        var spool = RestorePaths.SpoolName("new.txt", "recover");
+        Assert.Contains(spool, note.Detail!, StringComparison.Ordinal);
+        Assert.IsTrue(File.Exists(Path.Combine(logs, spool)), "the folder keeps the spool the note names");
+        Assert.AreEqual(1, report.Failed);
+        Assert.IsTrue(File.Exists(Path.Combine(output, "free", "c.txt")), "the tool goes on past the folder");
     }
 
     public void Dispose()

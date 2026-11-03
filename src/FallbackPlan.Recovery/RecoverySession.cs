@@ -1109,9 +1109,33 @@ public sealed class RecoverySession : IDisposable
             }
             finally
             {
+                Unspool(spool, path);
+            }
+        }
+
+        // An append-only folder lets the spool be made in it and neither
+        // renamed nor removed, so the file fails alone and its note names
+        // what stays, for whoever clears the flag (ADR-0180 Amendment 7).
+        void Unspool(string spool, string path)
+        {
+            try
+            {
                 if (File.Exists(spool))
                 {
                     File.Delete(spool);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                var stays = $"its spool {Path.GetFileName(spool)} stays beside it: {exception.Message}";
+                var at = notes.FindLastIndex(note => note.Path == path);
+                if (at >= 0 && notes[at].Kind == RecoveryNoteKind.WriteFailed)
+                {
+                    notes[at] = notes[at] with { Detail = $"{notes[at].Detail}; {stays}" };
+                }
+                else
+                {
+                    notes.Add(new RecoveryNote(RecoveryNoteKind.WriteFailed, path, Detail: stays));
                 }
             }
         }
