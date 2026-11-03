@@ -3,6 +3,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Index;
 using System.Diagnostics;
+using System.Text;
 using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -54,6 +55,16 @@ public readonly record struct CatalogueFolderEntry(string Name, EntryKind Kind, 
 /// that tree states, or <see langword="null"/> when it states none.
 /// </summary>
 public sealed record CatalogueDirectoryVersion(ObjectId TreeId, ulong? AccessedAt);
+
+/// <summary>
+/// A folder a snapshot holds, read whole (ADR-0186): its head tree, what
+/// every folder at and below it holds, and the access times those trees
+/// state.
+/// </summary>
+public sealed record CatalogueSubtree(
+    ObjectId TreeId,
+    IReadOnlyList<(ObjectId TreeId, IReadOnlyList<CatalogueFolderEntry> Entries)> Folders,
+    IReadOnlyList<(ObjectId TreeId, ulong AccessedAt)> AccessTimes);
 
 /// <summary>
 /// What the reuse decision needs to know about an object the index already
@@ -1321,6 +1332,101 @@ public sealed class Catalogue : IDisposable
         command.CommandText = "SELECT accessed_at FROM directory_access_times WHERE object_id = $tree;";
         command.Parameters.AddWithValue("$tree", tree.ToArray());
         return new CatalogueDirectoryVersion(tree, command.ExecuteScalar() is long accessedAt ? unchecked((ulong)accessedAt) : null);
+    }
+
+    /// <summary>
+    /// The folder a snapshot holds at <paramref name="path"/>, read whole, or
+    /// <see langword="null"/> where the snapshot holds none there, or where
+    /// any tree at or below it would have been written as a chain: its
+    /// continuations no row names, so a snapshot that reused it could not say
+    /// it is made of them (ADR-0186). The root is the empty string.
+    /// </summary>
+    /// <remarks>
+    /// One read, so a snapshot forgotten on another connection is forgotten
+    /// wholly before it or wholly after: a folder found here is found with
+    /// everything below it (ADR-0151 §4).
+    /// </remarks>
+    /// <param name="snapshotId">The snapshot's 16-byte id.</param>
+    /// <param name="path">The folder's path in the snapshot.</param>
+    /// <param name="shardBudget">
+    /// The budget a tree's entries were sharded by: a folder whose entries'
+    /// estimate, a name's bytes and 48 each, passes it was split.
+    /// </param>
+    public CatalogueSubtree? ReadSubtree(ReadOnlySpan<byte> snapshotId, string path, int shardBudget)
+    {
+        ThrowHelper.ThrowIfNull(path);
+
+        // Deferred, and only read: the catalogue's write lock is never taken.
+        using var transaction = _connection.BeginTransaction(deferred: true);
+        ObjectId head;
+        using (var find = _connection.CreateCommand())
+        {
+            find.Transaction = transaction;
+            find.CommandText = $"""
+                {FolderAt}
+                SELECT tree_id FROM walk WHERE rest IS NULL;
+                """;
+            BindFolder(find, snapshotId, path);
+            if (find.ExecuteScalar() is not byte[] found)
+            {
+                return null;
+            }
+
+            head = ObjectId.FromBytes(found);
+        }
+
+        var folders = new Dictionary<ObjectId, (List<CatalogueFolderEntry> Entries, long Estimate)>();
+        var accessTimes = new List<(ObjectId TreeId, ulong AccessedAt)>();
+        using (var read = _connection.CreateCommand())
+        {
+            read.Transaction = transaction;
+            read.CommandText = $"""
+                WITH RECURSIVE below(tree_id) AS (
+                    SELECT $head
+                    UNION
+                    SELECT e.object_id FROM below b CROSS JOIN folder_entries e ON e.tree_id = b.tree_id
+                    WHERE e.entry_kind = {(int)EntryKind.DirectoryPlaceholder}
+                )
+                SELECT b.tree_id, a.accessed_at, e.name, e.entry_kind, e.object_id
+                FROM below b
+                LEFT JOIN directory_access_times a ON a.object_id = b.tree_id
+                LEFT JOIN folder_entries e ON e.tree_id = b.tree_id;
+                """;
+            read.Parameters.AddWithValue("$head", head.ToArray());
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+            {
+                var tree = ObjectId.FromBytes((byte[])reader.GetValue(0));
+                if (!folders.TryGetValue(tree, out var folder))
+                {
+                    folder = ([], 0);
+                    if (!reader.IsDBNull(1))
+                    {
+                        accessTimes.Add((tree, unchecked((ulong)reader.GetInt64(1))));
+                    }
+                }
+
+                if (!reader.IsDBNull(2))
+                {
+                    var name = reader.GetString(2);
+                    folder.Entries.Add(new CatalogueFolderEntry(
+                        name, (EntryKind)reader.GetInt32(3), ObjectId.FromBytes((byte[])reader.GetValue(4))));
+                    folder.Estimate += Encoding.UTF8.GetByteCount(name) + ObjectId.Size + 16;
+                    if (folder.Estimate > shardBudget)
+                    {
+                        return null;
+                    }
+                }
+
+                folders[tree] = folder;
+            }
+        }
+
+        transaction.Commit();
+        return new CatalogueSubtree(
+            head,
+            [.. folders.Select(static folder => (folder.Key, (IReadOnlyList<CatalogueFolderEntry>)folder.Value.Entries))],
+            accessTimes);
     }
 
     /// <summary>

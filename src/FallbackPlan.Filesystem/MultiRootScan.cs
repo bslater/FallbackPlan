@@ -99,6 +99,7 @@ public static class MultiRootScan
                     ScanEvent.LeaveDirectory leave =>
                         new ScanEvent.LeaveDirectory(Prefix(leave.Entry, label)),
                     ScanEvent.Leaf leaf => new ScanEvent.Leaf(Prefix(leaf.Entry, label)),
+                    ScanEvent.UnchangedDirectory unchanged => new ScanEvent.UnchangedDirectory(Prefix(unchanged.Entry, label)),
                     ScanEvent.Failure failure => new ScanEvent.Failure(failure.Detail with
                     {
                         RelativePath = failure.Detail.RelativePath.Length == 0

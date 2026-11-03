@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
@@ -206,6 +207,52 @@ internal sealed class TargetedRecordReader(
         try
         {
             return FileVersionManifestCodec.Decode(plaintext!);
+        }
+        catch (Exception exception) when (exception is ManifestValidationException or FormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// A snapshot's manifest, or <see langword="null"/> when it cannot be
+    /// fetched, authenticated, or decoded.
+    /// </summary>
+    public ValueTask<SnapshotManifest?> TryReadSnapshotAsync(ObjectId objectId, CancellationToken cancellationToken) =>
+        TryDecodeAsync(objectId, ObjectType.SnapshotManifest, static plaintext => SnapshotManifestCodec.Decode(plaintext).Manifest, cancellationToken);
+
+    /// <summary>
+    /// The configuration a snapshot was captured under, or
+    /// <see langword="null"/> when it cannot be read.
+    /// </summary>
+    public ValueTask<PolicyManifest?> TryReadPolicyAsync(ObjectId objectId, CancellationToken cancellationToken) =>
+        TryDecodeAsync(objectId, ObjectType.PolicyManifest, PolicyManifestCodec.Decode, cancellationToken);
+
+    /// <summary>
+    /// The paths an error manifest names, each as the snapshot spells it,
+    /// or <see langword="null"/> when it cannot be read.
+    /// </summary>
+    public ValueTask<IReadOnlyList<string>?> TryReadFailedPathsAsync(ObjectId objectId, CancellationToken cancellationToken) =>
+        TryDecodeAsync<IReadOnlyList<string>>(
+            objectId,
+            ObjectType.ErrorManifest,
+            static plaintext => [.. ErrorManifestCodec.Decode(plaintext).Failures.Select(static failure =>
+                string.Join('/', failure.PathComponents.Select(static component => Encoding.UTF8.GetString(component.Span))))],
+            cancellationToken);
+
+    private async ValueTask<T?> TryDecodeAsync<T>(
+        ObjectId objectId, ObjectType expectedType, Func<ReadOnlyMemory<byte>, T> decode, CancellationToken cancellationToken)
+        where T : class
+    {
+        var (outcome, plaintext) = await ReadAsync(objectId, expectedType, cancellationToken).ConfigureAwait(false);
+        if (outcome != RecordReadOutcome.Ok)
+        {
+            return null;
+        }
+
+        try
+        {
+            return decode(plaintext!);
         }
         catch (Exception exception) when (exception is ManifestValidationException or FormatException)
         {

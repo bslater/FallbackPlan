@@ -22,7 +22,8 @@ namespace FallbackPlan.Filesystem.Tests;
 /// directory junction is named a mount point, and a folder's symbolic link
 /// is not (ADR-0183 Amendment 1). A file whose Windows attributes say its
 /// content is not on this device is named online-only, and an ordinary file
-/// is not (FR-SNP-009, ADR-0185). Freeing a file again does nothing on Linux
+/// is not (FR-SNP-009, ADR-0185). A folder the run says is unchanged is
+/// named and not entered (FR-SNP-010, ADR-0186). Freeing a file again does nothing on Linux
 /// and macOS; on Windows a file no provider keeps is refused and left as it
 /// was, and a file the person pinned is never asked (ADR-0185 Amendment 2).
 /// </summary>
@@ -296,6 +297,22 @@ public sealed partial class LocalScanTests : IDisposable
         // No filter on this machine keeps the tag, so its content does not
         // open, and the read says so where a link would have kept nothing.
         Assert.Throws<IOException>(() => _source.OpenRead(entry));
+    }
+
+    [TestMethod]
+    public async Task Scan_AFolderTheRunSaysIsUnchanged_IsNamedAndNotEntered()
+    {
+        Write("docs/a.txt");
+        Write("docs/sub/b.txt");
+        Write("photos/c.jpg");
+
+        var events = await ScanAsync(new ScanOptions { Unchanged = path => path == "docs" });
+
+        var unchanged = Assert.ContainsSingle(events.OfType<ScanEvent.UnchangedDirectory>());
+        Assert.AreEqual("docs", unchanged.Entry.RelativePath);
+        Assert.AreEqual(ScanEntryKind.Directory, unchanged.Entry.Kind);
+        Assert.IsFalse(Paths(events).Any(path => path.Contains("docs/", StringComparison.Ordinal)), "nothing below it is scanned");
+        Assert.Contains("F photos/c.jpg", Paths(events));
     }
 
     [TestMethod]

@@ -87,6 +87,28 @@ public sealed class MultiRootStitchTests
     }
 
     [TestMethod]
+    public async Task MultiRootScan_AFolderNotWalked_IsNamedUnderItsRootsLabel()
+    {
+        // A run reuses a folder by its path in the snapshot, which under a
+        // set of several folders begins with the folder's label (ADR-0186).
+        var events = await StitchAsync(new Dictionary<string, ScanEvent[]>(StringComparer.Ordinal)
+        {
+            ["/src/docs"] =
+            [
+                new ScanEvent.EnterDirectory(Directory(string.Empty, "docs")),
+                new ScanEvent.UnchangedDirectory(Directory("quarterly", "quarterly")),
+                new ScanEvent.LeaveDirectory(Directory(string.Empty, "docs")),
+            ],
+            ["/src/photos"] = [
+                new ScanEvent.EnterDirectory(Directory(string.Empty, "photos")),
+                new ScanEvent.LeaveDirectory(Directory(string.Empty, "photos")),
+            ],
+        });
+
+        Assert.AreEqual("docs/quarterly", Assert.ContainsSingle(events.OfType<ScanEvent.UnchangedDirectory>()).Entry.RelativePath);
+    }
+
+    [TestMethod]
     public async Task MultiRootScan_AFailureBelowARoot_IsReportedUnderThatRootsLabel()
     {
         var events = await StitchAsync(new Dictionary<string, ScanEvent[]>(StringComparer.Ordinal)

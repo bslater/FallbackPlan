@@ -126,6 +126,13 @@ public abstract record ScanEvent
 
     /// <summary>A path that could not be captured (error-manifest material).</summary>
     public sealed record Failure(ScanFailure Detail) : ScanEvent;
+
+    /// <summary>
+    /// A directory the walk did not enter, because the run was told nothing
+    /// in it changed since the prior snapshot (ADR-0186). Nothing below it
+    /// follows.
+    /// </summary>
+    public sealed record UnchangedDirectory(ScanEntry Entry) : ScanEvent;
 }
 
 /// <summary>Scanner behaviour switches. Defaults are the architecture's rules.</summary>
@@ -158,6 +165,15 @@ public sealed record ScanOptions
 
     /// <summary>Whether to capture the Windows security descriptor.</summary>
     public bool CaptureSecurityDescriptors { get; init; } = true;
+
+    /// <summary>
+    /// Whether a directory, by its path as the snapshot spells it (the label
+    /// first, in a set of several folders), is one the run takes as the prior
+    /// snapshot held it. The walk does not enter it and names it with
+    /// <see cref="ScanEvent.UnchangedDirectory"/> (ADR-0186). Null enters
+    /// every directory.
+    /// </summary>
+    public Func<string, bool>? Unchanged { get; init; }
 }
 
 /// <summary>

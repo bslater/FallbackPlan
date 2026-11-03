@@ -119,6 +119,9 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
     /// <summary>Every path whose content was opened — the short-circuit oracle (NFR-PERF-003).</summary>
     public List<string> OpenedPaths { get; } = [];
 
+    /// <summary>Every folder whose children the walk listed, by its path in the fake; the root's is empty.</summary>
+    public List<string> ListedFolders { get; } = [];
+
     /// <summary>Every path the run asked to free again (ADR-0185 Amendment 2).</summary>
     public List<string> FreedPaths { get; } = [];
 
@@ -222,6 +225,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
 
     private IEnumerable<ScanEvent> WalkDirectory(string directory, int strip, ScanOptions options)
     {
+        ListedFolders.Add(directory);
         var prefix = directory.Length == 0 ? string.Empty : directory + "/";
 
         var children = _nodes.Keys
@@ -284,6 +288,12 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
                         ?? new EntryMetadata { ModifiedAt = 1_722_000_000_000, PosixMode = 0x1ED },
                     FullPath = childPath,
                 };
+
+                if (options.Unchanged?.Invoke(subject) == true)
+                {
+                    yield return new ScanEvent.UnchangedDirectory(entry);
+                    continue;
+                }
 
                 yield return new ScanEvent.EnterDirectory(entry);
 
