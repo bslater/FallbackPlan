@@ -91,6 +91,13 @@ public sealed record ScanEntry
     /// </para>
     /// </remarks>
     public SafeFileHandle? ContentHandle { get; init; }
+
+    /// <summary>
+    /// Whether the entry's content is not on this device: a cloud provider
+    /// keeps it, and reading it asks the provider to fetch it (an online-only
+    /// file, ADR-0185).
+    /// </summary>
+    public bool OnlineOnly { get; init; }
 }
 
 /// <summary>A per-path capture failure — an error-manifest entry, never an aborted snapshot.</summary>

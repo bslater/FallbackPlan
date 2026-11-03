@@ -48,6 +48,8 @@ The tag is read only where the bit is set, so an entry without a reparse point c
 - A folder a filter keeps is descended into, and what it holds is backed up.
 - A file whose tag no filter on the machine keeps does not open. Its read fails and is reported as any unreadable file's is, where it was kept as a link with nothing in it.
 - Reading a file a cloud provider keeps only as a placeholder may make the provider fetch it, as any program reading it would.
+
+  > **2026-11 ([ADR-0185](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md)).** Such a file is read only when it is new or changed. Once the provider fails to deliver one, the run fetches no other online-only file: each is named as not fetched, and the next backup fetches it again.
 - A backup taken before this record holds such a file as a link with no target. The next backup after it captures the file's content, as a file it had not held.
 
 ## What this does not do
@@ -241,3 +243,4 @@ The two are not alike. A junction is resolved on the machine that holds it, even
 | 2026-11 | Accepted (Amendment 3) | The recovery tool makes a junction by Amendment 2's rule, through the platform's calls or a junction maker its caller gives; one refused fails that entry alone, noted in the maker's words, and leaves nothing; a platform that makes none makes a symbolic link to the same path and notes it. `Recovery/RecoverySession`; `Recovery/RecoveryNote`; `Repository.Tests/RecoveryJunctionTests` |
 | 2026-11 | Accepted (Amendment 4) | The engine's restore makes a junction where the target makes junctions, whether or not the account may make a symbolic link. On such a target the planner no longer says every link will be skipped; the metadata's declaration counts the links it will skip, a link whose facts were not read among them, and holds a junction made without the permission to the rule a link is. The recovery tool still skips one. `Restore/RestoreExecutor`; `Restore/RestorePlan`; `Restore/RestoreMetadata`; `Repository.Tests/RestoreJunctionTests` |
 | 2026-11 | Accepted (Amendment 5) | The recovery tool makes a junction wherever a junction maker is to hand, whether or not the account may make a symbolic link; where it may not, a symbolic link is skipped as before, as is a junction no maker can make. Whether the account may can be given to the tool, so a case stands in for one that may not. `Recovery/RecoverySession`; `Repository.Tests/RecoveryJunctionTests` |
+| 2026-11 | Accepted (related) | [ADR-0185](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) stops a run fetching online-only files after the first whose fetch fails, naming each it passes; the next backup fetches them again |

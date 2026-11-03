@@ -103,6 +103,12 @@ internal static partial class Log
         Message = "Could not capture {Path}: {Reason} — the job continues and the snapshot records the gap")]
     internal static partial void FileFailed(ILogger logger, LogPath path, string reason);
 
+    [LoggerMessage(
+        EventId = 2013, Level = LogLevel.Warning,
+        Message = "Fetching the online-only file {Path} failed: {Reason} — this run fetches no other online-only "
+            + "file, names each it passes, and the next backup tries them again")]
+    internal static partial void OnlineOnlyNotDelivered(ILogger logger, LogPath path, string reason);
+
     // ---------------------------------------------------------------- blobs
 
     [LoggerMessage(

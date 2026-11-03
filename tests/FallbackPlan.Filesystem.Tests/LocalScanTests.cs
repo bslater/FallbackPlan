@@ -20,7 +20,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// A reparse point whose tag names no other path, as a deduplicated file's
 /// does, is captured as the file it is, never as a link (ADR-0183). A
 /// directory junction is named a mount point, and a folder's symbolic link
-/// is not (ADR-0183 Amendment 1).
+/// is not (ADR-0183 Amendment 1). A file whose Windows attributes say its
+/// content is not on this device is named online-only, and an ordinary file
+/// is not (FR-SNP-009, ADR-0185).
 /// </summary>
 [TestClass]
 public sealed partial class LocalScanTests : IDisposable
@@ -292,6 +294,36 @@ public sealed partial class LocalScanTests : IDisposable
         // No filter on this machine keeps the tag, so its content does not
         // open, and the read says so where a link would have kept nothing.
         Assert.Throws<IOException>(() => _source.OpenRead(entry));
+    }
+
+    [TestMethod]
+    public async Task Scan_AnOrdinaryFile_IsNotOnlineOnly()
+    {
+        Write("here.txt");
+
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.IsFalse(entry.OnlineOnly);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps the offline attribute")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_AFileMarkedOffline_IsOnlineOnly()
+    {
+        // Offline is the one of the three bits a test can set. A cloud
+        // provider's placeholder carries recall on data access, which only the
+        // provider's filter gives a file.
+        var path = Write("elsewhere.txt");
+        File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Offline);
+        Assert.IsTrue(
+            (File.GetAttributes(path) & FileAttributes.Offline) != 0,
+            "the premise: the file carries the offline bit");
+
+        var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
+
+        Assert.IsTrue(entry.OnlineOnly);
     }
 
     [TestMethod]

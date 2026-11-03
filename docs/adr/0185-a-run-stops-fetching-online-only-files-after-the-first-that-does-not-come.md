@@ -1,0 +1,75 @@
+# ADR-0185 — A run stops fetching online-only files after the first that does not come
+
+**Status:** Accepted
+**Date:** 2026-11
+**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched)
+**Related:** [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup), [ADR-0026](0026-phase-1-capture-shapes.md) (the capture failure reasons), [ADR-0183](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) (a file a filter keeps is read through the filter)
+
+**Built:**
+- The rule: `Domain/MetadataRules` says which Windows attribute bits make a file online-only.
+- The scan: `Filesystem.Local/LocalFileSystemSource` names an online-only file on the entry it builds.
+- The run: `Repository/SnapshotPublication` stops fetching after the first online-only file that does not come, and names each it passes.
+- The tests:
+  - `Repository.Tests/OnlineOnlyCaptureTests` — through a stand-in source, on every platform: a fetch that fails before its first byte or part-way stops the run opening any other online-only file, each named with the file that failed and why, while a file on the device is still backed up; a file gone, refused, or on the device that will not read stops nothing; the next backup fetches what was not fetched; an unchanged online-only file is not opened again.
+  - `Domain.Tests/OnlineOnlyAttributesTests` — offline, recall on open and recall on data access each make a file online-only; pinned, unpinned and a reparse point do not.
+  - `Filesystem.Tests/LocalScanTests` — an ordinary file is not online-only, and on Windows a file carrying the offline bit is.
+
+---
+
+## Context
+
+A cloud provider that syncs a folder can leave a file's content off the device and keep only a placeholder: an **online-only file**. On Windows the placeholder's attributes say so, with recall on data access, recall on open or offline. Reading it asks the provider to fetch the content, and the read waits while it does.
+
+Capture reads a file only when it is new or changed (NFR-PERF-003), judged by identity, size and modification time. A placeholder keeps those as the provider's copy has them, so an unchanged online-only file is never read and costs nothing.
+
+A new or changed one is read, and that read is a fetch. Where the provider does not deliver, the platform fails the read only once its own time-out has passed. That can happen because the provider is not running, is signed out or offline, or does not serve the account the service runs as. A report from the field measured about two minutes per file. Each such file then failed alone, as an unreadable file does (ADR-0026), after its own time-out.
+
+So a set reconfigured to take in a folder of 89 online-only files ran for about three hours to end with 89 gaps. All that time its progress stood at the last file.
+
+## Decision
+
+### 1. The scan names an online-only file
+
+On Windows a file is online-only where its attributes carry offline, recall on open or recall on data access. Pinned and unpinned say only what the person wants kept on the device. A reparse point says only that a filter keeps the file (ADR-0183). Neither makes a file online-only.
+
+### 2. The first fetch that fails stops the run fetching
+
+An online-only file fails its fetch where opening or reading it raises an I/O fault, before its first byte or part-way. Its failure reads `online-only, and fetching it failed: …`, with the platform's words, and the run logs one warning.
+
+From then on the run opens no online-only file. Each it would have read is an entry in the error manifest, reason I/O error, which reads `online-only, and not fetched, since fetching <path> failed earlier in this run: …`. That names the file whose fetch failed and the platform's words for it.
+
+### 3. What is not the provider failing stops nothing
+
+A file gone since the scan, or one the account may not read, is the file's own state. A file on the device that will not read is the device's. Each fails alone, as before, and the run goes on fetching.
+
+### 4. The next backup fetches again
+
+A file not fetched is in no snapshot this run publishes, so the next run finds no prior version for it and reads it. The stop belongs to the run that met the failure. A later run stops only if its own fetch fails.
+
+## Consequences
+
+- **A run that meets a provider that does not deliver ends after about one time-out,** not one per file, and names every file it passed.
+- **One failed fetch stops every online-only file in the run,** whichever provider keeps it, because the run cannot tell one provider's placeholders from another's. A passing fault, such as a network drop, defers the rest to the next backup. Nothing is lost: each is named and fetched again.
+- **A changed online-only file not fetched is absent from this run's snapshot,** as any file that fails capture is. Its earlier versions stay in earlier snapshots.
+- **An unchanged online-only file is still never fetched** (NFR-PERF-003). A change to its metadata alone is still recorded from the prior version's manifest, with no fetch.
+
+## What this does not do
+
+- **Fetch in the person's own session.** The service, which runs as the system account by default, asks as any program does. Whether a provider serves that account is the provider's choice.
+- **Put a fetched file back.** A file the run fetched stays on the device as the provider leaves it. The owner has chosen that a backup should put back a file it fetched, and that is a later record.
+- **Leave the provider's state out of a file's metadata.** A file's attributes carry the provider's bits. A change between online-only and on the device is therefore a metadata change, recorded with no fetch, and a restore names those bits as not applied.
+- **Say before a run how much it must fetch.**
+- **Name an online-only file on macOS.** There, the walk opens each file it classifies, which may itself fetch one. Linux has no such marker.
+
+## Alternatives considered
+
+- **Leave online-only files out.** Comparable tools offer this as an option. It never fetches, but it also never backs up a file the person did not keep on the device, and the owner chose to back them up.
+- **A shorter time-out of our own.** The platform owns the wait. A read cannot be cut short below it without abandoning a thread mid-call.
+- **Stop per provider rather than per run.** Telling providers apart needs each provider's interface. The run stopping whole is simpler and loses nothing.
+- **Stop after several failures.** One failure is the evidence there is, and each further one costs a full time-out.
+
+## Status history
+
+| Date | Status | Note |
+|------|--------|------|
+| 2026-11 | Accepted | Built in one slice, tests first. On Windows a file whose attributes carry offline, recall on open or recall on data access is online-only. The first such file whose fetch fails stops the run opening any other: each is an error-manifest entry naming the file that failed and why, and the next backup fetches it again. A file gone, refused, or on the device that will not read stops nothing. `Domain/MetadataRules`; `Filesystem.Local/LocalFileSystemSource`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests` |

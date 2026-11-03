@@ -148,4 +148,10 @@
   <data name="StoreAdmission_NoRangedReads" xml:space="preserve">
     <value>This store declares no ranged reads, and opening a blob needs three of them before a single record is read. Refused rather than guessed (ADR-0012).</value>
   </data>
+  <data name="TreeWalkPublisher_OnlineOnlyFetchFailed" xml:space="preserve">
+    <value>online-only, and fetching it failed: {0}</value>
+  </data>
+  <data name="TreeWalkPublisher_OnlineOnlyNotFetched" xml:space="preserve">
+    <value>online-only, and not fetched, since fetching {0} failed earlier in this run: {1}</value>
+  </data>
 </root>

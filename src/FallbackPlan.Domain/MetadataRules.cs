@@ -82,6 +82,17 @@ public static class MetadataRules
     public const uint EntryFileAttributes = 0x10 | 0x80 | 0x200 | 0x400;
 
     /// <summary>
+    /// The bits that say a file's content is not on this device, so that
+    /// reading it asks whatever keeps it to fetch it: offline, recall on open
+    /// and recall on data access (ADR-0185).
+    /// </summary>
+    public const uint OnlineOnlyFileAttributes = 0x1000 | 0x4_0000 | 0x40_0000;
+
+    /// <summary>Whether <paramref name="fileAttributes"/> say the content is not on this device.</summary>
+    /// <param name="fileAttributes">An entry's Windows attribute bits, or null where none were captured.</param>
+    public static bool IsOnlineOnly(uint? fileAttributes) => (fileAttributes & OnlineOnlyFileAttributes) is > 0;
+
+    /// <summary>
     /// Each bit of <paramref name="captured"/> a restore neither writes back
     /// nor gives an entry by making it, as encrypted, and compressed where the
     /// target keeps no compression, named in the code's words, in the bits'
