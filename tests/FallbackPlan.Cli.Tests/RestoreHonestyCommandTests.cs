@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using FallbackPlan.Domain;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
@@ -11,7 +12,9 @@ namespace FallbackPlan.Cli.Tests;
 /// was not applied once it ends. On Windows it is the CLI, too, that refuses
 /// a run whose folder would open a file wider than it was, unless told to go
 /// on (ADR-0178 Amendment 1), and that counts a folder the run would make
-/// apart (ADR-0178 Amendment 4).
+/// apart (ADR-0178 Amendment 4). Its plan names a file in the run's way that
+/// an immutable or append-only flag keeps where it stands, unless the run
+/// keeps both (ADR-0180 Amendment 6).
 /// </summary>
 /// <remarks>
 /// The disk is the flow's own: <c>DirectGateway.AvailableBytesInFlow</c>
@@ -50,6 +53,46 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         Assert.AreEqual("first", await File.ReadAllTextAsync(Path.Combine(destination, "one.txt")));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a file's immutable flag")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Plan_NamesAFileInItsWayThatAFlagKeepsWhereItStands_UnlessItKeepsBoth()
+    {
+        if (!FileFlags.Settable(EntryKind.File).HasFlag(FileFlagBits.Immutable))
+        {
+            Assert.Inconclusive("This account may not set a file immutable: Linux needs CAP_LINUX_IMMUTABLE.");
+        }
+
+        var snapshot = await BackUpAsync();
+        var destination = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "live")).FullName;
+        var inTheWay = Path.Combine(destination, "one.txt");
+        await File.WriteAllTextAsync(inTheWay, "as it stands");
+        try
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                DiskFlags.SetOnMacOs(inTheWay, DiskFlags.DarwinImmutable);
+            }
+            else
+            {
+                DiskFlags.AddOnLinux(inTheWay, DiskFlags.LinuxImmutable);
+            }
+
+            var movingAside = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+            var named = movingAside.Output.Split('\n').SingleOrDefault(line => line.Contains(inTheWay, StringComparison.Ordinal));
+            Assert.IsNotNull(named, movingAside.All);
+            Assert.Contains("immutable", named, StringComparison.Ordinal);
+            Assert.Contains("move it aside", named, StringComparison.Ordinal);
+
+            var keepingBoth = await _cli.RunAsync("restore", snapshot, "--output", destination, "--existing", "rename", "--plan");
+            Assert.DoesNotContain("immutable", keepingBoth.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(destination);
+        }
     }
 
     [TestMethod]
