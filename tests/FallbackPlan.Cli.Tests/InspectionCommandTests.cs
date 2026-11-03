@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using FallbackPlan.Domain;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
@@ -18,7 +19,10 @@ namespace FallbackPlan.Cli.Tests;
 /// that spool itself, so it needs no room in the temporary folder
 /// (FR-RST-002; ADR-0173 Amendment 3). It says which of a file's flags it
 /// did not give back, as the executor's receipt does (FR-RST-004; ADR-0180
-/// Amendment 2). <c>inspect-manifest</c> shows the form manifest key 14
+/// Amendment 2). A write the platform refuses, at a file or a folder a flag
+/// keeps, ends it with the platform's words rather than a crash, and a spool
+/// its folder will not let go is named (FR-RST-002; ADR-0180 Amendment 9).
+/// <c>inspect-manifest</c> shows the form manifest key 14
 /// keeps for a Windows directory junction (FR-MAN-003; ADR-0183
 /// Amendment 1).
 /// </summary>
@@ -147,6 +151,103 @@ public sealed class InspectionCommandTests : IDisposable
 
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         Assert.AreEqual(content, File.ReadAllText(destination));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a file's immutable flag")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task RestoreFile_OverAFileAFlagKeeps_SaysWhatWasRefused_AndLeavesItAsItStood()
+    {
+        RequireImmutable();
+        var archived = await ArchiveAsync("restore-file over a kept file");
+        var destination = Path.Combine(_cli.WorkPath, "kept.txt");
+        File.WriteAllText(destination, "as it stands");
+        Hold(destination, DiskFlags.LinuxImmutable, DiskFlags.DarwinImmutable);
+        try
+        {
+            var restore = await _cli.RunAsync("restore-file", "--manifest", archived.FileVersion, "--output", destination);
+
+            Assert.AreNotEqual(0, restore.ExitCode);
+            Assert.Contains("error:", restore.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("   at ", restore.All, StringComparison.Ordinal);
+            Assert.AreEqual("as it stands", File.ReadAllText(destination));
+            Assert.IsFalse(File.Exists(RestorePaths.SpoolBeside(destination, "restore")), "its folder lets the spool go");
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(_cli.WorkPath);
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS keep a folder's immutable flag")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task RestoreFile_IntoAFolderAFlagKeeps_SaysWhatWasRefused_AndWritesNothing()
+    {
+        RequireImmutable();
+        var archived = await ArchiveAsync("restore-file into a kept folder");
+        var folder = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "locked")).FullName;
+        Hold(folder, DiskFlags.LinuxImmutable, DiskFlags.DarwinImmutable);
+        try
+        {
+            var restore = await _cli.RunAsync("restore-file", "--manifest", archived.FileVersion, "--output", Path.Combine(folder, "a.txt"));
+
+            Assert.AreNotEqual(0, restore.ExitCode);
+            Assert.Contains("error:", restore.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("   at ", restore.All, StringComparison.Ordinal);
+            Assert.IsEmpty(Directory.EnumerateFileSystemEntries(folder));
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(_cli.WorkPath);
+        }
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux's append-only folder lets a name be made in it but none renamed or removed")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task RestoreFile_IntoAnAppendOnlyFolder_SaysTheRenameWasRefused_AndNamesTheSpoolItKeeps()
+    {
+        RequireImmutable();
+        var archived = await ArchiveAsync("restore-file into an append-only folder");
+        var folder = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "logs")).FullName;
+        var destination = Path.Combine(folder, "a.txt");
+        Hold(folder, DiskFlags.LinuxAppendOnly, 0);
+        try
+        {
+            var restore = await _cli.RunAsync("restore-file", "--manifest", archived.FileVersion, "--output", destination);
+
+            Assert.AreNotEqual(0, restore.ExitCode);
+            Assert.DoesNotContain("   at ", restore.All, StringComparison.Ordinal);
+            var spool = RestorePaths.SpoolName("a.txt", "restore");
+            Assert.Contains($"its spool {spool} stays beside it", restore.Error, StringComparison.Ordinal);
+            Assert.IsTrue(File.Exists(Path.Combine(folder, spool)), "the folder keeps the spool the error names");
+            Assert.IsFalse(File.Exists(destination));
+        }
+        finally
+        {
+            DiskFlags.ClearUnder(_cli.WorkPath);
+        }
+    }
+
+    private static void RequireImmutable()
+    {
+        if (!FileFlags.Settable(EntryKind.DirectoryPlaceholder).HasFlag(FileFlagBits.Immutable))
+        {
+            Assert.Inconclusive("This account may not set a file or a folder immutable: Linux needs CAP_LINUX_IMMUTABLE.");
+        }
+    }
+
+    private static void Hold(string path, int onLinux, uint onMacOs)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            DiskFlags.SetOnMacOs(path, onMacOs);
+        }
+        else
+        {
+            DiskFlags.AddOnLinux(path, onLinux);
+        }
     }
 
     [TestMethod]

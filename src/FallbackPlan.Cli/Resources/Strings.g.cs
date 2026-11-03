@@ -121,6 +121,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, CliApplication_RestoreRefused, arg0);
 
     /// <summary>
+    /// {0}; its spool {1} stays beside it: {2}
+    /// </summary>
+    private static string CliApplication_SpoolStays => Get(nameof(CliApplication_SpoolStays));
+
+    /// <summary>
+    /// {0}; its spool {1} stays beside it: {2}
+    /// </summary>
+    internal static string FormatCliApplication_SpoolStays(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, CliApplication_SpoolStays, arg0, arg1, arg2);
+
+    /// <summary>
     /// --as-planned runs the restore its plan was kept for, and a plan restores nothing while a resume is not planned: use it without --plan, --export or --resume.
     /// </summary>
     internal static string CliApplication_AsPlannedIsARun => Get(nameof(CliApplication_AsPlannedIsARun));

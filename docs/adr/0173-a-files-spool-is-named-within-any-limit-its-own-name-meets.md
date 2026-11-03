@@ -65,6 +65,8 @@ The command line's `restore-file` opened its output with a create that truncates
 - the spool is moved over the output only once the restore succeeds;
 - the spool is deleted on every way out that does not move it.
 
+  > **2026-11 ([ADR-0180 Amendment 9](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-9-2026-11--the-single-file-restore-says-what-the-platform-refused)).** Not in an append-only folder, which takes the spool and lets it be neither renamed nor removed. The command now names the spool that stays, beside what the platform refused, where the removal's refusal had replaced the rename's.
+
 A restore that fails leaves the output as it was. A link at the output is replaced by the restored file, and nothing is written through it, as the executor's rule has it ([ADR-0152](0152-the-recovery-tool-keeps-every-path-inside-its-output-by-the-executors-rule.md)). Metadata is still written back after the content has landed ([ADR-0149](0149-the-single-file-restore-writes-back-a-files-metadata-by-the-executors-rule.md)).
 
 The command's type now renames a file into place, so by [ADR-0010 Amendment 9](0010-local-store-separation.md#amendment-9-2026-10--a-file-a-store-renames-into-place-is-read-sharing-deletion-too)'s rule its one direct read, of a kept plan, goes through `AtomicFile`, which shares deletion as a rename on Windows needs.
@@ -131,3 +133,4 @@ No product path now assembles a file in the system's temporary folder. The execu
 | 2026-10 | Amended | Amendment 1: the command line's `restore-file` writes its file whole beside its output and moves it there once verified, so one that fails leaves the output as it was, and a link at the output is replaced rather than written through. `Cli/CliApplication`; `Cli.Tests/InspectionCommandTests` |
 | 2026-10 | Amended | Amendment 2: under rename, the copy written beside a file in the way keeps as much of the file's stem as fits within the limit the target states on one name, cut where a whole character ends, and a resume finds it by the same cut. `Restore/RestoreExecutor`; `Repository.Tests/RestoreLongNameTests` |
 | 2026-10 | Amended | Amendment 3: the engine assembles a file where it is to stay, and `restore-file` assembles into the spool beside its output, so its file is written once and needs no room in the temporary folder. `Repository/RestoreEngine`; `Cli/CliApplication`; `Repository.Tests/SparseRestoreTests`; `Cli.Tests/InspectionCommandTests` |
+| 2026-11 | Accepted | Noted by [ADR-0180 Amendment 9](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-9-2026-11--the-single-file-restore-says-what-the-platform-refused): in an append-only folder `restore-file`'s spool stays, and the command names it beside what the platform refused. |

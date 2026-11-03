@@ -85,6 +85,9 @@
   <data name="CliApplication_RestoreRefused" xml:space="preserve">
     <value>Restore refused: {0}</value>
   </data>
+  <data name="CliApplication_SpoolStays" xml:space="preserve">
+    <value>{0}; its spool {1} stays beside it: {2}</value>
+  </data>
   <data name="CliApplication_AsPlannedIsARun" xml:space="preserve">
     <value>--as-planned runs the restore its plan was kept for, and a plan restores nothing while a resume is not planned: use it without --plan, --export or --resume.</value>
   </data>
