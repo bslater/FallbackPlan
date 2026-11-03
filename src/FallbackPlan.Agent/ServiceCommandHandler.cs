@@ -947,6 +947,11 @@ public sealed partial class ServiceCommandHandler(
                 // figure already looks.
                 conflicts.AddRange(report.Shortfalls.Select(need =>
                     $"{need.Directory} — the restore would not fit: it {need.Describe()}"));
+
+                // So is a file in the run's way that a flag keeps where it
+                // stands, which the run would fail (ADR-0180 Amendment 6).
+                conflicts.AddRange(RestoreInTheWay.HeldByFlags(measured, mode, policy, target.Flags)
+                    .Select(held => RestoreInTheWay.Describe(held, policy)));
             }
 
             return new RestorePlanResult(

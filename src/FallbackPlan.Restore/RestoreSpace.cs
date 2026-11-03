@@ -528,7 +528,7 @@ public static class RestoreSpace
     /// Where <paramref name="item"/> would meet something already there: only
     /// a run in place, or one landing where an earlier run landed, can.
     /// </summary>
-    private static string? DestinationOf(RestoreSlice slice, RestoreDestinationMode mode, string root, RestorePlanItem item)
+    internal static string? DestinationOf(RestoreSlice slice, RestoreDestinationMode mode, string root, RestorePlanItem item)
     {
         var landsIn = mode == RestoreDestinationMode.InPlace
             ? root
@@ -539,7 +539,7 @@ public static class RestoreSpace
     }
 
     /// <summary>Whether a resume finds <paramref name="item"/> landed, at its length, at <paramref name="destination"/>.</summary>
-    private static bool IsLanded(RestoreSlice slice, string? destination, RestorePlanItem item) =>
+    internal static bool IsLanded(RestoreSlice slice, string? destination, RestorePlanItem item) =>
         slice.ResumedIn is not null && destination is not null
         && new FileInfo(destination) is { Exists: true } landed
         && (ulong)landed.Length == item.Length;

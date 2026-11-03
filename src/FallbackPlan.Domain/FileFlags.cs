@@ -20,6 +20,15 @@ public interface IFileFlags
     /// <param name="kind">What stands there.</param>
     /// <returns>Those of <paramref name="flags"/> it carries now.</returns>
     FileFlagBits Apply(string path, FileFlagBits flags, EntryKind kind);
+
+    /// <summary>
+    /// The flags of what stands at <paramref name="path"/>, its own for a
+    /// link: what a restore meets in its way (ADR-0180 Amendment 6). None
+    /// where nothing stands, or where the platform keeps none or will not say.
+    /// </summary>
+    /// <param name="path">What stands where a restore would write.</param>
+    /// <returns>The flags it carries.</returns>
+    FileFlagBits Read(string path) => FileFlagBits.None;
 }
 
 /// <summary>The platform's rule and calls for a file's, a folder's and a link's flags.</summary>
@@ -143,11 +152,35 @@ public static partial class FileFlags
             : null;
     }
 
+    /// <summary>FS_IOC_GETFLAGS: _IOR('f', 1, long), whose size the request encodes.</summary>
+    private static nuint LinuxGetFlagsRequest => IntPtr.Size == 8 ? 0x8008_6601 : 0x8004_6601;
+
+    /// <summary>The inode flags of the file or folder at <paramref name="path"/>, or null where it will not say.</summary>
+    private static int? LinuxFlagsOf(string path)
+    {
+        // A link cannot be opened without following it, so it says nothing;
+        // non-blocking, so a pipe put in the file's place is not waited on.
+        var descriptor = Open(path, LinuxNoFollow | LinuxNonBlock | LinuxCloseOnExec);
+        if (descriptor < 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            var flags = 0;
+            return Ioctl(descriptor, LinuxGetFlagsRequest, ref flags) == 0 ? flags : null;
+        }
+        finally
+        {
+            _ = Close(descriptor);
+        }
+    }
+
     private static FileFlagBits OnLinux(string path, FileFlagBits asked)
     {
-        // FS_IOC_GETFLAGS and FS_IOC_SETFLAGS: _IOR and _IOW('f', 1|2, long),
-        // whose size the request encodes.
-        var get = IntPtr.Size == 8 ? (nuint)0x8008_6601 : 0x8004_6601;
+        // FS_IOC_SETFLAGS: _IOW('f', 2, long), whose size the request encodes.
+        var get = LinuxGetFlagsRequest;
         var set = IntPtr.Size == 8 ? (nuint)0x4008_6602 : 0x4004_6602;
 
         // Non-blocking, so a pipe put in the file's place is not waited on.
@@ -239,6 +272,15 @@ public static partial class FileFlags
             return asked == FileFlagBits.None ? FileFlagBits.None
                 : OperatingSystem.IsLinux() ? OnLinux(path, asked)
                 : OperatingSystem.IsMacOS() ? OnMacOs(path, asked)
+                : FileFlagBits.None;
+        }
+
+        public FileFlagBits Read(string path)
+        {
+            ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+
+            return OperatingSystem.IsLinux() ? LinuxFlagsOf(path) is { } linux ? FromLinux(linux) : FileFlagBits.None
+                : OperatingSystem.IsMacOS() ? DarwinFlagsOf(path) is { } darwin ? MetadataRules.FileFlagsFromDarwin(darwin) : FileFlagBits.None
                 : FileFlagBits.None;
         }
     }

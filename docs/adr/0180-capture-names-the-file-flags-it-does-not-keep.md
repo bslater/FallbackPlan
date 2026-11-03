@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics); FR-RST-003 and FR-RST-004 (amended by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back): the plan and the receipt name the flags a restore does not set; FR-RST-004 amended again by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too): so do the recovery tool and `restore-file`); FR-MAN-003 amended again by [Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too): from format 6 a file's and a folder's flags are kept in metadata key 11; FR-RST-003 and FR-RST-004 amended again by [Amendment 4](#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may): the engine's restore gives a file's, a folder's and a link's flags back where the target sets them, and names only those it does not; FR-RST-004 amended again by [Amendment 5](#amendment-5-2026-11--the-recovery-tool-and-the-single-file-restore-give-them-back-too): so do the recovery tool and `restore-file`
+**Requirements:** FR-MAN-003 (amended: a file's flags that no format key keeps are named among its capture diagnostics); FR-RST-003 and FR-RST-004 (amended by [Amendment 1](#amendment-1-2026-10--a-restore-names-the-file-flags-it-does-not-give-back): the plan and the receipt name the flags a restore does not set; FR-RST-004 amended again by [Amendment 2](#amendment-2-2026-10--the-recovery-tool-and-the-single-file-restore-name-them-too): so do the recovery tool and `restore-file`); FR-MAN-003 amended again by [Amendment 3](#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too): from format 6 a file's and a folder's flags are kept in metadata key 11; FR-RST-003 and FR-RST-004 amended again by [Amendment 4](#amendment-4-2026-11--a-restore-gives-the-flags-back-where-it-may): the engine's restore gives a file's, a folder's and a link's flags back where the target sets them, and names only those it does not; FR-RST-004 amended again by [Amendment 5](#amendment-5-2026-11--the-recovery-tool-and-the-single-file-restore-give-them-back-too): so do the recovery tool and `restore-file`; FR-RST-003 amended again by [Amendment 6](#amendment-6-2026-11--a-plan-names-a-file-in-its-way-that-a-flag-keeps-where-it-stands): a plan names a file in its way that an immutable or append-only flag keeps where it stands
 **Related:** [ADR-0026](0026-phase-1-capture-shapes.md) §2 (the `capture_diagnostics` vocabulary, which gains `file-flags:`), [ADR-0175](0175-a-restore-writes-back-the-windows-attribute-bits-it-may.md) (Windows' own attribute bits, which a format key keeps), [architecture 06 §3](../architecture/06-filesystem-capture.md#3-metadata-matrix) (immutable and system flags, and compression and encryption attributes, degraded and reported on Linux and macOS), [specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) (key 13)
 
 **Built:**
@@ -198,6 +198,8 @@ Amendments 1 to 3 named the flags a restore did not give back, and it gave none 
 **Consequences.**
 
 - **A file given back immutable cannot be replaced by a later restore**, nor can a folder given back immutable take a new name. A later run into the same destination fails that item with the platform's refusal, which the receipt says. Clearing the flag is the person's to do.
+
+  > **2026-11 ([Amendment 6](#amendment-6-2026-11--a-plan-names-a-file-in-its-way-that-a-flag-keeps-where-it-stands)).** The plan now names such a file before anything is written, under a policy that would move it aside or replace it. The run still fails it.
 - **A run cut short after its flags went on**, while its folders settled, leaves files a resume cannot write onto again: their metadata is refused, and the resume's receipt says so of each.
 
 **Not done.**
@@ -207,6 +209,8 @@ Amendments 1 to 3 named the flags a restore did not give back, and it gave none 
   > **2026-11: taken up by [Amendment 5](#amendment-5-2026-11--the-recovery-tool-and-the-single-file-restore-give-them-back-too).**
 - **A folder that already stands keeps its own flags**, as it keeps the rest of its metadata ([ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md)).
 - **An immutable file at the destination is not cleared to replace it**, whether a person set it or an earlier restore did.
+
+  > **2026-11 ([Amendment 6](#amendment-6-2026-11--a-plan-names-a-file-in-its-way-that-a-flag-keeps-where-it-stands)).** Still not cleared, by the owner's decision. The plan names it instead.
 
 **Built:** `Domain/FileFlags`; `Domain/LinuxCapabilities`, which `Domain/FileOwnership` reads CAP_CHOWN through too; `Domain/MetadataWriter`; `Domain/MetadataTarget`; `Domain/MetadataRules`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`:
 
@@ -256,6 +260,41 @@ Amendment 4 had the engine's restore give the flags back, and left the recovery 
 - `Repository.Tests/RecoveryHardLinkTests`: a later name of a group notes what its first name notes, which is nothing where this platform sets no-dump.
 - `Cli.Tests/InspectionCommandTests`: on Linux `restore-file` gives back the no-dump flag a file was backed up with, and says nothing of it.
 
+## Amendment 6 (2026-11) — a plan names a file in its way that a flag keeps where it stands
+
+**Requirements:** FR-RST-003 (amended: a plan names a file in its way that an immutable or append-only flag keeps where it stands).
+
+Amendment 4 left a file given back immutable as one a later restore cannot replace. A person may set the flag too, on a file the restore would meet. Either way the run learned of it only when the platform refused the move, item by item, after the plan had said nothing of it.
+
+Two answers were weighed. A restore could clear the flag, replace the file, and set the snapshot's flags back. That changes a flag a person may have set for their own reasons, so the owner chose the other: the plan says so, and no flag is cleared.
+
+**Decision.** A plan names each file already in its way that an immutable or append-only flag keeps where it stands, as a conflict, before anything is written (`Restore/RestoreInTheWay`).
+
+- **Only where the run would move it aside or replace it.** Moving it aside, the default, and replacing it are both refused by either flag. A run that keeps both writes beside the file and is not held. One that fails what is there fails it whatever its flags.
+- **Only what the run meets.** A run meets what is already there in place, and a resume where its run landed. A file that run landed, at its length, the resume leaves as it stands, by the space check's rule. A quarantined run lands in a folder of its own, where nothing is in its way.
+- **A file or a link, not a folder.** A link moves aside or replaces what stands in its place as a file does, so a flag that keeps a file there fails it alike. A folder is made where it is, which no policy reaches (ADR-0086), so nothing is moved aside for it.
+- **The flags are read where they stand.** `IFileFlags` gains `Read`: Linux's inode flags through `FS_IOC_GETFLAGS`, which a link cannot be opened for, and macOS's `st_flags`, a link's its own. Windows keeps none of them.
+- **Each line names the file, its flags and what to do.** For example: `<path> — immutable: the restore cannot move it aside, so it fails there. Clear the flag first, or keep both, writing the restored copy beside it.`
+- **Both plans say it.** The service's plan adds it to its conflicts, where a client that predates it already looks, and so does the command line's in direct mode. No contract field changes.
+
+**Not done.**
+
+- **The run still fails such a file**, with the platform's refusal, which its receipt says. A plan is advice; a run is not refused for it.
+- **A folder in the run's way that is immutable**, which takes no new name, is not named.
+
+**Built:** `Domain/FileFlags`; `Restore/RestoreInTheWay`; `Restore/RestoreSpace`; `Agent/ServiceCommandHandler`; `Cli/OperationGateway`:
+
+- `Domain.Tests/FileFlagReadTests`: Linux reads a file's inode flags, immutable and append-only where this process may set them, and none through a link; macOS reads a file's flags and a link's own; none where nothing stands, and none on Windows.
+- `Repository.Tests/RestoreHeldInPlaceTests`:
+  - in place, moving aside names an immutable file and only the flags that hold it, and no loose file;
+  - replacing names an append-only file as one it cannot replace;
+  - keeping both, or failing what is there, holds nothing;
+  - a quarantined run meets nothing, and its resume meets only what its run did not land;
+  - a link that would land where a flag keeps a file is named too;
+  - a folder is not asked, whatever stands where it would be made.
+- `Hosts.Tests/RestoreHonestyServiceTests`: the service's plan in place names an immutable file in its way, and not when the run keeps both.
+- `Cli.Tests/RestoreHonestyCommandTests`: the direct-mode plan does the same.
+
 ## Status history
 
 | Date | Status | Note |
@@ -267,3 +306,4 @@ Amendment 4 had the engine's restore give the flags back, and left the recovery 
 | 2026-11 | Accepted (Amendment 3) | From format 6 publication keeps a file's and a folder's flags in metadata key 11 and names them no more, the scanner naming a folder's too; the digest counts them alike wherever kept, so an upgrade restates nothing; every reader takes either form, and `inspect-manifest` shows them. `Domain/MetadataRules`; `Repository.Format/Manifests/FileVersionManifestCodec`; `Repository/SnapshotPublication`; `Filesystem.Local/LocalFileSystemSource`; `Cli/CliApplication`; `Domain.Tests/FileFlagsTests`; `Repository.Tests/FileFlagsCaptureTests`; `Repository.Tests/MetadataOnlyChangeTests`; `Cli.Tests/InspectionCommandTests` |
 | 2026-11 | Accepted (Amendment 4) | The engine's restore gives a file's, a folder's and a link's flags back where the platform and the account let it: Linux's no-dump, and immutable and append-only with `CAP_LINUX_IMMUTABLE`, none on a link; macOS's owner's four, a link's too; a file's and a link's once every item has landed, a folder's last in its settle, none by a stopped run; the plan names only the flags the target will not set, counting folders, and the receipt only those that did not land. `Domain/FileFlags`; `Domain/LinuxCapabilities`; `Domain/MetadataWriter`; `Domain/MetadataTarget`; `Restore/RestorePlan`; `Restore/RestoreExecutor`; `Restore/RestoreMetadata`; `Restore/RestoreBlobSet`; `Domain.Tests/FileFlagWriteTests`; `Repository.Tests/RestoreFileFlagsTests`; `Repository.Tests/RestoreMetadataHonestyTests` |
 | 2026-11 | Accepted (Amendment 5) | The recovery tool and `restore-file` give a file's, a folder's and a link's flags back by Amendment 4's rule: the tool sets a file's and a link's once the tree has landed, a group's once, a folder's last in its settle, none through a link put in a file's place, and none in a run that stops; each notes only what did not land, and `restore-file` prints only that. `Recovery/RecoverySession`; `Cli/CliApplication`; `Domain/MetadataRules`; `Repository.Tests/RecoveryFileFlagsTests`; `Repository.Tests/RecoveryMetadataTests`; `Repository.Tests/RecoveryLinkTests`; `Repository.Tests/RecoveryHardLinkTests`; `Cli.Tests/InspectionCommandTests` |
+| 2026-11 | Accepted (Amendment 6) | A plan names a file in its way that an immutable or append-only flag keeps where it stands, as a conflict, before anything is written, where the run would move it aside or replace it, and no flag is cleared. `Domain/FileFlags` reads what stands; `Restore/RestoreInTheWay` finds it by the space check's rule; `Agent/ServiceCommandHandler` and `Cli/OperationGateway` add it to their plans. `Domain.Tests/FileFlagReadTests`; `Repository.Tests/RestoreHeldInPlaceTests`; `Hosts.Tests/RestoreHonestyServiceTests`; `Cli.Tests/RestoreHonestyCommandTests` |
