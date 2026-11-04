@@ -1061,6 +1061,12 @@ public sealed record RestoreRunsResult(IReadOnlyList<RestoreRunDescriptor> Runs)
 /// Zero from a service before 1.78, and for a receipt kept before receipt
 /// schema 11, which says nothing of it.
 /// </param>
+/// <param name="EarlierVersions">
+/// Its files restored as a version backed up before, standing in for one
+/// their backup could not fetch (contract 1.88, ADR-0194 Amendment 2): the
+/// files written that its receipt names so. Zero from a service before 1.88,
+/// and for a receipt kept before receipt schema 12, which says nothing of it.
+/// </param>
 public sealed record RestoreReceiptDescriptor(
     string Run,
     string? Outcome,
@@ -1075,7 +1081,8 @@ public sealed record RestoreReceiptDescriptor(
     string? Problem = null,
     string? Set = null,
     string? SetId = null,
-    long ResumedWithin = 0);
+    long ResumedWithin = 0,
+    long EarlierVersions = 0);
 
 /// <summary>
 /// One file a restore did not restore, as its kept receipt says (contract

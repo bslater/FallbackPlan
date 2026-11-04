@@ -1874,7 +1874,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             lines.Add(OperationGateway.ResumedWithin(resumedWithin));
         }
 
-        var earlierVersions = receipt.Items.Where(item => item.EarlierVersion is not null).ToList();
+        var earlierVersions = RestoreEarlierVersions.RestoredIn(receipt.Items);
         lines.AddRange(OperationGateway.EarlierVersions(
             earlierVersions.Count, [.. earlierVersions.Take(20).Select(item => $"{item.Path} — {item.EarlierVersion}")]));
 
