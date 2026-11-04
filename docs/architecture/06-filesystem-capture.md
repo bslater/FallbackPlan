@@ -156,6 +156,8 @@ The reconciliation interval is configurable; a full scan is also forced after an
 
 > **2026-11 ([ADR-0189](../adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md)).** The day is a setting. A set may name its full walk in its schedule's grammar, `every 7d` or `daily at 02:00`, and the first backup after it falls due walks in full; it starts no backup of its own. A set's status says when it was last walked in full.
 
+> **2026-11 ([ADR-0189 Amendment 1](../adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md#amendment-1-2026-11--the-console-sets-the-full-walk-and-shows-the-last)).** The console sets it beside the set's schedule, in the schedule's own choices, and a set's card on the overview says when it was last walked in full.
+
 ### 4.1 Links are classified before they are traversed
 
 A link is a link whatever it points at. An object carrying both a directory marker and a link marker — an NTFS directory junction, a directory symlink — **MUST** be classified as a link, and the scanner MUST NOT descend through it. Testing the directory marker first classifies a junction as an ordinary directory and walks out of the approved root, and junctions need no privilege to create, so that is the shape an unprivileged attacker on the source machine actually has.

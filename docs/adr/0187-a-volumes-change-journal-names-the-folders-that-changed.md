@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-011 (new: on Windows, the folders of a set that changed on an NTFS volume since a place in its change journal are named from the journal, every name of a changed file counted, and a place the journal cannot answer for certain is no answer); FR-SNP-011 (amended by [Amendment 1](#amendment-1-2026-11--only-a-file-in-the-sets-folders-is-opened): only a file changed in the set's folders is opened to find its other names)
+**Requirements:** FR-SNP-011 (new: on Windows, the folders of a set that changed on an NTFS volume since a place in its change journal are named from the journal, every name of a changed file counted, and a place the journal cannot answer for certain is no answer); FR-SNP-011 (amended by [Amendment 1](#amendment-1-2026-11--only-a-file-in-the-sets-folders-is-opened): only a file changed in the set's folders is opened to find its other names); FR-SNP-011 (amended by [Amendment 2](#amendment-2-2026-11--a-folder-gone-as-it-is-followed-is-read-again): a folder gone as the records are followed is read again rather than doubted)
 **Related:** [architecture 06 §4](../architecture/06-filesystem-capture.md#4-change-detection) (journals are hints only, and a full walk follows any break in one), [ADR-0186](0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) (a run told which folders changed walks only those)
 
 **Built:**
@@ -89,3 +89,37 @@ The folders the records name are found first. Only a file changed through a name
 - **A backup's answer opens only the set's own files**, which the backup reads anyway, and folders, briefly, to find where they are.
 - **A file with one name inside the set and another outside it, changed through the outside one, is not named.** The next full walk, at least daily, finds it.
 - **A folder elsewhere is still opened for a moment** to find its path. A program deleting that folder at that moment sees it gone once the handle closes.
+
+  > **2026-11 ([Amendment 2](#amendment-2-2026-11--a-folder-gone-as-it-is-followed-is-read-again)).** The other way about, a folder deleted after its records are read and before it is opened, is read again rather than doubted.
+
+## Amendment 2 (2026-11) — a folder gone as it is followed is read again
+
+### Context
+
+A Windows job failed with the journal unable to answer, in a test that had passed before. The suites run their classes at once, so other tests make and delete folders on the same volume while one reads the journal. An answer reads a batch of records and then opens each folder they name by its id. A folder deleted between the two cannot be opened, and its deletion is not in the batch. The answer was doubt. On a real machine that is a full walk whenever any program deletes a folder anywhere on the volume at that moment.
+
+### Decision
+
+Some failures to open a folder mean it is gone or going:
+
+- it is not found;
+- there is no such path;
+- the volume no longer holds the id; or
+- a delete is pending.
+
+Where a folder fails that way, the journal is read again from the same place. It is read at most four times, with a short pause between. By then its deletion is among the records, so the folder is passed over as any deleted folder is, and the record of its deletion names the folder that held it. Any other failure is doubt at once, as before. A folder still gone after the fourth reading is doubt.
+
+### Consequences
+
+- **A folder deleted as a backup asks costs a few readings, not a full walk.**
+- **A folder deleted inside the set as the journal is read is named by the folder that held it.** The backup does not keep it as the last backup held it.
+
+**Built:** `Filesystem.Local/WindowsChangeJournal`; `Filesystem.Tests/WindowsChangeJournalTests` — a folder elsewhere deleted after the records are read and before they are followed is no doubt, the root that changed named still.
+
+## Status history
+
+| Date | Status | Note |
+|------|--------|------|
+| 2026-11 | Accepted | Built in one slice, tests first, with a CI step that gives the Windows runner's test volume a journal. |
+| 2026-11 | Accepted | [Amendment 1](#amendment-1-2026-11--only-a-file-in-the-sets-folders-is-opened): only a file changed in the set's folders is opened. |
+| 2026-11 | Accepted | [Amendment 2](#amendment-2-2026-11--a-folder-gone-as-it-is-followed-is-read-again): a folder gone as the records are followed is read again rather than doubted. |

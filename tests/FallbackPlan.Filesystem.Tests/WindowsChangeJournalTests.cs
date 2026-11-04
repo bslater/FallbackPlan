@@ -167,9 +167,35 @@ public sealed partial class WindowsChangeJournalTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "photos", "b.txt"), "outside");
 
         var docs = Path.Combine(_root, "docs");
-        var changed = journal.ChangedSince(since, [docs]);
-        Assert.IsNotNull(changed);
+        var changed = WindowsChangeJournal.ChangedSince(since, [docs], out var doubt);
+        Assert.IsNotNull(changed, $"the journal could not say: {doubt}");
         Assert.AreEqual(new ChangedFolder(docs, string.Empty), Assert.ContainsSingle(changed), "the root itself, and nothing beside it");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "the change journal is NTFS's")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public void ChangedSince_AFolderElsewhereDeletedAsTheJournalIsRead_IsNoDoubt()
+    {
+        // Another program deletes a folder after its records were read and
+        // before they were followed: the journal is read again, and holds
+        // the deletion then.
+        Make("docs");
+        Make("elsewhere/passing");
+        var journal = new WindowsChangeJournal();
+        var since = PositionOf(journal);
+
+        File.WriteAllText(Path.Combine(_root, "elsewhere", "passing", "a.txt"), "soon gone");
+        File.WriteAllText(Path.Combine(_root, "docs", "a.txt"), "inside");
+
+        var docs = Path.Combine(_root, "docs");
+        var changed = WindowsChangeJournal.ChangedSince(
+            since, [docs], out var doubt,
+            afterReading: () => Directory.Delete(Path.Combine(_root, "elsewhere", "passing"), recursive: true));
+
+        Assert.IsNotNull(changed, $"the journal could not say: {doubt}");
+        Assert.AreEqual(new ChangedFolder(docs, string.Empty), Assert.ContainsSingle(changed));
     }
 
     [TestMethod]

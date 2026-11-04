@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-012 (amended: a set is walked in full when its full walk falls due, on the schedule the set names for it or a day after the last where it names none, and its status says when it last was)
+**Requirements:** FR-SNP-012 (amended: a set is walked in full when its full walk falls due, on the schedule the set names for it or a day after the last where it names none, and its status says when it last was; Amendment 1: the console sets it and shows the last)
 **Related:** [ADR-0188](0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) (the service tells a backup what changed since the set's last, and walks in full at least once a day), [ADR-0027 §1](0027-services-scheduling-status-telemetry.md#1-schedule-semantics-and-missed-runs) (a set's schedule and its grammar), [ADR-0035 §1](0035-destination-fitness.md#1-fitness-is-reported-not-enforced-at-load) (a defect in the file is not refused at load), [architecture 06 §4](../architecture/06-filesystem-capture.md#4-change-detection) (a reconciliation walk is mandatory, on a schedule)
 
 **Built:**
@@ -57,6 +57,8 @@ The set's line of `status` ends `full-walk@<UTC minute>` where the service repor
 ## What this does not do
 
 - **Let the console set it or show it.** The set editor and the console's status are the next record.
+
+  > **2026-11 ([Amendment 1](#amendment-1-2026-11--the-console-sets-the-full-walk-and-shows-the-last)).** The console's set editor sets it beside the schedule, and a set's card says when it was last walked in full.
 - **Give the command line a way to set it.** The command line edits no set today. The configuration file and the console do.
 - **Check it in a draft.** `validate_set_draft` does not take the full walk. The save refuses one that does not read.
 - **Walk every backup in full by a word of its own.** `every 1m` comes close for a set backed up less often than a minute apart. A full backup asked for walks in full and reads every file again.
@@ -66,3 +68,35 @@ The set's line of `status` ends `full-walk@<UTC minute>` where the service repor
 - **A number of hours.** It cannot say "at night", which is when an owner wants the long walk. The schedule's grammar can, and a person already knows it from the set's schedule.
 - **A full walk that starts a backup of its own.** The set's schedule owns when backups run, and two schedules starting backups would contend for one set. Marking which backup walks in full keeps one source of when.
 - **Refuse a full walk that does not read when the file loads.** Every set would stop backing up over one set's typo. Walking in full costs only time.
+
+## Amendment 1 (2026-11) — the console sets the full walk and shows the last
+
+### Context
+
+Contract 1.82 carried a set's full walk and its last full walk, and the command line printed the last. The console did neither. A person managing sets there could not see or change when a set is walked in full.
+
+### Decision
+
+- **The set editor sets it beside the schedule.** The schedule section offers the full walk in the schedule's own choices: daily (the default), every so many minutes, hours or days, or daily at a time. A form those choices cannot show checks none of them, and is kept as the set has it, as the schedule's own custom form is. The new-set wizard's last step takes it with the schedule.
+- **The summary says it.** The schedule row reads "… · walked in full every 7 days", or "daily (the default)".
+- **The editor says what it shows.** Its upsert always carries the full walk: the set's own, or empty for the default. It never sends null, which would keep whatever stands.
+- **A set's card says when.** On the overview, the line with the set's next run gains "walked in full 3 h ago", with the time on hover. A set whose backups ask no journal shows nothing there.
+
+### Consequences
+
+- A set's full walk is set and read where its schedule is.
+- An edit in the console cannot leave a full walk the person did not see in place.
+
+### What this does not do
+
+- **Check it before the save.** A full walk the person types that does not read is refused by the save, in the service's words, as an unreadable schedule would be at the next pass.
+- **Show when the next full walk falls due.** The status carries the last one only.
+
+**Built:** `Web.DomTests/FullWalkDomTests` — an existing set's summary says its full walk, and the schedule section changes it; putting it back sends the empty that clears it; an edit that leaves it alone sends what the set has; the wizard's last step takes it; a set's card says when it was last walked in full, and nothing where no journal is asked. `Web.Tests/StatusRelayNamesTests`, `Web.Tests/CommandRelayTests` — the names the console reads cross the relay.
+
+## Status history
+
+| Date | Status | Note |
+|------|--------|------|
+| 2026-11 | Accepted | Built in one slice, tests first: the setting, the due check, contract 1.82 and the command line's status. |
+| 2026-11 | Accepted | [Amendment 1](#amendment-1-2026-11--the-console-sets-the-full-walk-and-shows-the-last): the console sets the full walk beside the schedule and shows the last on a set's card. |
