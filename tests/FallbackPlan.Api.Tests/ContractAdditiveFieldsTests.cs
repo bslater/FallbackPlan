@@ -1288,6 +1288,29 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheChangesToFetch_WireNamesAndPre186Default()
+    {
+        // Contract 1.86 (ADR-0192 Amendment 2): of the changed files the next
+        // backup will take, how many are online-only and must be fetched from
+        // their provider, and their bytes.
+        var status = JsonSerializer.Serialize(
+            new BackupSetStatusDescriptor(
+                "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null, Destinations: [],
+                PendingChanges: new PendingChangesDescriptor(Files: 12, WalksInFullBecause: null, CountedAt: 5_000, FilesToFetch: 3, BytesToFetch: 2_048)),
+            FrameCodec.SerializerOptions);
+
+        const string Field = ",\"files_to_fetch\":3,\"bytes_to_fetch\":2048";
+        Assert.Contains(Field, status, StringComparison.Ordinal);
+
+        // A pre-1.86 frame says nothing of them: not counted.
+        var old = status.Replace(Field, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(status, old, "the strip must have removed the fields, or the old frame proves nothing");
+        var read = JsonSerializer.Deserialize<BackupSetStatusDescriptor>(old, FrameCodec.SerializerOptions)!.PendingChanges!;
+        Assert.IsNull(read.FilesToFetch);
+        Assert.IsNull(read.BytesToFetch);
+    }
+
+    [TestMethod]
     public void TheDeepSweep_WireNamesAndPre146Default()
     {
         // Contract 1.46 (ADR-0035 Amendment 3): each destination row carries

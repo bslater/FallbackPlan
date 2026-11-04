@@ -17,7 +17,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// backup could not read are waiting too, since the next backup walks their
 /// folders to try them again, and where its failures will not read it walks
 /// in full and says why; they are read once for a snapshot, not once a count
-/// (ADR-0192 Amendment 1).
+/// (ADR-0192 Amendment 1). Of the waiting files, the online-only ones the
+/// next backup must fetch are counted apart, with their bytes (Amendment 2).
 /// </summary>
 /// <remarks>
 /// The journal is scripted, so this runs on every platform.
@@ -53,6 +54,8 @@ public sealed class PendingChangesTests : IDisposable
         var pending = await CountAsync(runtime, start.AddMinutes(10));
 
         Assert.AreEqual(2L, pending!.Files);
+        Assert.AreEqual(0L, pending.FilesToFetch, "both are on the device");
+        Assert.AreEqual(0L, pending.BytesToFetch);
         Assert.IsNull(pending.WalksInFullBecause);
         Assert.AreEqual(Ms(start.AddMinutes(10)), pending.CountedAt);
     }
@@ -201,6 +204,8 @@ public sealed class PendingChangesTests : IDisposable
         _journal.Answer = _ => [];
         var pending = await CountAsync(runtime, start.AddHours(1).AddMinutes(10));
         Assert.AreEqual(2L, pending!.Files, "both are tried again by the next backup");
+        Assert.AreEqual(2L, pending.FilesToFetch, "both are online-only, and must be fetched");
+        Assert.AreEqual(17L, pending.BytesToFetch, "\"delta, changed\" and \"new\"");
 
         // Which takes them, and walks no folder the count did not.
         _delivers = true;
