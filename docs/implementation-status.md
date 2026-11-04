@@ -215,6 +215,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0188](adr/0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) | The service tells a backup what changed since the set's last: a backup takes the journal's places before it walks and keeps them once it has published; the next asks from there and walks only what is named; it walks in full where nothing was kept for the last backup, the folders changed, the journal cannot say, a full backup is asked for, and at least once a day; a backup that reused folders says how many it did not walk. Windows, and Linux since ADR-0190; since ADR-0189 the full walk is a setting of the set | **Built** | `Agent/ChangeHints` · `Agent/BackupRunner` · `Agent/ServiceRuntime` · `Hosts.Tests/ChangeJournalRunTests` · [notes](#0188--backups-told-what-changed) |
 | [0189](adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md) | A set's full walk is a setting of the set: named in its schedule's grammar, the first backup after it falls due walks in full; none named is a day, one that does not read walks every backup in full, and it starts no backup; contract 1.82 carries it, an edit keeping it where silent, clearing it where empty and refusing one that does not read, and the last full walk on the set's status, which the command line prints; since [Amendment 1](adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md#amendment-1-2026-11--the-console-sets-the-full-walk-and-shows-the-last) the console sets it beside the schedule, always sending what it shows, and a set's card says when it was last walked in full | **Built** | `Application/ClientConfiguration` · `Agent/ChangeHints` · `Agent/ServiceCommandHandler` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Hosts.Tests/ChangeJournalRunTests` · `Hosts.Tests/ConfigurationCommandTests` · `Application.Tests/ClientConfigurationTests` · `Api.Tests/ContractAdditiveFieldsTests` · `Cli.Tests/StatusFullWalkTokenTests` · `Web.DomTests/FullWalkDomTests` · `Web.Tests/StatusRelayNamesTests` · [notes](#0189--full-walk-a-setting) |
 | [0190](adr/0190-on-linux-the-service-watches-a-sets-folders-itself.md) | On Linux the service watches a set's folders itself: the first place asked starts an inotify watch of the root and every folder below it on its filesystem, one tree for every set; a change names its folder, a folder made or moved in is named whole and watched, a folder moved within goes on being named where it is; a place is good only to the session that gave it, and a changed file with another name, an overflowed queue, a place older than the 100,000 changed folders kept, or a root moved or deleted is doubt; a root over the watch limit or on a remote filesystem has no place; the runtime gives every backup the process's one watch | **Built** | `Filesystem.Local/LinuxChangeJournal` · `Agent/ServiceRuntime` · `Filesystem.Tests/LinuxChangeJournalTests` · `Hosts.Tests/LinuxChangeWatchRunTests` · [notes](#0190--linux-change-watch) |
+| [0191](adr/0191-on-macos-the-service-asks-the-volumes-event-history.md) | On macOS the service asks the volume's event history: a place is the history's identity and the latest event's number; what changed since is replayed over the set's roots, and no answer is given until a mark the service writes after the replay comes back; a file or a link names its folder, anything else itself, each as it is spelled on disk; a history that lost track, a root moved, a changed file with another name, a place in another history or ahead of it is doubt; a folder not there or on a volume keeping no history has no place; the runtime gives every backup the history | **Built** | `Filesystem.Local/MacChangeJournal` · `Filesystem.Local/FsEventsRecords` · `Agent/ServiceRuntime` · `Filesystem.Tests/MacChangeJournalTests` · `Filesystem.Tests/FsEventsRecordsTests` · `Hosts.Tests/MacChangeHistoryRunTests` · [notes](#0191--macos-change-history) |
 
 ---
 
@@ -5652,7 +5653,7 @@ What remains is recorded rather than done:
 - nothing asks the journal yet; the service's use of it, keeping a place
   before each walk and walking in full daily, is next;
 - ReFS's journal, whose records carry longer identities, is not read;
-- macOS and Linux have no change source yet (Linux has had one since ADR-0190).
+- macOS and Linux have no change source yet (Linux has had one since ADR-0190, macOS since ADR-0191).
 
 ### 0188 — backups told what changed
 
@@ -5683,7 +5684,7 @@ What remains is recorded rather than done:
   the command line, and the last full walk in status, are next (the
   setting, the contract and the command line's status are ADR-0189's);
 - direct mode's backup walks in full;
-- macOS and Linux have no change source yet (Linux has had one since ADR-0190);
+- macOS and Linux have no change source yet (Linux has had one since ADR-0190, macOS since ADR-0191);
 - a deleted set's kept places stay until its id is used again.
 
 ### 0189 — full walk a setting
@@ -5761,4 +5762,48 @@ What remains is recorded rather than done:
   name outside the set, and an overlay's lower layer go unheard until the
   full walk;
 - a deleted set's watches go when the service stops or the folders do;
-- macOS has no change source yet.
+- macOS has no change source yet (it has had one since ADR-0191).
+
+### 0191 — macOS change history
+
+Built in one slice, tests first. macOS had no change source, so every
+backup there still walked in full.
+
+**The volume's history.** `Filesystem.Local/MacChangeJournal` answers the
+change journal's two questions from the FSEvents history the system keeps
+for each volume, whether or not anything listens. A place is the
+history's identity, which the system renews whenever it starts the
+history afresh, and the latest event's number. Asked what changed since
+one, it replays the history from there over the set's roots, as the
+system spells them with no link above.
+
+**The mark.** The system numbers a change a moment after it is made, so
+after the replay the journal writes a mark of its own in a folder the
+stream also watches, and answers only once the mark comes back. A change
+made a moment before the question is then in the answer. A replay or a
+mark not in time is doubt.
+
+**What it names.** A file or a link names the folder holding it; a
+folder names itself, and a run walks every folder above a path it is
+told of. The run compares those paths exactly, and nothing promises the
+history heard a folder in its own case, so each is resolved as it is
+spelled on disk; one that cannot be, or lies outside every root, is
+doubt. The rule is `Filesystem.Local/FsEventsRecords`, with no platform
+call in it, so it is tested on every platform. A
+history the system reset, dropped events from or told to be scanned
+again, a root moved, a volume mounted or unmounted under a root, a
+changed file with another name, and a place in another history or ahead
+of this one are doubt. A folder not there, or on a volume keeping no
+history, has no place.
+
+`Agent/ServiceRuntime` gives every backup the history on macOS. The
+history outlasts the service, as the journal does on Windows, so a
+backup after a restart asks from the place its last backup kept.
+
+What remains is recorded rather than done:
+
+- a hard-linked file changed through a name outside the set goes unheard
+  until the full walk, as on Windows;
+- a history the system pruned without starting afresh or saying it lost
+  track would be believed until the set's next full walk;
+- a set of several roots writes a mark for each.

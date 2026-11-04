@@ -84,6 +84,8 @@ The watch keeps up to 100,000 changed folders. Past that it lets go of the older
 ## What this does not do
 
 - **Watch on macOS.** FSEvents keeps a journal of its own, as Windows does, and is the next record.
+
+  > **2026-11 ([ADR-0191](0191-on-macos-the-service-asks-the-volumes-event-history.md)).** On macOS the service asks that history and watches nothing.
 - **Watch beyond the process.** A change made while the service is stopped is found by the first backup after it starts, which walks in full.
 - **Let go of a set's watches when the set is deleted.** They go when the service stops, or when the folders do.
 - **Watch with fanotify.** It needs privileges the service may not hold, and its whole-filesystem marks hear every other program too.
@@ -99,3 +101,4 @@ The watch keeps up to 100,000 changed folders. Past that it lets go of the older
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first. The whole Hosts suite passes on Linux with the watch on by default. |
+| 2026-11 | Accepted | Noted by [ADR-0191](0191-on-macos-the-service-asks-the-volumes-event-history.md): macOS is asked from the volume's event history, not watched. |
