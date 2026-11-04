@@ -12,7 +12,7 @@
 - The seam: `Cli/OperationGateway` lets a test wrap the source a direct backup reads through, as the service's harness wraps the service's.
 - The clients: `Cli/RestorePlanReport` prints them under an earlier line; the console's plan step says how many, each, and why.
 - The tests:
-  - `Repository.Tests/OnlineOnlyCaptureTests` — the probe names the file an earlier version stands in for, with what the backup said of it; no file new to the set, none on the device that would not read, and none outside what the plan restores; none for a backup that fetched every one.
+  - `Repository.Tests/OnlineOnlyCaptureTests` — the probe names the file an earlier version stands in for, with what the backup said of it; no file new to the set, none on the device that would not read, and none outside what the plan restores; none for a backup that fetched every one; and, with a byte of the snapshot's failures or of its manifest flipped beneath the store, none named and the plan unable to name them.
   - `Repository.Tests/RestorePlanTests` — where the snapshot's failures will not read, the plan says it cannot name them.
   - `Hosts.Tests/EarlierVersionPlanTests` — the service's plan names it, through a stand-in source wrapping the real one.
   - `Api.Tests/ContractAdditiveFieldsTests` — the wire names at 1.85, and an older service's silence.

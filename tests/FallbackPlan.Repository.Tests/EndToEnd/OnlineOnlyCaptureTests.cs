@@ -601,6 +601,55 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         Assert.IsEmpty((await ProbeAsync(catalogue, store, keys, 0xB2, "docs/still.bin")).EarlierVersions);
     }
 
+    [TestMethod]
+    public async Task ARestoresPlan_WhoseSnapshotOrItsFailuresWillNotRead_SaysItCannotName_AndNamesNone()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+        var failures = second.ErrorManifestObjectId ?? throw new AssertFailedException("the run recorded its failure");
+
+        // The failures will not read: nothing can be named, and the plan says so.
+        await FlipAsync(store, keys, failures);
+        var unread = await ProbeAsync(catalogue, store, keys, 0xB2);
+        Assert.IsTrue(unread.FailuresUnread, "the snapshot's failures would not read");
+        Assert.IsEmpty(unread.EarlierVersions);
+        await FlipAsync(store, keys, failures);
+
+        // Nor where the snapshot's own manifest will not read, which says
+        // where its failures are.
+        await FlipAsync(store, keys, second.SnapshotObjectId);
+        Assert.IsTrue((await ProbeAsync(catalogue, store, keys, 0xB2)).FailuresUnread, "the snapshot's manifest would not read");
+    }
+
+    /// <summary>Flips one ciphertext byte of a record beneath the store, so it no longer authenticates; flipped again, it does.</summary>
+    private async Task FlipAsync(IObjectStore store, RepositoryKeySet keys, ObjectId record)
+    {
+        RecordTableEntry located;
+        string file;
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            Assert.IsTrue(reader.TryLocateRecord(record, out var blobStoreKey, out located));
+            file = Path.Combine(StoreRoot, blobStoreKey.Value.Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        var stored = await File.ReadAllBytesAsync(file, CancellationToken.None);
+        stored[(long)located.PhysicalOffset + 54 + 3] ^= 0x01;
+        await File.WriteAllBytesAsync(file, stored, CancellationToken.None);
+    }
+
     private static async Task<RestoreBlobSetResult> ProbeAsync(
         CatalogueDb catalogue, IObjectStore store, RepositoryKeySet keys, byte snapshotSeed, string prefix = "")
     {
