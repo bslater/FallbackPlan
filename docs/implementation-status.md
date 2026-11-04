@@ -212,8 +212,9 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0185](adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) | A run stops fetching online-only files after the first that does not come: on Windows offline, recall on open or recall on data access make a file online-only; the first whose fetch fails stops the run opening any other, each named with the file that failed and why, and the next backup fetches it again; a file gone, refused, or on the device stops nothing. Amendment 1: a backup keeps none of the five bits a provider keeps on an entry, so going between online-only and on the device is no change, and a restore names none. Amendment 2: a file the run fetched and read whole is freed again, unless pinned; a refusal fails nothing | **Built** | `Domain/MetadataRules` · `Filesystem.Local/LocalFileSystemSource` · `Repository/SnapshotPublication` · `Repository.Tests/OnlineOnlyCaptureTests`, `Domain.Tests/OnlineOnlyAttributesTests`, `Domain.Tests/FileAttributesWriteBackTests`, `Filesystem.Tests/LocalScanTests`, `Hosts.Tests/PacedFileSystemSourceTests` · `Filesystem.Local/WindowsInterop` · `Agent/PacedFileSystemSource` · [notes](#0185--online-only-files) |
 | [0186](adr/0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) | A run reuses a folder it was told did not change: told which folders changed since its prior snapshot, it walks only those and the folders above them, and takes every other folder's tree as that snapshot held it; a folder holding a path the prior snapshot failed, one it does not hold, and one whose tree is a chain are walked, and nothing is reused under other rules or other folders; a reused folder's rows are recorded again after the run's row. No change source tells a run yet | **Built** | `Repository/FolderReuse` · `Repository/SnapshotPublication` · `Repository/TargetedRecordReader` · `Repository.Catalogue/Catalogue` · `Filesystem/ScanModel` · `Filesystem/MultiRootScan` · `Filesystem.Local/LocalFileSystemSource` · `Repository.Tests/FolderReuseTests`, `Filesystem.Tests/LocalScanTests`, `Filesystem.Tests/MultiRootStitchTests` · [notes](#0186--folder-reuse) |
 | [0187](adr/0187-a-volumes-change-journal-names-the-folders-that-changed.md) | A volume's change journal names the folders that changed: on Windows, since a place in an NTFS volume's journal, the folder holding each entry changed, a folder whose own metadata changed, and every folder holding a name of a changed file, under the roots asked of; another journal, records let go of, a record of another version, a root on another volume, or a folder it cannot find is no answer. Amendment 1: only a file changed in the set's folders is opened to find its other names. Amendment 2: a folder gone as the records are followed is read again rather than doubted | **Built** | `Filesystem/ChangeJournal` · `Filesystem.Local/UsnRecords` · `Filesystem.Local/WindowsChangeJournal` · `Filesystem.Tests/UsnRecordsTests`, `Filesystem.Tests/WindowsChangeJournalTests` · [notes](#0187--change-journal) |
-| [0188](adr/0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) | The service tells a backup what changed since the set's last: a backup takes the journal's places before it walks and keeps them once it has published; the next asks from there and walks only what is named; it walks in full where nothing was kept for the last backup, the folders changed, the journal cannot say, a full backup is asked for, and at least once a day; a backup that reused folders says how many it did not walk. Windows only; since ADR-0189 the full walk is a setting of the set | **Built** | `Agent/ChangeHints` · `Agent/BackupRunner` · `Agent/ServiceRuntime` · `Hosts.Tests/ChangeJournalRunTests` · [notes](#0188--backups-told-what-changed) |
+| [0188](adr/0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) | The service tells a backup what changed since the set's last: a backup takes the journal's places before it walks and keeps them once it has published; the next asks from there and walks only what is named; it walks in full where nothing was kept for the last backup, the folders changed, the journal cannot say, a full backup is asked for, and at least once a day; a backup that reused folders says how many it did not walk. Windows, and Linux since ADR-0190; since ADR-0189 the full walk is a setting of the set | **Built** | `Agent/ChangeHints` · `Agent/BackupRunner` · `Agent/ServiceRuntime` · `Hosts.Tests/ChangeJournalRunTests` · [notes](#0188--backups-told-what-changed) |
 | [0189](adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md) | A set's full walk is a setting of the set: named in its schedule's grammar, the first backup after it falls due walks in full; none named is a day, one that does not read walks every backup in full, and it starts no backup; contract 1.82 carries it, an edit keeping it where silent, clearing it where empty and refusing one that does not read, and the last full walk on the set's status, which the command line prints; since [Amendment 1](adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md#amendment-1-2026-11--the-console-sets-the-full-walk-and-shows-the-last) the console sets it beside the schedule, always sending what it shows, and a set's card says when it was last walked in full | **Built** | `Application/ClientConfiguration` · `Agent/ChangeHints` · `Agent/ServiceCommandHandler` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Hosts.Tests/ChangeJournalRunTests` · `Hosts.Tests/ConfigurationCommandTests` · `Application.Tests/ClientConfigurationTests` · `Api.Tests/ContractAdditiveFieldsTests` · `Cli.Tests/StatusFullWalkTokenTests` · `Web.DomTests/FullWalkDomTests` · `Web.Tests/StatusRelayNamesTests` · [notes](#0189--full-walk-a-setting) |
+| [0190](adr/0190-on-linux-the-service-watches-a-sets-folders-itself.md) | On Linux the service watches a set's folders itself: the first place asked starts an inotify watch of the root and every folder below it on its filesystem, one tree for every set; a change names its folder, a folder made or moved in is named whole and watched, a folder moved within goes on being named where it is; a place is good only to the session that gave it, and a changed file with another name, an overflowed queue, a place older than the 100,000 changed folders kept, or a root moved or deleted is doubt; a root over the watch limit or on a remote filesystem has no place; the runtime gives every backup the process's one watch | **Built** | `Filesystem.Local/LinuxChangeJournal` · `Agent/ServiceRuntime` · `Filesystem.Tests/LinuxChangeJournalTests` · `Hosts.Tests/LinuxChangeWatchRunTests` · [notes](#0190--linux-change-watch) |
 
 ---
 
@@ -5651,7 +5652,7 @@ What remains is recorded rather than done:
 - nothing asks the journal yet; the service's use of it, keeping a place
   before each walk and walking in full daily, is next;
 - ReFS's journal, whose records carry longer identities, is not read;
-- macOS and Linux have no change source yet.
+- macOS and Linux have no change source yet (Linux has had one since ADR-0190).
 
 ### 0188 — backups told what changed
 
@@ -5682,7 +5683,7 @@ What remains is recorded rather than done:
   the command line, and the last full walk in status, are next (the
   setting, the contract and the command line's status are ADR-0189's);
 - direct mode's backup walks in full;
-- macOS and Linux have no change source yet;
+- macOS and Linux have no change source yet (Linux has had one since ADR-0190);
 - a deleted set's kept places stay until its id is used again.
 
 ### 0189 — full walk a setting
@@ -5723,3 +5724,41 @@ walk, the set's own or empty for the default, never the null that keeps
 whatever stands. A set's card on the overview says when it was last
 walked in full, beside its next run, and nothing for a set whose backups
 ask no journal. `Web.DomTests/FullWalkDomTests` walks each of these.
+
+### 0190 — Linux change watch
+
+Built in one slice, tests first. Linux keeps no change journal a program
+can read after the fact, so every backup there still walked in full.
+
+**The service's own watch.** `Filesystem.Local/LinuxChangeJournal`
+answers the change journal's two questions from an inotify watch the
+process holds. The first place asked for a folder watches it and every
+folder below it on its filesystem, before the place is given, so the
+backup that takes the place walks in full and every change after is
+heard. One tree of watches serves every set.
+
+**What it names.** A change names its folder; a folder made or moved in
+is named whole and watched from then; a folder moved within goes on being
+named where it is, and one moved out is unwatched; a set's root moved or
+deleted is forgotten.
+
+**What is doubt.** Each root carries a session, renewed whenever the
+watch loses track, so a place from before is answered with doubt: a
+changed file with another name, an overflowed queue, a name that is not
+UTF-8, a watch that cannot be read. Past 100,000 changed folders the
+watch lets go of the older half, and a place from before them is doubt.
+A root over `fs.inotify.max_user_watches`, or on a filesystem changed
+from elsewhere, has no place and says why.
+
+`Agent/ServiceRuntime` gives every backup the process's one watch on
+Linux. The whole Hosts suite passes with it on.
+
+What remains is recorded rather than done:
+
+- a backup after the service starts walks in full, since the watch lasts
+  only as long as the process;
+- writes through a memory mapping, a hard-linked file changed through a
+  name outside the set, and an overlay's lower layer go unheard until the
+  full walk;
+- a deleted set's watches go when the service stops or the folders do;
+- macOS has no change source yet.
