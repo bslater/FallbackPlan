@@ -955,6 +955,15 @@ function notFetchedLine(set) {
   return `<p class="sub" data-not-fetched title="${esc(why)}">${esc(head + which)} · first missed ${esc(rel(m.since))}</p>`;
 }
 
+// A set that leaves its online-only files to their cloud provider
+// (contract 1.89), said where a person reads what the set backs up: a file
+// new or changed there is in no backup. Nothing for a set that fetches them,
+// and from a service older than 1.89.
+function leavesOnlineOnlyLine(set) {
+  if (set.leavesOnlineOnly !== true) return "";
+  return `<p class="sub" data-leaves-online-only>Online-only files are left to their cloud provider: one new or changed there is not downloaded, and is kept only by its provider.</p>`;
+}
+
 // The same count at a glance, on the card itself.
 function notFetchedChip(set) {
   const m = set.notFetched;
@@ -1123,6 +1132,7 @@ function renderSetCard(set) {
       <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}${pendingClause(set)}${fullWalkClause(set)}
          ${verification}</p>
       ${notFetchedLine(set)}
+      ${leavesOnlineOnlyLine(set)}
       ${staging ? `<p class="sub"><span class="detail">Staging archive</span> ${staging}</p>` : ""}
       ${destinations}
       ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
@@ -4004,6 +4014,7 @@ function newDraft(set) {
     overrides: { ...(set?.destinationRetention ?? {}) },
     priority: set?.priority ?? null,
     directShip: set ? (set.directShip ?? false) : true,
+    leaveOnlineOnly: set?.leaveOnlineOnly ?? false, // false: fetched, as every set before 1.89
     touched: new Set(),       // sections staged by their dialogs, pending the one confirm
     tree: new Map(),          // full path -> {open, listing}; "" is the machine's drive list
     lastPreviewKey: null,     // what the live preview last compared, to skip no-op walks
@@ -4089,7 +4100,8 @@ function renderSetSummary() {
     ["sec-retention", "retention", "Retention", esc(retentionProse(E.retention, E.overrides))],
     ["sec-other", "other", "Other settings",
       `${E.priority != null ? `priority ${esc(String(E.priority))}` : "default priority"} · `
-        + (E.directShip ? "ships straight to destinations" : "stages locally, then copies out")],
+        + (E.directShip ? "ships straight to destinations" : "stages locally, then copies out")
+        + (E.leaveOnlineOnly ? " · online-only files left to their cloud provider" : "")],
   ];
 
   openDialog(`
@@ -4370,7 +4382,15 @@ function setSectionHtml(key) {
         machine. Changing this on an existing set migrates it; its staging archive stays as a read-only seed
         until you retire it from the notice.</p>
         <label class="mini"><input type="checkbox" id="set-direct-ship" ${E.directShip ? "checked" : ""}>
-          ship straight to destinations</label>`;
+          ship straight to destinations</label>
+        <label class="field">Online-only files</label>
+        <p class="subtle">A cloud provider can keep a file's content off this device until it is opened. Backups
+        download such a file when it is new or changed, since the cloud copy is not a backup: a deletion, an
+        overwrite or ransomware reaches it too. Ticked, backups download none. A file new or changed there is left
+        out of the backup and kept only by its provider; one already backed up keeps that version while it is
+        unchanged.</p>
+        <label class="mini"><input type="checkbox" id="set-leave-online-only" ${E.leaveOnlineOnly ? "checked" : ""}>
+          leave online-only files to their cloud provider</label>`;
   }
 }
 
@@ -4458,6 +4478,9 @@ function payloadFromDraft() {
     // preserve-by-omission a pre-1.23 client sends, and an editor that
     // shows the checkbox must say what it shows.
     directShip: E.directShip,
+    // Always explicit from this editor (contract 1.89): null keeps what
+    // stands, and the editor says what it shows.
+    leaveOnlineOnly: E.leaveOnlineOnly,
   };
 }
 
@@ -4528,6 +4551,7 @@ function stageSection(key, { lenient = false } = {}) {
       }
       E.priority = priority;
       E.directShip = document.getElementById("set-direct-ship")?.checked ?? false;
+      E.leaveOnlineOnly = document.getElementById("set-leave-online-only")?.checked ?? false;
       // The wizard's last step carries the schedule; the summary's Other
       // settings dialog does not, and leaves it as staged.
       if (document.querySelector("input[name=sched-mode]")) E.schedule = scheduleFromEditor();
