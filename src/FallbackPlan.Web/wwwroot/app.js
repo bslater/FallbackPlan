@@ -894,6 +894,14 @@ function stagingSweepLabel(set) {
   return sweepLabel({ deepSweep: set.stagingSweep });
 }
 
+// When the set was last walked in full, every folder looked at whatever the
+// change journal said (contract 1.82). Nothing for a set whose backups ask no
+// journal: each of them walks in full, and nothing is owed a line.
+function fullWalkClause(set) {
+  if (set.lastFullWalkAt == null) return "";
+  return ` · <span title="Every folder last looked at ${esc(fmtWhen(set.lastFullWalkAt))}">walked in full ${esc(rel(set.lastFullWalkAt))}</span>`;
+}
+
 // The ring: an SVG arc whose offset is set from script, because the CSP
 // forbids inline style attributes — the same reason the meters' widths are.
 // The unknown state draws the track alone rather than a zero-length arc, so
@@ -1050,7 +1058,7 @@ function renderSetCard(set) {
     </summary>
     <div class="set-body">
       <p class="sub">${badge(meta, meta.label)} ${esc(meta.blurb)}</p>
-      <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}
+      <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}${fullWalkClause(set)}
          ${verification}</p>
       ${staging ? `<p class="sub"><span class="detail">Staging archive</span> ${staging}</p>` : ""}
       ${destinations}
@@ -3925,6 +3933,7 @@ function newDraft(set) {
     handIncludes,
     handExcludes,
     schedule: set?.schedule ?? null,
+    fullWalk: set?.fullWalk ?? null,   // null: the default, a day after the last
     destinations: new Set(set?.destinations ?? []),
     retention: set?.retention ?? null,
     overrides: { ...(set?.destinationRetention ?? {}) },
@@ -3965,6 +3974,11 @@ function describeSchedule(schedule) {
   return daily ? `daily at ${daily[1]}` : schedule;
 }
 
+// A set's full walk in the schedule's words; none named is the default.
+function describeFullWalk(fullWalk) {
+  return fullWalk ? describeSchedule(fullWalk) : "daily (the default)";
+}
+
 // The retention policy as a sentence. Absent fields are "no rule"; with no
 // rules at all the truth is stated plainly rather than as blanks.
 function retentionProse(policy, overrides) {
@@ -3995,7 +4009,8 @@ function renderSetSummary() {
   const roots = compiled.roots.length ? compiled.roots : E.roots;
   const ruleCount = E.handIncludes.length + E.handExcludes.length;
   const rows = [
-    ["sec-schedule", "schedule", "Schedule", esc(describeSchedule(E.schedule))],
+    ["sec-schedule", "schedule", "Schedule",
+      `${esc(describeSchedule(E.schedule))} · walked in full ${esc(describeFullWalk(E.fullWalk))}`],
     ["sec-locations", "locations", "What is backed up",
       roots.length
         ? roots.map(root => `<span class="mono" title="${esc(root.path)}">${esc(truncateMiddle(root.path, 58))}</span>`).join(" · ")
@@ -4153,6 +4168,7 @@ function wizardRest(index) {
   if (ahead("retention")) parts.push(`retention: ${retentionProse(E.retention, E.overrides)}`);
   if (ahead("other")) {
     parts.push(`schedule: ${describeSchedule(E.schedule)}`);
+    parts.push(`walked in full ${describeFullWalk(E.fullWalk)}`);
     parts.push(E.directShip ? "ships straight to its destinations" : "stages here, then copies out");
   }
   return parts.length ? `Created now, the rest stays as it is — ${parts.join(" · ")}.` : "";
@@ -4217,7 +4233,8 @@ function setSectionHtml(key) {
           <label><input type="radio" name="sched-mode" value="daily" ${scheduleMode === "daily" ? "checked" : ""}> daily at
             <input type="time" id="sched-time" value="${esc(daily)}"></label>
         </div>
-        <div id="sched-preview" class="subtle"></div>`;
+        <div id="sched-preview" class="subtle"></div>
+        ${fullWalkHtml()}`;
     }
 
     case "locations":
@@ -4292,6 +4309,33 @@ function setSectionHtml(key) {
   }
 }
 
+// The full walk, offered in the schedule's own choices (ADR-0189). A form the
+// choices cannot show checks none of them, and is kept as the set has it.
+function fullWalkHtml() {
+  const mode = !E.fullWalk ? "default"
+    : /^every \d+[mhd]$/.test(E.fullWalk) ? "every"
+    : /^daily at /.test(E.fullWalk) ? "daily" : "custom";
+  const every = /^every (\d+)([mhd])$/.exec(E.fullWalk ?? "") ?? [null, "7", "d"];
+  const daily = /^daily at (.+)$/.exec(E.fullWalk ?? "")?.[1] ?? "02:00";
+  return `
+    <label class="field">Full walk</label>
+    <p class="subtle">Between full walks a backup looks only in the folders the change journal says changed.
+    A full walk looks in every folder, to find a change the journal missed. It starts no backup of its own:
+    the first backup after it falls due walks in full.${mode === "custom" ? ` This set's is ${esc(E.fullWalk)}, kept unless you choose another.` : ""}</p>
+    <div class="radio-row">
+      <label><input type="radio" name="fw-mode" value="default" ${mode === "default" ? "checked" : ""}> daily (the default)</label>
+      <label><input type="radio" name="fw-mode" value="every" ${mode === "every" ? "checked" : ""}> every
+        <input type="text" id="fw-n" class="num" value="${esc(every[1])}">
+        <select id="fw-unit">
+          <option value="m" ${every[2] === "m" ? "selected" : ""}>minutes</option>
+          <option value="h" ${every[2] === "h" ? "selected" : ""}>hours</option>
+          <option value="d" ${every[2] === "d" ? "selected" : ""}>days</option>
+        </select></label>
+      <label><input type="radio" name="fw-mode" value="daily" ${mode === "daily" ? "checked" : ""}> daily at
+        <input type="time" id="fw-time" value="${esc(daily)}"></label>
+    </div>`;
+}
+
 // Sections whose controls mutate the draft live (the tree's marks, the rule
 // chips, the destination checkboxes) are snapshotted on open so Cancel can
 // mean it; the rest stage nothing until Save reads their inputs.
@@ -4336,6 +4380,9 @@ function payloadFromDraft() {
     root: compiled.roots[0]?.path ?? "", // back-fill for anything pre-1.10 reading it
     roots: compiled.roots.map(root => ({ path: root.path, label: root.label })),
     schedule: E.schedule,
+    // Always explicit from this editor (contract 1.82): null keeps what
+    // stands, so the default is said as empty.
+    fullWalk: E.fullWalk ?? "",
     includeRules: [...E.handIncludes],
     excludeRules: [...compiled.excludeRules, ...E.handExcludes],
     destinations: [...E.destinations],
@@ -4367,6 +4414,7 @@ function stageSection(key, { lenient = false } = {}) {
     }
     case "schedule":
       E.schedule = scheduleFromEditor();
+      E.fullWalk = fullWalkFromEditor();
       return true;
     case "locations":
     case "sources":
@@ -4418,6 +4466,7 @@ function stageSection(key, { lenient = false } = {}) {
       // The wizard's last step carries the schedule; the summary's Other
       // settings dialog does not, and leaves it as staged.
       if (document.querySelector("input[name=sched-mode]")) E.schedule = scheduleFromEditor();
+      if (document.querySelector("input[name=fw-mode]")) E.fullWalk = fullWalkFromEditor();
       return true;
     }
     default:
@@ -4920,6 +4969,19 @@ function scheduleFromEditor() {
   }
   if (mode === "daily") return `daily at ${document.getElementById("sched-time").value || "00:00"}`;
   return E?.schedule ?? null; // custom: whatever the set already had
+}
+
+function fullWalkFromEditor() {
+  // As the schedule's: outside its dialog the staged draft is the answer.
+  if (!document.querySelector("input[name=fw-mode]")) return E?.fullWalk ?? null;
+  const mode = document.querySelector("input[name=fw-mode]:checked")?.value ?? "custom";
+  if (mode === "default") return null;
+  if (mode === "every") {
+    const n = document.getElementById("fw-n").value.trim() || "0";
+    return `every ${n}${document.getElementById("fw-unit").value}`;
+  }
+  if (mode === "daily") return `daily at ${document.getElementById("fw-time").value || "00:00"}`;
+  return E?.fullWalk ?? null; // custom: whatever the set already had
 }
 
 function readPolicyInputs(read) {
