@@ -1,5 +1,7 @@
+using System.CommandLine;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
+using FallbackPlan.Api.Transport;
 using FallbackPlan.Filesystem;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -90,6 +92,29 @@ public sealed class NotFetchedStatusTests : IDisposable
         await BackUpAsync(runtime, start.AddHours(2));
 
         Assert.IsNull((await StatusAsync(runtime)).NotFetched);
+    }
+
+    [TestMethod]
+    public async Task TheCommandLinesStatus_PrintsHowManyOnTheSetsLine()
+    {
+        WriteTree();
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        _harness.WriteSourceFile("docs/a.cloud", "alpha, changed");
+        _harness.WriteSourceFile("docs/b.cloud", "bravo, changed");
+        _delivers = false;
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        await using var listener = LocalServiceListener.Start(
+            new ServiceCommandHandler(runtime, RemoteBindingState.Off), _harness.StateDirectory);
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("  not-fetched:2", result.All, StringComparison.Ordinal);
     }
 
     private static ulong Ms(DateTimeOffset at) => (ulong)at.ToUnixTimeMilliseconds();
