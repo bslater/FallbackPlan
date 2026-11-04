@@ -575,7 +575,9 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
 
         await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
-        Assert.IsEmpty((await ProbeAsync(catalogue, store, keys, 0xA1)).EarlierVersions, "a backup that fetched every one");
+        var clean = await ProbeAsync(catalogue, store, keys, 0xA1);
+        Assert.IsEmpty(clean.EarlierVersions, "a backup that fetched every one");
+        Assert.IsFalse(clean.FailuresUnread, "a snapshot that failed nothing has no failures to read");
 
         Change(doc, 5);
         Change(local, 8);

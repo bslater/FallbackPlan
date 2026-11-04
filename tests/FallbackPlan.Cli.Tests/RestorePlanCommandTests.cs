@@ -15,7 +15,9 @@ namespace FallbackPlan.Cli.Tests;
 /// it would write to takes for one are named a collision, whatever its
 /// platform's volumes do (ADR-0170 Amendment 5), and a name that volume's
 /// rules refuse or alter is named where it names files by Windows' rules
-/// (ADR-0170 Amendment 6).
+/// (ADR-0170 Amendment 6). It names each file it restores as a version
+/// backed up before, standing in for one its backup could not fetch, and why,
+/// and may still run (ADR-0194).
 /// </summary>
 /// <remarks>
 /// In direct mode the CLI makes the plan itself, as it runs the restore
@@ -88,6 +90,31 @@ public sealed class RestorePlanCommandTests : IDisposable
         Assert.Contains("by Windows' rules", fat.All, StringComparison.Ordinal);
         Assert.Contains("what?.txt", fat.All, StringComparison.Ordinal);
         Assert.IsFalse(Directory.Exists(destination), "a plan writes nothing, not even the folder");
+    }
+
+    [TestMethod]
+    public async Task Plan_OfAFileAnEarlierVersionStandsIn_NamesItAndWhy_AndMayStillRun()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/a.cloud", "alpha");
+        _cli.WriteFile("tree/b.txt", "bravo");
+        var delivers = true;
+        DirectGateway.SourceInFlow = source => new CloudStandIn(source, () => delivers);
+        var first = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+        Assert.AreEqual(0, first.ExitCode, first.All);
+
+        _cli.WriteFile("tree/a.cloud", "alpha, changed");
+        delivers = false;
+        await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+        var snapshot = await FirstSnapshotAsync();
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        var plan = await _cli.RunAsync("restore", snapshot, "--output", destination, "--plan");
+
+        Assert.AreEqual(0, plan.ExitCode, plan.All);
+        Assert.Contains("earlier: 1 file(s)", plan.All, StringComparison.Ordinal);
+        Assert.Contains("a.cloud — ", plan.All, StringComparison.Ordinal);
+        Assert.Contains("stands in its place", plan.All, StringComparison.Ordinal);
     }
 
     [TestMethod]
