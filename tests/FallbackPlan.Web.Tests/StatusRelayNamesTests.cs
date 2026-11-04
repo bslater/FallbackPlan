@@ -338,6 +338,43 @@ public sealed class StatusRelayNamesTests
     }
 
     [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesTheChangesWaitingForEachSet()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets:
+            [
+                new BackupSetStatusDescriptor(
+                    "docs", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [], PendingChanges: new PendingChangesDescriptor(12, null, 9_000)),
+                new BackupSetStatusDescriptor(
+                    "photos", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [], PendingChanges: new PendingChangesDescriptor(null, "its full walk is due", 9_000)),
+                new BackupSetStatusDescriptor(
+                    "music", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    []),
+            ],
+            ObservedAt: 10_000,
+            Notices: []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var sets = body.RootElement.GetProperty("sets");
+        var docs = sets[0].GetProperty("pendingChanges");
+        Assert.AreEqual(12, docs.GetProperty("files").GetInt64());
+        Assert.AreEqual(JsonValueKind.Null, docs.GetProperty("walksInFullBecause").ValueKind);
+        Assert.AreEqual(9_000, docs.GetProperty("countedAt").GetInt64());
+        var photos = sets[1].GetProperty("pendingChanges");
+        Assert.AreEqual(JsonValueKind.Null, photos.GetProperty("files").ValueKind);
+        Assert.AreEqual("its full walk is due", photos.GetProperty("walksInFullBecause").GetString());
+        Assert.AreEqual(JsonValueKind.Null, sets[2].GetProperty("pendingChanges").ValueKind);
+    }
+
+    [TestMethod]
     public async Task GetStatus_WithNoLimits_RelaysNullRatherThanOmittingIt()
     {
         await using var harness = await ConsoleHarness.StartAsync();
