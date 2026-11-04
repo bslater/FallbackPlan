@@ -412,8 +412,11 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
                 StringComparison.Ordinal);
         }
 
-        // As it was when it was backed up, so the next backup sees it changed.
-        Assert.AreEqual(1_722_000_000_000UL, catalogue.LookupPath(Snapshot(0xB2), "docs/doc.bin")!.ModifiedAt);
+        // As it was when it was backed up, so the next backup sees it changed,
+        // and with its own length, which no later record overwrites.
+        var kept = catalogue.LookupPath(Snapshot(0xB2), "docs/doc.bin")!;
+        Assert.AreEqual(1_722_000_000_000UL, kept.ModifiedAt);
+        Assert.AreEqual(4_000UL, kept.LogicalLength);
     }
 
     [TestMethod]
