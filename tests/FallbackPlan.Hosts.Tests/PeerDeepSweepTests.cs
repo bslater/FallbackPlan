@@ -732,6 +732,10 @@ public sealed class PeerDeepSweepTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
                 PacingClock = _pacing.Clock,
+                // Every backup walks in full. Tests that write a file and back
+                // up again need the second backup to take it, whatever the
+                // host's change journal would have said.
+                ChangeJournal = null,
             },
             Timeout);
     }
