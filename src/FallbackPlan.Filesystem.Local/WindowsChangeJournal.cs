@@ -41,6 +41,9 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
     /// <summary>The most entries one read names before a walk is the cheaper way to find them.</summary>
     public const int MostEntriesNamed = 200_000;
 
+    /// <summary>How many times the journal is read for one answer, while a folder it names is gone as it is followed.</summary>
+    private const int ReadingsForAFolderGone = 4;
+
     private const uint GenericRead = 0x8000_0000;
     private const uint ShareAll = 0x7;
     private const uint OpenExisting = 3;
@@ -115,10 +118,12 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
     /// <summary>
     /// As <see cref="ChangedSince(JournalPosition, IReadOnlyCollection{string})"/>,
     /// and where there is no answer, why: the step that doubted, with the
-    /// platform's error where one was raised.
+    /// platform's error where one was raised. <paramref name="afterReading"/>
+    /// runs once the records are first read and before they are followed, so
+    /// a test can delete a folder between the two as another program would.
     /// </summary>
     internal static IReadOnlyList<ChangedFolder>? ChangedSince(
-        JournalPosition since, IReadOnlyCollection<string> roots, out string? doubt)
+        JournalPosition since, IReadOnlyCollection<string> roots, out string? doubt, Action? afterReading = null)
     {
         ArgumentNullException.ThrowIfNull(since);
         ArgumentNullException.ThrowIfNull(roots);
@@ -155,36 +160,68 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
             return null;
         }
 
-        if (Query(device) is not { } journal)
-        {
-            doubt = Failed($"asking {since.Volume} for its journal");
-            return null;
-        }
-
-        if (!JournalCoverage.Covers(since, journal.Id, journal.LowestValid, journal.Next))
-        {
-            doubt = "the journal does not hold every record since the place";
-            return null;
-        }
-
-        if (Read(device, since, journal.Next) is not { } changes)
-        {
-            doubt = Failed("reading the journal");
-            return null;
-        }
-
-        if (changes.Folders.Count + changes.Files.Count > MostEntriesNamed)
-        {
-            doubt = "it names more entries than a walk would cost";
-            return null;
-        }
-
         using var hint = OpenDirectory(spelled[0].OnVolume);
         if (hint.IsInvalid)
         {
             doubt = Failed($"opening {spelled[0].OnVolume}");
             return null;
         }
+
+        // A folder another program deletes after its records are read, and
+        // before they are followed, cannot be opened, and its deletion is not
+        // among them: the journal is read again, and holds it then.
+        for (var reading = 1; ; reading++)
+        {
+            if (Query(device) is not { } journal)
+            {
+                doubt = Failed($"asking {since.Volume} for its journal");
+                return null;
+            }
+
+            if (!JournalCoverage.Covers(since, journal.Id, journal.LowestValid, journal.Next))
+            {
+                doubt = "the journal does not hold every record since the place";
+                return null;
+            }
+
+            if (Read(device, since, journal.Next) is not { } changes)
+            {
+                doubt = Failed("reading the journal");
+                return null;
+            }
+
+            if (changes.Folders.Count + changes.Files.Count > MostEntriesNamed)
+            {
+                doubt = "it names more entries than a walk would cost";
+                return null;
+            }
+
+            if (reading == 1)
+            {
+                afterReading?.Invoke();
+            }
+
+            var named = Follow(changes, hint, spelled, out doubt, out var vanished);
+            if (named is not null || !vanished || reading == ReadingsForAFolderGone)
+            {
+                return named;
+            }
+
+            Thread.Sleep(50 * reading);
+        }
+    }
+
+    /// <summary>
+    /// The folders in the set that <paramref name="changes"/> name, or null
+    /// with why; <paramref name="vanished"/> says a folder they name was gone
+    /// by the time it was followed.
+    /// </summary>
+    private static List<ChangedFolder>? Follow(
+        JournalChanges changes, SafeFileHandle hint, List<(string Root, string OnVolume)> spelled,
+        out string? doubt, out bool vanished)
+    {
+        doubt = null;
+        vanished = false;
 
         // Folders first, so that only a file changed in one of the set's
         // folders is opened to find its other names: a file another program
@@ -200,6 +237,7 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
 
             if (PathOfId(hint, folder, out var error) is not { } path)
             {
+                vanished = Vanished(error);
                 doubt = string.Create(CultureInfo.InvariantCulture, $"finding folder {folder:X}: error {error}");
                 return null;
             }
@@ -227,6 +265,7 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
             {
                 if (PathOfId(hint, folder, out var error) is not { } path)
                 {
+                    vanished = Vanished(error);
                     doubt = string.Create(CultureInfo.InvariantCulture, $"finding folder {folder:X}: error {error}");
                     return null;
                 }
@@ -261,6 +300,10 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
             return inside;
         }
     }
+
+    // The errors an id gives once what it named is gone, or going.
+    private static bool Vanished(int error) =>
+        error is ErrorFileNotFound or ErrorPathNotFound or ErrorInvalidParameter or ErrorDeletePending;
 
     /// <summary>Every record from <paramref name="since"/> to at least <paramref name="until"/>, or null where a read fails.</summary>
     private static unsafe JournalChanges? Read(SafeFileHandle device, JournalPosition since, long until)
@@ -343,7 +386,7 @@ public sealed partial class WindowsChangeJournal : IChangeJournal
         if (handle.IsInvalid)
         {
             var error = Marshal.GetLastPInvokeError();
-            if (error is ErrorFileNotFound or ErrorPathNotFound or ErrorInvalidParameter or ErrorDeletePending)
+            if (Vanished(error))
             {
                 return [];
             }
