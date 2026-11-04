@@ -31,7 +31,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// backup asks for it again even where nothing is said to have changed; a
 /// file new to the set has none to keep, a file on the device that will not
 /// read keeps none, and nor does one found only under another name
-/// (ADR-0185 Amendment 3).
+/// (ADR-0185 Amendment 3). A run says how many online-only files it did not
+/// fetch, how many of them kept the version before, and which file's fetch
+/// failed and why, and says nothing where it fetched every one (ADR-0193,
+/// FR-SNP-014).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -526,6 +529,32 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
 
         Assert.IsEmpty(second.Files);
         Assert.DoesNotContain("stands in its place", Detail(second, "new/doc.bin"), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARun_SaysHowManyItDidNotFetch_AndHowManyKeptTheirVersionBefore()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+        var other = Online(source, "docs/other.bin", 2);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Assert.IsNull(first.NotFetched, "a run that fetched every one says nothing");
+
+        Change(doc, 5);
+        Change(other, 6);
+        Online(source, "docs/new.bin", 3);
+        doc.OpenFailure = new IOException(TimedOut);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.AreEqual(new NotFetchedFiles(Files: 3, KeptEarlier: 2, Path: "docs/doc.bin", Reason: TimedOut), second.NotFetched);
     }
 
     private const uint Archive = 0x20;

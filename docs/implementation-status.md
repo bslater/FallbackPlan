@@ -217,6 +217,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0190](adr/0190-on-linux-the-service-watches-a-sets-folders-itself.md) | On Linux the service watches a set's folders itself: the first place asked starts an inotify watch of the root and every folder below it on its filesystem, one tree for every set; a change names its folder, a folder made or moved in is named whole and watched, a folder moved within goes on being named where it is; a place is good only to the session that gave it, and a changed file with another name, an overflowed queue, a place older than the 100,000 changed folders kept, or a root moved or deleted is doubt; a root over the watch limit or on a remote filesystem has no place; the runtime gives every backup the process's one watch | **Built** | `Filesystem.Local/LinuxChangeJournal` · `Agent/ServiceRuntime` · `Filesystem.Tests/LinuxChangeJournalTests` · `Hosts.Tests/LinuxChangeWatchRunTests` · [notes](#0190--linux-change-watch) |
 | [0191](adr/0191-on-macos-the-service-asks-the-volumes-event-history.md) | On macOS the service asks the volume's event history: a place is the history's identity and the latest event's number; what changed since is replayed over the set's roots, and no answer is given until a mark the service writes after the replay comes back; a file or a link names its folder, anything else itself, each as it is spelled on disk; a history that lost track, a root moved, a changed file with another name, a place in another history or ahead of it is doubt; a folder not there or on a volume keeping no history has no place; the runtime gives every backup the history | **Built** | `Filesystem.Local/MacChangeJournal` · `Filesystem.Local/FsEventsRecords` · `Agent/ServiceRuntime` · `Filesystem.Tests/MacChangeJournalTests` · `Filesystem.Tests/FsEventsRecordsTests` · `Hosts.Tests/MacChangeHistoryRunTests` · [notes](#0191--macos-change-history) |
 | [0192](adr/0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md) | A set's status says how many changed files its next backup will take: a dry walk of the folders the change journal named since its last backup, entering what folder reuse will enter and judging each file as the backup will, opening nothing; where the next backup walks in full it says why (no backup, no place kept, its full walk due, its folders changed, a journal that cannot say); the count is kept and renewed a minute on, on the reader lane, never two at once; contract 1.83, the command line's `waiting:` token, the console's card | **Built** | `Repository/SourceComparer` · `Agent/ChangeHints` · `Agent/PendingChangesBoard` · `Api/Results` · `Cli/CliApplication` · `Repository.Tests/ChangedFilesCountTests` · `Hosts.Tests/PendingChangesTests` · `Cli.Tests/StatusPendingTokenTests` · `Web.DomTests/PendingChangesDomTests` · [notes](#0192--changes-waiting) |
+| [0193](adr/0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md) | A set's status says which online-only files its last backup could not fetch: the run counts each it did not fetch and how many kept the version backed up before, with the file whose fetch failed and the provider's words; the service keeps that per set once the backup has published, since the first of the backups that each missed some, and lets it go when one fetches them all; contract 1.84, the command line's not-fetched token, the console's card | **Built** | `Repository/SnapshotPublication` · `Agent/NotFetchedStore` · `Agent/BackupRunner` · `Agent/ServiceRuntime` · `Api/Results` · `Cli/CliApplication` · `Repository.Tests/OnlineOnlyCaptureTests` · `Hosts.Tests/NotFetchedStatusTests` · `Cli.Tests/StatusNotFetchedTokenTests` · `Web.DomTests/NotFetchedDomTests` · [notes](#0193--files-not-fetched) |
 
 ---
 
@@ -5859,3 +5860,38 @@ What remains is recorded rather than done:
 - files the last backup could not read are tried again but not counted;
 - files deleted are not counted;
 - the count names no files; the preview does.
+
+### 0193 — files not fetched
+
+Built in one slice, tests first, after the owner's question of how a
+backup treats files a cloud provider keeps off the device. A backup that
+cannot fetch one keeps the version backed up before (ADR-0185
+Amendment 3); this says so where a person looks.
+
+**The count.** `Repository/SnapshotPublication` counts, as it passes
+them, each online-only file it did not fetch: the one whose fetch failed
+and each it then did not ask for. It counts how many kept the version
+backed up before, and keeps the failed file's path and the provider's
+words. A run that fetched every one says nothing.
+
+**Kept for the set.** `Agent/NotFetchedStore` keeps one record per set
+in the state directory, written by `Agent/BackupRunner` once the backup
+has published. The time is the first backup that missed some, kept while
+each after it misses some; a backup that fetches every one lets the
+record go. `Api/Results` carries it at contract 1.84;
+`Cli/CliApplication` prints the not-fetched token; the console's card
+says `3 not downloaded` at a glance, and in words how many keep an
+earlier version, how many are not in that backup, and since when.
+
+**A seam for the tests.** No runner has a cloud provider, so
+`Agent/ServiceRuntime` gives a test harness the source every backup
+reads through, and `Hosts.Tests/NotFetchedStatusTests` wraps the real
+one with a stand-in that marks some files online-only and fails their
+fetch.
+
+What remains is recorded rather than done:
+
+- the set's protection state is unchanged by it;
+- the files are counted, not named; the snapshot's failures name them;
+- a full backup keeps nothing earlier, so its files not fetched are not
+  in it, though older backups may hold them.

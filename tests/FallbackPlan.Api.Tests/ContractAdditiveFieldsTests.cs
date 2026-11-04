@@ -1245,6 +1245,27 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheNotFetched_WireNamesAndPre184Default()
+    {
+        // Contract 1.84 (ADR-0193): a set's status says which online-only
+        // files its last backup could not fetch, and since when.
+        var status = JsonSerializer.Serialize(
+            new BackupSetStatusDescriptor(
+                "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null, Destinations: [],
+                NotFetched: new NotFetchedDescriptor(Files: 3, KeptEarlier: 2, Since: 5_000, Path: "docs/a.docx", Reason: "timed out")),
+            FrameCodec.SerializerOptions);
+
+        const string Field =
+            ",\"not_fetched\":{\"files\":3,\"kept_earlier\":2,\"since\":5000,\"path\":\"docs/a.docx\",\"reason\":\"timed out\"}";
+        Assert.Contains(Field, status, StringComparison.Ordinal);
+
+        // A pre-1.84 frame says nothing: none missed.
+        var old = status.Replace(Field, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(status, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<BackupSetStatusDescriptor>(old, FrameCodec.SerializerOptions)!.NotFetched);
+    }
+
+    [TestMethod]
     public void TheDeepSweep_WireNamesAndPre146Default()
     {
         // Contract 1.46 (ADR-0035 Amendment 3): each destination row carries

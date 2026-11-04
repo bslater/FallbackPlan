@@ -3729,7 +3729,7 @@ public static class CliApplication
                     foreach (var set in result.Sets)
                     {
                         output.WriteLine(
-                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}{(DescribePending(set) is { Length: > 0 } waiting ? $"  {waiting}" : string.Empty)}");
+                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}{(DescribePending(set) is { Length: > 0 } waiting ? $"  {waiting}" : string.Empty)}{(DescribeNotFetched(set) is { Length: > 0 } missed ? $"  {missed}" : string.Empty)}");
 
                         // Under the set's own line, as offline status prints
                         // them: the state says what, the warnings say why
@@ -4174,6 +4174,15 @@ public static class CliApplication
         { Files: { } files } => string.Create(CultureInfo.InvariantCulture, $"waiting:{files}"),
         _ => "waiting:full-walk",
     };
+
+    /// <summary>
+    /// The not-fetched token on a set's line (FR-SNP-014, contract 1.84): how
+    /// many online-only files its last backup could not fetch, or nothing
+    /// where it fetched every one.
+    /// </summary>
+    internal static string DescribeNotFetched(BackupSetStatusDescriptor set) => set.NotFetched is { } missed
+        ? string.Create(CultureInfo.InvariantCulture, $"not-fetched:{missed.Files}")
+        : string.Empty;
 
     private static string SweepToken(DeepSweepDescriptor? sweep) => sweep switch
     {

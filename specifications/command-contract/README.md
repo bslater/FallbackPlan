@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.83
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.84
 
 ---
 
@@ -120,7 +120,8 @@ machine cause and the set's `last_completed_at`, since 1.39 with the
 background window's state, since 1.43 with the byte-rate limits background
 work is held to, since 1.63 with each staging set's sweep of its own
 staging archive, since 1.82 with when each set was last walked in full, since 1.83
-with how many changed files each set's next backup will take).
+with how many changed files each set's next backup will take, since 1.84 with
+which online-only files each set's last backup could not fetch).
 
 **Snapshots and restore** — `list_snapshots`, `list_directory`,
 `plan_restore` / `run_restore`, `open_restore_source` /
@@ -272,3 +273,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.81 | A folder the run would make is judged too ([ADR-0178 Amendment 4](../../docs/adr/0178-the-plan-names-a-file-its-new-folder-would-open-wider-than-it-was.md#amendment-4-2026-10--a-folder-the-restore-makes-is-judged-too), FR-RST-003). `restore_plan` gains `opened_wider_folders`, how many folders the run would make that what passes to them would open wider, apart from `opened_wider`'s files, null where none; a run with any is refused unless it acknowledges wider access, as one with such files is. Additive: a pre-1.81 service judges no folder. |
 | 1.82 | A set's full walk is a setting of the set ([ADR-0189](../../docs/adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md), FR-SNP-012). The set descriptor gains `full_walk`, in the grammar of its schedule, null where the set names none; on `upsert_backup_set` null keeps what the set has, empty clears it back to daily, and one that does not read is refused `invalid_argument`. A set's status gains `last_full_walk_at`, Unix milliseconds, null for a set whose backups ask no journal. Additive: a pre-1.82 service walks every set in full daily and says nothing of when it last did. |
 | 1.83 | A set's status says how many changed files its next backup will take ([ADR-0192](../../docs/adr/0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md), FR-SNP-013). It gains `pending_changes`: `files`, counted over the folders the change journal named since the set's last backup as that backup will count them, or null with `walks_in_full_because` where the next backup walks every folder, and `counted_at`, Unix milliseconds. Null for a set whose backups ask no journal and before the first count. Additive: a pre-1.83 service counts nothing. |
+| 1.84 | A set's status says which online-only files its last backup could not fetch ([ADR-0193](../../docs/adr/0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md), FR-SNP-014). It gains `not_fetched`: `files`, how many the last backup did not fetch from their provider; `kept_earlier`, how many of them keep the version backed up before; `since`, Unix milliseconds, the first of the backups that have each missed some; and the `path` and `reason` of the fetch that failed. Null where the last backup fetched every one and before the first backup. Additive: a pre-1.84 service says nothing. |

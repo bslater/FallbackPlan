@@ -1468,6 +1468,12 @@ public sealed record DeepSweepDescriptor(
 /// whose backups ask no change journal, before the first count, and from
 /// older services.
 /// </param>
+/// <param name="NotFetched">
+/// The online-only files the set's last backup could not fetch from their
+/// provider, and since when backups have been missing some (contract 1.84,
+/// FR-SNP-014). Null where the last backup fetched every one, before the
+/// first backup, and from older services.
+/// </param>
 public sealed record BackupSetStatusDescriptor(
     string SetName,
     BackupSetStatus Status,
@@ -1476,7 +1482,8 @@ public sealed record BackupSetStatusDescriptor(
     ulong? LastCompletedAt = null,
     DeepSweepDescriptor? StagingSweep = null,
     ulong? LastFullWalkAt = null,
-    PendingChangesDescriptor? PendingChanges = null);
+    PendingChangesDescriptor? PendingChanges = null,
+    NotFetchedDescriptor? NotFetched = null);
 
 /// <summary>
 /// The changed files a set's next backup will take (contract 1.83,
@@ -1495,6 +1502,27 @@ public sealed record BackupSetStatusDescriptor(
 /// </param>
 /// <param name="CountedAt">When it was counted, Unix milliseconds.</param>
 public sealed record PendingChangesDescriptor(long? Files, string? WalksInFullBecause, ulong CountedAt);
+
+/// <summary>
+/// The online-only files a set's last backup could not fetch from their
+/// provider (contract 1.84, FR-SNP-014, ADR-0193). A run stops asking the
+/// provider after the first fetch that fails (ADR-0185), so one failure is
+/// what <paramref name="Path"/> and <paramref name="Reason"/> name.
+/// </summary>
+/// <param name="Files">How many online-only files the last backup did not fetch.</param>
+/// <param name="KeptEarlier">
+/// How many of them keep the version backed up before, as it was then; the
+/// rest are not in that backup at all (ADR-0185 Amendment 3): a file new to
+/// the set, or any where the backup was asked to walk in full.
+/// </param>
+/// <param name="Since">
+/// When the first of the backups that have each missed some ran, Unix
+/// milliseconds: kept while every backup after it misses some, and let go of
+/// by the first that fetches every one.
+/// </param>
+/// <param name="Path">The file whose fetch failed, as the set's backup names it.</param>
+/// <param name="Reason">The provider's words for that failure.</param>
+public sealed record NotFetchedDescriptor(long Files, long KeptEarlier, ulong Since, string Path, string Reason);
 
 /// <summary>
 /// The background window's state at the instant the status was observed

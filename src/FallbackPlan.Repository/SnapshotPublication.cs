@@ -183,7 +183,25 @@ public sealed record PublishedTreeSnapshot(
 {
     /// <summary>How many folders the run took as its prior snapshot held them, without walking them (ADR-0186).</summary>
     public int FoldersReused { get; init; }
+
+    /// <summary>
+    /// The online-only files the run did not fetch (ADR-0193), or null where
+    /// it fetched every one it asked for.
+    /// </summary>
+    public NotFetchedFiles? NotFetched { get; init; }
 }
+
+/// <summary>
+/// The online-only files a run did not fetch (ADR-0193, FR-SNP-014).
+/// </summary>
+/// <param name="Files">How many it did not fetch.</param>
+/// <param name="KeptEarlier">
+/// How many of them kept the version backed up before (ADR-0185 Amendment 3);
+/// the rest are not in the run's snapshot at all.
+/// </param>
+/// <param name="Path">The file whose fetch failed, after which the run asked for no other.</param>
+/// <param name="Reason">The provider's words for that failure.</param>
+public sealed record NotFetchedFiles(int Files, int KeptEarlier, string Path, string Reason);
 
 /// <summary>
 /// The multi-file publication path: the same canonical nine-step order as
@@ -615,6 +633,7 @@ public sealed partial class PublicationOrchestrator
                 builder.Blobs)
             {
                 FoldersReused = reuse?.Reused ?? 0,
+                NotFetched = walker.NotFetched,
             };
         }
     }
@@ -756,6 +775,9 @@ public sealed partial class PublicationOrchestrator
         /// </summary>
         private (string Path, string Reason)? _notDelivered;
 
+        private int _notFetched;
+        private int _keptEarlier;
+
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
         public ObjectId? RootTreeId { get; private set; }
@@ -763,6 +785,12 @@ public sealed partial class PublicationOrchestrator
         public List<PublishedFileVersion> Files => _files;
 
         public List<CaptureFailure> Failures => _failures;
+
+        /// <summary>The online-only files this walk did not fetch, or null where it fetched every one (ADR-0193).</summary>
+        public NotFetchedFiles? NotFetched =>
+            _notDelivered is { } notDelivered
+                ? new NotFetchedFiles(_notFetched, _keptEarlier, notDelivered.Path, notDelivered.Reason)
+                : null;
 
         /// <summary>Every published directory's head tree and what it holds, the root's included (ADR-0151).</summary>
         public IReadOnlyList<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> Folders => _folders;
@@ -1013,10 +1041,7 @@ public sealed partial class PublicationOrchestrator
             // another in this run: each would wait out the same time-out.
             if (entry.OnlineOnly && _notDelivered is { } notDelivered)
             {
-                RecordFailure(
-                    entry,
-                    CaptureFailureReason.IoError,
-                    KeepEarlier(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyNotFetched(notDelivered.Path, notDelivered.Reason)));
+                RecordNotFetched(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyNotFetched(notDelivered.Path, notDelivered.Reason));
                 return;
             }
 
@@ -1075,15 +1100,22 @@ public sealed partial class PublicationOrchestrator
                 {
                     _notDelivered = (entry.RelativePath, exception.Message);
                     Log.OnlineOnlyNotDelivered(logger, new LogPath(entry.RelativePath), exception.Message);
-                    RecordFailure(
-                        entry,
-                        CaptureFailureReason.IoError,
-                        KeepEarlier(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyFetchFailed(exception.Message)));
+                    RecordNotFetched(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyFetchFailed(exception.Message));
                     return;
                 }
 
                 RecordFailure(entry, ClassifyFailure(exception), exception.Message);
             }
+        }
+
+        /// <summary>
+        /// Records an online-only file the run did not fetch, and counts it
+        /// for the set's status (ADR-0193).
+        /// </summary>
+        private void RecordNotFetched(ScanEntry entry, CatalogueTreeEntry? prior, string detail)
+        {
+            _notFetched++;
+            RecordFailure(entry, CaptureFailureReason.IoError, KeepEarlier(entry, prior, detail));
         }
 
         /// <summary>
@@ -1115,6 +1147,7 @@ public sealed partial class PublicationOrchestrator
                 prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true,
                 HasAlternateStreams: prior.HasAlternateStreams));
             session.BackedUp.RestAlreadyStored();
+            _keptEarlier++;
             return prior.ModifiedAt is { } modified
                 ? Strings.FormatTreeWalkPublisher_EarlierVersionStands(
                     detail,

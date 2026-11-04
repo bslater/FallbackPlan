@@ -268,6 +268,11 @@ internal static partial class Log
     internal static partial void JournalPlacesNotKept(ILogger logger, LogLabel set, Exception exception);
 
     [LoggerMessage(
+        EventId = 3799, Level = LogLevel.Warning,
+        Message = "Set {Set}: what this backup did not fetch was not kept, so the set's status may say it of an earlier backup")]
+    internal static partial void NotFetchedNotKept(ILogger logger, LogLabel set, Exception exception);
+
+    [LoggerMessage(
         EventId = 3795, Level = LogLevel.Debug,
         Message = "Set {Set}: no index delta retired this run, because a sync, sweep or retention pass holds the set")]
     internal static partial void RetirementSkippedBusy(ILogger logger, LogLabel set);

@@ -208,7 +208,7 @@ public static class BackupRunner
                     // installation's read limit (NFR-PERF-013, ADR-0074); a
                     // person's run reads through none.
                     Source = PacedFileSystemSource.Over(
-                        new LocalFileSystemSource(runtime.LoggerFor<LocalFileSystemSource>()),
+                        WrapSource(runtime, new LocalFileSystemSource(runtime.LoggerFor<LocalFileSystemSource>())),
                         userInitiated ? null : runtime.Pacing.ForSourceReads(runtime.Configuration)),
                     Roots = SetChangeScan.ScanRootsOf(set),
                     IncludeRules = set.IncludeRules,
@@ -250,6 +250,18 @@ public static class BackupRunner
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 Log.JournalPlacesNotKept(runtime.LoggerFor<JournalPlaceStore>(), new Domain.Diagnostics.LogLabel(set.Name), exception);
+            }
+
+            // What the set's status says of the online-only files this backup
+            // did not fetch, and since when backups have been missing some
+            // (ADR-0193). Not kept costs the status that word, nothing more.
+            try
+            {
+                new NotFetchedStore(runtime.Options.StateDirectory).Keep(set.Id, published.NotFetched, nowMs);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Log.NotFetchedNotKept(runtime.LoggerFor<NotFetchedStore>(), new Domain.Diagnostics.LogLabel(set.Name), exception);
             }
 
             // The pass's clock, not the wall clock. This transition writes the
@@ -505,6 +517,10 @@ public static class BackupRunner
     /// terminal transition — for a failed or cancelled run no snapshot
     /// exists, so this is the only record of how far it got.
     /// </summary>
+    /// <summary>The source a backup reads through: the device's, as a test harness wraps it where it does (ADR-0193).</summary>
+    private static IFileSystemSource WrapSource(ServiceRuntime runtime, IFileSystemSource source) =>
+        runtime.Options.WrapSource is { } wrap ? wrap(source) : source;
+
     private static JobRunStats StatsOf(JobProgress latest) => new()
     {
         FilesSeen = latest.FilesSeen,

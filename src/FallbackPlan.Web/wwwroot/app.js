@@ -926,6 +926,37 @@ function pendingChip(set) {
   return `<span class="detail" title="Changed files the next backup will take">${esc(fmtCount(p.files))} changed</span>`;
 }
 
+// The online-only files the set's last backup could not download from their
+// provider (contract 1.84): how many keep the version backed up before and how
+// many are not in that backup at all — a full backup keeps none, though older
+// ones may hold them — since when backups have been missing some, and on
+// hover the file whose download failed and the provider's words — after it the
+// backup asked for no other. Nothing where the last backup downloaded every
+// one, and from a service older than 1.84.
+function notFetchedLine(set) {
+  const m = set.notFetched;
+  if (m == null) return "";
+  const files = Number(m.files), kept = Number(m.keptEarlier), lost = files - kept;
+  const head = files === 1
+    ? "1 online-only file was not downloaded by the last backup"
+    : `${fmtCount(files)} online-only files were not downloaded by the last backup`;
+  const which = kept === files
+    ? (files === 1 ? "; it keeps the version backed up before" : "; each keeps the version backed up before")
+    : kept === 0
+      ? (files === 1 ? "; it is not in that backup at all" : "; none of them is in that backup")
+      : `: ${fmtCount(kept)} ${kept === 1 ? "keeps" : "keep"} the version backed up before, ${fmtCount(lost)} ${lost === 1 ? "is" : "are"} not in it at all`;
+  const said = /[.!?]$/.test(m.reason) ? m.reason : `${m.reason}.`;
+  const why = `${m.path} could not be downloaded: ${said} No other online-only file was asked for after it.`;
+  return `<p class="sub" data-not-fetched title="${esc(why)}">${esc(head + which)} · first missed ${esc(rel(m.since))}</p>`;
+}
+
+// The same count at a glance, on the card itself.
+function notFetchedChip(set) {
+  const m = set.notFetched;
+  if (m == null) return "";
+  return `<span class="detail" title="Online-only files the last backup could not download">${esc(fmtCount(m.files))} not downloaded</span>`;
+}
+
 // The ring: an SVG arc whose offset is set from script, because the CSP
 // forbids inline style attributes — the same reason the meters' widths are.
 // The unknown state draws the track alone rather than a zero-length arc, so
@@ -1076,6 +1107,7 @@ function renderSetCard(set) {
     <summary>
       <b>${esc(set.setName)}</b>
       ${pendingChip(set)}
+      ${notFetchedChip(set)}
       ${holdings.length ? `<span class="set-ring" title="Files backed up across all destinations">${ring(setPercent)}</span>` : ""}
       ${running
         ? `${badge({ cls: "accent", icon: "◐" }, lm.finishing ? "Finishing" : "Backing up")}<span class="set-live-mini"><span class="meter ${lm.determinate ? "" : "indeterminate"}"><i data-w="${lm.ratio}"></i></span><span class="detail">${lm.determinate ? lm.ratio + "%" : "…"}</span></span>`
@@ -1085,6 +1117,7 @@ function renderSetCard(set) {
       <p class="sub">${badge(meta, meta.label)} ${esc(meta.blurb)}</p>
       <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}${pendingClause(set)}${fullWalkClause(set)}
          ${verification}</p>
+      ${notFetchedLine(set)}
       ${staging ? `<p class="sub"><span class="detail">Staging archive</span> ${staging}</p>` : ""}
       ${destinations}
       ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
