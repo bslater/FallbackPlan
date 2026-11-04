@@ -164,6 +164,8 @@ The reconciliation interval is configurable; a full scan is also forced after an
 
 > **2026-11 ([ADR-0192](../adr/0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md)).** A set's status says how many changed files its next backup will take: a dry walk of the folders the journal named, entered as folder reuse will enter them and judged as the backup will judge them, renewed at most once a minute while it is asked for. Where the next backup walks in full the status says why instead.
 
+> **2026-11 ([ADR-0192 Amendment 1](../adr/0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-1-2026-11--the-files-the-next-backup-tries-again-are-waiting-too)).** The count also enters the folders the last snapshot's failures name, as the next backup walks them to try those files again, read once for a snapshot; where those failures will not read the next backup walks in full and the status says why.
+
 ### 4.1 Links are classified before they are traversed
 
 A link is a link whatever it points at. An object carrying both a directory marker and a link marker — an NTFS directory junction, a directory symlink — **MUST** be classified as a link, and the scanner MUST NOT descend through it. Testing the directory marker first classifies a junction as an ordinary directory and walks out of the approved root, and junctions need no privilege to create, so that is the shape an unprivileged attacker on the source machine actually has.

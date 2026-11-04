@@ -2,18 +2,19 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-013 (new: a set's status says how many changed files its next backup will take, counted as that backup will count them, or that it will walk in full and why)
+**Requirements:** FR-SNP-013 (new: a set's status says how many changed files its next backup will take, counted as that backup will count them, or that it will walk in full and why); FR-SNP-013 (amended by [Amendment 1](#amendment-1-2026-11--the-files-the-next-backup-tries-again-are-waiting-too): the files the last backup could not read are counted too, since the next backup tries them again, and where its failures will not read the next backup walks in full and the status says why)
 **Related:** [ADR-0186](0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) (a run reuses a folder it was told did not change), [ADR-0188](0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) (the service tells a backup what changed since the set's last), [ADR-0189](0189-a-sets-full-walk-is-a-setting-of-the-set.md) (a set's full walk is a setting of the set), [architecture 06 §4](../architecture/06-filesystem-capture.md#4-change-detection) (change detection)
 
 **Built:**
 - The count: `Repository/SourceComparer` counts the files a backup told which folders changed will write, walking only what that backup will.
+- The failures: `Repository/SnapshotFailures` reads the paths a snapshot's failures name, which the next backup walks to try again (Amendment 1).
 - The judgement: `Agent/ChangeHints` says what the next backup will be told, or why it will walk in full, for the backup and the count alike.
 - The board: `Agent/PendingChangesBoard` keeps each set's last count, and asks for another on the reader lane once it is a minute old.
 - The wire: a set's status in `Api/Results` carries the count, at contract 1.83.
 - The clients: `Cli/CliApplication` prints a set's `waiting:` token; the console's card says it at a glance and in words.
 - The tests:
   - `Repository.Tests/ChangedFilesCountTests` — a file changed in a named folder is counted and a folder nothing named is not entered; a file new, and every file in a folder the last snapshot does not hold, is counted; so is a file changed only in its metadata, and one moved; a file unchanged, or one the rules leave out, is not; nothing named counts nothing; nothing is opened.
-  - `Hosts.Tests/PendingChangesTests` — the files changed and new in a named folder are waiting, and none where nothing is named; the next backup walks in full, and says why, for a set never backed up, one whose full walk is due, and one whose journal cannot say; a set whose backups ask no journal says nothing; a count moves no place; the status gives the last count and asks for another once it is a minute old, never two at once.
+  - `Hosts.Tests/PendingChangesTests` — the files changed and new in a named folder are waiting, and none where nothing is named; the files the last backup could not read are waiting though nothing is named, and the next backup takes them; where the last snapshot's failures will not read the next backup walks in full, and they are read once for a snapshot (Amendment 1); the next backup walks in full, and says why, for a set never backed up, one whose full walk is due, and one whose journal cannot say; a set whose backups ask no journal says nothing; a count moves no place; the status gives the last count and asks for another once it is a minute old, never two at once.
   - `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/StatusRelayNamesTests` — the wire names at 1.83, the console's names, and an older service's silence.
   - `Cli.Tests/StatusPendingTokenTests` — `waiting:12`, `waiting:0`, `waiting:full-walk`, and nothing where none was counted.
   - `Web.DomTests/PendingChangesDomTests` — the card's count at a glance and in words, the singular, a full walk and why, nothing changed, and nothing for a set that asks no journal.
@@ -77,6 +78,8 @@ A set whose backups ask no journal says nothing. Every one of its backups walks 
 ## What this does not do
 
 - **Count the files the last backup could not read.** The next backup tries them again, and they are not counted. That would need the snapshot's error manifest, which is in the archive's blobs, not the catalogue.
+
+  > **2026-11: done ([Amendment 1](#amendment-1-2026-11--the-files-the-next-backup-tries-again-are-waiting-too)).** The count reads the last snapshot's failures from the archive, and enters the folders they name as the backup does.
 - **Count files deleted.** A walk of some folders cannot tell a file gone from one not looked at, and a deletion writes no version.
 - **Name the files.** The preview, `What changed?`, walks the whole set and names them.
 - **Count for a set whose backups ask no journal.**
@@ -87,8 +90,30 @@ A set whose backups ask no journal says nothing. Every one of its backups walks 
 - **Count inside each status.** Exact to the moment, but a console asking every five seconds would walk every set's changed folders twelve times a minute.
 - **Count after each change the journal hears.** It would need every journal to call out, and Windows' journal is read, not heard.
 
+## Amendment 1 (2026-11) — the files the next backup tries again are waiting too
+
+### Context
+
+The next backup walks every folder its last one failed a file in, to try it again (ADR-0186): a file that would not read, or an online-only file whose provider did not deliver it (ADR-0185). The count entered only the folders the change journal named, so a set whose last backup missed files said nothing was waiting. The failures are in the snapshot's error manifest, in the archive's blobs; the count holds the archive, so it can read them.
+
+### Decision
+
+- **The count reads the last snapshot's failures, as folder reuse reads them,** and enters the folder each lies in beside the folders the journal named. Each such file is judged as the backup will judge it: new where the snapshot holds none of it, changed where it holds the version before (ADR-0185 Amendment 3).
+- **Where they will not read, the next backup walks in full,** as folder reuse does, and the status says so: `its last backup's failures would not read`.
+- **They are read once for a snapshot,** not once a count. A snapshot never changes, and a direct-ship set's store reads through its destinations, billed by the request.
+
+### Consequences
+
+- A set whose last backup missed files says how many its next backup will try again, and the console's `nothing changed since the last backup` is no longer said of it.
+- A file that still will not read is counted at each count until a backup takes it.
+
+### What this does not do
+
+- **Say which of the waiting files are retries.** The count is one number.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first, at contract 1.83. |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-files-the-next-backup-tries-again-are-waiting-too): the count enters the folders the last snapshot's failures name, as the next backup does to try them again, and where those will not read the next backup walks in full and the status says why; they are read once for a snapshot. `Repository/SnapshotFailures`; `Agent/PendingChangesBoard`; `Hosts.Tests/PendingChangesTests`; `Repository.Tests/OnlineOnlyCaptureTests` |
