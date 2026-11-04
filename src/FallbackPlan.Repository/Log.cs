@@ -115,6 +115,12 @@ internal static partial class Log
             + "refused: {Reason} — it stays on the device until its provider frees it")]
     internal static partial void OnlineOnlyNotFreed(ILogger logger, LogPath path, string reason);
 
+    [LoggerMessage(
+        EventId = 2035, Level = LogLevel.Debug,
+        Message = "The online-only file {Path} is new or changed, and the set leaves such files to their provider: "
+            + "it was not fetched, and is not in this snapshot")]
+    internal static partial void OnlineOnlyLeft(ILogger logger, LogPath path);
+
     // ---------------------------------------------------------------- blobs
 
     [LoggerMessage(

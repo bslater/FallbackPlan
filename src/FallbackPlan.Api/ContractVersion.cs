@@ -863,8 +863,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// `restore_receipts` entry gains `earlier_versions`. Additive: a pre-1.88
     /// service says none.
     /// </para>
+    /// <para>
+    /// 1.89 lets a set leave its online-only files to their cloud provider
+    /// (FR-SNP-015, ADR-0195). `backup_set` gains `leave_online_only`; an
+    /// upsert that sends none keeps what the set has, and a listing says true
+    /// or false. A set's status gains `leaves_online_only`, true where the set
+    /// leaves them. Additive: a pre-1.89 service fetches them, and its status
+    /// says nothing of it.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 88);
+    public static ContractVersion Current { get; } = new(1, 89);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

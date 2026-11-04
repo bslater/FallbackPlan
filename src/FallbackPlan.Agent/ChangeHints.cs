@@ -13,7 +13,15 @@ namespace FallbackPlan.Agent;
 /// stood for each of the set's folders before that backup walked.
 /// </summary>
 internal sealed record KeptJournalPlaces(
-    string SnapshotId, ulong LastFullWalk, IReadOnlyList<(string Root, JournalPosition Place)> Places);
+    string SnapshotId, ulong LastFullWalk, IReadOnlyList<(string Root, JournalPosition Place)> Places)
+{
+    /// <summary>
+    /// Whether that backup's snapshot may lack an online-only file the set
+    /// left to its provider (ADR-0195): one left there, or in a backup before
+    /// it that walked in full, with every backup since told what changed.
+    /// </summary>
+    public bool LeftOnlineOnly { get; init; }
+}
 
 /// <summary>
 /// What one backup is told, and what it will keep (ADR-0188): the folders
@@ -24,7 +32,15 @@ internal sealed record KeptJournalPlaces(
 internal sealed record ChangeHintPlan(
     IReadOnlyCollection<string>? ChangedFolders,
     IReadOnlyList<(string Root, JournalPosition Place)>? Places,
-    ulong? LastFullWalk);
+    ulong? LastFullWalk)
+{
+    /// <summary>
+    /// Whether the last backup's snapshot may lack an online-only file the set
+    /// left (ADR-0195), as that backup kept it. A backup told what changed
+    /// carries it on.
+    /// </summary>
+    public bool LeftOnlineOnly { get; init; }
+}
 
 /// <summary>
 /// What changed since a set's last backup, as its next backup will be told
@@ -73,15 +89,17 @@ internal static class ChangeHints
         }
 
         var changed = full ? null : WhatChanged(journal, kept, set, prior, now).Folders;
-        return new ChangeHintPlan(changed, places, kept?.LastFullWalk);
+        return new ChangeHintPlan(changed, places, kept?.LastFullWalk) { LeftOnlineOnly = kept?.LeftOnlineOnly ?? false };
     }
 
     /// <summary>
     /// The folders that changed since the set's last backup, as its next
     /// backup will be told them, or why that backup will walk in full, in
     /// words for a person (ADR-0192): the set has no backup, the places kept
-    /// are none or another backup's, a full walk is due, the set's folders are
-    /// not the ones kept, or the journal cannot say for one. It moves no place.
+    /// are none or another backup's, the set no longer leaves online-only files
+    /// its last snapshot may lack (ADR-0195), a full walk is due, the set's
+    /// folders are not the ones kept, or the journal cannot say for one. It
+    /// moves no place.
     /// </summary>
     public static ChangesSinceLast WhatChanged(
         IChangeJournal journal, KeptJournalPlaces? kept, BackupSetConfiguration set,
@@ -102,6 +120,13 @@ internal static class ChangeHints
         if (!string.Equals(kept.SnapshotId, Convert.ToHexStringLower(priorId.Span), StringComparison.Ordinal))
         {
             return ChangesSinceLast.WalksInFull("the places kept in the change journal are another backup's");
+        }
+
+        // A file left earlier, and unchanged since, is in no folder the
+        // journal will name.
+        if (kept.LeftOnlineOnly && !set.LeaveOnlineOnly)
+        {
+            return ChangesSinceLast.WalksInFull("it left online-only files to their provider, and no longer does");
         }
 
         if (FullWalkDue(set.FullWalk, kept.LastFullWalk, now))
@@ -135,8 +160,10 @@ internal static class ChangeHints
     /// <summary>
     /// What a backup that published <paramref name="snapshotId"/> keeps for
     /// the next, or null where it found no place for one of its folders.
+    /// <paramref name="leftOnlineOnly"/> is whether it left any online-only
+    /// file to its provider (ADR-0195).
     /// </summary>
-    public static KeptJournalPlaces? Kept(ChangeHintPlan plan, ReadOnlySpan<byte> snapshotId, ulong nowMs)
+    public static KeptJournalPlaces? Kept(ChangeHintPlan plan, ReadOnlySpan<byte> snapshotId, ulong nowMs, bool leftOnlineOnly)
     {
         ThrowHelper.ThrowIfNull(plan);
         return plan.Places is { } places
@@ -144,6 +171,11 @@ internal static class ChangeHints
                 Convert.ToHexStringLower(snapshotId),
                 plan.ChangedFolders is null || plan.LastFullWalk is not { } last ? nowMs : last,
                 places)
+            {
+                // A backup told what changed walked only that, so a file the
+                // last one left may still be missing from this one.
+                LeftOnlineOnly = leftOnlineOnly || (plan.ChangedFolders is not null && plan.LeftOnlineOnly),
+            }
             : null;
     }
 
@@ -230,7 +262,11 @@ internal sealed class JournalPlaceStore(string stateDirectory)
                     new JournalPosition(
                         place.GetProperty("volume").GetString() ?? throw new FormatException("no volume"),
                         place.GetProperty("journal").GetUInt64(),
-                        place.GetProperty("usn").GetInt64())))]);
+                        place.GetProperty("usn").GetInt64())))])
+            {
+                // Absent from what was kept before it was said (ADR-0195).
+                LeftOnlineOnly = root.TryGetProperty("leftOnlineOnly", out var left) && left.GetBoolean(),
+            };
         }
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException
             or InvalidOperationException or FormatException or IOException or UnauthorizedAccessException)
@@ -255,6 +291,11 @@ internal sealed class JournalPlaceStore(string stateDirectory)
             writer.WriteStartObject();
             writer.WriteString("snapshot", kept.SnapshotId);
             writer.WriteNumber("lastFullWalk", kept.LastFullWalk);
+            if (kept.LeftOnlineOnly)
+            {
+                writer.WriteBoolean("leftOnlineOnly", true);
+            }
+
             writer.WriteStartArray("places");
             foreach (var (root, place) in kept.Places)
             {

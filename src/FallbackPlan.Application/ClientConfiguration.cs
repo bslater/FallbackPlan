@@ -83,6 +83,16 @@ public sealed record BackupSetConfiguration
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FullWalk { get; init; }
 
+    /// <summary>
+    /// Whether the set leaves its online-only files to their cloud provider
+    /// (ADR-0195): its backups fetch none, and leave one new or changed out
+    /// of the snapshot without failing it. Written only where it is chosen,
+    /// so a file that says nothing fetches them, as every set before it did.
+    /// </summary>
+    [JsonPropertyName("leave_online_only")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool LeaveOnlineOnly { get; init; }
+
     /// <summary>The set's retention policy; null defers retention entirely (architecture 07 §2).</summary>
     [JsonPropertyName("retention")]
     public RetentionConfiguration? Retention { get; init; }

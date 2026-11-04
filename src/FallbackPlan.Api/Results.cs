@@ -205,6 +205,13 @@ public sealed record BackupRootDescriptor(string Path, string? Label = null);
 /// client sends — empty clears it back to the default, and one that does not
 /// read is refused.
 /// </param>
+/// <param name="LeaveOnlineOnly">
+/// Whether the set leaves its online-only files to their cloud provider
+/// (ADR-0195, contract 1.89): its backups fetch none, and leave one new or
+/// changed out of the snapshot without failing it. A listing says true or
+/// false. On an upsert, null preserves what the set already has — what every
+/// pre-1.89 client sends.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -223,7 +230,8 @@ public sealed record BackupSetDescriptor(
     uint? KdfIterations = null,
     byte? KdfParallelism = null,
     string? SealingPublicKey = null,
-    string? FullWalk = null);
+    string? FullWalk = null,
+    bool? LeaveOnlineOnly = null);
 
 /// <summary>
 /// One declared destination, as the configuration surface sees it
@@ -1512,6 +1520,12 @@ public sealed record DeepSweepDescriptor(
 /// FR-SNP-014). Null where the last backup fetched every one, before the
 /// first backup, and from older services.
 /// </param>
+/// <param name="LeavesOnlineOnly">
+/// True where the set leaves its online-only files to their cloud provider
+/// (contract 1.89, FR-SNP-015): its backups fetch none, so a file new or
+/// changed there is kept only by its provider. Null for a set that fetches
+/// them, and from older services.
+/// </param>
 public sealed record BackupSetStatusDescriptor(
     string SetName,
     BackupSetStatus Status,
@@ -1521,7 +1535,8 @@ public sealed record BackupSetStatusDescriptor(
     DeepSweepDescriptor? StagingSweep = null,
     ulong? LastFullWalkAt = null,
     PendingChangesDescriptor? PendingChanges = null,
-    NotFetchedDescriptor? NotFetched = null);
+    NotFetchedDescriptor? NotFetched = null,
+    bool? LeavesOnlineOnly = null);
 
 /// <summary>
 /// The changed files a set's next backup will take (contract 1.83,
