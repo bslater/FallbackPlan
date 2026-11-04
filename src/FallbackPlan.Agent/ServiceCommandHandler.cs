@@ -1256,6 +1256,13 @@ public sealed partial class ServiceCommandHandler(
                     + "anyway, ignoring free space: a volume that compresses what it stores can hold more than this estimate.");
             }
 
+            // Which files it restores as a version backed up before, as its
+            // plan named them (ADR-0194 Amendment 1), read before it writes:
+            // a run stopped part-way still keeps a receipt that says so.
+            var earlier = await Restore.RestoreBlobSet.EarlierVersionsAsync(
+                catalogue, plan, context.Store, copies?.Sources ?? [], context.RepositoryId, context.Keys, cancellationToken)
+                .ConfigureAwait(false);
+
             // Named before it writes a byte, under the name its result gives
             // (ADR-0115): a run cut short with the machine is then on record
             // when the service starts again, though nobody heard it end.
@@ -1294,11 +1301,11 @@ public sealed partial class ServiceCommandHandler(
                         slice.LabelPrefix));
                 }
 
-                var receipt = RestoreOriginalLocation.Merge(receipts) with
+                var receipt = earlier.Stamp(RestoreOriginalLocation.Merge(receipts) with
                 {
                     Set = record.SetName,
                     SetId = context.Source?.SetId ?? context.Set?.Id,
-                };
+                });
                 var receiptPath = PersistReceipt(receipt, options.RunId);
                 if (copies is not null)
                 {
@@ -1323,6 +1330,7 @@ public sealed partial class ServiceCommandHandler(
 
                 var failures = receipt.Items.Where(item => item.Outcome == "failed").ToList();
                 var notApplied = RestoreMetadata.Summarise(receipt.Items, target);
+                var earlierVersions = receipt.Items.Where(item => item.EarlierVersion is not null).ToList();
                 answered = new RestoreResult(
                     // A degraded file's content was written and verified, so it
                     // counts among the files written; the Outcome carries the
@@ -1356,7 +1364,11 @@ public sealed partial class ServiceCommandHandler(
                     NotApplied: notApplied.Count == 0 ? null : notApplied,
                     FoundInPlace: receipt.Items.Count(item => item.FoundInPlace),
                     Run: record.Run,
-                    ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0));
+                    ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0),
+                    EarlierVersions: earlierVersions.Count,
+                    EarlierVersionsSample: earlierVersions.Count == 0
+                        ? null
+                        : [.. earlierVersions.Take(20).Select(item => $"{item.Path} — {item.EarlierVersion}")]);
                 return answered;
             }
             finally

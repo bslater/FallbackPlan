@@ -6491,6 +6491,10 @@ function rstStep6() {
         already in place, holding the snapshot's content, and were left as they stood.</p>` : ""}
       ${W.result.resumedWithin ? `<p class="dlg-sub" id="rst-resumed-within">${fmtCount(W.result.resumedWithin)} file(s) were
         resumed from what the run had assembled of them, reading again only what was left.</p>` : ""}
+      ${W.result.earlierVersions ? `<div id="rst-earlier-restored"><p class="dlg-sub">${fmtCount(W.result.earlierVersions)} file(s) were
+        restored as the version backed up before, since their backup could not download the one on the device;
+        the receipt names each.</p>
+        ${W.result.earlierVersionsSample?.length ? `<pre class="report">${esc(W.result.earlierVersionsSample.join("\n"))}</pre>` : ""}</div>` : ""}
       ${resumable ? `<p class="dlg-sub">A resume restores what is left: each file already holding the snapshot's
         content stays as it stands.</p>` : ""}
       ${offer ? rstResumeOffer(offer) : ""}

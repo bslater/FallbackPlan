@@ -560,6 +560,29 @@ public static class OperationGateway
         CultureInfo.InvariantCulture,
         $"{count} file(s) already in place, holding the snapshot's content, were left as they stood");
 
+    /// <summary>
+    /// The lines saying how many files a run restored as the version backed
+    /// up before, and which and why (ADR-0194 Amendment 1), said alike by
+    /// either gateway; none where it restored none.
+    /// </summary>
+    /// <param name="count">The files so restored.</param>
+    /// <param name="sample">At most twenty of them, as <c>path — what the backup said</c> lines.</param>
+    internal static IEnumerable<string> EarlierVersions(long count, IReadOnlyList<string> sample)
+    {
+        if (count == 0)
+        {
+            return [];
+        }
+
+        return
+        [
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"{count} file(s) were restored as the version backed up before, since their backup could not fetch the one on the device; the receipt names each:"),
+            .. sample.Select(line => "  " + line),
+        ];
+    }
+
     /// <summary>The line saying how many files a resume took up from the parts its run had assembled (ADR-0130).</summary>
     internal static string ResumedWithin(long count) => string.Create(
         CultureInfo.InvariantCulture,
@@ -872,6 +895,8 @@ internal sealed class ServiceGateway(
         {
             lines.Add(OperationGateway.ResumedWithin(result.ResumedWithin));
         }
+
+        lines.AddRange(OperationGateway.EarlierVersions(result.EarlierVersions, result.EarlierVersionsSample ?? []));
 
         // How to resume a run that did not finish (ADR-0110). A partial
         // run skipped what this target cannot hold, which a resume would
@@ -1719,6 +1744,13 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             throw new CliFailureException(Strings.FormatDirectGateway_RestoreWouldNotFit(space.Refusal()));
         }
 
+        // Which files it restores as a version backed up before, as its plan
+        // named them (ADR-0194 Amendment 1), read before it writes: a run
+        // stopped part-way still keeps a receipt that says so.
+        var earlier = await RestoreBlobSet.EarlierVersionsAsync(
+            catalogue, plan, session.Store, [], session.Repository.RepositoryId, session.Repository.Keys, cancellationToken)
+            .ConfigureAwait(false);
+
         var began = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var executor = new RestoreExecutor(reader, target);
         var options = new RestoreExecutionOptions
@@ -1794,7 +1826,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             hold.Dispose();
         }
 
-        var receipt = RestoreOriginalLocation.Merge(receipts) with { Set = set?.Name, SetId = set?.Id };
+        var receipt = earlier.Stamp(RestoreOriginalLocation.Merge(receipts) with { Set = set?.Name, SetId = set?.Id });
 
         // A run that completed, or skipped only what the target cannot hold,
         // is finished, as the service has it (ADR-0115): a resume would add
@@ -1841,6 +1873,10 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
         {
             lines.Add(OperationGateway.ResumedWithin(resumedWithin));
         }
+
+        var earlierVersions = receipt.Items.Where(item => item.EarlierVersion is not null).ToList();
+        lines.AddRange(OperationGateway.EarlierVersions(
+            earlierVersions.Count, [.. earlierVersions.Take(20).Select(item => $"{item.Path} — {item.EarlierVersion}")]));
 
         // How to resume a run that did not finish, as one through the
         // service says it (ADR-0110), what its parts keep of the backup's

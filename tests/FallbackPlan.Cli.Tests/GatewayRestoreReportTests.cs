@@ -26,7 +26,9 @@ namespace FallbackPlan.Cli.Tests;
 /// files failing and saying how to go on (FR-RST-003, ADR-0178 Amendment 1),
 /// as one that counts only such folders does (ADR-0178 Amendment 4). And a
 /// plan that names each file an earlier version stands in for, and why,
-/// holding nothing back for it (FR-RST-003, ADR-0194).
+/// holding nothing back for it (FR-RST-003, ADR-0194). And a run that says
+/// how many files it restored as the version backed up before, and which and
+/// why, the receipt naming each (FR-RST-004, ADR-0194 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class GatewayRestoreReportTests
@@ -107,6 +109,26 @@ public sealed class GatewayRestoreReportTests
         Assert.IsTrue(
             report.Lines.Any(printed => printed.Contains("1 file(s) already in place", StringComparison.Ordinal)),
             string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
+    public async Task ARestore_OfFilesAnEarlierVersionStoodIn_SaysHowManyAndWhich_AndStillSucceeds()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(
+            2, 0, "/out", "complete", EarlierVersions: 1, EarlierVersionsSample: ["docs/a.docx — timed out"]));
+
+        var report = await RestoreAsync(client, timeout.Token);
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        var said = report.Lines.SkipWhile(line => !line.Contains("1 file(s) were restored as the version backed up before", StringComparison.Ordinal)).ToList();
+        Assert.IsGreaterThanOrEqualTo(2, said.Count, string.Join(" | ", report.Lines));
+        Assert.AreEqual("  docs/a.docx — timed out", said[1]);
+
+        await using var none = new ScriptedClient(new RestoreResult(2, 0, "/out", "complete"));
+        Assert.IsFalse(
+            (await RestoreAsync(none, timeout.Token)).Lines.Any(line => line.Contains("version backed up before", StringComparison.Ordinal)),
+            "nothing where none was");
     }
 
     [TestMethod]

@@ -95,6 +95,37 @@ public sealed record RestoreBlobSetResult(
 public sealed record RestoreEarlierVersion(string Path, string Detail);
 
 /// <summary>
+/// The files a run restores as a version backed up before, read for its
+/// receipt (ADR-0194 Amendment 1), as its plan read them.
+/// </summary>
+/// <param name="Files">Each file the run's plan restores that the snapshot's failures name, with what the backup said of it.</param>
+/// <param name="Unread">Whether the snapshot's manifest or its failures would not read, so none could be named.</param>
+public sealed record RestoreEarlierVersions(IReadOnlyList<RestoreEarlierVersion> Files, bool Unread)
+{
+    /// <summary>
+    /// The receipt with each item these name carrying what the backup said
+    /// of it, and saying whether they could be read at all.
+    /// </summary>
+    /// <param name="receipt">The run's receipt, its items named by the paths the snapshot holds them at.</param>
+    /// <returns>The receipt, stamped.</returns>
+    public RestoreReceipt Stamp(RestoreReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        var said = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in Files)
+        {
+            said.TryAdd(file.Path, file.Detail);
+        }
+
+        return receipt with
+        {
+            Items = [.. receipt.Items.Select(item => said.TryGetValue(item.Path, out var detail) ? item with { EarlierVersion = detail } : item)],
+            EarlierVersionsUnread = Unread,
+        };
+    }
+}
+
+/// <summary>
 /// What a resume already holds of the files its plan names (FR-RST-003,
 /// FR-RST-008; ADR-0132), so the plan counts among what its run reads only
 /// what the run will read: the files its run landed at their length, of
@@ -389,6 +420,50 @@ public static class RestoreBlobSet
             EarlierVersions = earlier,
             FailuresUnread = unread,
         };
+    }
+
+    /// <summary>
+    /// The plan's files whose version is one backed up before, read alone for
+    /// a run, which does not probe (ADR-0194 Amendment 1): the snapshot's
+    /// manifest and its failures, from the first of the store and
+    /// <paramref name="otherCopies"/> that holds each, as the plan read them.
+    /// </summary>
+    /// <remarks>
+    /// A store that will not answer is the run's to meet, file by file, and
+    /// here only means none can be named. So does a run stopped before they
+    /// are read: it goes on to its receipt, as any stopped run does.
+    /// </remarks>
+    public static async ValueTask<RestoreEarlierVersions> EarlierVersionsAsync(
+        Catalogue catalogue,
+        RestorePlan plan,
+        IObjectStore store,
+        IReadOnlyList<CopySource> otherCopies,
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(otherCopies);
+        ArgumentNullException.ThrowIfNull(keys);
+
+        using var keyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
+        using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
+        using var metaReaders = new MetaReaderCache();
+        try
+        {
+            var (earlier, unread) = await EarlierVersionsAsync(
+                catalogue, plan, otherCopies.Count == 0 ? store : new FirstHolderStore(store, otherCopies),
+                repositoryId, keys, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
+                .ConfigureAwait(false);
+            return new RestoreEarlierVersions(earlier, unread);
+        }
+        catch (Exception exception) when (exception is IOException
+            || (exception is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        {
+            return new RestoreEarlierVersions([], Unread: true);
+        }
     }
 
     /// <summary>

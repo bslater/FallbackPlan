@@ -153,6 +153,8 @@ The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a f
 
 > **2026-11 ([ADR-0180 Amendment 10](../adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-10-2026-11--a-refused-move-aside-leaves-nothing-of-its-own-behind)).** A move aside is a rename onto a refuge nothing stands at, so one the platform refuses leaves nothing of its own under the displaced folder. That means no copy, which the move had made where a flag refused its link, and none of the folders it made.
 
+> **2026-11 ([ADR-0194 Amendment 1](../adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-1-2026-11--the-run-and-its-receipt-name-them-too)).** The receipt, at schema 12, names each file the run restored as a version backed up before, standing in for one its backup could not fetch, with what the backup said of it, or says the snapshot's failures would not read. The run reads them as its plan did, before it writes, and its result says how many and which, which the command line and the console say.
+
 ### 3.1 Quarantine by default
 
 Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006

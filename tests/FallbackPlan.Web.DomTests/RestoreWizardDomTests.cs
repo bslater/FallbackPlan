@@ -35,6 +35,9 @@ namespace FallbackPlan.Web.DomTests;
 /// acknowledges it, beside the choice to go on for room where the plan is
 /// short of that too (FR-RST-003, ADR-0178 Amendment 2). A plan counting only
 /// folders the run would make is asked of alike (ADR-0178 Amendment 5).
+/// The result says how many files were restored as the version backed up
+/// before, and which and why, as the plan said they would be (FR-RST-004,
+/// ADR-0194 Amendment 1).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -284,6 +287,37 @@ public sealed class RestoreWizardDomTests
         // It holds nothing back: the typed word alone arms the restore.
         await page.FillAsync("#confirm-word", "restore");
         await Expect(page.Locator("#rst-run-go")).ToBeEnabledAsync();
+    }
+
+    [TestMethod]
+    public async Task Wizard_ARunThatRestoredTheVersionBackedUpBefore_SaysHowManyAndWhich()
+    {
+        // FR-RST-004, ADR-0194 Amendment 1: what the plan said before the run,
+        // the result says after it, and the receipt names each.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            PlanRestoreCommand => new RestorePlanResult(2, 8_192, [], WriteBytes: 8_192,
+                EarlierVersions: [new EarlierVersionDescriptor("docs/a.txt", "the cloud provider timed out")]),
+            RunRestoreCommand => new ApiRestoreResult(
+                2, 0, "/restore/out", "complete", ReceiptPath: "/state/receipts/0123456789abcdef.json",
+                EarlierVersions: 1, EarlierVersionsSample: ["docs/a.txt — the cloud provider timed out"]),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+
+        await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
+        var earlier = page.Locator("#rst-earlier-restored");
+        await Expect(earlier).ToContainTextAsync("1 file(s) were restored as the version backed up before");
+        await Expect(earlier).ToContainTextAsync("the receipt names each");
+        await Expect(earlier).ToContainTextAsync("docs/a.txt — the cloud provider timed out");
     }
 
     [TestMethod]
@@ -586,6 +620,7 @@ public sealed class RestoreWizardDomTests
         await Expect(page.Locator("#rst-found-in-place")).ToContainTextAsync("1 file(s)");
         await Expect(page.Locator("#rst-resumed-within")).ToContainTextAsync("1 file(s)");
         await Expect(page.Locator("#rst-resume")).ToHaveCountAsync(0);
+        await Expect(page.Locator("#rst-earlier-restored")).ToHaveCountAsync(0);
     }
 
     [TestMethod]

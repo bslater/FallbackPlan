@@ -850,8 +850,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// `bytes_to_fetch`, their bytes. Both null where nothing is counted.
     /// Additive: a pre-1.86 service says nothing of them.
     /// </para>
+    /// <para>
+    /// 1.87 has a restore's run say how many files it restored as a version
+    /// backed up before, as its plan said it would (FR-RST-004, ADR-0194
+    /// Amendment 1). `restore` gains `earlier_versions`, the count, and
+    /// `earlier_versions_sample`, at most twenty `path — detail` lines; the
+    /// receipt names each. Additive: a pre-1.87 service says none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 86);
+    public static ContractVersion Current { get; } = new(1, 87);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

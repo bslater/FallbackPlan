@@ -963,6 +963,16 @@ public sealed record RestoreSpaceDescriptor(
 /// counted among <paramref name="Restored"/>. The receipt says where each was
 /// resumed. Zero from a service before 1.76.
 /// </param>
+/// <param name="EarlierVersions">
+/// Files restored as a version backed up before, standing in for one their
+/// backup could not fetch from its cloud provider (contract 1.87, ADR-0194
+/// Amendment 1), as the plan said they would be. The receipt names each with
+/// what the backup said of it. Zero from a service before 1.87.
+/// </param>
+/// <param name="EarlierVersionsSample">
+/// At most twenty of them, as <c>path — what the backup said</c> lines. Null
+/// where there are none.
+/// </param>
 public sealed record RestoreResult(
     long Restored,
     long Failed,
@@ -979,7 +989,9 @@ public sealed record RestoreResult(
     IReadOnlyList<string>? NotApplied = null,
     long FoundInPlace = 0,
     string? Run = null,
-    long ResumedWithin = 0) : ServiceResult;
+    long ResumedWithin = 0,
+    long EarlierVersions = 0,
+    IReadOnlyList<string>? EarlierVersionsSample = null) : ServiceResult;
 
 /// <summary>
 /// One restore run the service began and has not seen finish (contract 1.71,

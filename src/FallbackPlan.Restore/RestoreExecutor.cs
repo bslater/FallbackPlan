@@ -180,6 +180,17 @@ public sealed record ReceiptItem
     [JsonPropertyName("resumed_at")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public ulong ResumedAt { get; init; }
+
+    /// <summary>
+    /// What the backup said of the file, where the version the snapshot holds
+    /// of it is one backed up before, standing in for one its backup could
+    /// not fetch from its cloud provider (FR-RST-004; ADR-0185 Amendment 3,
+    /// ADR-0194 Amendment 1): why it was not fetched, and when the version
+    /// restored was last modified. Written only for such a file.
+    /// </summary>
+    [JsonPropertyName("earlier_version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EarlierVersion { get; init; }
 }
 
 /// <summary>
@@ -226,8 +237,13 @@ public sealed record RestoreReceipt
     /// a file a resume took up from its part was written by this run, but not
     /// all of it was read again, and a receipt that said nothing of it would
     /// not say where the run picked it up.
+    /// Version 12 added the optional per-item <c>earlier_version</c> and
+    /// <c>earlier_versions_unread</c> (ADR-0194 Amendment 1): a file whose
+    /// version is one backed up before, standing in for one its backup could
+    /// not fetch, was restored as that version, which its plan said and its
+    /// receipt, read back long after, did not.
     /// </remarks>
-    public const int CurrentSchemaVersion = 11;
+    public const int CurrentSchemaVersion = 12;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -285,6 +301,16 @@ public sealed record RestoreReceipt
     [JsonPropertyName("set_id")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SetId { get; init; }
+
+    /// <summary>
+    /// Whether the snapshot's manifest or its failures would not read, or the
+    /// run was stopped before it read them, so no item could be said to be a
+    /// version backed up before though some may be (ADR-0194 Amendment 1).
+    /// Written only when true.
+    /// </summary>
+    [JsonPropertyName("earlier_versions_unread")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool EarlierVersionsUnread { get; init; }
 
     /// <summary>The receipt as indented JSON.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, SerializerOptions);

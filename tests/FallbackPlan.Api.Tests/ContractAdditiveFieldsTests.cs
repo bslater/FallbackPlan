@@ -1101,6 +1101,31 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheEarlierVersionsRestored_WireNamesAndPre187Default()
+    {
+        // Contract 1.87 (FR-RST-004, ADR-0194 Amendment 1): a run says how
+        // many files it restored as the version backed up before, and at most
+        // twenty of them with what the backup said of each.
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreResult(2, 0, "/out", "complete", EarlierVersions: 1, EarlierVersionsSample: ["docs/a.docx — timed out"]),
+            FrameCodec.SerializerOptions);
+
+        const string Count = ",\"earlier_versions\":1";
+        const string Sample = ",\"earlier_versions_sample\":[\"docs/a.docx \\u2014 timed out\"]";
+        Assert.Contains(Count, modern, StringComparison.Ordinal);
+        Assert.Contains(Sample, modern, StringComparison.Ordinal);
+
+        // A pre-1.87 service's result carries neither, and reads as none.
+        var old = modern.Replace(Count, "", StringComparison.Ordinal).Replace(Sample, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual(0, read.EarlierVersions);
+        Assert.IsNull(read.EarlierVersionsSample);
+    }
+
+    [TestMethod]
     public void WhatAClosedCircuitPassedOver_WireNameAndPre166Default()
     {
         // Contract 1.66 (FR-VER-003, ADR-0106): a sweep says how many blobs
