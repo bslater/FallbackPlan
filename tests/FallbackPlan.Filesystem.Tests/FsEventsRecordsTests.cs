@@ -107,6 +107,21 @@ public sealed class FsEventsRecordsTests
     }
 
     [TestMethod]
+    public void TheRootHeardInAnotherCase_IsTheRoot()
+    {
+        var named = FsEventsRecords.Named(
+            [("/PRIVATE/var/folders/t/SET", ItemIsDir | ItemInodeMetaMod)],
+            [(Root, Real)],
+            Marks,
+            static _ => false,
+            static path => path == "/PRIVATE/var/folders/t/SET" ? Real : null,
+            out var doubt);
+
+        Assert.IsNull(doubt);
+        Assert.AreEqual(new ChangedFolder(Root, string.Empty), Assert.ContainsSingle(named!));
+    }
+
+    [TestMethod]
     public void APathThatCannotBeSpelledAsOnDisk_IsDoubt()
     {
         Assert.IsNull(FsEventsRecords.Named(
