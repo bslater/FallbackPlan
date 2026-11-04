@@ -69,7 +69,30 @@ public sealed record RestoreBlobSetResult(
     /// in <see cref="ReadBytes"/>, because the run cannot read it as it is.
     /// </summary>
     public IReadOnlyList<string> Archived { get; init; } = [];
+
+    /// <summary>
+    /// The plan's files whose version is one backed up before, standing in
+    /// for one the backup could not fetch from its cloud provider, each with
+    /// what the backup said of it (ADR-0185 Amendment 3, ADR-0194): the files
+    /// the snapshot's failures name though its tree holds them.
+    /// </summary>
+    public IReadOnlyList<RestoreEarlierVersion> EarlierVersions { get; init; } = [];
+
+    /// <summary>
+    /// Whether the snapshot's manifest or its failures would not read, so
+    /// <see cref="EarlierVersions"/> cannot say which files an earlier version
+    /// stands in for (ADR-0194).
+    /// </summary>
+    public bool FailuresUnread { get; init; }
 }
+
+/// <summary>
+/// A file a restore gives back as a version backed up before, standing in
+/// for one its backup could not fetch (ADR-0194).
+/// </summary>
+/// <param name="Path">The file, as the snapshot names it.</param>
+/// <param name="Detail">What the backup said of it: why it was not fetched, and when the version restored was last modified.</param>
+public sealed record RestoreEarlierVersion(string Path, string Detail);
 
 /// <summary>
 /// What a resume already holds of the files its plan names (FR-RST-003,
@@ -355,7 +378,79 @@ public static class RestoreBlobSet
             }
         }
 
-        return new RestoreBlobSetResult(needed, missing) { Facts = facts, ReadBytes = readBytes, Archived = archived };
+        var (earlier, unread) = await EarlierVersionsAsync(
+            catalogue, plan, store, repositoryId, keys, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
+            .ConfigureAwait(false);
+        return new RestoreBlobSetResult(needed, missing)
+        {
+            Facts = facts,
+            ReadBytes = readBytes,
+            Archived = archived,
+            EarlierVersions = earlier,
+            FailuresUnread = unread,
+        };
+    }
+
+    /// <summary>
+    /// The plan's files the snapshot's failures name though its tree holds
+    /// them (ADR-0194). A failed file is in no tree, but for one whose version
+    /// before was put in its place (ADR-0185 Amendment 3), so each such file
+    /// is one an earlier version stands in for. Unread where the snapshot's
+    /// manifest or its failures will not read.
+    /// </summary>
+    private static async ValueTask<(IReadOnlyList<RestoreEarlierVersion> Earlier, bool Unread)> EarlierVersionsAsync(
+        Catalogue catalogue,
+        RestorePlan plan,
+        IObjectStore store,
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        StoreBlobKeyDeriver keyDeriver,
+        ObjectIdDeriver objectIdDeriver,
+        MetaReaderCache metaReaders,
+        CancellationToken cancellationToken)
+    {
+        var files = plan.Items.Where(static item => item.Kind == EntryKind.File).Select(static item => item.Path).ToHashSet(StringComparer.Ordinal);
+        if (files.Count == 0)
+        {
+            return ([], false);
+        }
+
+        async ValueTask<byte[]?> ReadAsync(ObjectId objectId) =>
+            catalogue.ResolveLocation(objectId) is { } location
+                ? await ReadManifestAsync(
+                    store, repositoryId, keys, objectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+
+        var snapshotId = plan.SnapshotId;
+        if (catalogue.EnumerateSnapshots().FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(snapshotId.Span)) is not { } row
+            || await ReadAsync(row.ObjectId).ConfigureAwait(false) is not { } snapshotRecord
+            || Decode(snapshotRecord, static plaintext => SnapshotManifestCodec.Decode(plaintext).Manifest) is not { } snapshot)
+        {
+            return ([], true);
+        }
+
+        if (snapshot.ErrorManifest is not { } errors)
+        {
+            return ([], false);
+        }
+
+        if (await ReadAsync(errors).ConfigureAwait(false) is not { } errorRecord
+            || Decode(errorRecord, ErrorManifestCodec.Decode) is not { } failures)
+        {
+            return ([], true);
+        }
+
+        return (
+            [
+                .. failures.Failures
+                    .Select(static failure => new RestoreEarlierVersion(
+                        string.Join('/', failure.PathComponents.Select(static component => System.Text.Encoding.UTF8.GetString(component.Span))),
+                        failure.Detail))
+                    .Where(failure => files.Contains(failure.Path))
+                    .OrderBy(static failure => failure.Path, StringComparer.Ordinal),
+            ],
+            false);
     }
 
     /// <summary>
@@ -515,7 +610,8 @@ public static class RestoreBlobSet
             var manifests = new Dictionary<ObjectId, RecordTableEntry>();
             foreach (var entry in reader.RecordTable)
             {
-                if (entry.ObjectType is ObjectType.FileVersionManifest or ObjectType.TreeManifest)
+                if (entry.ObjectType is ObjectType.FileVersionManifest or ObjectType.TreeManifest
+                    or ObjectType.SnapshotManifest or ObjectType.ErrorManifest)
                 {
                     manifests.TryAdd(entry.ObjectId, entry);
                 }

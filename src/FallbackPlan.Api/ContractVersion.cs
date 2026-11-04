@@ -835,8 +835,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// Additive: a pre-1.84 service says nothing, as a service does of a set
     /// whose last backup fetched every one.
     /// </para>
+    /// <para>
+    /// 1.85 has a restore's plan name the files it restores as a version
+    /// backed up before, standing in for one their backup could not fetch
+    /// (FR-RST-003, ADR-0194). `restore_plan` gains `earlier_versions`, each
+    /// with its `path` and the backup's `detail`. They restore, and nothing
+    /// is refused for them. Additive: a pre-1.85 service names none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 84);
+    public static ContractVersion Current { get; } = new(1, 85);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -1929,7 +1929,10 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
                 probed.Archived.Count == 0 ? null : probed.Archived,
                 request.Resume ? space.Landed : null,
                 wider is { Files: > 0 } ? wider.Files : null,
-                wider is { OpenedFolders: > 0 } ? wider.OpenedFolders : null),
+                wider is { OpenedFolders: > 0 } ? wider.OpenedFolders : null,
+                probed.EarlierVersions.Count == 0
+                    ? null
+                    : [.. probed.EarlierVersions.Select(earlier => new EarlierVersionDescriptor(earlier.Path, earlier.Detail))]),
             request);
     }
 

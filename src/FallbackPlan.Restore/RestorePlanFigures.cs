@@ -47,10 +47,20 @@ public static class RestorePlanFigures
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(probed);
-        return
+        List<string> said =
         [
             .. plan.Degradations.Concat(RestoreMetadata.Declare(plan, probed.Facts, target, destinationOf))
                 .Select(degradation => degradation.Detail),
         ];
+
+        // The plan names the files an earlier version stands in for from the
+        // snapshot's failures (ADR-0194); where those will not read, it says
+        // it cannot, rather than naming none.
+        if (probed.FailuresUnread)
+        {
+            said.Add("The snapshot's record of what its backup could not capture would not read, so this plan cannot say which files it restores as an earlier version.");
+        }
+
+        return said;
     }
 }

@@ -854,6 +854,13 @@ public sealed record DirectoryResult(
 /// them as for files. Null where there are none, and from a service before
 /// 1.81.
 /// </param>
+/// <param name="EarlierVersions">
+/// The files the plan restores as a version backed up before, standing in
+/// for one their backup could not fetch from its cloud provider, each with
+/// what the backup said of it (contract 1.85, FR-RST-003, ADR-0194). They
+/// restore; what they restore is older than the file was when that backup
+/// ran. Null where there are none, and from a service before 1.85.
+/// </param>
 public sealed record RestorePlanResult(
     long Files,
     long Bytes,
@@ -867,7 +874,19 @@ public sealed record RestorePlanResult(
     IReadOnlyList<string>? ArchivedObjects = null,
     long? Landed = null,
     long? OpenedWider = null,
-    long? OpenedWiderFolders = null) : ServiceResult;
+    long? OpenedWiderFolders = null,
+    IReadOnlyList<EarlierVersionDescriptor>? EarlierVersions = null) : ServiceResult;
+
+/// <summary>
+/// A file a restore gives back as a version backed up before, standing in
+/// for one its backup could not fetch (contract 1.85, ADR-0194).
+/// </summary>
+/// <param name="Path">The file, as the snapshot names it.</param>
+/// <param name="Detail">
+/// What the backup said of it: why it was not fetched, and when the version
+/// restored was last modified.
+/// </param>
+public sealed record EarlierVersionDescriptor(string Path, string Detail);
 
 /// <summary>The room a restore needs on one volume it writes to (contract 1.53, FR-RST-003).</summary>
 /// <param name="Directory">
