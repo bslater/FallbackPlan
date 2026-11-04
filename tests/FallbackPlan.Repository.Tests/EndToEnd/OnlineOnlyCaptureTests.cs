@@ -689,6 +689,34 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task ARunsReadOfThemFromAStoreThatWillNotServeTheirRecords_NamesNone_AndSaysItCouldNot()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        // A store that opens a blob and then will not serve what is in it is
+        // the run's to meet, file by file: here it only means none is named.
+        var plan = RestorePlanner.Plan(catalogue, Snapshot(0xB2), string.Empty, RestoreTargetProfile.ForLocalPlatform());
+        var earlier = await RestoreBlobSet.EarlierVersionsAsync(
+            catalogue, plan, new RecordRefusingStore(store), [], Repo, keys, CancellationToken.None);
+
+        Assert.IsTrue(earlier.Unread);
+        Assert.IsEmpty(earlier.Files);
+    }
+
+    [TestMethod]
     public async Task ASnapshotsFailures_AreReadAsItsPaths_NoneWhereItFailedNothing_AndNullWhereTheyWillNotRead()
     {
         var source = new FakeFileSystemSource();
@@ -843,5 +871,40 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         }
 
         return data;
+    }
+
+    /// <summary>
+    /// Serves each blob's opening, its locator, footer and envelope, and fails
+    /// every read of it after with an <see cref="IOException"/>, as a store
+    /// that goes away between a blob's footer and its records does.
+    /// </summary>
+    private sealed class RecordRefusingStore(IObjectStore inner) : IObjectStore
+    {
+        private const int OpeningReads = 3;
+
+        private readonly Dictionary<ObjectKey, int> _reads = [];
+
+        public StoreCapabilities Capabilities => inner.Capabilities;
+
+        public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+            inner.GetMetadataAsync(key, cancellationToken);
+
+        public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken)
+        {
+            var read = _reads[key] = _reads.GetValueOrDefault(key) + 1;
+            return read > OpeningReads
+                ? throw new IOException($"Injected fault: the read of '{key}' failed.")
+                : inner.OpenReadAsync(key, range, cancellationToken);
+        }
+
+        public ValueTask<PutResult> PutAsync(
+            ObjectKey key, Func<CancellationToken, ValueTask<Stream>> openContent, PutConditions conditions, CancellationToken cancellationToken) =>
+            inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+        public IAsyncEnumerable<ObjectEntry> ListAsync(ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+            inner.ListAsync(prefix, options, cancellationToken);
+
+        public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+            inner.DeleteAsync(key, conditions, cancellationToken);
     }
 }
