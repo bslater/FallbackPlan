@@ -187,6 +187,7 @@ public sealed class PendingChangesTests : IDisposable
         await using var runtime = await StartAsync();
         var start = DateTimeOffset.Now;
         await BackUpAsync(runtime, start);
+        Assert.AreEqual(0L, (await CountAsync(runtime, start.AddMinutes(10)))!.Files, "nothing failed, nothing named");
 
         // A changed file the provider does not deliver, and a new one it never
         // does: the backup fails both, and keeps the version before of the one.
@@ -196,6 +197,7 @@ public sealed class PendingChangesTests : IDisposable
         _delivers = false;
         await BackUpAsync(runtime, start.AddHours(1));
 
+        // A new snapshot, so its failures are read afresh.
         _journal.Answer = _ => [];
         var pending = await CountAsync(runtime, start.AddHours(1).AddMinutes(10));
         Assert.AreEqual(2L, pending!.Files, "both are tried again by the next backup");
