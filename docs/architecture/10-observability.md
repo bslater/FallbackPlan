@@ -144,6 +144,8 @@ Every transition and checkpoint is durable and idempotent. `Segmenting` replaces
 
 `CompletedWithFailures` is terminal and distinct from `Complete` because "backed up your 40 000 files" and "backed up 39 998 of them" are different outcomes a caller must tell apart without parsing English; the snapshot is committed and anchors the schedule, but the surface never reports it as a clean success.
 
+> **2026-11 ([ADR-0193 Amendment 1](../adr/0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md#amendment-1-2026-11--a-backup-that-kept-every-earlier-version-is-behind-not-partial)).** A backup whose every failure is an online-only file its provider did not deliver, whose version backed up before it kept, holds a version of all 40 000 and is `Complete`, behind: its detail says on how many, and the set's status says what it is behind on with no PARTIAL warning. A file new to the set that it did not fetch, or a file on the device that would not read, is still `CompletedWithFailures`.
+
 ### 3.1 How a client learns any of this
 
 Status and progress are computed inside the service and reach a UI over the
