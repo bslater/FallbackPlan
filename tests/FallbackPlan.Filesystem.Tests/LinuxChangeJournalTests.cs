@@ -239,6 +239,30 @@ public sealed partial class LinuxChangeJournalTests : IDisposable
     [PlatformCondition(TestPlatforms.Linux, "inotify is Linux's")]
     [PlatformTrait(TestPlatforms.Linux)]
     [SupportedOSPlatform("linux")]
+    public void ChangedSince_APlaceOlderThanTheWatchKeeps_CannotBeAnswered_AndALaterOneCan()
+    {
+        // A service runs for months: the watch lets go of the older half of
+        // what it keeps, and a place from before that is doubt, not silence.
+        var journal = new LinuxChangeJournal(readsInBackground: false, mostFoldersKept: 8);
+        _journals.Add(journal);
+        var since = PositionOf(journal);
+        for (var i = 0; i < 12; i++)
+        {
+            Make($"folder-{i}");
+        }
+
+        Assert.IsNull(journal.ChangedSince(since, [_root], out var doubt));
+        Assert.Contains("older than", doubt!, StringComparison.Ordinal);
+
+        var later = PositionOf(journal);
+        File.WriteAllText(Path.Combine(_root, "folder-11", "a.txt"), "after");
+        AssertNamed(Changed(journal, later), named: ["folder-11"], notNamed: ["folder-0"]);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "inotify is Linux's")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    [SupportedOSPlatform("linux")]
     public void ChangedSince_ARootDeleted_CannotBeAnswered()
     {
         Make("docs");
