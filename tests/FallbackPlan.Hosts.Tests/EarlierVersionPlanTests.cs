@@ -10,7 +10,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// none where the backup fetched every one (ADR-0194, FR-RST-003). The run
 /// says how many it restored so, and its receipt names each with what the
 /// backup said of it (ADR-0194 Amendment 1, FR-RST-004), read from the copy
-/// that holds them where the set's own copy does not (FR-RST-007).
+/// that holds them where the set's own copy does not (FR-RST-007). The
+/// service's listing of the receipts it keeps counts them (ADR-0194
+/// Amendment 2).
 /// </summary>
 /// <remarks>
 /// No runner has a cloud provider, so a stand-in source marks the files
@@ -87,6 +89,11 @@ public sealed class EarlierVersionPlanTests : IDisposable
         Assert.IsFalse(receipt.EarlierVersionsUnread);
         var written = Assert.ContainsSingle(Directory.GetFiles(Path.Combine(_harness.WorkPath, "earlier"), "a.cloud", SearchOption.AllDirectories));
         Assert.AreEqual("alpha", await File.ReadAllTextAsync(written, Timeout), "the version backed up before");
+
+        // The service's listing of the receipts it keeps counts them (ADR-0194 Amendment 2).
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(await handler.ExecuteAsync(new ListRestoreReceiptsCommand(), Timeout), out var kept);
+        Assert.AreEqual(1L, kept.Receipts.Single(listed => listed.Run == Path.GetFileNameWithoutExtension(result.ReceiptPath!)).EarlierVersions);
+        Assert.AreEqual(0L, kept.Receipts.Single(listed => listed.Run == Path.GetFileNameWithoutExtension(clean.Result.ReceiptPath!)).EarlierVersions);
     }
 
     [TestMethod]

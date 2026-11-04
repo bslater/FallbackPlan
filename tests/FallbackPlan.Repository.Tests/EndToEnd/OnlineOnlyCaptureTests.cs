@@ -732,6 +732,26 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public void TheFilesRestoredAsAnEarlierVersion_AreThoseWritten_NotThoseThatFailedOrWereSkipped()
+    {
+        const string Said = "timed out; the version backed up earlier stands in its place";
+        var receipt = Receipt("restored", "degraded", "failed", "skipped", "own");
+        receipt = receipt with
+        {
+            Items =
+            [
+                .. receipt.Items.Select(item => item.Path == "own"
+                    ? item
+                    : item with { Outcome = item.Path, EarlierVersion = Said }),
+            ],
+        };
+
+        CollectionAssert.AreEqual(
+            new[] { "restored", "degraded" },
+            RestoreEarlierVersions.RestoredIn(receipt.Items).Select(item => item.Path).ToArray());
+    }
+
+    [TestMethod]
     public async Task ASnapshotsFailures_AreReadAsItsPaths_NoneWhereItFailedNothing_AndNullWhereTheyWillNotRead()
     {
         var source = new FakeFileSystemSource();

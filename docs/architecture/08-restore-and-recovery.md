@@ -155,6 +155,8 @@ The last rule is absolute. A restore that recovered 9 999 of 10 000 files is a f
 
 > **2026-11 ([ADR-0194 Amendment 1](../adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-1-2026-11--the-run-and-its-receipt-name-them-too)).** The receipt, at schema 12, names each file the run restored as a version backed up before, standing in for one its backup could not fetch, with what the backup said of it, or says the snapshot's failures would not read. The run reads them as its plan did, before it writes, and its result says how many and which, which the command line and the console say.
 
+> **2026-11 ([ADR-0194 Amendment 2](../adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-2-2026-11--the-kept-receipts-count-them)).** The listing of kept receipts counts each run's files restored as the version backed up before, those written alone, from the command line and the console alike.
+
 ### 3.1 Quarantine by default
 
 Restores default to a quarantine path rather than the original location when restoring historical content that has not been scanned. Historical snapshots may contain malware that was present at capture time, and re-introducing it directly into a live tree is the wrong default. Restoring in place is a deliberate choice the user makes, not what happens if they press Enter. → FR-RST-006

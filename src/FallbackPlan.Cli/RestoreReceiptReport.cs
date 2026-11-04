@@ -54,7 +54,8 @@ internal static class RestoreReceiptReport
                     receipt.Items.Count(item => item.ResumedAt > 0),
                     receipt.Items.Count(item => item.Outcome == "skipped"),
                     receipt.Items.Count(item => item.Outcome == "failed"),
-                    receipt.Items.Count(item => item.Outcome == "degraded")),
+                    receipt.Items.Count(item => item.Outcome == "degraded"),
+                    RestoreEarlierVersions.RestoredIn(receipt.Items).Count),
                 receipt.WrittenTo);
         }
 
@@ -437,7 +438,7 @@ internal static class RestoreReceiptReport
             receipt.EndedAt ?? 0,
             receipt.SnapshotId,
             receipt.Set,
-            Counts(receipt.Restored, receipt.FoundInPlace, receipt.ResumedWithin, receipt.Skipped, receipt.Failed, receipt.Degraded),
+            Counts(receipt.Restored, receipt.FoundInPlace, receipt.ResumedWithin, receipt.Skipped, receipt.Failed, receipt.Degraded, receipt.EarlierVersions),
             receipt.WrittenTo);
     }
 
@@ -491,13 +492,14 @@ internal static class RestoreReceiptReport
             Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
             Set: receipt.Set,
             SetId: receipt.SetId,
-            ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0));
+            ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0),
+            EarlierVersions: RestoreEarlierVersions.RestoredIn(receipt.Items).Count);
 
     /// <summary>
     /// The items' outcomes, counted. A file a resume found in place is counted
     /// restored, as its receipt counts it, and said to be.
     /// </summary>
-    private static string Counts(long restored, long found, long resumed, long skipped, long failed, long degraded)
+    private static string Counts(long restored, long found, long resumed, long skipped, long failed, long degraded, long earlier)
     {
         // Both are among the files restored: one found in place was left as
         // it stood, and one resumed within was written from its run's part.
@@ -508,6 +510,10 @@ internal static class RestoreReceiptReport
         ];
         var counts = among.Length > 0 ? $"{restored} restored ({string.Join(", ", among)})" : $"{restored} restored";
         counts += $", {skipped} skipped, {failed} failed";
-        return degraded > 0 ? $"{counts}, {degraded} degraded" : counts;
+        counts = degraded > 0 ? $"{counts}, {degraded} degraded" : counts;
+
+        // Apart from the counts: a degraded file may be one, and a file is
+        // counted only where its content was written (ADR-0194 Amendment 2).
+        return earlier > 0 ? $"{counts}; {earlier} restored as the version backed up before" : counts;
     }
 }

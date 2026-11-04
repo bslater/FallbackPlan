@@ -857,8 +857,14 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// `earlier_versions_sample`, at most twenty `path — detail` lines; the
     /// receipt names each. Additive: a pre-1.87 service says none.
     /// </para>
+    /// <para>
+    /// 1.88 has the listing of kept receipts count each run's files restored
+    /// as a version backed up before (FR-RST-004, ADR-0194 Amendment 2). A
+    /// `restore_receipts` entry gains `earlier_versions`. Additive: a pre-1.88
+    /// service says none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 87);
+    public static ContractVersion Current { get; } = new(1, 88);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

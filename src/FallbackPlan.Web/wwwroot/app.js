@@ -1822,7 +1822,9 @@ function renderRestoreReceiptsCard() {
       ? `${fmtCount(row.restored)} restored (${among.join(", ")})`
       : `${fmtCount(row.restored)} restored`;
     const counts = `${restored}, ${fmtCount(row.skipped)} skipped, ${fmtCount(row.failed)} failed`;
-    return row.degraded ? `${counts}, ${fmtCount(row.degraded)} degraded` : counts;
+    const all = row.degraded ? `${counts}, ${fmtCount(row.degraded)} degraded` : counts;
+    // Apart from the counts, as the command line says it (ADR-0194 Amendment 2).
+    return row.earlierVersions ? `${all}; ${fmtCount(row.earlierVersions)} restored as the version backed up before` : all;
   };
   // Which files a run did not restore are the backup's file names, so they
   // are offered only where the receipt records the set whose passphrase

@@ -1330,7 +1330,7 @@ public sealed partial class ServiceCommandHandler(
 
                 var failures = receipt.Items.Where(item => item.Outcome == "failed").ToList();
                 var notApplied = RestoreMetadata.Summarise(receipt.Items, target);
-                var earlierVersions = receipt.Items.Where(item => item.EarlierVersion is not null).ToList();
+                var earlierVersions = Restore.RestoreEarlierVersions.RestoredIn(receipt.Items);
                 answered = new RestoreResult(
                     // A degraded file's content was written and verified, so it
                     // counts among the files written; the Outcome carries the
@@ -1508,7 +1508,8 @@ public sealed partial class ServiceCommandHandler(
             Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
             Set: receipt.Set,
             SetId: receipt.SetId,
-            ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0));
+            ResumedWithin: receipt.Items.Count(item => item.ResumedAt > 0),
+            EarlierVersions: Restore.RestoreEarlierVersions.RestoredIn(receipt.Items).Count);
 
     /// <summary>How many of a receipt's files a reading answers where the caller names no limit.</summary>
     private const int ReceiptFilesAnswered = 200;

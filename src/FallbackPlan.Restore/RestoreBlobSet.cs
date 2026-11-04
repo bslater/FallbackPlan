@@ -103,6 +103,20 @@ public sealed record RestoreEarlierVersion(string Path, string Detail);
 public sealed record RestoreEarlierVersions(IReadOnlyList<RestoreEarlierVersion> Files, bool Unread)
 {
     /// <summary>
+    /// The items of a receipt restored as a version backed up before: those
+    /// it names so whose content was written, restored or degraded (ADR-0194
+    /// Amendments 1 and 2). One that failed or was skipped was not restored as
+    /// anything, though its version is the one backed up before.
+    /// </summary>
+    /// <param name="items">A receipt's items.</param>
+    /// <returns>Those restored as a version backed up before, in order.</returns>
+    public static IReadOnlyList<ReceiptItem> RestoredIn(IEnumerable<ReceiptItem> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        return [.. items.Where(static item => item.EarlierVersion is not null && item.Outcome is "restored" or "degraded")];
+    }
+
+    /// <summary>
     /// The receipt with each item these name carrying what the backup said
     /// of it, and saying whether they could be read at all.
     /// </summary>
