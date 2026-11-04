@@ -216,6 +216,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0189](adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md) | A set's full walk is a setting of the set: named in its schedule's grammar, the first backup after it falls due walks in full; none named is a day, one that does not read walks every backup in full, and it starts no backup; contract 1.82 carries it, an edit keeping it where silent, clearing it where empty and refusing one that does not read, and the last full walk on the set's status, which the command line prints; since [Amendment 1](adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md#amendment-1-2026-11--the-console-sets-the-full-walk-and-shows-the-last) the console sets it beside the schedule, always sending what it shows, and a set's card says when it was last walked in full | **Built** | `Application/ClientConfiguration` · `Agent/ChangeHints` · `Agent/ServiceCommandHandler` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Hosts.Tests/ChangeJournalRunTests` · `Hosts.Tests/ConfigurationCommandTests` · `Application.Tests/ClientConfigurationTests` · `Api.Tests/ContractAdditiveFieldsTests` · `Cli.Tests/StatusFullWalkTokenTests` · `Web.DomTests/FullWalkDomTests` · `Web.Tests/StatusRelayNamesTests` · [notes](#0189--full-walk-a-setting) |
 | [0190](adr/0190-on-linux-the-service-watches-a-sets-folders-itself.md) | On Linux the service watches a set's folders itself: the first place asked starts an inotify watch of the root and every folder below it on its filesystem, one tree for every set; a change names its folder, a folder made or moved in is named whole and watched, a folder moved within goes on being named where it is; a place is good only to the session that gave it, and a changed file with another name, an overflowed queue, a place older than the 100,000 changed folders kept, or a root moved or deleted is doubt; a root over the watch limit or on a remote filesystem has no place; the runtime gives every backup the process's one watch | **Built** | `Filesystem.Local/LinuxChangeJournal` · `Agent/ServiceRuntime` · `Filesystem.Tests/LinuxChangeJournalTests` · `Hosts.Tests/LinuxChangeWatchRunTests` · [notes](#0190--linux-change-watch) |
 | [0191](adr/0191-on-macos-the-service-asks-the-volumes-event-history.md) | On macOS the service asks the volume's event history: a place is the history's identity and the latest event's number; what changed since is replayed over the set's roots, and no answer is given until a mark the service writes after the replay comes back; a file or a link names its folder, anything else itself, each as it is spelled on disk; a history that lost track, a root moved, a changed file with another name, a place in another history or ahead of it is doubt; a folder not there or on a volume keeping no history has no place; the runtime gives every backup the history | **Built** | `Filesystem.Local/MacChangeJournal` · `Filesystem.Local/FsEventsRecords` · `Agent/ServiceRuntime` · `Filesystem.Tests/MacChangeJournalTests` · `Filesystem.Tests/FsEventsRecordsTests` · `Hosts.Tests/MacChangeHistoryRunTests` · [notes](#0191--macos-change-history) |
+| [0192](adr/0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md) | A set's status says how many changed files its next backup will take: a dry walk of the folders the change journal named since its last backup, entering what folder reuse will enter and judging each file as the backup will, opening nothing; where the next backup walks in full it says why (no backup, no place kept, its full walk due, its folders changed, a journal that cannot say); the count is kept and renewed a minute on, on the reader lane, never two at once; contract 1.83, the command line's `waiting:` token, the console's card | **Built** | `Repository/SourceComparer` · `Agent/ChangeHints` · `Agent/PendingChangesBoard` · `Api/Results` · `Cli/CliApplication` · `Repository.Tests/ChangedFilesCountTests` · `Hosts.Tests/PendingChangesTests` · `Cli.Tests/StatusPendingTokenTests` · `Web.DomTests/PendingChangesDomTests` · [notes](#0192--changes-waiting) |
 
 ---
 
@@ -5826,3 +5827,35 @@ What remains is recorded rather than done:
 - a history the system pruned without starting afresh or saying it lost
   track would be believed until the set's next full walk;
 - a set of several roots writes a mark for each.
+
+### 0192 — changes waiting
+
+Built in one slice, tests first, at the owner's ask that the console show
+how many files have been found changed that the next backup will take.
+
+**The count.** `Repository/SourceComparer` gains a count over only the
+folders a change journal named: it enters each, the folders above it, and
+any folder the last snapshot does not hold, through the scan's own hook,
+and passes over every other folder as folder reuse does. Each file is
+judged by the backup's change detection against the last snapshot's
+version at its path or its identity, under the set's rules; a file new,
+changed, changed only in its metadata, or moved is counted. Nothing is
+opened, so no online-only file is fetched.
+
+**One judgement.** `Agent/ChangeHints` says what the next backup will be
+told, or why it will walk in full, and the backup's own plan now asks it
+too. It moves no place.
+
+**Kept, not counted per status.** `Agent/PendingChangesBoard` keeps each
+set's last count; a status reading one a minute old, missing, or from a
+clock ahead asks for another on the reader lane, one at a time for a set.
+`Api/Results` carries it at contract 1.83;
+`Cli/CliApplication` prints `waiting:12`, `waiting:0` or
+`waiting:full-walk`; the console's card says `12 changed` at a glance and
+in words beside the next run.
+
+What remains is recorded rather than done:
+
+- files the last backup could not read are tried again but not counted;
+- files deleted are not counted;
+- the count names no files; the preview does.
