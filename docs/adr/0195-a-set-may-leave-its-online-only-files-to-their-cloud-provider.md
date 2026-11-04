@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-015 (new: a set may leave its online-only files to their cloud provider. Its backups fetch none, leave a new or changed one out of the snapshot without failing it, and say how many they left. Its status says that it leaves them, its changes waiting count none it will leave, and a set that stops leaving them walks in full at its next backup)
+**Requirements:** FR-SNP-015 (new: a set may leave its online-only files to their cloud provider. Its backups fetch none, leave a new or changed one out of the snapshot without failing it, and say how many they left. Its status says that it leaves them, its changes waiting count none it will leave, and a set that stops leaving them walks in full at its next backup); FR-SNP-015 (amended by [Amendment 1](#amendment-1-2026-11--the-console-offers-the-choice-and-says-it): the console offers the choice among a set's other settings, and a set's card says the set leaves them)
 **Related:** [ADR-0185](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) (a run stops fetching online-only files after the first that does not come, and its Amendment 3: a file not fetched keeps its version before), [ADR-0193](0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md) (a set's status says which online-only files its last backup could not fetch, and its Amendment 1: behind, not partial), [ADR-0188](0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) (the service tells a backup what changed since the set's last), [ADR-0192](0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md) (a set's status says how many changed files its next backup will take)
 
 **Built:**
@@ -11,7 +11,7 @@
 - The count: `Repository/SourceComparer` counts none the next backup will leave.
 - The full walk after: `Agent/ChangeHints` keeps, with the journal places, whether the set's snapshot may lack a file left, and walks a set that no longer leaves them in full. `Agent/BackupRunner` passes the choice to the run and says how many it left.
 - The wire: `Api/Results` carries the choice on a set and in its status, at contract 1.89. `Agent/ServiceCommandHandler` keeps it where an edit says nothing of it.
-- The clients: `Cli/CliApplication` prints `online-only:left-to-provider` on the set's status line. Direct mode's backup, in `Cli/OperationGateway`, says how many it left.
+- The clients: `Cli/CliApplication` prints `online-only:left-to-provider` on the set's status line. Direct mode's backup, in `Cli/OperationGateway`, says how many it left. The console offers the choice among a set's other settings, and its card says it (Amendment 1).
 - The tests:
   - `Repository.Tests/OnlineOnlyCaptureTests` — a run that leaves them fetches none, leaves out the new and the changed, keeps the unchanged, and fails nothing; one only moved is taken without a fetch.
   - `Repository.Tests/ChangedFilesCountTests` — for a set that leaves them, none it will leave is counted, and none is to fetch.
@@ -21,6 +21,8 @@
   - `Cli.Tests/BackupNotFetchedDirectTests` — direct mode's backup of a set that leaves them fetches none, says how many it left, and exits zero; one that fetches them says nothing of it.
   - `Cli.Tests/StatusLeavesOnlineOnlyTokenTests` — the token, and nothing for a set that fetches them.
   - `Api.Tests/ContractAdditiveFieldsTests` — the wire names at 1.89 and an older service's silence. `ConfigurationContractTests` pins 1.89.
+  - `Web.Tests/CommandRelayTests`, `Web.Tests/StatusRelayNamesTests` — the console's names, both ways on the set and in its status (Amendment 1).
+  - `Web.DomTests/LeaveOnlineOnlyDomTests` — the set's other settings tick it and untick it, the summary says it, an edit sends what it shows, the new-set wizard's last step takes it, and a set's card says it, and nothing for a set that fetches them (Amendment 1).
 
 ---
 
@@ -102,6 +104,8 @@ The next backup of a set that no longer leaves them, where the last says it may 
 - **Leave a file on the device.** A file its provider has put on the device is read like any other.
 - **Offer the choice in the console.** The console's set editor and card are a later record's.
 
+  > **2026-11: done ([Amendment 1](#amendment-1-2026-11--the-console-offers-the-choice-and-says-it)).** The console offers it among a set's other settings, and a set's card says it.
+
 ## Alternatives considered
 
 - **Record a file left as skipped in the error manifest.** The error manifest says what the snapshot failed to capture. A skip by choice is not a failure, and recording it there would make every backup partial or behind again.
@@ -109,8 +113,31 @@ The next backup of a set that no longer leaves them, where the last says it may 
 - **Give the status a count.** See above: a count from a backup told which folders changed says less than is left.
 - **Walk in full when an edit turns the choice off.** A configuration file edited by hand would not do it. The places kept with each backup see every backup, however the set came to change.
 
+## Amendment 1 (2026-11) — the console offers the choice and says it
+
+**Requirements:** FR-SNP-015 (amended: the console offers the choice among a set's other settings, and a set's card says the set leaves them)
+
+### Context
+
+The choice could be made only in the configuration file or over the wire, and only the command line's status said it. A person who uses the console could neither make it nor see it.
+
+### Decision
+
+- **A set's other settings offer it,** unticked by default: *leave online-only files to their cloud provider*. The text above the box says what it does and what it costs: a file new or changed there is left out of the backup and kept only by its provider.
+  - The new-set wizard's last step shows those settings, so it takes the choice too.
+- **The set's summary says it** among its other settings, `online-only files left to their cloud provider`, and says nothing for a set that fetches them.
+- **An edit always sends what it shows,** true or false. The silence that keeps whatever stands is for a client that cannot see the choice.
+- **A set's card says it,** where a person reads what the set backs up: `Online-only files are left to their cloud provider: one new or changed there is not downloaded, and is kept only by its provider.` A set that fetches them says nothing.
+
+The console's relay is generic, so the wire's names reach it as `leaveOnlineOnly` and `leavesOnlineOnly` with no change there.
+
+### What this does not do
+
+- **Put it at a glance on the card's summary line.** The choice is the set's standing setting, not news about its last backup, and the opened card says it.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first, at contract 1.89. |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-console-offers-the-choice-and-says-it): the console offers the choice among a set's other settings, unticked by default, and the new-set wizard's last step takes it; the summary says it, an edit sends what it shows, and a set's card says the set leaves them. |
