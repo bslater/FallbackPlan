@@ -448,11 +448,6 @@ public static class RestoreBlobSet
         ArgumentNullException.ThrowIfNull(otherCopies);
         ArgumentNullException.ThrowIfNull(keys);
 
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return new RestoreEarlierVersions([], Unread: true);
-        }
-
         using var keyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         using var metaReaders = new MetaReaderCache();
