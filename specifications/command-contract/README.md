@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.86
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.87
 
 ---
 
@@ -276,3 +276,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.84 | A set's status says which online-only files its last backup could not fetch ([ADR-0193](../../docs/adr/0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md), FR-SNP-014). It gains `not_fetched`: `files`, how many the last backup did not fetch from their provider; `kept_earlier`, how many of them keep the version backed up before; `since`, Unix milliseconds, the first of the backups that have each missed some; and the `path` and `reason` of the fetch that failed. Null where the last backup fetched every one and before the first backup. Additive: a pre-1.84 service says nothing. |
 | 1.85 | A restore's plan names the files an earlier version stands in for ([ADR-0194](../../docs/adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md), FR-RST-003). `restore_plan` gains `earlier_versions`: each file the plan restores as a version backed up before, standing in for one its backup could not fetch, with its `path` and the backup's `detail`. Null where there are none. Nothing is refused for them. Additive: a pre-1.85 service names none. |
 | 1.86 | A set's status says how much its next backup must fetch ([ADR-0192 Amendment 2](../../docs/adr/0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch), FR-SNP-013). A set's `pending_changes` gains `files_to_fetch`, how many of the changed files counted are online-only ones whose content that backup must fetch from their provider, and `bytes_to_fetch`, their bytes. Both null where nothing is counted. Additive: a pre-1.86 service says nothing of them. |
+| 1.87 | A restore's run says how many files it restored as a version backed up before ([ADR-0194 Amendment 1](../../docs/adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-1-2026-11--the-run-and-its-receipt-name-them-too), FR-RST-004). `restore` gains `earlier_versions`, the count, and `earlier_versions_sample`, at most twenty `path — detail` lines; the receipt, at schema 12, names each. Additive: a pre-1.87 service says none. |
