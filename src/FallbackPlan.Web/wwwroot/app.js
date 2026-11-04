@@ -916,7 +916,12 @@ function pendingClause(set) {
   const counted = `Counted ${fmtWhen(p.countedAt)}`;
   if (p.files === 0) return ` · <span data-pending title="${esc(counted)}">nothing changed since the last backup</span>`;
   const files = p.files === 1 ? "1 changed file will" : `${fmtCount(p.files)} changed files will`;
-  return ` · <span data-pending title="${esc(counted)}">${esc(files)} be backed up next</span>`;
+  // Of them, the online-only ones the backup must download from their
+  // provider first (contract 1.86): nothing more where none must.
+  const fetch = p.filesToFetch > 0
+    ? `; ${p.filesToFetch === p.files ? (p.files === 1 ? "it" : "all of them") : `${fmtCount(p.filesToFetch)} of them`}, ${fmtBytes(p.bytesToFetch)}, must be downloaded from the cloud first`
+    : "";
+  return ` · <span data-pending title="${esc(counted)}">${esc(files)} be backed up next${esc(fetch)}</span>`;
 }
 
 // The same count at a glance, on the card itself, only where any are waiting.

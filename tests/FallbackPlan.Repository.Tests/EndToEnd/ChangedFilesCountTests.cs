@@ -15,7 +15,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// snapshot does not hold, and passes over every other folder as the backup
 /// will. A file new, changed, changed only in its metadata, or moved there is
 /// counted, judged as the backup judges it and under the set's rules; one
-/// unchanged is not, and nothing is opened.
+/// unchanged is not, and nothing is opened. Of them, the online-only files the
+/// backup must fetch from their provider are counted apart, with their bytes:
+/// one new or whose content changed, whether found at its path or moved, and
+/// not one changed only in its metadata or moved unchanged (ADR-0192
+/// Amendment 2).
 /// </summary>
 /// <remarks>
 /// The source is a stand-in, so this runs on every platform.
@@ -145,6 +149,49 @@ public sealed class ChangedFilesCountTests : ArchiveTestHarness
         var count = await CountAsync(tree.Source, catalogue, baseline, ["docs"], includes: ["**/*.txt"]);
 
         Assert.AreEqual(1, count.New);
+    }
+
+    [TestMethod]
+    public async Task OnlineOnlyFilesNewOrChanged_AreCountedToFetch_WithTheirBytes()
+    {
+        var source = new FakeFileSystemSource();
+        var changed = source.AddFile("docs/changed.bin", Bytes(400, 1));
+        changed.OnlineOnly = true;
+        var metadataOnly = source.AddFile("docs/metadata.bin", Bytes(300, 2));
+        metadataOnly.OnlineOnly = true;
+        var moving = source.AddFile("docs/moving.bin", Bytes(200, 3), fileId: 700);
+        moving.OnlineOnly = true;
+        var movingAndChanging = source.AddFile("docs/changing.bin", Bytes(220, 4), fileId: 701);
+        movingAndChanging.OnlineOnly = true;
+        var local = source.AddFile("docs/local.bin", Bytes(100, 5));
+        using var catalogue = OpenCatalogue();
+        var baseline = await PublishBaselineAsync(source, catalogue);
+
+        Change(changed, 9);
+        metadataOnly.Metadata = metadataOnly.Metadata with { PosixMode = 0x180 };
+        source.Remove("docs/moving.bin");
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "docs/moved.bin", Content = moving.Content, Identity = moving.Identity,
+            Metadata = moving.Metadata, OnlineOnly = true,
+        });
+        source.Remove("docs/changing.bin");
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "docs/changed-and-moved.bin", Content = Bytes(260, 6), Identity = movingAndChanging.Identity,
+            Metadata = movingAndChanging.Metadata with { ModifiedAt = movingAndChanging.Metadata.ModifiedAt + 60_000 },
+            OnlineOnly = true,
+        });
+        Change(local, 9);
+        source.AddFile("docs/new.bin", Bytes(50, 7)).OnlineOnly = true;
+        var count = await CountAsync(source, catalogue, baseline, ["docs"]);
+
+        // Fetched: the one changed (410 bytes), the one new (50), and the one
+        // moved and changed (260). Not the file on the device, nor the ones
+        // whose content is the version before's.
+        Assert.AreEqual(
+            new ChangedFileCount(New: 1, Updated: 2, MetadataOnly: 1, Moved: 2) { ToFetch = 3, ToFetchBytes = 720 },
+            count);
     }
 
     private static Fixture Tree()

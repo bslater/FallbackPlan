@@ -517,8 +517,12 @@ public static class BackupRunner
     /// terminal transition — for a failed or cancelled run no snapshot
     /// exists, so this is the only record of how far it got.
     /// </summary>
-    /// <summary>The source a backup reads through: the device's, as a test harness wraps it where it does (ADR-0193).</summary>
-    private static IFileSystemSource WrapSource(ServiceRuntime runtime, IFileSystemSource source) =>
+    /// <summary>
+    /// The source a backup reads through: the device's, as a test harness
+    /// wraps it where it does (ADR-0193). The count of what the next backup
+    /// will take reads through it too (ADR-0192 Amendment 2).
+    /// </summary>
+    internal static IFileSystemSource WrapSource(ServiceRuntime runtime, IFileSystemSource source) =>
         runtime.Options.WrapSource is { } wrap ? wrap(source) : source;
 
     private static JobRunStats StatsOf(JobProgress latest) => new()

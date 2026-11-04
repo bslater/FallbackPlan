@@ -3729,7 +3729,7 @@ public static class CliApplication
                     foreach (var set in result.Sets)
                     {
                         output.WriteLine(
-                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}{(DescribePending(set) is { Length: > 0 } waiting ? $"  {waiting}" : string.Empty)}{(DescribeNotFetched(set) is { Length: > 0 } missed ? $"  {missed}" : string.Empty)}");
+                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}{(DescribePending(set) is { Length: > 0 } waiting ? $"  {waiting}" : string.Empty)}{(DescribeToFetch(set) is { Length: > 0 } fetching ? $"  {fetching}" : string.Empty)}{(DescribeNotFetched(set) is { Length: > 0 } missed ? $"  {missed}" : string.Empty)}");
 
                         // Under the set's own line, as offline status prints
                         // them: the state says what, the warnings say why
@@ -4174,6 +4174,15 @@ public static class CliApplication
         { Files: { } files } => string.Create(CultureInfo.InvariantCulture, $"waiting:{files}"),
         _ => "waiting:full-walk",
     };
+
+    /// <summary>
+    /// How many of the changed files waiting are online-only ones the next
+    /// backup must fetch (contract 1.86, ADR-0192 Amendment 2): nothing where
+    /// none must, where nothing was counted, and from an older service.
+    /// </summary>
+    internal static string DescribeToFetch(BackupSetStatusDescriptor set) => set.PendingChanges is { FilesToFetch: > 0 and var files }
+        ? string.Create(CultureInfo.InvariantCulture, $"to-fetch:{files}")
+        : string.Empty;
 
     /// <summary>
     /// The not-fetched token on a set's line (FR-SNP-014, contract 1.84): how

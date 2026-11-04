@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-013 (new: a set's status says how many changed files its next backup will take, counted as that backup will count them, or that it will walk in full and why); FR-SNP-013 (amended by [Amendment 1](#amendment-1-2026-11--the-files-the-next-backup-tries-again-are-waiting-too): the files the last backup could not read are counted too, since the next backup tries them again, and where its failures will not read the next backup walks in full and the status says why)
+**Requirements:** FR-SNP-013 (new: a set's status says how many changed files its next backup will take, counted as that backup will count them, or that it will walk in full and why); FR-SNP-013 (amended by [Amendment 1](#amendment-1-2026-11--the-files-the-next-backup-tries-again-are-waiting-too): the files the last backup could not read are counted too, since the next backup tries them again, and where its failures will not read the next backup walks in full and the status says why); FR-SNP-013 (amended by [Amendment 2](#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch): of the files waiting, the online-only ones the next backup must fetch from their provider are counted apart, with their bytes)
 **Related:** [ADR-0186](0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) (a run reuses a folder it was told did not change), [ADR-0188](0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) (the service tells a backup what changed since the set's last), [ADR-0189](0189-a-sets-full-walk-is-a-setting-of-the-set.md) (a set's full walk is a setting of the set), [architecture 06 §4](../architecture/06-filesystem-capture.md#4-change-detection) (change detection)
 
 **Built:**
@@ -10,13 +10,13 @@
 - The failures: `Repository/SnapshotFailures` reads the paths a snapshot's failures name, which the next backup walks to try again (Amendment 1).
 - The judgement: `Agent/ChangeHints` says what the next backup will be told, or why it will walk in full, for the backup and the count alike.
 - The board: `Agent/PendingChangesBoard` keeps each set's last count, and asks for another on the reader lane once it is a minute old.
-- The wire: a set's status in `Api/Results` carries the count, at contract 1.83.
+- The wire: a set's status in `Api/Results` carries the count, at contract 1.83, and from 1.86 how many of the files it counts must be fetched, with their bytes (Amendment 2).
 - The clients: `Cli/CliApplication` prints a set's `waiting:` token; the console's card says it at a glance and in words.
 - The tests:
   - `Repository.Tests/ChangedFilesCountTests` — a file changed in a named folder is counted and a folder nothing named is not entered; a file new, and every file in a folder the last snapshot does not hold, is counted; so is a file changed only in its metadata, and one moved; a file unchanged, or one the rules leave out, is not; nothing named counts nothing; nothing is opened.
   - `Hosts.Tests/PendingChangesTests` — the files changed and new in a named folder are waiting, and none where nothing is named; the files the last backup could not read are waiting though nothing is named, and the next backup takes them; where the last snapshot's failures will not read the next backup walks in full, and they are read once for a snapshot (Amendment 1); the next backup walks in full, and says why, for a set never backed up, one whose full walk is due, and one whose journal cannot say; a set whose backups ask no journal says nothing; a count moves no place; the status gives the last count and asks for another once it is a minute old, never two at once.
   - `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/StatusRelayNamesTests` — the wire names at 1.83, the console's names, and an older service's silence.
-  - `Cli.Tests/StatusPendingTokenTests` — `waiting:12`, `waiting:0`, `waiting:full-walk`, and nothing where none was counted.
+  - `Cli.Tests/StatusPendingTokenTests` — `waiting:12`, `waiting:0`, `waiting:full-walk`, and nothing where none was counted; `to-fetch:3`, and nothing where none must be fetched (Amendment 2).
   - `Web.DomTests/PendingChangesDomTests` — the card's count at a glance and in words, the singular, a full walk and why, nothing changed, and nothing for a set that asks no journal.
 
 ---
@@ -111,9 +111,33 @@ The next backup walks every folder its last one failed a file in, to try it agai
 
 - **Say which of the waiting files are retries.** The count is one number.
 
+## Amendment 2 (2026-11) — the status says how much the next backup must fetch
+
+### Context
+
+A backup reads a file's content only where it is new or changed, and for an online-only file that read is a fetch from its cloud provider, which may take long or not come (ADR-0185). ADR-0185 left saying before a run how much it must fetch to a later record. The count already judges each file as the backup will, and the scan already says which are online-only.
+
+### Decision
+
+- **Of the files counted, the online-only ones the backup will read are counted apart, with their bytes.** That is one new, or whose content changed against its version before, whether found at its path or moved. One changed only in its metadata, or moved unchanged, is taken from its version before without a fetch, and is not counted.
+- **The count reads the device through the source a backup reads through,** so it judges what the backup will fetch from what the backup will see.
+- **Contract 1.86:** a set's `pending_changes` gains `files_to_fetch` and `bytes_to_fetch`, null where nothing is counted. Additive.
+- **The command line** prints `to-fetch:3` beside `waiting:12`, where any must be fetched.
+- **The console's card** goes on: `12 changed files will be backed up next; 3 of them, 2.0 MiB, must be downloaded from the cloud first`, or `all of them`, or `it`.
+
+### Consequences
+
+- A person sees, before the backup runs, that it will download from the cloud and how much.
+- The count says what the backup will ask for, not what the provider will give. A run that meets a provider that does not deliver stops asking after the first (ADR-0185).
+
+### What this does not do
+
+- **Count what a full walk will fetch.** Where the next backup walks in full nothing is counted, as before.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first, at contract 1.83. |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-files-the-next-backup-tries-again-are-waiting-too): the count enters the folders the last snapshot's failures name, as the next backup does to try them again, and where those will not read the next backup walks in full and the status says why; they are read once for a snapshot. `Repository/SnapshotFailures`; `Agent/PendingChangesBoard`; `Hosts.Tests/PendingChangesTests`; `Repository.Tests/OnlineOnlyCaptureTests` |
+| 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch): of the files waiting, the online-only ones the next backup must fetch, new or changed in content, are counted apart with their bytes, at contract 1.86; the command line prints a to-fetch token and the console says how many and how much must be downloaded. `Repository/SourceComparer`; `Agent/PendingChangesBoard`; `Api/Results`; `Cli/CliApplication`; `Repository.Tests/ChangedFilesCountTests`; `Hosts.Tests/PendingChangesTests`; `Cli.Tests/StatusPendingTokenTests`; `Web.DomTests/PendingChangesDomTests` |

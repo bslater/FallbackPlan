@@ -50,6 +50,18 @@ public sealed record ChangedFileCount(long New, long Updated, long MetadataOnly,
 {
     /// <summary>Every file the backup will write.</summary>
     public long Total => New + Updated + MetadataOnly + Moved;
+
+    /// <summary>
+    /// How many of them are online-only files the backup must fetch from
+    /// their provider (ADR-0192 Amendment 2): one new, or whose content
+    /// changed against its version before, found at its path or moved. One
+    /// changed only in its metadata, or moved unchanged, is taken from its
+    /// version before without a fetch.
+    /// </summary>
+    public long ToFetch { get; init; }
+
+    /// <summary>The bytes of <see cref="ToFetch"/>'s files, as the scan finds them.</summary>
+    public long ToFetchBytes { get; init; }
 }
 
 /// <summary>
@@ -274,6 +286,19 @@ public static class SourceComparer
         long updated = 0;
         long metadataOnly = 0;
         long moved = 0;
+        long toFetch = 0;
+        long toFetchBytes = 0;
+
+        // The backup reads a file's content only where it is new or changed;
+        // for an online-only file that read is a fetch from its provider.
+        void Fetches(ScanEntry entry)
+        {
+            if (entry.OnlineOnly)
+            {
+                toFetch++;
+                toFetchBytes += (long)entry.Length;
+            }
+        }
         var options = new ScanOptions
         {
             Rules = rules,
@@ -293,6 +318,7 @@ public static class SourceComparer
                 if (!ChangeDetection.IsContentUnchanged(entry, prior))
                 {
                     updated++;
+                    Fetches(entry);
                 }
                 else if (!ChangeDetection.IsMetadataUnchanged(
                     FileVersionManifestCodec.MetadataDigest(entry.Metadata, MetadataRules.FileFlagsOf(entry.Diagnostics)), prior))
@@ -301,17 +327,22 @@ public static class SourceComparer
                 }
             }
             else if (entry.Identity is { } identity
-                && catalogue.LookupIdentity(baseline, identity.Device, identity.FileId) is not null)
+                && catalogue.LookupIdentity(baseline, identity.Device, identity.FileId) is { } before)
             {
                 moved++;
+                if (!ChangeDetection.IsContentUnchanged(entry, before))
+                {
+                    Fetches(entry);
+                }
             }
             else
             {
                 added++;
+                Fetches(entry);
             }
         }
 
-        return new ChangedFileCount(added, updated, metadataOnly, moved);
+        return new ChangedFileCount(added, updated, metadataOnly, moved) { ToFetch = toFetch, ToFetchBytes = toFetchBytes };
     }
 
     // Probe first: rule case-sensitivity is the filesystem's, exactly as

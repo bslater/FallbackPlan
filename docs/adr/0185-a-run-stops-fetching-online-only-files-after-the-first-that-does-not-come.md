@@ -67,6 +67,8 @@ A file not fetched is in no snapshot this run publishes, so the next run finds n
 
   > **2026-11: done ([Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept)).** The provider's bits are no longer kept, so going between online-only and on the device is no change, and a restore names none of them.
 - **Say before a run how much it must fetch.**
+
+  > **2026-11: done ([ADR-0192 Amendment 2](0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch)).** A set's status says how many of the changed files its next backup will take are online-only ones it must fetch, and their bytes.
 - **Name an online-only file on macOS.** There, the walk opens each file it classifies, which may itself fetch one. Linux has no such marker.
 
 ## Alternatives considered
@@ -187,3 +189,4 @@ While the provider stays away each backup keeps the same version. The first back
 | 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name; the failure is still recorded, with what stands in its place, so the next backup walks its folder and asks again. A file new to the set, one found only under another name, and a file on the device that will not read keep nothing. `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests` |
 | 2026-11 | Accepted | Noted by [ADR-0193](0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md): a set's status says how many online-only files its last backup did not fetch, how many keep the version before, the file that failed and why, and since when. |
 | 2026-11 | Accepted | Noted by [ADR-0194](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md): a restore's plan names each file it restores as a version backed up before, with what the backup said of it. |
+| 2026-11 | Accepted | Noted by [ADR-0192 Amendment 2](0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch): a set's status says how many online-only files its next backup must fetch, and their bytes. |

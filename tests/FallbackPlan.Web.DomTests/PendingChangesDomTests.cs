@@ -12,7 +12,8 @@ namespace FallbackPlan.Web.DomTests;
 /// are waiting, and in words beside the next run when it is opened. A card
 /// whose next backup will walk in full says so, and why on hover; one with
 /// nothing changed says that; and a set whose backups ask no change journal
-/// says nothing.
+/// says nothing. Where some must be downloaded from their cloud provider
+/// first, it says how many and how much (ADR-0192 Amendment 2).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -39,6 +40,39 @@ public sealed class PendingChangesDomTests
         var letters = page.Locator("details.set[data-set=\"letters\"]");
         await letters.Locator("summary").ClickAsync();
         await Expect(letters.Locator(".set-body")).ToContainTextAsync("1 changed file will be backed up next");
+    }
+
+    [TestMethod]
+    public async Task Overview_ChangedFilesTheNextBackupMustDownload_AreSaidWithTheirSize()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(
+            Set("docs", new PendingChangesDescriptor(12, null, NowMs, FilesToFetch: 3, BytesToFetch: 2 * 1024 * 1024)),
+            Set("letters", new PendingChangesDescriptor(4, null, NowMs, FilesToFetch: 0, BytesToFetch: 0)),
+            Set("music", new PendingChangesDescriptor(4, null, NowMs, FilesToFetch: 4, BytesToFetch: 4096)),
+            Set("notes", new PendingChangesDescriptor(1, null, NowMs, FilesToFetch: 1, BytesToFetch: 2048)));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync(harness.TokenedUrl);
+
+        var docs = page.Locator("details.set[data-set=\"docs\"]");
+        await docs.Locator("summary").ClickAsync();
+        await Expect(docs.Locator(".set-body [data-pending]")).ToContainTextAsync(
+            "12 changed files will be backed up next; 3 of them, 2.0 MiB, must be downloaded from the cloud first");
+
+        var letters = page.Locator("details.set[data-set=\"letters\"]");
+        await letters.Locator("summary").ClickAsync();
+        await Expect(letters.Locator(".set-body [data-pending]")).ToHaveTextAsync("4 changed files will be backed up next");
+
+        var music = page.Locator("details.set[data-set=\"music\"]");
+        await music.Locator("summary").ClickAsync();
+        await Expect(music.Locator(".set-body [data-pending]")).ToHaveTextAsync(
+            "4 changed files will be backed up next; all of them, 4.0 KiB, must be downloaded from the cloud first");
+
+        var notes = page.Locator("details.set[data-set=\"notes\"]");
+        await notes.Locator("summary").ClickAsync();
+        await Expect(notes.Locator(".set-body [data-pending]")).ToHaveTextAsync(
+            "1 changed file will be backed up next; it, 2.0 KiB, must be downloaded from the cloud first");
     }
 
     [TestMethod]
