@@ -6,6 +6,7 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.TestSupport;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
@@ -34,7 +35,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// (ADR-0185 Amendment 3). A run says how many online-only files it did not
 /// fetch, how many of them kept the version before, and which file's fetch
 /// failed and why, and says nothing where it fetched every one (ADR-0193,
-/// FR-SNP-014).
+/// FR-SNP-014). A restore's plan names each file whose version is one backed
+/// up before, standing in for one its backup could not fetch, with what the
+/// backup said of it, and names no other (ADR-0194, FR-RST-003).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -555,6 +558,52 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
 
         Assert.AreEqual(new NotFetchedFiles(Files: 3, KeptEarlier: 2, Path: "docs/doc.bin", Reason: TimedOut), second.NotFetched);
+    }
+
+    [TestMethod]
+    public async Task ARestoresPlan_NamesEachFileAnEarlierVersionStandsIn_AndWhatTheBackupSaid()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+        Online(source, "docs/still.bin", 2);
+        var local = source.AddFile("docs/local.bin", Deterministic(4_000, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Assert.IsEmpty((await ProbeAsync(catalogue, store, keys, 0xA1)).EarlierVersions, "a backup that fetched every one");
+
+        Change(doc, 5);
+        Change(local, 8);
+        local.OpenFailure = new IOException("a bad sector");
+        doc.OpenFailure = new IOException(TimedOut);
+        Online(source, "docs/new.bin", 3);
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        // The file a version before stands in for is named; one new to the set
+        // and one on the device that would not read are in no tree to plan,
+        // and one unchanged holds its own.
+        var probed = await ProbeAsync(catalogue, store, keys, 0xB2);
+        var earlier = Assert.ContainsSingle(probed.EarlierVersions);
+        Assert.AreEqual("docs/doc.bin", earlier.Path);
+        Assert.Contains(TimedOut, earlier.Detail, StringComparison.Ordinal);
+        Assert.Contains("stands in its place", earlier.Detail, StringComparison.Ordinal);
+        Assert.IsFalse(probed.FailuresUnread);
+
+        // Named only where the plan restores it.
+        Assert.IsEmpty((await ProbeAsync(catalogue, store, keys, 0xB2, "docs/still.bin")).EarlierVersions);
+    }
+
+    private static async Task<RestoreBlobSetResult> ProbeAsync(
+        CatalogueDb catalogue, IObjectStore store, RepositoryKeySet keys, byte snapshotSeed, string prefix = "")
+    {
+        var plan = RestorePlanner.Plan(catalogue, Snapshot(snapshotSeed), prefix, RestoreTargetProfile.ForLocalPlatform());
+        return await RestoreBlobSet.ResolveAsync(catalogue, plan, store, Repo, keys, CancellationToken.None);
     }
 
     private const uint Archive = 0x20;

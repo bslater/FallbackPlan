@@ -24,7 +24,9 @@ namespace FallbackPlan.Cli.Tests;
 /// files the run already landed. And a restore that goes past a file its
 /// folder would open wider, only when told, with a plan that counts such
 /// files failing and saying how to go on (FR-RST-003, ADR-0178 Amendment 1),
-/// as one that counts only such folders does (ADR-0178 Amendment 4).
+/// as one that counts only such folders does (ADR-0178 Amendment 4). And a
+/// plan that names each file an earlier version stands in for, and why,
+/// holding nothing back for it (FR-RST-003, ADR-0194).
 /// </summary>
 [TestClass]
 public sealed class GatewayRestoreReportTests
@@ -311,6 +313,25 @@ public sealed class GatewayRestoreReportTests
         Assert.AreEqual("/out", asked.OutputDirectory, "a plan measures where the run would write");
         Assert.IsFalse(asked.InPlace, "the run it plans lands under quarantine, as restore's own does");
         Assert.IsEmpty(client.Received.OfType<RunRestoreCommand>(), "a plan restores nothing");
+    }
+
+    [TestMethod]
+    public async Task APlan_NamesEachFileAnEarlierVersionStandsIn_AndStillMayRun()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 9_000, [], EarlierVersions: [new EarlierVersionDescriptor("docs/a.docx", "timed out")]));
+
+        var report = await PlanAsync(client, timeout.Token);
+
+        // An earlier version restores; the plan says which files, and why,
+        // and holds nothing back for them.
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        Assert.Contains(
+            line => line.StartsWith("earlier: 1 file(s)", StringComparison.Ordinal),
+            report.Lines);
+        CollectionAssert.Contains(report.Lines.ToList(), "  docs/a.docx — timed out");
     }
 
     [TestMethod]

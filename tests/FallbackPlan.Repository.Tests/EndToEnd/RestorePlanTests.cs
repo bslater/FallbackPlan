@@ -153,6 +153,23 @@ public sealed class RestorePlanTests : ArchiveTestHarness
     private const string Decomposed = "names/cafe\u0301.txt";
 
     [TestMethod]
+    public void RestorePlan_WhoseSnapshotsFailuresWillNotRead_SaysItCannotNameTheEarlierVersions()
+    {
+        // ADR-0194: a plan names each file an earlier version stands in for
+        // from the snapshot's failures; where those will not read, it says it
+        // cannot, rather than naming none.
+        var plan = new RestorePlan { SnapshotId = new byte[16], Items = [], Conflicts = [], Degradations = [] };
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        Assert.DoesNotContain(
+            line => line.Contains("earlier version", StringComparison.Ordinal),
+            RestorePlanFigures.Degradations(plan, new RestoreBlobSetResult([], []), target));
+        Assert.Contains(
+            line => line.Contains("earlier version", StringComparison.Ordinal),
+            RestorePlanFigures.Degradations(plan, new RestoreBlobSetResult([], []) { FailuresUnread = true }, target));
+    }
+
+    [TestMethod]
     public async Task RestorePlan_NamesThatDifferOnlyInTheirNormalisation_CollideOnlyWhereTheTargetFoldsThem()
     {
         var source = new FakeFileSystemSource();
