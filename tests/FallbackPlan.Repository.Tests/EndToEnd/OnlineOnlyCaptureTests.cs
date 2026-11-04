@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Filesystem;
@@ -40,6 +41,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// backup said of it, and names no other (ADR-0194, FR-RST-003). A
 /// snapshot's failures are read as the paths they name, for the count of
 /// what the next backup will try again (ADR-0192 Amendment 1, FR-SNP-013).
+/// A restore's receipt names the same files, each with what the backup said
+/// of it, and says where the snapshot's failures would not read
+/// (ADR-0194 Amendment 1, FR-RST-004).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -636,6 +640,55 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task ARestoresReceipt_NamesEachFileItRestoredAsAnEarlierVersion_AndSaysWhereItCannot()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+        Online(source, "docs/still.bin", 2);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        var clean = await EarlierAsync(catalogue, store, keys, 0xA1);
+        Assert.IsTrue(clean.Stamp(Receipt("docs/doc.bin", "docs/still.bin")).Items.All(item => item.EarlierVersion is null), "a backup that fetched every one");
+
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        // Each item the snapshot's failures name carries what the backup said
+        // of it; the rest carry nothing, and the receipt says it could name them.
+        var stamped = (await EarlierAsync(catalogue, store, keys, 0xB2)).Stamp(Receipt("docs/doc.bin", "docs/still.bin"));
+        Assert.Contains(TimedOut, stamped.Items[0].EarlierVersion!, StringComparison.Ordinal);
+        Assert.Contains("stands in its place", stamped.Items[0].EarlierVersion!, StringComparison.Ordinal);
+        Assert.IsNull(stamped.Items[1].EarlierVersion);
+        Assert.IsFalse(stamped.EarlierVersionsUnread);
+        using (var kept = JsonDocument.Parse(stamped.ToJson()))
+        {
+            Assert.AreEqual(12, kept.RootElement.GetProperty("schema_version").GetInt32());
+            Assert.IsFalse(kept.RootElement.TryGetProperty("earlier_versions_unread", out _), "written only where they would not read");
+            var items = kept.RootElement.GetProperty("items");
+            Assert.AreEqual(stamped.Items[0].EarlierVersion, items[0].GetProperty("earlier_version").GetString());
+            Assert.IsFalse(items[1].TryGetProperty("earlier_version", out _), "written only for a file an earlier version stands in for");
+        }
+
+        // Where the failures will not read, nothing is named, and the receipt says it could not.
+        await FlipAsync(store, keys, second.ErrorManifestObjectId!.Value);
+        var unread = (await EarlierAsync(catalogue, store, keys, 0xB2)).Stamp(Receipt("docs/doc.bin", "docs/still.bin"));
+        Assert.IsTrue(unread.EarlierVersionsUnread);
+        Assert.IsTrue(unread.Items.All(item => item.EarlierVersion is null));
+        using (var kept = JsonDocument.Parse(unread.ToJson()))
+        {
+            Assert.IsTrue(kept.RootElement.GetProperty("earlier_versions_unread").GetBoolean());
+        }
+    }
+
+    [TestMethod]
     public async Task ASnapshotsFailures_AreReadAsItsPaths_NoneWhereItFailedNothing_AndNullWhereTheyWillNotRead()
     {
         var source = new FakeFileSystemSource();
@@ -679,6 +732,26 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         stored[(long)located.PhysicalOffset + 54 + 3] ^= 0x01;
         await File.WriteAllBytesAsync(file, stored, CancellationToken.None);
     }
+
+    private static async Task<RestoreEarlierVersions> EarlierAsync(
+        CatalogueDb catalogue, IObjectStore store, RepositoryKeySet keys, byte snapshotSeed)
+    {
+        var plan = RestorePlanner.Plan(catalogue, Snapshot(snapshotSeed), string.Empty, RestoreTargetProfile.ForLocalPlatform());
+        return await RestoreBlobSet.EarlierVersionsAsync(catalogue, plan, store, [], Repo, keys, CancellationToken.None);
+    }
+
+    /// <summary>A receipt of a run that restored <paramref name="paths"/>, as the executor keeps one.</summary>
+    private static RestoreReceipt Receipt(params string[] paths) => new()
+    {
+        SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
+        SnapshotId = new string('b', 32),
+        StartedAt = 1,
+        CompletedAt = 2,
+        Items = [.. paths.Select(path => new ReceiptItem { Path = path, Outcome = "restored", Bytes = 4_000 })],
+        Displaced = [],
+        WrittenTo = "/restored",
+        Outcome = RestoreOutcome.Complete,
+    };
 
     private static async Task<RestoreBlobSetResult> ProbeAsync(
         CatalogueDb catalogue, IObjectStore store, RepositoryKeySet keys, byte snapshotSeed, string prefix = "")

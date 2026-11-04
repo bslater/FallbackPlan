@@ -8,6 +8,9 @@ namespace FallbackPlan.Cli.Tests;
 /// the service keeps one: the run's own file under the state directory's
 /// receipts, named by the run. The report says where. A run that writes
 /// nothing, refused before it begins, keeps none, and a plan keeps none.
+/// A run says how many files it restored as a version backed up before,
+/// standing in for one its backup could not fetch, and its receipt names
+/// each with what the backup said of it (ADR-0194 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class RestoreReceiptDirectTests : IDisposable
@@ -82,6 +85,34 @@ public sealed class RestoreReceiptDirectTests : IDisposable
         Assert.IsFalse(Directory.Exists(Receipts) && Directory.GetFiles(Receipts, "*.json").Length > 0, "nothing ran, so nothing is receipted");
     }
 
+    [TestMethod]
+    public async Task ARestore_OfAFileAnEarlierVersionStandsIn_SaysSo_AndItsReceiptNamesItAndWhy()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/a.cloud", "alpha");
+        _cli.WriteFile("tree/b.txt", "bravo");
+        var delivers = true;
+        DirectGateway.SourceInFlow = source => new CloudStandIn(source, () => delivers);
+        var first = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+        Assert.AreEqual(0, first.ExitCode, first.All);
+        _cli.WriteFile("tree/a.cloud", "alpha, changed");
+        delivers = false;
+        await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        var run = await _cli.RunAsync("restore", await NewestSnapshotAsync(), "--output", destination);
+
+        Assert.AreEqual(0, run.ExitCode, run.All);
+        Assert.Contains("1 file(s) were restored as the version backed up before", run.Output, StringComparison.Ordinal);
+        Assert.Contains("  a.cloud — ", run.Output, StringComparison.Ordinal);
+        Assert.AreEqual("alpha", await File.ReadAllTextAsync(Path.Combine(destination, "a.cloud")), "the version backed up before");
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(Assert.ContainsSingle(Directory.GetFiles(Receipts, "*.json"))));
+        var items = document.RootElement.GetProperty("items").EnumerateArray()
+            .ToDictionary(item => item.GetProperty("path").GetString()!, StringComparer.Ordinal);
+        Assert.Contains("stands in its place", items["a.cloud"].GetProperty("earlier_version").GetString()!, StringComparison.Ordinal);
+        Assert.IsFalse(items["b.txt"].TryGetProperty("earlier_version", out _), "its own version");
+    }
+
     private async Task<string> BackUpAsync()
     {
         await _cli.InitAsync();
@@ -90,7 +121,11 @@ public sealed class RestoreReceiptDirectTests : IDisposable
 
         var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
         Assert.IsTrue(backup.ExitCode == 0, backup.All);
+        return await NewestSnapshotAsync();
+    }
 
+    private async Task<string> NewestSnapshotAsync()
+    {
         var snapshots = await _cli.RunAsync("snapshots");
         Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
 
