@@ -12,9 +12,12 @@ namespace FallbackPlan.Hosts.Tests;
 /// journal stood before it walked; the next asks the journal from there, and
 /// walks only what it names. It walks in full where it has nothing to ask
 /// from, where the journal cannot say, where the set's folders changed, where
-/// a full walk was asked for, and once a day whatever the journal says. A
-/// backup that kept no place, or whose kept place is damaged or names an
-/// earlier backup than the set's last, leaves the next nothing to ask from.
+/// a full walk was asked for, and when the set's full walk falls due whatever
+/// the journal says: a day after the last, or on the schedule the set names
+/// for it (ADR-0189), which starts no backup of its own and is due wherever it
+/// cannot be told. A backup that kept no place, or whose kept place is damaged
+/// or names an earlier backup than the set's last, leaves the next nothing to
+/// ask from. The status says when the set was last walked in full.
 /// </summary>
 /// <remarks>
 /// The journal here is scripted, so this runs on every platform: what the
