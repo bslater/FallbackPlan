@@ -9,8 +9,9 @@ namespace FallbackPlan.Web.Tests;
 /// Contract 1.19's full-backup facts reaching the console's status matrix
 /// (ADR-0047 §§5–6): the destination rows <c>app.js</c> renders as "awaiting
 /// full backup" instead of a bare "behind". Later names ride here too, among
-/// them 1.69's requests a cloud destination's store was sent (FR-DEST-019)
-/// and 1.70's replica object a store holds only archived (FR-DEST-020).
+/// them 1.69's requests a cloud destination's store was sent (FR-DEST-019),
+/// 1.70's replica object a store holds only archived (FR-DEST-020), and
+/// 1.82's last full walk on a set (FR-SNP-012).
 /// </summary>
 /// <remarks>
 /// Same rationale as <c>DiagnosticsRelayTests</c>: the console serialises
@@ -306,6 +307,34 @@ public sealed class StatusRelayNamesTests
         Assert.AreEqual("friend", friend.GetProperty("destinationName").GetString());
         Assert.AreEqual("2 MiB/s", friend.GetProperty("text").GetString());
         Assert.AreEqual(2_097_152, friend.GetProperty("bytesPerSecond").GetInt64());
+    }
+
+    [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesWhenEachSetWasLastWalkedInFull()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets:
+            [
+                new BackupSetStatusDescriptor(
+                    "docs", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [], LastFullWalkAt: 7_000),
+                new BackupSetStatusDescriptor(
+                    "photos", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    []),
+            ],
+            ObservedAt: 10_000,
+            Notices: []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var sets = body.RootElement.GetProperty("sets");
+        Assert.AreEqual(7_000, sets[0].GetProperty("lastFullWalkAt").GetInt64());
+        Assert.AreEqual(JsonValueKind.Null, sets[1].GetProperty("lastFullWalkAt").ValueKind);
     }
 
     [TestMethod]
