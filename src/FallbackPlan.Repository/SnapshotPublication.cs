@@ -189,6 +189,19 @@ public sealed record PublishedTreeSnapshot(
     /// it fetched every one it asked for.
     /// </summary>
     public NotFetchedFiles? NotFetched { get; init; }
+
+    /// <summary>
+    /// Whether every failure the run recorded is an online-only file it did
+    /// not fetch whose version backed up before it kept (ADR-0193 Amendment
+    /// 1): the snapshot holds a version of every file it names, some older
+    /// than the file is, and misses none it was asked to keep. Never for a
+    /// run that failed nothing, which is complete.
+    /// </summary>
+    /// <remarks>
+    /// Each file that kept its version before records one failure, so the
+    /// counts match only where no other file failed.
+    /// </remarks>
+    public bool Behind => NotFetched is { KeptEarlier: > 0 } notFetched && notFetched.KeptEarlier == Failures.Count;
 }
 
 /// <summary>

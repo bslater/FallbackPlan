@@ -11,8 +11,9 @@ namespace FallbackPlan.Agent;
 /// What each set's last backup could not fetch of its online-only files
 /// (ADR-0193): one file per set under <c>&lt;state&gt;/not-fetched/</c>, by
 /// the set's id, replaced atomically, and none where that backup fetched every
-/// one. A file that does not read says nothing, which costs the set's status
-/// the word until its next backup.
+/// one. It names that backup's snapshot and whether it was behind (ADR-0193
+/// Amendment 1). A file that does not read says nothing, which costs the set's
+/// status the word until its next backup.
 /// </summary>
 internal sealed class NotFetchedStore(string stateDirectory)
 {
@@ -46,11 +47,43 @@ internal sealed class NotFetchedStore(string stateDirectory)
     }
 
     /// <summary>
+    /// Whether the set's last backup, the one whose snapshot is
+    /// <paramref name="snapshotId"/>, was behind (ADR-0193 Amendment 1): its
+    /// every failure an online-only file that kept its version before. Never
+    /// for another snapshot, as another writer's, nor where the record does
+    /// not say, as one kept before it did.
+    /// </summary>
+    public bool IsBehind(string setId, ReadOnlySpan<byte> snapshotId)
+    {
+        var path = PathFor(setId);
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(AtomicFile.ReadAllText(path));
+            var root = document.RootElement;
+            return root.TryGetProperty("behind", out var behind) && behind.GetBoolean()
+                && root.TryGetProperty("snapshot", out var snapshot)
+                && string.Equals(snapshot.GetString(), Convert.ToHexStringLower(snapshotId), StringComparison.Ordinal);
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException
+            or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Keeps what a backup at <paramref name="nowMs"/> did not fetch, since
     /// the first of the backups before it that each missed some; or lets go
-    /// of what an earlier one kept, where this one fetched every one.
+    /// of what an earlier one kept, where this one fetched every one. Its
+    /// snapshot is <paramref name="snapshotId"/>, and whether it was behind
+    /// is kept with it.
     /// </summary>
-    public void Keep(string setId, NotFetchedFiles? notFetched, ulong nowMs)
+    public void Keep(string setId, NotFetchedFiles? notFetched, ulong nowMs, ReadOnlySpan<byte> snapshotId, bool isBehind)
     {
         var path = PathFor(setId);
         if (notFetched is null)
@@ -73,6 +106,8 @@ internal sealed class NotFetchedStore(string stateDirectory)
             writer.WriteNumber("since", since);
             writer.WriteString("path", notFetched.Path);
             writer.WriteString("reason", notFetched.Reason);
+            writer.WriteString("snapshot", Convert.ToHexStringLower(snapshotId));
+            writer.WriteBoolean("behind", isBehind);
             writer.WriteEndObject();
         }
 

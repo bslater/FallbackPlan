@@ -257,7 +257,8 @@ public static class BackupRunner
             // (ADR-0193). Not kept costs the status that word, nothing more.
             try
             {
-                new NotFetchedStore(runtime.Options.StateDirectory).Keep(set.Id, published.NotFetched, nowMs);
+                new NotFetchedStore(runtime.Options.StateDirectory).Keep(
+                    set.Id, published.NotFetched, nowMs, snapshotId, published.Behind);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -274,7 +275,12 @@ public static class BackupRunner
             // and says so in the state rather than only in the detail. The
             // detail stays as the human half — the count — but it is no longer
             // the only thing distinguishing this run from a clean one.
-            var partial = published.ErrorManifestObjectId is not null;
+            //
+            // A run whose every failure kept the version backed up before is
+            // behind, not partial (ADR-0193 Amendment 1): it holds a version of
+            // every file it names, and the set's status says what it is behind
+            // on.
+            var partial = published.ErrorManifestObjectId is not null && !published.Behind;
             var outcome = partial ? JobState.CompletedWithFailures : JobState.Complete;
 
             // Always an explicit detail: Transition keeps the prior detail on
@@ -300,7 +306,7 @@ public static class BackupRunner
                     jobId,
                     outcome,
                     nowMs,
-                    detail: partial ? $"partial: {published.Failures.Count} failure(s)" : summary,
+                    detail: partial ? $"partial: {published.Failures.Count} failure(s)" : published.Behind ? $"{summary}; {Behind(published)}" : summary,
                     snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant(),
                     stats: StatsOf(progress.Latest));
                 progress.Enter(outcome);
@@ -524,6 +530,11 @@ public static class BackupRunner
     /// </summary>
     internal static IFileSystemSource WrapSource(ServiceRuntime runtime, IFileSystemSource source) =>
         runtime.Options.WrapSource is { } wrap ? wrap(source) : source;
+
+    /// <summary>What the detail of a backup behind says of it (ADR-0193 Amendment 1).</summary>
+    private static string Behind(Repository.PublishedTreeSnapshot published) => string.Create(
+        System.Globalization.CultureInfo.InvariantCulture,
+        $"behind: {published.NotFetched!.KeptEarlier} online-only file(s) not downloaded keep the version backed up before");
 
     private static JobRunStats StatsOf(JobProgress latest) => new()
     {

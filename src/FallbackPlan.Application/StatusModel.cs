@@ -445,6 +445,14 @@ public sealed record StatusInputs
     /// <summary>The latest snapshot's capture status (1 complete, 2 partial); null when none.</summary>
     public byte? LatestCaptureStatus { get; init; }
 
+    /// <summary>
+    /// Whether the latest snapshot's every failure is an online-only file its
+    /// backup did not fetch whose version backed up before it kept (ADR-0193
+    /// Amendment 1): behind, which the set's status says apart from its
+    /// warnings, rather than partial.
+    /// </summary>
+    public bool LatestBehind { get; init; }
+
     /// <summary>The set's destinations, in declaration order (FR-DEST-004: never summarised into one flag).</summary>
     public required IReadOnlyList<DestinationStatusInput> Destinations { get; init; }
 
@@ -509,7 +517,7 @@ public static class StatusDeriver
                 ["Required objects are missing or damaged with no replica able to heal them."]);
         }
 
-        if (inputs.LatestCaptureStatus == 2)
+        if (inputs.LatestCaptureStatus == 2 && !inputs.LatestBehind)
         {
             warnings.Add("The latest snapshot is PARTIAL — its error manifest names what was not captured.");
         }
