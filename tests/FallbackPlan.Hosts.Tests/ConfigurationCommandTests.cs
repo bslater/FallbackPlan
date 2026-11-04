@@ -19,7 +19,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// FR-GC-014: an edit that cannot see the deleted-file duration keeps it. A
 /// set's full walk (FR-SNP-012) is edited here too: kept where an edit is
 /// silent, cleared back to daily where it speaks empty, refused where it does
-/// not read.
+/// not read. So is a set's choice to leave its online-only files to their
+/// cloud provider (FR-SNP-015): kept where an edit is silent, listed, and
+/// let go of where an edit says false.
 /// </summary>
 [TestClass]
 public sealed class ConfigurationCommandTests : IDisposable
@@ -975,6 +977,43 @@ public sealed class ConfigurationCommandTests : IDisposable
                 _harness.DocsSetId, "docs", _harness.SourceRoot, "every 2h", [], [], ["vault"], FullWalk: "")),
             _timeout.Token));
         Assert.IsNull(ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.FullWalk, "empty is the default, a day");
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_LeavingOnlineOnlyFiles_IsKeptWhereUnspoken_AndFalseFetchesThemAgain()
+    {
+        // Contract 1.89 (ADR-0195): a client before it cannot see the choice,
+        // so an edit that says nothing of it changes nothing.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<BackupSetsResult>(
+            await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var before);
+        Assert.IsFalse(Assert.ContainsSingle(before.Sets).LeaveOnlineOnly, "a set fetches them unless it says otherwise");
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 1h", [], [], ["vault"], LeaveOnlineOnly: true)),
+            _timeout.Token));
+        Assert.IsTrue(ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.LeaveOnlineOnly);
+        Assert.IsInstanceOfType<BackupSetsResult>(
+            await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var sets);
+        Assert.IsTrue(Assert.ContainsSingle(sets.Sets).LeaveOnlineOnly);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 2h", [], [], ["vault"])),
+            _timeout.Token));
+        Assert.IsTrue(ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.LeaveOnlineOnly);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 2h", [], [], ["vault"], LeaveOnlineOnly: false)),
+            _timeout.Token));
+        Assert.IsFalse(ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.LeaveOnlineOnly);
     }
 
     [TestMethod]

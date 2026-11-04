@@ -35,8 +35,10 @@ namespace FallbackPlan.Api.Tests;
 /// read them; 1.69's requests a cloud destination's store was sent, the
 /// wire half of FR-DEST-019; 1.70's replica object a store holds only
 /// archived without which nothing restores, the wire half of FR-DEST-020;
-/// and 1.82's full walk on a set and when its status says it last walked in
-/// full, the wire half of FR-SNP-012.
+/// 1.82's full walk on a set and when its status says it last walked in
+/// full, the wire half of FR-SNP-012; and 1.89's choice of a set to leave its
+/// online-only files to their cloud provider, on the set and in its status,
+/// the wire half of FR-SNP-015.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1333,6 +1335,34 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var read = JsonSerializer.Deserialize<BackupSetStatusDescriptor>(old, FrameCodec.SerializerOptions)!.PendingChanges!;
         Assert.IsNull(read.FilesToFetch);
         Assert.IsNull(read.BytesToFetch);
+    }
+
+    [TestMethod]
+    public void LeavingOnlineOnlyFiles_WireNamesAndPre189Default()
+    {
+        // Contract 1.89 (ADR-0195): a set may leave its online-only files to
+        // their cloud provider, and its status says that it does.
+        var set = JsonSerializer.Serialize(
+            new BackupSetDescriptor("a", "docs", "/data", null, [], [], ["vault"], LeaveOnlineOnly: true),
+            FrameCodec.SerializerOptions);
+        var status = JsonSerializer.Serialize(
+            new BackupSetStatusDescriptor(
+                "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null, Destinations: [],
+                LeavesOnlineOnly: true),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"leave_online_only\":true", set, StringComparison.Ordinal);
+        Assert.Contains("\"leaves_online_only\":true", status, StringComparison.Ordinal);
+
+        // A pre-1.89 frame says nothing of either: on an upsert that keeps
+        // what the set has, and on a status it reads as a set that fetches
+        // them.
+        var oldSet = set.Replace(",\"leave_online_only\":true", "", StringComparison.Ordinal);
+        var oldStatus = status.Replace(",\"leaves_online_only\":true", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(set, oldSet, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.AreNotEqual(status, oldStatus, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<BackupSetDescriptor>(oldSet, FrameCodec.SerializerOptions)!.LeaveOnlineOnly);
+        Assert.IsNull(JsonSerializer.Deserialize<BackupSetStatusDescriptor>(oldStatus, FrameCodec.SerializerOptions)!.LeavesOnlineOnly);
     }
 
     [TestMethod]

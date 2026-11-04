@@ -10,7 +10,9 @@ namespace FallbackPlan.Application.Tests;
 /// ADR-0034 §5). The v1 tests here pin the migration refusal, not compatibility
 /// — pre-1.0 the old schema is rejected with directions, never guessed at. A
 /// set's full walk (FR-SNP-012) is written under its own name, and a file that
-/// says nothing of it leaves it daily.
+/// says nothing of it leaves it daily. So is a set's choice to leave its
+/// online-only files to their cloud provider (FR-SNP-015), written only where
+/// it is made: a file that says nothing fetches them.
 /// </summary>
 [TestClass]
 public sealed class ClientConfigurationTests
@@ -107,6 +109,31 @@ public sealed class ClientConfigurationTests
         var loaded = ClientConfiguration.Load(ConfigPath);
         Assert.AreEqual("daily at 02:00", loaded.FindSet("docs")!.FullWalk);
         Assert.IsNull(loaded.FindSet("photos")!.FullWalk);
+    }
+
+    [TestMethod]
+    public void SaveThenLoad_LeavingOnlineOnlyFiles_RoundTripsUnderItsName_AndIsNotWrittenWhereUnset()
+    {
+        // ADR-0195: a set may leave its online-only files to their cloud
+        // provider; a file that says nothing fetches them, as every file
+        // written before the choice existed does.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("vault")],
+            BackupSets =
+            [
+                Set("docs", Ref("vault")) with { LeaveOnlineOnly = true },
+                Set("photos", Ref("vault")) with { Id = new string('b', 32) },
+            ],
+        }.Save(ConfigPath);
+
+        var text = File.ReadAllText(ConfigPath);
+        Assert.Contains("\"leave_online_only\": true", text, StringComparison.Ordinal);
+        Assert.AreEqual(1, text.Split("leave_online_only").Length - 1, "a set that fetches them writes nothing");
+        var loaded = ClientConfiguration.Load(ConfigPath);
+        Assert.IsTrue(loaded.FindSet("docs")!.LeaveOnlineOnly);
+        Assert.IsFalse(loaded.FindSet("photos")!.LeaveOnlineOnly);
     }
 
     [TestMethod]
