@@ -169,7 +169,7 @@ public static class BackupRunner
             // (ADR-0188).
             var journalPlaces = new JournalPlaceStore(runtime.Options.StateDirectory);
             var hints = ChangeHints.Plan(
-                runtime.Options.ChangeJournal, journalPlaces.Read(set.Id), set, prior?.SnapshotId, nowMs, full);
+                runtime.Options.ChangeJournal, journalPlaces.Read(set.Id), set, prior?.SnapshotId, now, full);
 
             var generation =
                 archive.Repository.CurrentDataGeneration.Value >= archive.Repository.CurrentMetadataGeneration.Value

@@ -3729,7 +3729,7 @@ public static class CliApplication
                     foreach (var set in result.Sets)
                     {
                         output.WriteLine(
-                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}");
+                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}");
 
                         // Under the set's own line, as offline status prints
                         // them: the state says what, the warnings say why
@@ -4149,6 +4149,18 @@ public static class CliApplication
     /// </summary>
     internal static string DescribeStagingSweep(BackupSetStatusDescriptor set) =>
         SweepToken(set.StagingSweep) is { Length: > 0 } token ? "staging-" + token : string.Empty;
+
+    /// <summary>
+    /// When the set was last walked in full (contract 1.82, FR-SNP-012), to
+    /// the minute, or nothing for a set whose backups ask no change journal,
+    /// every one of which walks in full, and from an older service.
+    /// </summary>
+    internal static string DescribeFullWalk(BackupSetStatusDescriptor set) =>
+        set.LastFullWalkAt is { } walked
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"full-walk@{DateTimeOffset.FromUnixTimeMilliseconds((long)walked):yyyy-MM-dd'T'HH:mm}Z")
+            : string.Empty;
 
     private static string SweepToken(DeepSweepDescriptor? sweep) => sweep switch
     {

@@ -1767,7 +1767,8 @@ public sealed partial class ServiceCommandHandler(
                     facts?.KdfParameters.MemoryKiB,
                     facts?.KdfParameters.Iterations,
                     facts?.KdfParameters.Parallelism,
-                    facts is null ? null : Convert.ToHexStringLower(facts.SealingPublicKey.Span));
+                    facts is null ? null : Convert.ToHexStringLower(facts.SealingPublicKey.Span),
+                    set.FullWalk);
             })]);
 
     private async ValueTask<ServiceResult> UpsertBackupSetAsync(
@@ -1783,6 +1784,12 @@ public sealed partial class ServiceCommandHandler(
         if (ScheduleDefect(command.Set.Schedule) is { } scheduleDefect)
         {
             return new ServiceError(ServiceErrorReason.InvalidArgument, scheduleDefect);
+        }
+
+        // The full walk is the same grammar under the same rule (ADR-0189).
+        if (ScheduleDefect(command.Set.FullWalk) is { } fullWalkDefect)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, $"The full walk {fullWalkDefect}");
         }
 
         // The roots (ADR-0040): a 1.10 client speaks `roots`, older ones the
@@ -1871,6 +1878,11 @@ public sealed partial class ServiceCommandHandler(
             Name = command.Set.Name,
             Roots = resolvedRoots,
             Schedule = command.Set.Schedule,
+            // Null preserves (a pre-1.82 client cannot see the field); empty
+            // is the default, a day, spoken.
+            FullWalk = command.Set.FullWalk is { } fullWalk
+                ? string.IsNullOrWhiteSpace(fullWalk) ? null : fullWalk.Trim()
+                : existing?.FullWalk,
             IncludeRules = includeRules,
             ExcludeRules = excludeRules,
             Retention = ToRetention(command.Set.Retention, existing?.Retention, existing?.Retention?.KeepDeletedDays),
@@ -3427,7 +3439,8 @@ public sealed partial class ServiceCommandHandler(
             sets.Add(new BackupSetStatusDescriptor(
                 set.Name, status, nextRun, rows,
                 LastCompletedAt: lastCompleted == 0 ? null : lastCompleted,
-                StagingSweep: set.DirectShip ? null : DescribeStagingSweep(runtime.StagingSweeps.Find(set.Id))));
+                StagingSweep: set.DirectShip ? null : DescribeStagingSweep(runtime.StagingSweeps.Find(set.Id)),
+                LastFullWalkAt: new JournalPlaceStore(runtime.Options.StateDirectory).Read(set.Id)?.LastFullWalk));
         }
 
         // From the parsed window, never from the presence of the text: a window

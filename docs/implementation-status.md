@@ -212,7 +212,8 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0185](adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) | A run stops fetching online-only files after the first that does not come: on Windows offline, recall on open or recall on data access make a file online-only; the first whose fetch fails stops the run opening any other, each named with the file that failed and why, and the next backup fetches it again; a file gone, refused, or on the device stops nothing. Amendment 1: a backup keeps none of the five bits a provider keeps on an entry, so going between online-only and on the device is no change, and a restore names none. Amendment 2: a file the run fetched and read whole is freed again, unless pinned; a refusal fails nothing | **Built** | `Domain/MetadataRules` · `Filesystem.Local/LocalFileSystemSource` · `Repository/SnapshotPublication` · `Repository.Tests/OnlineOnlyCaptureTests`, `Domain.Tests/OnlineOnlyAttributesTests`, `Domain.Tests/FileAttributesWriteBackTests`, `Filesystem.Tests/LocalScanTests`, `Hosts.Tests/PacedFileSystemSourceTests` · `Filesystem.Local/WindowsInterop` · `Agent/PacedFileSystemSource` · [notes](#0185--online-only-files) |
 | [0186](adr/0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) | A run reuses a folder it was told did not change: told which folders changed since its prior snapshot, it walks only those and the folders above them, and takes every other folder's tree as that snapshot held it; a folder holding a path the prior snapshot failed, one it does not hold, and one whose tree is a chain are walked, and nothing is reused under other rules or other folders; a reused folder's rows are recorded again after the run's row. No change source tells a run yet | **Built** | `Repository/FolderReuse` · `Repository/SnapshotPublication` · `Repository/TargetedRecordReader` · `Repository.Catalogue/Catalogue` · `Filesystem/ScanModel` · `Filesystem/MultiRootScan` · `Filesystem.Local/LocalFileSystemSource` · `Repository.Tests/FolderReuseTests`, `Filesystem.Tests/LocalScanTests`, `Filesystem.Tests/MultiRootStitchTests` · [notes](#0186--folder-reuse) |
 | [0187](adr/0187-a-volumes-change-journal-names-the-folders-that-changed.md) | A volume's change journal names the folders that changed: on Windows, since a place in an NTFS volume's journal, the folder holding each entry changed, a folder whose own metadata changed, and every folder holding a name of a changed file, under the roots asked of; another journal, records let go of, a record of another version, a root on another volume, or a folder it cannot find is no answer. Amendment 1: only a file changed in the set's folders is opened to find its other names | **Built** | `Filesystem/ChangeJournal` · `Filesystem.Local/UsnRecords` · `Filesystem.Local/WindowsChangeJournal` · `Filesystem.Tests/UsnRecordsTests`, `Filesystem.Tests/WindowsChangeJournalTests` · [notes](#0187--change-journal) |
-| [0188](adr/0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) | The service tells a backup what changed since the set's last: a backup takes the journal's places before it walks and keeps them once it has published; the next asks from there and walks only what is named; it walks in full where nothing was kept for the last backup, the folders changed, the journal cannot say, a full backup is asked for, and at least once a day; a backup that reused folders says how many it did not walk. Windows only; the daily walk is not yet a setting | **Built** | `Agent/ChangeHints` · `Agent/BackupRunner` · `Agent/ServiceRuntime` · `Hosts.Tests/ChangeJournalRunTests` · [notes](#0188--backups-told-what-changed) |
+| [0188](adr/0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md) | The service tells a backup what changed since the set's last: a backup takes the journal's places before it walks and keeps them once it has published; the next asks from there and walks only what is named; it walks in full where nothing was kept for the last backup, the folders changed, the journal cannot say, a full backup is asked for, and at least once a day; a backup that reused folders says how many it did not walk. Windows only; since ADR-0189 the full walk is a setting of the set | **Built** | `Agent/ChangeHints` · `Agent/BackupRunner` · `Agent/ServiceRuntime` · `Hosts.Tests/ChangeJournalRunTests` · [notes](#0188--backups-told-what-changed) |
+| [0189](adr/0189-a-sets-full-walk-is-a-setting-of-the-set.md) | A set's full walk is a setting of the set: named in its schedule's grammar, the first backup after it falls due walks in full; none named is a day, one that does not read walks every backup in full, and it starts no backup; contract 1.82 carries it, an edit keeping it where silent, clearing it where empty and refusing one that does not read, and the last full walk on the set's status, which the command line prints. The console's editor and status are owed | **Built** | `Application/ClientConfiguration` · `Agent/ChangeHints` · `Agent/ServiceCommandHandler` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Hosts.Tests/ChangeJournalRunTests` · `Hosts.Tests/ConfigurationCommandTests` · `Application.Tests/ClientConfigurationTests` · `Api.Tests/ContractAdditiveFieldsTests` · `Cli.Tests/StatusFullWalkTokenTests` · [notes](#0189--full-walk-a-setting) |
 
 ---
 
@@ -5670,7 +5671,38 @@ files gone.
 What remains is recorded rather than done:
 
 - the full walk's day is fixed; a setting per set, in the console and on
-  the command line, and the last full walk in status, are next;
+  the command line, and the last full walk in status, are next (the
+  setting, the contract and the command line's status are ADR-0189's);
 - direct mode's backup walks in full;
 - macOS and Linux have no change source yet;
 - a deleted set's kept places stay until its id is used again.
+
+### 0189 — full walk a setting
+
+Built in one slice, tests first. ADR-0188 walked every set in full a day
+after its last full walk.
+
+**The set's schedule grammar.** `Application/ClientConfiguration` carries
+`full_walk` on a set, written only where it is set. `Agent/ChangeHints`
+asks the schedule whether it is due from the last full walk, in the
+wall-clock frame a set's schedule is judged in; none named is
+`every 1d`. Where it cannot be told it is due: a schedule that does not
+read, an interval too large, a clock behind the last full walk. It is
+not refused at load, as a schedule is not.
+
+**It starts no backup.** The first backup after it falls due walks in
+full; the set's schedule still says when backups run.
+
+**Contract 1.82.** The set's descriptor carries `full_walk` and the set's
+status `last_full_walk_at`, read from what the set's last backup kept.
+`Agent/ServiceCommandHandler` keeps the full walk where an upsert is
+silent, clears it where it is empty, and refuses one that does not read
+with the file left as it was. The status names none for a set whose
+backups ask no journal, every one of which walks in full.
+`Cli/CliApplication` prints `full-walk@<UTC minute>` on the set's line.
+
+What remains is recorded rather than done:
+
+- the console's set editor and its status;
+- `validate_set_draft` does not check the full walk; the save does;
+- the command line edits no set, so it sets no full walk.

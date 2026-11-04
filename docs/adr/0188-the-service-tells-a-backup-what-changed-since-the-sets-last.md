@@ -50,6 +50,8 @@ ADR-0186 still reuses nothing where the rules or the folders changed, whatever i
 
 A set is walked in full once a day, whatever the journal says. A full walk is a backup that was told nothing, and it is when the kept time moves on. A clock that went back is a doubt too, and walks in full.
 
+> **Amended 2026-11 ([ADR-0189](0189-a-sets-full-walk-is-a-setting-of-the-set.md)).** The day is the default. A set may name its full walk in its schedule's grammar, `every 7d` or `daily at 02:00`, and the first backup after it falls due walks in full. One that does not read walks every backup in full.
+
 ### 5. The run says what it did not walk
 
 A backup that reused folders says so in its outcome: `… file(s), … unchanged, … folder(s) not walked`. Its files are the ones it walked. A full walk says what it always has.
@@ -64,6 +66,8 @@ A backup that reused folders says so in its outcome: `… file(s), … unchanged
 ## What this does not do
 
 - **Let a person set how often a set is walked in full.** The day is fixed. A setting for each set, in the console and on the command line, and the last full walk shown in status, are the next record.
+
+  > **2026-11 ([ADR-0189](0189-a-sets-full-walk-is-a-setting-of-the-set.md)).** A set's full walk is a setting of the set, carried at contract 1.82, and the command line's status shows the last full walk. The console's editor and status are the next record.
 - **Tell a backup in direct mode what changed.** The command line's backup walks in full.
 - **Name changes on macOS or Linux.** The owner has asked for them once Windows works.
 - **Let go of a deleted set's kept places.** The file stays until the set's id is used again, and it names a backup no set holds.
@@ -73,3 +77,10 @@ A backup that reused folders says so in its outcome: `… file(s), … unchanged
 - **Keep the places in the catalogue.** The catalogue can be rebuilt from the store, which holds no places. A place lost costs only a full walk, so a file beside the service's other state is enough.
 - **Keep the places in the snapshot.** A snapshot records what was captured, and goes to every destination. A journal's place belongs to this machine's volume and to nothing a restore reads.
 - **Walk in full only after a break in the journal.** Architecture 06 §4 makes a scheduled walk mandatory. It is what catches what a journal can miss without saying so.
+
+## Status history
+
+| Date | Status | Note |
+|------|--------|------|
+| 2026-11 | Accepted | Built in one slice, tests first, joining folder reuse to the change journal on Windows. |
+| 2026-11 | Accepted | Amended by [ADR-0189](0189-a-sets-full-walk-is-a-setting-of-the-set.md): the day is the default full walk, and a set may name its own in its schedule's grammar. |

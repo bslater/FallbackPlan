@@ -33,8 +33,10 @@ namespace FallbackPlan.Api.Tests;
 /// them; 1.66's count of blobs a closed circuit passed over held only
 /// there, the wire half of FR-VER-003's report of a circuit that did not
 /// read them; 1.69's requests a cloud destination's store was sent, the
-/// wire half of FR-DEST-019; and 1.70's replica object a store holds only
-/// archived without which nothing restores, the wire half of FR-DEST-020.
+/// wire half of FR-DEST-019; 1.70's replica object a store holds only
+/// archived without which nothing restores, the wire half of FR-DEST-020;
+/// and 1.82's full walk on a set and when its status says it last walked in
+/// full, the wire half of FR-SNP-012.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1188,6 +1190,33 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
 
         var read = JsonSerializer.Deserialize<BackupSetStatusDescriptor>(old, FrameCodec.SerializerOptions)!;
         Assert.IsNull(read.StagingSweep);
+    }
+
+    [TestMethod]
+    public void TheFullWalk_WireNamesAndPre182Default()
+    {
+        // Contract 1.82 (ADR-0189): a set says when it is walked in full, and
+        // its status says when it last was.
+        var set = JsonSerializer.Serialize(
+            new BackupSetDescriptor("a", "docs", "/data", null, [], [], ["vault"], FullWalk: "daily at 02:00"),
+            FrameCodec.SerializerOptions);
+        var status = JsonSerializer.Serialize(
+            new BackupSetStatusDescriptor(
+                "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null, Destinations: [],
+                LastFullWalkAt: 5_000),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"full_walk\":\"daily at 02:00\"", set, StringComparison.Ordinal);
+        Assert.Contains("\"last_full_walk_at\":5000", status, StringComparison.Ordinal);
+
+        // A pre-1.82 frame says nothing of either: on an upsert that keeps the
+        // set's full walk, and on a status it reads as none reported.
+        var oldSet = set.Replace(",\"full_walk\":\"daily at 02:00\"", "", StringComparison.Ordinal);
+        var oldStatus = status.Replace(",\"last_full_walk_at\":5000", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(set, oldSet, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.AreNotEqual(status, oldStatus, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<BackupSetDescriptor>(oldSet, FrameCodec.SerializerOptions)!.FullWalk);
+        Assert.IsNull(JsonSerializer.Deserialize<BackupSetStatusDescriptor>(oldStatus, FrameCodec.SerializerOptions)!.LastFullWalkAt);
     }
 
     [TestMethod]
