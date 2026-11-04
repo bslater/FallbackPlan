@@ -1220,6 +1220,31 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheChangesWaiting_WireNamesAndPre183Default()
+    {
+        // Contract 1.83 (ADR-0192): a set's status says how many changed files
+        // its next backup will take, or why it will walk in full.
+        var status = JsonSerializer.Serialize(
+            new BackupSetStatusDescriptor(
+                "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null, Destinations: [],
+                PendingChanges: new PendingChangesDescriptor(Files: null, WalksInFullBecause: "its full walk is due", CountedAt: 5_000)),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains(
+            "\"pending_changes\":{\"files\":null,\"walks_in_full_because\":\"its full walk is due\",\"counted_at\":5000}",
+            status,
+            StringComparison.Ordinal);
+
+        // A pre-1.83 frame says nothing: none counted.
+        var old = status.Replace(
+            ",\"pending_changes\":{\"files\":null,\"walks_in_full_because\":\"its full walk is due\",\"counted_at\":5000}",
+            "",
+            StringComparison.Ordinal);
+        Assert.AreNotEqual(status, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<BackupSetStatusDescriptor>(old, FrameCodec.SerializerOptions)!.PendingChanges);
+    }
+
+    [TestMethod]
     public void TheDeepSweep_WireNamesAndPre146Default()
     {
         // Contract 1.46 (ADR-0035 Amendment 3): each destination row carries

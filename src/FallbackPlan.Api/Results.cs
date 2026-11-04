@@ -1462,6 +1462,12 @@ public sealed record DeepSweepDescriptor(
 /// and <paramref name="LastCompletedAt"/> says when the last did — for a set
 /// never backed up, and from older services.
 /// </param>
+/// <param name="PendingChanges">
+/// How many changed files the set's next backup will take, or why it will
+/// walk in full, as last counted (contract 1.83, FR-SNP-013). Null for a set
+/// whose backups ask no change journal, before the first count, and from
+/// older services.
+/// </param>
 public sealed record BackupSetStatusDescriptor(
     string SetName,
     BackupSetStatus Status,
@@ -1469,7 +1475,26 @@ public sealed record BackupSetStatusDescriptor(
     IReadOnlyList<DestinationStatusDescriptor> Destinations,
     ulong? LastCompletedAt = null,
     DeepSweepDescriptor? StagingSweep = null,
-    ulong? LastFullWalkAt = null);
+    ulong? LastFullWalkAt = null,
+    PendingChangesDescriptor? PendingChanges = null);
+
+/// <summary>
+/// The changed files a set's next backup will take (contract 1.83,
+/// FR-SNP-013, ADR-0192): counted over the folders the change journal named
+/// since the set's last backup, judged as that backup will judge them.
+/// </summary>
+/// <param name="Files">
+/// The files new, changed, changed only in their metadata, or moved, that the
+/// next backup will write. Null where it will walk in full, and
+/// <paramref name="WalksInFullBecause"/> says why.
+/// </param>
+/// <param name="WalksInFullBecause">
+/// Why the next backup will walk every folder rather than those named, in
+/// words for a person: no backup yet, its full walk due, a journal that
+/// cannot say. Null where <paramref name="Files"/> is counted.
+/// </param>
+/// <param name="CountedAt">When it was counted, Unix milliseconds.</param>
+public sealed record PendingChangesDescriptor(long? Files, string? WalksInFullBecause, ulong CountedAt);
 
 /// <summary>
 /// The background window's state at the instant the status was observed

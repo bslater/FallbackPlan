@@ -3729,7 +3729,7 @@ public static class CliApplication
                     foreach (var set in result.Sets)
                     {
                         output.WriteLine(
-                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}");
+                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}{(DescribePending(set) is { Length: > 0 } waiting ? $"  {waiting}" : string.Empty)}");
 
                         // Under the set's own line, as offline status prints
                         // them: the state says what, the warnings say why
@@ -4161,6 +4161,19 @@ public static class CliApplication
                 CultureInfo.InvariantCulture,
                 $"full-walk@{DateTimeOffset.FromUnixTimeMilliseconds((long)walked):yyyy-MM-dd'T'HH:mm}Z")
             : string.Empty;
+
+    /// <summary>
+    /// How many changed files the set's next backup will take (contract 1.83,
+    /// FR-SNP-013), or that it will walk in full; nothing for a set whose
+    /// backups ask no change journal, before the first count, and from an
+    /// older service.
+    /// </summary>
+    internal static string DescribePending(BackupSetStatusDescriptor set) => set.PendingChanges switch
+    {
+        null => string.Empty,
+        { Files: { } files } => string.Create(CultureInfo.InvariantCulture, $"waiting:{files}"),
+        _ => "waiting:full-walk",
+    };
 
     private static string SweepToken(DeepSweepDescriptor? sweep) => sweep switch
     {

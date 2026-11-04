@@ -3440,7 +3440,8 @@ public sealed partial class ServiceCommandHandler(
                 set.Name, status, nextRun, rows,
                 LastCompletedAt: lastCompleted == 0 ? null : lastCompleted,
                 StagingSweep: set.DirectShip ? null : DescribeStagingSweep(runtime.StagingSweeps.Find(set.Id)),
-                LastFullWalkAt: new JournalPlaceStore(runtime.Options.StateDirectory).Read(set.Id)?.LastFullWalk));
+                LastFullWalkAt: new JournalPlaceStore(runtime.Options.StateDirectory).Read(set.Id)?.LastFullWalk,
+                PendingChanges: runtime.PendingChanges.Describe(set, observed)));
         }
 
         // From the parsed window, never from the presence of the text: a window

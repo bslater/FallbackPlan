@@ -27,6 +27,17 @@ internal sealed record ChangeHintPlan(
     ulong? LastFullWalk);
 
 /// <summary>
+/// What changed since a set's last backup, as its next backup will be told
+/// (ADR-0192): the folders named, as the snapshot spells them, or null with
+/// why it will walk in full instead.
+/// </summary>
+internal sealed record ChangesSinceLast(HashSet<string>? Folders, string? WalksInFullBecause)
+{
+    /// <summary>A next backup that walks every folder, for the reason given.</summary>
+    public static ChangesSinceLast WalksInFull(string because) => new(null, because);
+}
+
+/// <summary>
 /// How the service tells a backup what changed since the set's last one,
 /// from the change journal (ADR-0188). Every doubt walks in full.
 /// </summary>
@@ -61,10 +72,64 @@ internal static class ChangeHints
             places.Add((root.Path, place));
         }
 
-        var changed = full || prior is not { } priorId || kept is null
-            ? null
-            : Changed(journal, kept, set, roots, priorId, now);
+        var changed = full ? null : WhatChanged(journal, kept, set, prior, now).Folders;
         return new ChangeHintPlan(changed, places, kept?.LastFullWalk);
+    }
+
+    /// <summary>
+    /// The folders that changed since the set's last backup, as its next
+    /// backup will be told them, or why that backup will walk in full, in
+    /// words for a person (ADR-0192): the set has no backup, the places kept
+    /// are none or another backup's, a full walk is due, the set's folders are
+    /// not the ones kept, or the journal cannot say for one. It moves no place.
+    /// </summary>
+    public static ChangesSinceLast WhatChanged(
+        IChangeJournal journal, KeptJournalPlaces? kept, BackupSetConfiguration set,
+        ReadOnlyMemory<byte>? prior, DateTimeOffset now)
+    {
+        ThrowHelper.ThrowIfNull(journal);
+        ThrowHelper.ThrowIfNull(set);
+        if (prior is not { } priorId)
+        {
+            return ChangesSinceLast.WalksInFull("the set has no backup yet");
+        }
+
+        if (kept is null)
+        {
+            return ChangesSinceLast.WalksInFull("its last backup kept no place in the change journal");
+        }
+
+        if (!string.Equals(kept.SnapshotId, Convert.ToHexStringLower(priorId.Span), StringComparison.Ordinal))
+        {
+            return ChangesSinceLast.WalksInFull("the places kept in the change journal are another backup's");
+        }
+
+        if (FullWalkDue(set.FullWalk, kept.LastFullWalk, now))
+        {
+            return ChangesSinceLast.WalksInFull("its full walk is due");
+        }
+
+        var roots = SetChangeScan.ScanRootsOf(set);
+        if (!kept.Places.Select(place => place.Root).SequenceEqual(roots.Select(root => root.Path), StringComparer.Ordinal))
+        {
+            return ChangesSinceLast.WalksInFull("its folders changed since its last backup");
+        }
+
+        var changed = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (root, place) in kept.Places)
+        {
+            if (journal.ChangedSince(place, [root]) is not { } named)
+            {
+                return ChangesSinceLast.WalksInFull("the change journal cannot say what changed");
+            }
+
+            foreach (var folder in named)
+            {
+                changed.Add(SnapshotPath(roots, folder));
+            }
+        }
+
+        return new ChangesSinceLast(changed, null);
     }
 
     /// <summary>
@@ -131,40 +196,6 @@ internal static class ChangeHints
         var label = roots.First(root => string.Equals(root.Path, folder.Root, StringComparison.Ordinal)).Label
             ?? throw new ArgumentException("A set of several folders names each by its label.", nameof(roots));
         return folder.Path.Length == 0 ? label : label + "/" + folder.Path;
-    }
-
-    /// <summary>
-    /// The folders that changed since the set's last backup, or null where
-    /// the run walks in full: the places kept are another backup's, a full
-    /// walk is due, the set's folders are not the ones kept, or the journal
-    /// cannot say for one.
-    /// </summary>
-    private static HashSet<string>? Changed(
-        IChangeJournal journal, KeptJournalPlaces kept, BackupSetConfiguration set, IReadOnlyList<ScanRoot> roots,
-        ReadOnlyMemory<byte> prior, DateTimeOffset now)
-    {
-        if (!string.Equals(kept.SnapshotId, Convert.ToHexStringLower(prior.Span), StringComparison.Ordinal)
-            || FullWalkDue(set.FullWalk, kept.LastFullWalk, now)
-            || !kept.Places.Select(place => place.Root).SequenceEqual(roots.Select(root => root.Path), StringComparer.Ordinal))
-        {
-            return null;
-        }
-
-        var changed = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (root, place) in kept.Places)
-        {
-            if (journal.ChangedSince(place, [root]) is not { } named)
-            {
-                return null;
-            }
-
-            foreach (var folder in named)
-            {
-                changed.Add(SnapshotPath(roots, folder));
-            }
-        }
-
-        return changed;
     }
 }
 

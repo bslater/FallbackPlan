@@ -244,6 +244,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         Jobs = jobs;
         Progress = new ProgressHub();
         BackupPoolWidth = ConfiguredBackupPoolWidth(options);
+        PendingChanges = new PendingChangesBoard(this);
         Queue = new JobScheduler(
             Logger(options, typeof(JobScheduler)), BackupPoolWidth, options.MaxPauseOverride);
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
@@ -359,6 +360,12 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// resolve the set-changed notice and whether a rescan may raise it.
     /// </summary>
     internal SetSettingsGenerations SetSettings { get; } = new();
+
+    /// <summary>
+    /// How many changed files each set's next backup will take, as last
+    /// counted (ADR-0192): what a set's status reads.
+    /// </summary>
+    internal PendingChangesBoard PendingChanges { get; }
 
     /// <summary>The open restore sources (ADR-0041).</summary>
     internal RestoreSourceRegistry RestoreSources { get; } = new();
