@@ -1,5 +1,6 @@
 using System.CommandLine;
 using FallbackPlan.Agent;
+using FallbackPlan.Application;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 
@@ -11,7 +12,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// up before, the file whose fetch failed and the provider's words, and since
 /// when backups have been missing them. The time is the first backup that
 /// missed any, kept while each after it misses some; a backup that fetches
-/// every one clears it.
+/// every one clears it. A backup whose every failure is such a file that
+/// kept its version before completes behind, and the set is not said to be
+/// partial; one that missed a file new to the set still completes with
+/// failures (ADR-0193 Amendment 1).
 /// </summary>
 /// <remarks>
 /// No runner has a cloud provider, so a stand-in source marks the files
@@ -92,6 +96,69 @@ public sealed class NotFetchedStatusTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ABackupThatKeptTheEarlierVersionOfEachFileItMissed_CompletesBehind_AndTheSetIsNotPartial()
+    {
+        WriteTree();
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        _harness.WriteSourceFile("docs/a.cloud", "alpha, changed");
+        _harness.WriteSourceFile("docs/b.cloud", "bravo, changed");
+        _delivers = false;
+
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        var job = LastJob(runtime);
+        Assert.AreEqual(Domain.Jobs.JobState.Complete, job.State, job.Detail);
+        Assert.Contains("behind: 2 online-only file(s) not downloaded keep the version backed up before", job.Detail!, StringComparison.Ordinal);
+        var status = await StatusAsync(runtime);
+        Assert.DoesNotContain(warning => warning.Contains("PARTIAL", StringComparison.Ordinal), status.Status.Warnings);
+        Assert.AreEqual(2L, status.NotFetched!.KeptEarlier, "the set still says what it is behind on");
+    }
+
+    [TestMethod]
+    public async Task ABackupThatMissedAFileNewToTheSet_StillCompletesWithFailures_AndTheSetIsPartial()
+    {
+        WriteTree();
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        _harness.WriteSourceFile("docs/a.cloud", "alpha, changed");
+        _harness.WriteSourceFile("docs/new.cloud", "new, and never fetched");
+        _delivers = false;
+
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        var job = LastJob(runtime);
+        Assert.AreEqual(Domain.Jobs.JobState.CompletedWithFailures, job.State, job.Detail);
+        Assert.Contains(warning => warning.Contains("PARTIAL", StringComparison.Ordinal), (await StatusAsync(runtime)).Status.Warnings);
+    }
+
+    [TestMethod]
+    public void TheRecordOfABackupBehind_SaysSoOnlyOfItsOwnSnapshot_AndAnOlderRecordSaysNot()
+    {
+        var setId = new string('a', 32);
+        var store = new NotFetchedStore(_harness.StateDirectory);
+        byte[] behind = [.. Enumerable.Repeat((byte)0xB2, 16)];
+        byte[] later = [.. Enumerable.Repeat((byte)0xC3, 16)];
+        var missed = new Repository.NotFetchedFiles(Files: 1, KeptEarlier: 1, Path: "docs/a.cloud", Reason: CloudStandIn.TimedOut);
+
+        store.Keep(setId, missed, 1_000, behind, isBehind: true);
+        Assert.IsTrue(store.IsBehind(setId, behind));
+        Assert.IsFalse(store.IsBehind(setId, later), "a later snapshot, as another writer's, is not said to be behind");
+
+        store.Keep(setId, missed with { KeptEarlier = 0 }, 2_000, later, isBehind: false);
+        Assert.IsFalse(store.IsBehind(setId, later));
+
+        // A record kept before it said which snapshot it was of says none is behind.
+        File.WriteAllText(
+            Path.Combine(_harness.StateDirectory, "not-fetched", $"{setId}.json"),
+            """{"files":1,"keptEarlier":1,"since":1000,"path":"docs/a.cloud","reason":"timed out"}""");
+        Assert.IsFalse(store.IsBehind(setId, behind));
+        Assert.IsNotNull(store.Read(setId), "and still reads as what it names");
+    }
+
+    [TestMethod]
     public async Task TheCommandLinesStatus_PrintsHowManyOnTheSetsLine()
     {
         WriteTree();
@@ -115,6 +182,9 @@ public sealed class NotFetchedStatusTests : IDisposable
     }
 
     private static ulong Ms(DateTimeOffset at) => (ulong)at.ToUnixTimeMilliseconds();
+
+    private static JobRecord LastJob(ServiceRuntime runtime) =>
+        runtime.Jobs.Jobs.Last(job => job.BackupSetId == runtime.Configuration.BackupSets.Single().Id);
 
     private async Task<BackupSetStatusDescriptor> StatusAsync(ServiceRuntime runtime)
     {

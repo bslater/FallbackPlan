@@ -3437,6 +3437,8 @@ public sealed partial class ServiceCommandHandler(
             {
                 LatestSnapshotAt = latest?.CapturedAt,
                 LatestCaptureStatus = latest?.CaptureStatus,
+                LatestBehind = latest is not null
+                    && new NotFetchedStore(runtime.Options.StateDirectory).IsBehind(set.Id, latest.SnapshotId.Span),
                 Destinations = inputs,
                 DamageFindings = findings,
                 StagingDamage = set.DirectShip

@@ -43,7 +43,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// what the next backup will try again (ADR-0192 Amendment 1, FR-SNP-013).
 /// A restore's receipt names the same files, each with what the backup said
 /// of it, and says where the snapshot's failures would not read
-/// (ADR-0194 Amendment 1, FR-RST-004).
+/// (ADR-0194 Amendment 1, FR-RST-004). A run whose every failure is an
+/// online-only file that kept its version before is behind, not partial; one
+/// that failed a file new to the set, or a file on the device, is not
+/// (ADR-0193 Amendment 1, FR-SNP-014).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -564,6 +567,44 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
 
         Assert.AreEqual(new NotFetchedFiles(Files: 3, KeptEarlier: 2, Path: "docs/doc.bin", Reason: TimedOut), second.NotFetched);
+    }
+
+    [TestMethod]
+    public async Task ARunThatKeptTheEarlierVersionOfEachFileItDidNotFetch_IsBehind_AndOneThatFailedAnyOtherIsNot()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+        var local = source.AddFile("docs/local.bin", Deterministic(4_000, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var clean = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Assert.IsFalse(clean.Behind, "a run that failed nothing is complete, not behind");
+
+        // Every failure is a file whose version before stands in its place.
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        var behind = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+        Assert.IsTrue(behind.Behind);
+
+        // A file on the device that will not read is no provider's.
+        local.OpenFailure = new IOException("a bad sector");
+        Change(local, 8);
+        var unreadable = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xC3, 0xB2, now: 1_722_700_000_002), CancellationToken.None);
+        Assert.IsFalse(unreadable.Behind, "a file on the device that would not read");
+
+        // A file new to the set has no version before to keep.
+        local.OpenFailure = null;
+        Online(source, "docs/new.bin", 3);
+        var unkept = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xD4, 0xC3, now: 1_722_700_000_003), CancellationToken.None);
+        Assert.IsFalse(unkept.Behind, "a file new to the set is in no backup");
     }
 
     [TestMethod]

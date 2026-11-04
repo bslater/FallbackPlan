@@ -1545,11 +1545,16 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             report.Add($"incremental    against {Hex(prior.SnapshotId)}");
         }
 
+        // A backup whose every failure kept the version backed up before is
+        // behind, not partial (ADR-0193 Amendment 1), and exits as one that
+        // completed.
         report.Add(published.ErrorManifestObjectId is null
             ? "status         complete"
-            : "status         PARTIAL — see the error manifest");
+            : published.Behind
+                ? string.Create(CultureInfo.InvariantCulture, $"status         behind — {published.NotFetched!.KeptEarlier} online-only file(s) not downloaded keep the version backed up before")
+                : "status         PARTIAL — see the error manifest");
 
-        return new OperationReport(published.ErrorManifestObjectId is null, report);
+        return new OperationReport(published.ErrorManifestObjectId is null || published.Behind, report);
     }
 
     /// <inheritdoc/>
