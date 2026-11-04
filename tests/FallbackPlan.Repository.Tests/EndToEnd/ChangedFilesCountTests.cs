@@ -119,6 +119,34 @@ public sealed class ChangedFilesCountTests : ArchiveTestHarness
         Assert.AreEqual(1, count.New);
     }
 
+    [TestMethod]
+    public async Task AFolderNamedBelowOneNotNamed_IsReachedThroughIt()
+    {
+        var tree = Tree();
+        var deep = tree.Source.AddFile("docs/2026/june/c.txt", Bytes(100, 9));
+        using var catalogue = OpenCatalogue();
+        var baseline = await PublishBaselineAsync(tree.Source, catalogue);
+
+        Change(deep, 10);
+        var count = await CountAsync(tree.Source, catalogue, baseline, ["docs/2026/june"]);
+
+        Assert.AreEqual(1, count.Updated, "the folders above a named one are entered, as the backup enters them");
+    }
+
+    [TestMethod]
+    public async Task AFileTheIncludeRulesDoNotTake_IsNotCounted()
+    {
+        var tree = Tree();
+        using var catalogue = OpenCatalogue();
+        var baseline = await PublishBaselineAsync(tree.Source, catalogue, includes: ["**/*.txt"]);
+
+        tree.Source.AddFile("docs/new.txt", Bytes(100, 3));
+        tree.Source.AddFile("docs/new.jpg", Bytes(100, 4));
+        var count = await CountAsync(tree.Source, catalogue, baseline, ["docs"], includes: ["**/*.txt"]);
+
+        Assert.AreEqual(1, count.New);
+    }
+
     private static Fixture Tree()
     {
         var source = new FakeFileSystemSource();
@@ -139,15 +167,16 @@ public sealed class ChangedFilesCountTests : ArchiveTestHarness
         CatalogueDb catalogue,
         ReadOnlyMemory<byte> baseline,
         IReadOnlyCollection<string> changed,
-        IReadOnlyList<string>? excludes = null) =>
+        IReadOnlyList<string>? excludes = null,
+        IReadOnlyList<string>? includes = null) =>
         SourceComparer.CountChangedAsync(
-            source, [new ScanRoot("/")], [], excludes ?? [], catalogue, baseline, changed, CancellationToken.None);
+            source, [new ScanRoot("/")], includes ?? [], excludes ?? [], catalogue, baseline, changed, CancellationToken.None);
 
     private CatalogueDb OpenCatalogue() =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
     private async Task<ReadOnlyMemory<byte>> PublishBaselineAsync(
-        FakeFileSystemSource source, CatalogueDb catalogue, IReadOnlyList<string>? excludes = null)
+        FakeFileSystemSource source, CatalogueDb catalogue, IReadOnlyList<string>? excludes = null, IReadOnlyList<string>? includes = null)
     {
         var store = CreateStore();
         using var keys = CreateKeys();
@@ -171,6 +200,7 @@ public sealed class ChangedFilesCountTests : ArchiveTestHarness
                     Source = source,
                     Roots = [new ScanRoot("/")],
                     ExcludeRules = excludes ?? [],
+                    IncludeRules = includes ?? [],
                     DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
                     BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
                     SnapshotId = Enumerable.Repeat((byte)0xB1, 16).ToArray(),
