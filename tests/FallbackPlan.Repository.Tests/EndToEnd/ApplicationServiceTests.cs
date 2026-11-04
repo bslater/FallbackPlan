@@ -855,6 +855,18 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void BackupSetStatus_TheLatestSnapshotIsOnlyBehind_RaisesNoPartialWarning()
+    {
+        // ADR-0193 Amendment 1: every file it failed keeps the version backed
+        // up before, which the set's status says apart from its warnings.
+        var behind = StatusDeriver.Derive(HealthyInputs() with { LatestCaptureStatus = 2, LatestBehind = true });
+        var healthy = StatusDeriver.Derive(HealthyInputs());
+
+        Assert.DoesNotContain(warning => warning.Contains("PARTIAL", StringComparison.Ordinal), behind.Warnings);
+        Assert.AreEqual(healthy.State, behind.State);
+    }
+
+    [TestMethod]
     public void BackupSetStatus_NoSnapshotExists_ReportsNeverBackedUpRatherThanAnError()
     {
         var status = StatusDeriver.Derive(HealthyInputs() with { LatestSnapshotAt = null });
