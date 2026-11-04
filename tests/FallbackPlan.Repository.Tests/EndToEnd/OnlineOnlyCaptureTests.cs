@@ -33,7 +33,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// read keeps none, and nor does one found only under another name
 /// (ADR-0185 Amendment 3). A run says how many online-only files it did not
 /// fetch, how many of them kept the version before, and which file's fetch
-/// failed and why, and says nothing where it fetched every one (ADR-0193).
+/// failed and why, and says nothing where it fetched every one (ADR-0193,
+/// FR-SNP-014).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every

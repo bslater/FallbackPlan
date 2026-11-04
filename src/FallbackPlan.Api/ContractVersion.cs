@@ -826,8 +826,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// walk every folder, and `counted_at`. Additive: a pre-1.83 service counts
     /// nothing, and a set whose backups ask no journal has none.
     /// </para>
+    /// <para>
+    /// 1.84 says which online-only files a set's last backup could not fetch
+    /// from their provider (FR-SNP-014, ADR-0193). A set's status gains
+    /// `not_fetched`: how many `files`, how many `kept_earlier` the version
+    /// backed up before, `since` the first of the backups that have each
+    /// missed some, and the `path` and `reason` of the fetch that failed.
+    /// Additive: a pre-1.84 service says nothing, as a service does of a set
+    /// whose last backup fetched every one.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 83);
+    public static ContractVersion Current { get; } = new(1, 84);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

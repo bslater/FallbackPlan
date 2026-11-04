@@ -138,6 +138,14 @@ public sealed record ServiceOptions
         : null;
 
     /// <summary>
+    /// Wraps the source every backup reads its set's files through: a test
+    /// harness's way to make files online-only and their provider fail, which
+    /// no runner can (ADR-0193). Null, the production value, reads the device
+    /// as it is.
+    /// </summary>
+    internal Func<Filesystem.IFileSystemSource, Filesystem.IFileSystemSource>? WrapSource { get; init; }
+
+    /// <summary>
     /// Awaited by every backup run of a format-5 set as it begins to
     /// checkpoint its index after the commit (ADR-0097), with the run's job id
     /// and cancellation token: a test harness's way to hold a committed run at
