@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing)
+**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing); FR-SNP-009 (amended by [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name, and the failure says so)
 **Related:** [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup), [ADR-0026](0026-phase-1-capture-shapes.md) (the capture failure reasons), [ADR-0183](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) (a file a filter keeps is read through the filter)
 
 **Built:**
@@ -10,7 +10,7 @@
 - The scan: `Filesystem.Local/LocalFileSystemSource` names an online-only file on the entry it builds.
 - The run: `Repository/SnapshotPublication` stops fetching after the first online-only file that does not come, and names each it passes.
 - The tests:
-  - `Repository.Tests/OnlineOnlyCaptureTests` — through a stand-in source, on every platform: a fetch that fails before its first byte or part-way stops the run opening any other online-only file, each named with the file that failed and why, while a file on the device is still backed up; a file gone, refused, or on the device that will not read stops nothing; the next backup fetches what was not fetched; an unchanged online-only file is not opened again.
+  - `Repository.Tests/OnlineOnlyCaptureTests` — through a stand-in source, on every platform: a fetch that fails before its first byte or part-way stops the run opening any other online-only file, each named with the file that failed and why, while a file on the device is still backed up; a file gone, refused, or on the device that will not read stops nothing; the next backup fetches what was not fetched; an unchanged online-only file is not opened again. A changed one not fetched keeps the version backed up before it, asked for again by each backup and fetched once the provider answers (Amendment 3).
   - `Domain.Tests/OnlineOnlyAttributesTests` — offline, recall on open and recall on data access each make a file online-only; pinned, unpinned and a reparse point do not.
   - `Filesystem.Tests/LocalScanTests` — an ordinary file is not online-only, and on Windows a file carrying the offline bit is.
 
@@ -51,6 +51,8 @@ A file not fetched is in no snapshot this run publishes, so the next run finds n
 - **A run that meets a provider that does not deliver ends after about one time-out,** not one per file, and names every file it passed.
 - **One failed fetch stops every online-only file in the run,** whichever provider keeps it, because the run cannot tell one provider's placeholders from another's. A passing fault, such as a network drop, defers the rest to the next backup. Nothing is lost: each is named and fetched again.
 - **A changed online-only file not fetched is absent from this run's snapshot,** as any file that fails capture is. Its earlier versions stay in earlier snapshots.
+
+  > **2026-11 ([Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before)).** It keeps the version backed up before it, where that version is at its name, so the newest snapshot still restores it and retention cannot let the last copy go.
 - **An unchanged online-only file is still never fetched** (NFR-PERF-003). A change to its metadata alone is still recorded from the prior version's manifest, with no fetch.
 
 ## What this does not do
@@ -131,6 +133,46 @@ The owner chose that a backup should leave such a file as it found it.
 - **Wait for the provider to free the file.** The platform frees it in its own time, and a run does not check that it did.
 - **Show a refusal in the console.** It is in the log.
 
+## Amendment 3 (2026-11) — a file not fetched keeps its version before
+
+**Requirements:** FR-SNP-009 (amended: a changed online-only file the run did not fetch keeps the version backed up before it, at its name, and the failure says so)
+
+### Context
+
+A changed online-only file that a run did not fetch is left out of its snapshot (Consequences). Its earlier versions are only in earlier snapshots, and retention expires those by their own rules. Keeping a deleted file restorable for some days (ADR-0094) does not help for long: it counts from the first snapshot the file is missing from.
+
+A provider can stay away for weeks. That happens when the person stays signed out, or the provider does not serve the account the service runs as. In that time every backup leaves the file out, and once the last snapshot holding it expires, the backup no longer has the file at all, though the person still does.
+
+The owner chose that such a file keep the version backed up before it. The owner kept this to files a provider holds. Their content is safe where the provider keeps it, so keeping the older copy hides nothing the person could have fixed.
+
+### Decision
+
+**A changed online-only file the run did not fetch keeps the version backed up before it.** This covers the file whose fetch failed and every one the run passed after it (Decision 2). The snapshot's tree names the prior snapshot's version, unchanged, and a restore of the newest snapshot gives that version back.
+
+**Only a version at the file's own name.** A version found only under another name, because the file moved as well as changed, is not put here. A manifest states its own name, and rewriting it here would claim the earlier content was modified when this one was. That file is left out, as before.
+
+**The failure is still recorded.** It is the same entry in the error manifest, with what stands in its place added: `…; the version backed up earlier, last modified <time> UTC, stands in its place`. The person sees it among the run's failures, and the run still completes with failures.
+
+**The next backup asks again.** Two things make sure of it.
+- The folder holding a failure is walked even where the change journal names nothing (ADR-0186).
+- The version kept carries the modification time it had when it was backed up, so the file is seen as changed.
+
+While the provider stays away each backup keeps the same version. The first backup it answers fetches the file.
+
+**A file new to the set has nothing to keep** and is left out, as before. **A file on the device that will not read** is not the provider's, and is left out as before.
+
+### Consequences
+
+- The newest snapshot holds every online-only file it held before, however long the provider stays away. Retention never sees one go.
+- A snapshot can now name a failure at a path its tree also holds. The tree then holds an earlier version, carried from the snapshot before ([specification 06 §8](../../specifications/repository-format/06-manifests.md#8-error-manifest)).
+- A restore of the file gives the earlier version back, as the failure says, and does not say so itself.
+
+### What this does not do
+
+- **Say at restore that a file is older than its source was.** The run's failures say it. A restore plan that names such a file, read from the snapshot's error manifest, is a later record.
+- **Keep a version for a file that moved and changed.**
+- **Keep a version for any other file that will not read.** The owner kept this to online-only files.
+
 ## Status history
 
 | Date | Status | Note |
@@ -138,3 +180,4 @@ The owner chose that a backup should leave such a file as it found it.
 | 2026-11 | Accepted | Built in one slice, tests first. On Windows a file whose attributes carry offline, recall on open or recall on data access is online-only. The first such file whose fetch fails stops the run opening any other: each is an error-manifest entry naming the file that failed and why, and the next backup fetches it again. A file gone, refused, or on the device that will not read stops nothing. `Domain/MetadataRules`; `Filesystem.Local/LocalFileSystemSource`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests` |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a backup keeps none of the five bits a cloud provider keeps on an entry (offline, recall on open, recall on data access, pinned, unpinned). Publication drops them before a manifest, tree or digest is made, so going between online-only and on the device is no change, and a restore names none of them. `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Domain.Tests/FileAttributesWriteBackTests` |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is unpinned so its provider frees it from the device again. A file changed or replaced while read, one not fetched, and one the person pinned are left alone. A refusal is logged and fails nothing. `Filesystem/ScanModel`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Local/WindowsInterop`; `Agent/PacedFileSystemSource`; `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests`; `Hosts.Tests/PacedFileSystemSourceTests` |
+| 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name; the failure is still recorded, with what stands in its place, so the next backup walks its folder and asks again. A file new to the set, one found only under another name, and a file on the device that will not read keep nothing. `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests` |
