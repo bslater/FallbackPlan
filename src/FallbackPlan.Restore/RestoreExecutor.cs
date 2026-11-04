@@ -303,9 +303,10 @@ public sealed record RestoreReceipt
     public string? SetId { get; init; }
 
     /// <summary>
-    /// Whether the snapshot's manifest or its failures would not read, so no
-    /// item could be said to be a version backed up before though some may
-    /// be (ADR-0194 Amendment 1). Written only when true.
+    /// Whether the snapshot's manifest or its failures would not read, or the
+    /// run was stopped before it read them, so no item could be said to be a
+    /// version backed up before though some may be (ADR-0194 Amendment 1).
+    /// Written only when true.
     /// </summary>
     [JsonPropertyName("earlier_versions_unread")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]

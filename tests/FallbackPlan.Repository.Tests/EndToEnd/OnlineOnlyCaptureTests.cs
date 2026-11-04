@@ -689,7 +689,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task ARunsReadOfThemFromAStoreThatWillNotServeTheirRecords_NamesNone_AndSaysItCouldNot()
+    public async Task ARunsReadOfThem_FromAStoreThatWillNotServeTheirRecords_OrStoppedBeforeIt_NamesNone_AndSaysItCouldNot()
     {
         var source = new FakeFileSystemSource();
         var doc = Online(source, "docs/doc.bin", 1);
@@ -714,6 +714,14 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
 
         Assert.IsTrue(earlier.Unread);
         Assert.IsEmpty(earlier.Files);
+
+        // Nor does a run stopped before it reads them stop at them: it goes on
+        // to its receipt, which says it could not name them.
+        using var stopped = new CancellationTokenSource();
+        await stopped.CancelAsync();
+        var unread = await RestoreBlobSet.EarlierVersionsAsync(catalogue, plan, store, [], Repo, keys, stopped.Token);
+        Assert.IsTrue(unread.Unread);
+        Assert.IsEmpty(unread.Files);
     }
 
     [TestMethod]

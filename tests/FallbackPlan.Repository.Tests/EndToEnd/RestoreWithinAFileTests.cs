@@ -62,7 +62,7 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task TheReceipt_SaysWhereAFileWasResumed_AtSchemaEleven_AndNothingOfOneWrittenWhole()
+    public async Task TheReceipt_SaysWhereAFileWasResumed_SinceSchemaEleven_AndNothingOfOneWrittenWhole()
     {
         using var published = await PublishAsync("receipt", 0xE8);
         var parts = Path.Combine(SpoolDirectory, "receipt-parts");
@@ -71,8 +71,8 @@ public sealed class RestoreWithinAFileTests : ArchiveTestHarness
         var resumed = await RestoreAsync(published, "receipt-resumed", Resumed("receipt-resumed", parts));
         var fresh = await RestoreAsync(published, "receipt-fresh", Fresh("receipt-fresh"));
 
-        Assert.AreEqual(11, RestoreReceipt.CurrentSchemaVersion);
-        Assert.AreEqual(11, resumed.Receipt.SchemaVersion);
+        Assert.AreEqual(12, RestoreReceipt.CurrentSchemaVersion);
+        Assert.AreEqual(12, resumed.Receipt.SchemaVersion);
         Assert.Contains($"\"resumed_at\": {3 * Segment}", resumed.Receipt.ToJson(), StringComparison.Ordinal);
         Assert.DoesNotContain("\"resumed_at\"", fresh.Receipt.ToJson(), StringComparison.Ordinal);
     }

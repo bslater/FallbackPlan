@@ -430,7 +430,8 @@ public static class RestoreBlobSet
     /// </summary>
     /// <remarks>
     /// A store that will not answer is the run's to meet, file by file, and
-    /// here only means none can be named.
+    /// here only means none can be named. So does a run stopped before they
+    /// are read: it goes on to its receipt, as any stopped run does.
     /// </remarks>
     public static async ValueTask<RestoreEarlierVersions> EarlierVersionsAsync(
         Catalogue catalogue,
@@ -447,6 +448,11 @@ public static class RestoreBlobSet
         ArgumentNullException.ThrowIfNull(otherCopies);
         ArgumentNullException.ThrowIfNull(keys);
 
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return new RestoreEarlierVersions([], Unread: true);
+        }
+
         using var keyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
         using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         using var metaReaders = new MetaReaderCache();
@@ -458,7 +464,8 @@ public static class RestoreBlobSet
                 .ConfigureAwait(false);
             return new RestoreEarlierVersions(earlier, unread);
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is IOException
+            || (exception is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             return new RestoreEarlierVersions([], Unread: true);
         }
