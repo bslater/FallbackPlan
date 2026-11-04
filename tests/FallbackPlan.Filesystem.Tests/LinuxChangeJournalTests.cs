@@ -13,7 +13,7 @@ namespace FallbackPlan.Filesystem.Tests;
 /// turn. A folder moved within the roots goes on being named where it now
 /// is. A change to a file with another name cannot be answered, since its
 /// other folders cannot be found, and neither can a place from another watch,
-/// a watch whose queue overflowed, or a root no longer there.
+/// a watch whose queue overflowed, or a root deleted or moved away.
 /// </summary>
 /// <remarks>
 /// These watch real folders with inotify, so they run where Linux does. Each
@@ -131,6 +131,28 @@ public sealed partial class LinuxChangeJournalTests : IDisposable
         var later = PositionOf(journal);
         File.WriteAllText(Path.Combine(outside, "leaving", "a.txt"), "outside the roots now");
         Assert.IsEmpty(Changed(journal, later), "nothing outside the roots is named");
+        Directory.Delete(outside, recursive: true);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "inotify is Linux's")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    [SupportedOSPlatform("linux")]
+    public void ChangedSince_ARootMovedOutOfTheWatch_CannotBeAnswered()
+    {
+        // Another set's folder inside this one, moved away: what is at its
+        // path now, if anything, is nothing the watch has watched.
+        Make("docs/inner");
+        var outside = Directory.CreateDirectory(_root + "-outside").FullName;
+        var journal = Journal();
+        PositionOf(journal);
+        var inner = Path.Combine(_root, "docs", "inner");
+        var since = journal.PositionOf(inner) ?? throw new AssertFailedException($"no place: {journal.WhyNoPosition(inner)}");
+
+        Directory.Move(inner, Path.Combine(outside, "inner"));
+
+        Assert.IsNull(journal.ChangedSince(since, [inner], out var doubt));
+        Assert.Contains("no longer watched", doubt!, StringComparison.Ordinal);
         Directory.Delete(outside, recursive: true);
     }
 
