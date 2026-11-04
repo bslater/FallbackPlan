@@ -169,7 +169,7 @@ internal sealed class PendingChangesBoard(ServiceRuntime runtime)
 
         var count = await SourceComparer.CountChangedAsync(
             BackupRunner.WrapSource(runtime, new LocalFileSystemSource()), SetChangeScan.ScanRootsOf(set), set.IncludeRules, set.ExcludeRules,
-            catalogue, latest.SnapshotId, [.. folders, .. failed], cancellationToken).ConfigureAwait(false);
+            catalogue, latest.SnapshotId, [.. folders, .. failed], set.LeaveOnlineOnly, cancellationToken).ConfigureAwait(false);
         return new PendingChangesDescriptor(count.Total, null, countedAt, count.ToFetch, count.ToFetchBytes);
     }
 }

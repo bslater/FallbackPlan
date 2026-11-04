@@ -1784,7 +1784,8 @@ public sealed partial class ServiceCommandHandler(
                     facts?.KdfParameters.Iterations,
                     facts?.KdfParameters.Parallelism,
                     facts is null ? null : Convert.ToHexStringLower(facts.SealingPublicKey.Span),
-                    set.FullWalk);
+                    set.FullWalk,
+                    set.LeaveOnlineOnly);
             })]);
 
     private async ValueTask<ServiceResult> UpsertBackupSetAsync(
@@ -1899,6 +1900,8 @@ public sealed partial class ServiceCommandHandler(
             FullWalk = command.Set.FullWalk is { } fullWalk
                 ? string.IsNullOrWhiteSpace(fullWalk) ? null : fullWalk.Trim()
                 : existing?.FullWalk,
+            // Null preserves (a pre-1.89 client cannot see the choice).
+            LeaveOnlineOnly = command.Set.LeaveOnlineOnly ?? existing?.LeaveOnlineOnly ?? false,
             IncludeRules = includeRules,
             ExcludeRules = excludeRules,
             Retention = ToRetention(command.Set.Retention, existing?.Retention, existing?.Retention?.KeepDeletedDays),
@@ -3460,7 +3463,8 @@ public sealed partial class ServiceCommandHandler(
                 StagingSweep: set.DirectShip ? null : DescribeStagingSweep(runtime.StagingSweeps.Find(set.Id)),
                 LastFullWalkAt: new JournalPlaceStore(runtime.Options.StateDirectory).Read(set.Id)?.LastFullWalk,
                 PendingChanges: runtime.PendingChanges.Describe(set, observed),
-                NotFetched: new NotFetchedStore(runtime.Options.StateDirectory).Read(set.Id)));
+                NotFetched: new NotFetchedStore(runtime.Options.StateDirectory).Read(set.Id),
+                LeavesOnlineOnly: set.LeaveOnlineOnly ? true : null));
         }
 
         // From the parsed window, never from the presence of the text: a window

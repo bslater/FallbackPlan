@@ -46,7 +46,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// (ADR-0194 Amendment 1, FR-RST-004). A run whose every failure is an
 /// online-only file that kept its version before is behind, not partial; one
 /// that failed a file new to the set, or a file on the device, is not
-/// (ADR-0193 Amendment 1, FR-SNP-014).
+/// (ADR-0193 Amendment 1, FR-SNP-014). A set that leaves its online-only
+/// files to their cloud provider fetches none: one new or changed is left out
+/// of the snapshot and counted, and fails nothing, while one unchanged keeps
+/// the version backed up, and one only moved is still taken without a fetch
+/// (ADR-0195, FR-SNP-015).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -605,6 +609,74 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         var unkept = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(After(source, 0xD4, 0xC3, now: 1_722_700_000_003), CancellationToken.None);
         Assert.IsFalse(unkept.Behind, "a file new to the set is in no backup");
+    }
+
+    [TestMethod]
+    public async Task ASetThatLeavesThem_FetchesNone_LeavesOutTheNewAndTheChanged_KeepsTheUnchanged_AndFailsNothing()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+        Online(source, "docs/kept.bin", 2);
+        var local = source.AddFile("docs/local.bin", Deterministic(4_000, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Assert.AreEqual(0, first.LeftOnlineOnly, "a set that fetches them leaves none");
+        var before = first.Files.ToDictionary(file => file.RelativePath);
+
+        Change(doc, 5);
+        var added = Online(source, "docs/new.bin", 3);
+        Change(local, 8);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001) with { LeaveOnlineOnly = true }, CancellationToken.None);
+
+        Assert.AreEqual(1, doc.OpenAttempts, "the changed one was not fetched again");
+        Assert.AreEqual(0, added.OpenAttempts, "nor was the new one");
+        Assert.AreEqual(2, second.LeftOnlineOnly);
+        Assert.IsEmpty(second.Failures, "a file left is no failure");
+        Assert.IsNull(second.ErrorManifestObjectId);
+        Assert.IsNull(second.NotFetched);
+        Assert.IsFalse(second.Behind);
+
+        var after = second.Files.ToDictionary(file => file.RelativePath);
+        Assert.IsFalse(after.ContainsKey("docs/doc.bin"), "a changed one is left out, its version before in the snapshot before");
+        Assert.IsFalse(after.ContainsKey("docs/new.bin"));
+        Assert.IsNull(catalogue.LookupPath(Snapshot(0xB2), "docs/doc.bin"));
+        Assert.AreEqual(before["docs/kept.bin"].ObjectId, after["docs/kept.bin"].ObjectId, "an unchanged one keeps the version backed up");
+        Assert.IsFalse(after["docs/local.bin"].Reused, "a file on the device is taken as ever");
+    }
+
+    [TestMethod]
+    public async Task ASetThatLeavesThem_StillTakesOneOnlyMoved_WithoutAFetch()
+    {
+        var source = new FakeFileSystemSource();
+        var original = source.AddFile("old/doc.bin", Deterministic(4_000, 1), fileId: 500);
+        original.OnlineOnly = true;
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.Remove("old/doc.bin");
+        var moved = source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "new/doc.bin", Content = original.Content, Identity = original.Identity,
+            Metadata = original.Metadata, OnlineOnly = true,
+        });
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001) with { LeaveOnlineOnly = true }, CancellationToken.None);
+
+        Assert.AreEqual(0, moved.OpenAttempts, "its content is the version before's");
+        Assert.AreEqual(0, second.LeftOnlineOnly);
+        Assert.AreEqual("new/doc.bin", Assert.ContainsSingle(second.Files).RelativePath);
     }
 
     [TestMethod]

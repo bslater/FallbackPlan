@@ -1448,6 +1448,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
         IReadOnlyList<ScanRoot> roots;
         IReadOnlyList<string> include, exclude;
         byte[] backupSetId;
+        var leaveOnlineOnly = false;
 
         if (request.SetName is { } setName)
         {
@@ -1458,6 +1459,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             include = set.IncludeRules;
             exclude = set.ExcludeRules;
             backupSetId = Convert.FromHexString(set.Id);
+            leaveOnlineOnly = set.LeaveOnlineOnly;
         }
         else
         {
@@ -1513,6 +1515,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
                 SnapshotId = snapshotId,
                 ParentSnapshots = prior is null ? [] : [prior.SnapshotId],
                 PriorSnapshotId = prior?.SnapshotId,
+                LeaveOnlineOnly = leaveOnlineOnly,
                 NowUnixMilliseconds = now,
                 Clock = static () => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 DeclaredMaxDurationMs = 3_600_000,
@@ -1543,6 +1546,15 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
         if (prior is not null)
         {
             report.Add($"incremental    against {Hex(prior.SnapshotId)}");
+        }
+
+        // A set that leaves its online-only files to their provider is told
+        // how many its backup left (ADR-0195); none of them is a failure.
+        if (published.LeftOnlineOnly > 0)
+        {
+            report.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"left           {published.LeftOnlineOnly} online-only file(s) to their cloud provider, as the set asks"));
         }
 
         // A backup whose every failure kept the version backed up before is

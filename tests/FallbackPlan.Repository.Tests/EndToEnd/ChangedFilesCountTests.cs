@@ -19,7 +19,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// backup must fetch from their provider are counted apart, with their bytes:
 /// one new or whose content changed, whether found at its path or moved, and
 /// not one changed only in its metadata or moved unchanged (ADR-0192
-/// Amendment 2).
+/// Amendment 2). For a set that leaves its online-only files to their cloud
+/// provider, none it will leave is counted, and none is to fetch (ADR-0195,
+/// FR-SNP-015).
 /// </summary>
 /// <remarks>
 /// The source is a stand-in, so this runs on every platform.
@@ -154,6 +156,29 @@ public sealed class ChangedFilesCountTests : ArchiveTestHarness
     [TestMethod]
     public async Task OnlineOnlyFilesNewOrChanged_AreCountedToFetch_WithTheirBytes()
     {
+        var count = await CountOnlineOnlyChangesAsync(leaveOnlineOnly: false);
+
+        // Fetched: the one changed (410 bytes), the one new (50), and the one
+        // moved and changed (260). Not the file on the device, nor the ones
+        // whose content is the version before's.
+        Assert.AreEqual(
+            new ChangedFileCount(New: 1, Updated: 2, MetadataOnly: 1, Moved: 2) { ToFetch = 3, ToFetchBytes = 720 },
+            count);
+    }
+
+    [TestMethod]
+    public async Task ForASetThatLeavesOnlineOnlyFiles_NoneItWillLeaveIsCounted_AndNoneIsToFetch()
+    {
+        var count = await CountOnlineOnlyChangesAsync(leaveOnlineOnly: true);
+
+        // Taken: the file on the device, and the online-only ones changed only
+        // in their metadata or moved unchanged, which need no fetch. Left: the
+        // one changed, the one new, and the one moved and changed.
+        Assert.AreEqual(new ChangedFileCount(New: 0, Updated: 1, MetadataOnly: 1, Moved: 1), count);
+    }
+
+    private async Task<ChangedFileCount> CountOnlineOnlyChangesAsync(bool leaveOnlineOnly)
+    {
         var source = new FakeFileSystemSource();
         var changed = source.AddFile("docs/changed.bin", Bytes(400, 1));
         changed.OnlineOnly = true;
@@ -184,14 +209,7 @@ public sealed class ChangedFilesCountTests : ArchiveTestHarness
         });
         Change(local, 9);
         source.AddFile("docs/new.bin", Bytes(50, 7)).OnlineOnly = true;
-        var count = await CountAsync(source, catalogue, baseline, ["docs"]);
-
-        // Fetched: the one changed (410 bytes), the one new (50), and the one
-        // moved and changed (260). Not the file on the device, nor the ones
-        // whose content is the version before's.
-        Assert.AreEqual(
-            new ChangedFileCount(New: 1, Updated: 2, MetadataOnly: 1, Moved: 2) { ToFetch = 3, ToFetchBytes = 720 },
-            count);
+        return await CountAsync(source, catalogue, baseline, ["docs"], leaveOnlineOnly: leaveOnlineOnly);
     }
 
     private static Fixture Tree()
@@ -215,9 +233,10 @@ public sealed class ChangedFilesCountTests : ArchiveTestHarness
         ReadOnlyMemory<byte> baseline,
         IReadOnlyCollection<string> changed,
         IReadOnlyList<string>? excludes = null,
-        IReadOnlyList<string>? includes = null) =>
+        IReadOnlyList<string>? includes = null,
+        bool leaveOnlineOnly = false) =>
         SourceComparer.CountChangedAsync(
-            source, [new ScanRoot("/")], includes ?? [], excludes ?? [], catalogue, baseline, changed, CancellationToken.None);
+            source, [new ScanRoot("/")], includes ?? [], excludes ?? [], catalogue, baseline, changed, leaveOnlineOnly, CancellationToken.None);
 
     private CatalogueDb OpenCatalogue() =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);

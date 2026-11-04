@@ -246,6 +246,11 @@ public static class SourceComparer
     /// <param name="catalogue">The set's catalogue, opened read-side; the caller owns it.</param>
     /// <param name="baselineSnapshotId">The snapshot the next backup will compare with.</param>
     /// <param name="changedFolders">The folders named changed since it, as the snapshot spells them.</param>
+    /// <param name="leaveOnlineOnly">
+    /// Whether the set leaves its online-only files to their provider
+    /// (ADR-0195): an online-only file the backup would fetch it leaves, and
+    /// is not counted.
+    /// </param>
     /// <param name="cancellationToken">Cancels the walk.</param>
     /// <returns>The files the next backup will write.</returns>
     /// <exception cref="ArgumentException">The rules are invalid — the same refusal a writer gives them.</exception>
@@ -257,6 +262,7 @@ public static class SourceComparer
         CatalogueDb catalogue,
         ReadOnlyMemory<byte> baselineSnapshotId,
         IReadOnlyCollection<string> changedFolders,
+        bool leaveOnlineOnly,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(source);
@@ -313,10 +319,19 @@ public static class SourceComparer
                 continue;
             }
 
+            // A file the backup would fetch, a set that leaves its online-only
+            // files to their provider leaves, and the backup writes nothing
+            // for it (ADR-0195).
+            var left = leaveOnlineOnly && entry.OnlineOnly;
             if (catalogue.LookupPath(baseline, entry.RelativePath) is { } prior)
             {
                 if (!ChangeDetection.IsContentUnchanged(entry, prior))
                 {
+                    if (left)
+                    {
+                        continue;
+                    }
+
                     updated++;
                     Fetches(entry);
                 }
@@ -329,13 +344,19 @@ public static class SourceComparer
             else if (entry.Identity is { } identity
                 && catalogue.LookupIdentity(baseline, identity.Device, identity.FileId) is { } before)
             {
+                var changed = !ChangeDetection.IsContentUnchanged(entry, before);
+                if (changed && left)
+                {
+                    continue;
+                }
+
                 moved++;
-                if (!ChangeDetection.IsContentUnchanged(entry, before))
+                if (changed)
                 {
                     Fetches(entry);
                 }
             }
-            else
+            else if (!left)
             {
                 added++;
                 Fetches(entry);

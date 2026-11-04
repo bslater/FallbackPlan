@@ -98,6 +98,15 @@ public sealed record SnapshotJob
     /// </summary>
     public IReadOnlyCollection<string>? ChangedFolders { get; init; }
 
+    /// <summary>
+    /// Whether the set leaves its online-only files to their cloud provider
+    /// (ADR-0195): one new, or whose content changed, is not fetched, and is
+    /// left out of the snapshot without a failure. One unchanged, only moved,
+    /// or changed only in its metadata is taken as ever, since none of those
+    /// is fetched.
+    /// </summary>
+    public bool LeaveOnlineOnly { get; init; }
+
     /// <summary>Wall-clock now, epoch milliseconds.</summary>
     public required ulong NowUnixMilliseconds { get; init; }
 
@@ -202,6 +211,13 @@ public sealed record PublishedTreeSnapshot(
     /// counts match only where no other file failed.
     /// </remarks>
     public bool Behind => NotFetched is { KeptEarlier: > 0 } notFetched && notFetched.KeptEarlier == Failures.Count;
+
+    /// <summary>
+    /// How many online-only files the run left to their cloud provider, new or
+    /// changed, as its set asks (ADR-0195): none is in the snapshot, and none
+    /// is a failure.
+    /// </summary>
+    public int LeftOnlineOnly { get; init; }
 }
 
 /// <summary>
@@ -647,6 +663,7 @@ public sealed partial class PublicationOrchestrator
             {
                 FoldersReused = reuse?.Reused ?? 0,
                 NotFetched = walker.NotFetched,
+                LeftOnlineOnly = walker.LeftOnlineOnly,
             };
         }
     }
@@ -790,6 +807,7 @@ public sealed partial class PublicationOrchestrator
 
         private int _notFetched;
         private int _keptEarlier;
+        private int _leftOnlineOnly;
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
@@ -804,6 +822,9 @@ public sealed partial class PublicationOrchestrator
             _notDelivered is { } notDelivered
                 ? new NotFetchedFiles(_notFetched, _keptEarlier, notDelivered.Path, notDelivered.Reason)
                 : null;
+
+        /// <summary>How many online-only files this walk left to their provider (ADR-0195).</summary>
+        public int LeftOnlineOnly => _leftOnlineOnly;
 
         /// <summary>Every published directory's head tree and what it holds, the root's included (ADR-0151).</summary>
         public IReadOnlyList<(ObjectId TreeId, IEnumerable<CatalogueFolderEntry> Entries)> Folders => _folders;
@@ -1047,6 +1068,17 @@ public sealed partial class PublicationOrchestrator
                 await PublishInheritedAsync(entry, prior, inherited, metadataDigest, cancellationToken)
                     .ConfigureAwait(false);
                 session.BackedUp.RestAlreadyStored();
+                return;
+            }
+
+            // A set that leaves its online-only files to their provider asks
+            // it for none (ADR-0195). The file is not in this snapshot, and
+            // is no failure: the set chose it.
+            if (entry.OnlineOnly && job.LeaveOnlineOnly)
+            {
+                EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "left"));
+                Log.OnlineOnlyLeft(logger, new LogPath(entry.RelativePath));
+                _leftOnlineOnly++;
                 return;
             }
 
