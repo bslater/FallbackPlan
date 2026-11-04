@@ -818,8 +818,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// gains `last_full_walk_at`. Additive: a pre-1.82 service walks every
     /// set in full daily and says nothing of when it last did.
     /// </para>
+    /// <para>
+    /// 1.83 says how many changed files a set's next backup will take
+    /// (FR-SNP-013, ADR-0192). A set's status gains `pending_changes`:
+    /// `files`, counted over the folders the change journal named since the
+    /// set's last backup, or `walks_in_full_because` where the next backup will
+    /// walk every folder, and `counted_at`. Additive: a pre-1.83 service counts
+    /// nothing, and a set whose backups ask no journal has none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 82);
+    public static ContractVersion Current { get; } = new(1, 83);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

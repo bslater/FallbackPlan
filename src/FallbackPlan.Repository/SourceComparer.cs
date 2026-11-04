@@ -39,6 +39,20 @@ public sealed record SourceComparison(
     SourceChangeBucket NoLongerIncluded);
 
 /// <summary>
+/// The files a backup told which folders changed will write (FR-SNP-013,
+/// ADR-0192): new, changed, changed only in their metadata, or moved.
+/// </summary>
+/// <param name="New">Files the baseline snapshot does not hold.</param>
+/// <param name="Updated">Files whose content changed.</param>
+/// <param name="MetadataOnly">Files whose bytes are unchanged but whose metadata moved.</param>
+/// <param name="Moved">Files found at another path by stable identity.</param>
+public sealed record ChangedFileCount(long New, long Updated, long MetadataOnly, long Moved)
+{
+    /// <summary>Every file the backup will write.</summary>
+    public long Total => New + Updated + MetadataOnly + Moved;
+}
+
+/// <summary>
 /// Walks the live source under a set's rules and diffs it against a snapshot
 /// — a dry scan: no content is opened, nothing is written or published
 /// (FR-SVC-009). The classification reuses <see cref="ChangeDetection"/>'s
@@ -74,23 +88,7 @@ public static class SourceComparer
         ThrowHelper.ThrowIfNull(includeRules);
         ThrowHelper.ThrowIfNull(excludeRules);
 
-        // Probe first: rule case-sensitivity is the filesystem's, exactly as
-        // publication compiles them (specification 06 §7.1: writers MUST
-        // refuse invalid rules, and a preview must refuse what a writer
-        // would). Several roots intersect conservatively, as publication does.
-        var filesystem = roots.Count == 1
-            ? source.Probe(roots[0].Path)
-            : SourceFilesystemIntersection.Intersect([.. roots.Select(root => source.Probe(root.Path))]);
-        if (!PathRuleSet.TryCreate(
-                includeRules, excludeRules, caseSensitive: filesystem.CaseSensitive,
-                out var rules, out var ruleDefects))
-        {
-            throw new ArgumentException(
-                "The capture rules are invalid and a writer MUST refuse them (specification 06 §7.1): " +
-                string.Join("; ", ruleDefects),
-                nameof(includeRules));
-        }
-
+        var (filesystem, rules) = Compile(source, roots, includeRules, excludeRules);
         var limit = Math.Max(0, sampleLimit);
         var comparer = filesystem.CaseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
         var byPath = new Dictionary<string, CatalogueTreeEntry>(comparer);
@@ -217,6 +215,126 @@ public static class SourceComparer
 
             added.Add(entry.RelativePath);
         }
+    }
+
+    /// <summary>
+    /// Counts the files the next backup will write, walking only what that
+    /// backup will (ADR-0192): each folder in <paramref name="changedFolders"/>,
+    /// as the snapshot spells it, the folders above it, and any folder the
+    /// baseline does not hold; every other folder is passed over unopened, as
+    /// folder reuse passes over it (ADR-0186). Each file is judged by
+    /// <see cref="ChangeDetection"/> against the baseline's version at its
+    /// path, or at its identity, as publication finds a prior version. No
+    /// content is opened.
+    /// </summary>
+    /// <param name="source">The filesystem to walk.</param>
+    /// <param name="roots">The capture roots.</param>
+    /// <param name="includeRules">rules-v1 include rules.</param>
+    /// <param name="excludeRules">rules-v1 exclude rules.</param>
+    /// <param name="catalogue">The set's catalogue, opened read-side; the caller owns it.</param>
+    /// <param name="baselineSnapshotId">The snapshot the next backup will compare with.</param>
+    /// <param name="changedFolders">The folders named changed since it, as the snapshot spells them.</param>
+    /// <param name="cancellationToken">Cancels the walk.</param>
+    /// <returns>The files the next backup will write.</returns>
+    /// <exception cref="ArgumentException">The rules are invalid — the same refusal a writer gives them.</exception>
+    public static async ValueTask<ChangedFileCount> CountChangedAsync(
+        IFileSystemSource source,
+        IReadOnlyList<ScanRoot> roots,
+        IReadOnlyList<string> includeRules,
+        IReadOnlyList<string> excludeRules,
+        CatalogueDb catalogue,
+        ReadOnlyMemory<byte> baselineSnapshotId,
+        IReadOnlyCollection<string> changedFolders,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(source);
+        ThrowHelper.ThrowIfNull(roots);
+        ThrowHelper.ThrowIfZeroOrNegative(roots.Count);
+        ThrowHelper.ThrowIfNull(includeRules);
+        ThrowHelper.ThrowIfNull(excludeRules);
+        ThrowHelper.ThrowIfNull(catalogue);
+        ThrowHelper.ThrowIfNull(changedFolders);
+
+        var (_, rules) = Compile(source, roots, includeRules, excludeRules);
+        var baseline = baselineSnapshotId.ToArray();
+
+        // A folder named, and every folder above it, as folder reuse walks.
+        var walked = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var path in changedFolders)
+        {
+            var at = path;
+            while (walked.Add(at) && at.Length > 0)
+            {
+                var slash = at.LastIndexOf('/');
+                at = slash < 0 ? string.Empty : at[..slash];
+            }
+        }
+
+        long added = 0;
+        long updated = 0;
+        long metadataOnly = 0;
+        long moved = 0;
+        var options = new ScanOptions
+        {
+            Rules = rules,
+            Unchanged = path => !walked.Contains(path)
+                && catalogue.LookupPath(baseline, path) is { EntryKind: EntryKind.DirectoryPlaceholder },
+        };
+        await foreach (var scanEvent in MultiRootScan.ScanAsync(source, roots, options, cancellationToken).ConfigureAwait(false))
+        {
+            if (scanEvent is not ScanEvent.Leaf { Entry: var entry }
+                || (rules is { } compiled && !compiled.IsCaptured(entry.RelativePath.Normalize(NormalizationForm.FormC))))
+            {
+                continue;
+            }
+
+            if (catalogue.LookupPath(baseline, entry.RelativePath) is { } prior)
+            {
+                if (!ChangeDetection.IsContentUnchanged(entry, prior))
+                {
+                    updated++;
+                }
+                else if (!ChangeDetection.IsMetadataUnchanged(
+                    FileVersionManifestCodec.MetadataDigest(entry.Metadata, MetadataRules.FileFlagsOf(entry.Diagnostics)), prior))
+                {
+                    metadataOnly++;
+                }
+            }
+            else if (entry.Identity is { } identity
+                && catalogue.LookupIdentity(baseline, identity.Device, identity.FileId) is not null)
+            {
+                moved++;
+            }
+            else
+            {
+                added++;
+            }
+        }
+
+        return new ChangedFileCount(added, updated, metadataOnly, moved);
+    }
+
+    // Probe first: rule case-sensitivity is the filesystem's, exactly as
+    // publication compiles them (specification 06 §7.1: writers MUST refuse
+    // invalid rules, and a preview must refuse what a writer would). Several
+    // roots intersect conservatively, as publication does.
+    private static (SourceFilesystemInfo Filesystem, PathRuleSet? Rules) Compile(
+        IFileSystemSource source, IReadOnlyList<ScanRoot> roots, IReadOnlyList<string> includeRules, IReadOnlyList<string> excludeRules)
+    {
+        var filesystem = roots.Count == 1
+            ? source.Probe(roots[0].Path)
+            : SourceFilesystemIntersection.Intersect([.. roots.Select(root => source.Probe(root.Path))]);
+        if (!PathRuleSet.TryCreate(
+                includeRules, excludeRules, caseSensitive: filesystem.CaseSensitive,
+                out var rules, out var ruleDefects))
+        {
+            throw new ArgumentException(
+                "The capture rules are invalid and a writer MUST refuse them (specification 06 §7.1): " +
+                string.Join("; ", ruleDefects),
+                nameof(includeRules));
+        }
+
+        return (filesystem, rules);
     }
 
     /// <summary>Accumulates one bucket: the exact count and the first paths up to the cap.</summary>

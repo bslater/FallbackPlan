@@ -902,6 +902,30 @@ function fullWalkClause(set) {
   return ` · <span title="Every folder last looked at ${esc(fmtWhen(set.lastFullWalkAt))}">walked in full ${esc(rel(set.lastFullWalkAt))}</span>`;
 }
 
+// How many changed files the set's next backup will take, as the service
+// last counted them over the folders the change journal named since its last
+// backup (contract 1.83): or that it walks in full, and why on hover. Nothing
+// for a set whose backups ask no journal, before the first count, or from a
+// service older than 1.83 — none of those is "nothing changed".
+function pendingClause(set) {
+  const p = set.pendingChanges;
+  if (p == null) return "";
+  if (p.files == null) {
+    return ` · <span data-pending title="${esc(`The next backup walks in full: ${p.walksInFullBecause}.`)}">next backup walks in full</span>`;
+  }
+  const counted = `Counted ${fmtWhen(p.countedAt)}`;
+  if (p.files === 0) return ` · <span data-pending title="${esc(counted)}">nothing changed since the last backup</span>`;
+  const files = p.files === 1 ? "1 changed file will" : `${fmtCount(p.files)} changed files will`;
+  return ` · <span data-pending title="${esc(counted)}">${esc(files)} be backed up next</span>`;
+}
+
+// The same count at a glance, on the card itself, only where any are waiting.
+function pendingChip(set) {
+  const p = set.pendingChanges;
+  if (p == null || p.files == null || p.files === 0) return "";
+  return `<span class="detail" title="Changed files the next backup will take">${esc(fmtCount(p.files))} changed</span>`;
+}
+
 // The ring: an SVG arc whose offset is set from script, because the CSP
 // forbids inline style attributes — the same reason the meters' widths are.
 // The unknown state draws the track alone rather than a zero-length arc, so
@@ -1051,6 +1075,7 @@ function renderSetCard(set) {
   return `<details class="set" data-set="${esc(set.setName)}" ${S.openSets.has(set.setName) ? "open" : ""}>
     <summary>
       <b>${esc(set.setName)}</b>
+      ${pendingChip(set)}
       ${holdings.length ? `<span class="set-ring" title="Files backed up across all destinations">${ring(setPercent)}</span>` : ""}
       ${running
         ? `${badge({ cls: "accent", icon: "◐" }, lm.finishing ? "Finishing" : "Backing up")}<span class="set-live-mini"><span class="meter ${lm.determinate ? "" : "indeterminate"}"><i data-w="${lm.ratio}"></i></span><span class="detail">${lm.determinate ? lm.ratio + "%" : "…"}</span></span>`
@@ -1058,7 +1083,7 @@ function renderSetCard(set) {
     </summary>
     <div class="set-body">
       <p class="sub">${badge(meta, meta.label)} ${esc(meta.blurb)}</p>
-      <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}${fullWalkClause(set)}
+      <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}${pendingClause(set)}${fullWalkClause(set)}
          ${verification}</p>
       ${staging ? `<p class="sub"><span class="detail">Staging archive</span> ${staging}</p>` : ""}
       ${destinations}
