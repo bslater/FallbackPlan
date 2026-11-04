@@ -1,4 +1,6 @@
+using System.Globalization;
 using FallbackPlan.Agent;
+using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Filesystem;
 
@@ -246,6 +248,119 @@ public sealed class ChangeJournalRunTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ASetWalkedInFullEveryFewHours_WalksInFullOnItsOwnSchedule()
+    {
+        WriteTree();
+        WalkInFull("every 2h");
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+
+        var hinted = await BackUpAsync(runtime, start.AddHours(1));
+        Assert.HasCount(1, _journal.Asked);
+        Assert.AreEqual("0 file(s), 0 unchanged, 2 folder(s) not walked", hinted.Detail);
+
+        var due = await BackUpAsync(runtime, start.AddHours(2));
+        Assert.HasCount(1, _journal.Asked, "two hours after the last full walk, not a day");
+        Assert.AreEqual("2 file(s), 2 unchanged", due.Detail);
+    }
+
+    [TestMethod]
+    public async Task ASetWalkedInFullDailyAtAnHour_WalksInFullAtTheFirstBackupAfterIt()
+    {
+        WriteTree();
+        var start = DateTimeOffset.Now;
+        WalkInFull(string.Create(CultureInfo.InvariantCulture, $"daily at {start.AddHours(2):HH:mm}"));
+        await using var runtime = await StartAsync();
+        await BackUpAsync(runtime, start);
+
+        var before = await BackUpAsync(runtime, start.AddHours(1));
+        Assert.HasCount(1, _journal.Asked);
+        Assert.AreEqual("0 file(s), 0 unchanged, 2 folder(s) not walked", before.Detail);
+
+        // The full walk starts no backup of its own: the set's next one,
+        // whenever it comes after the hour, is the one that walks in full.
+        var after = await BackUpAsync(runtime, start.AddHours(3));
+        Assert.HasCount(1, _journal.Asked);
+        Assert.AreEqual("2 file(s), 2 unchanged", after.Detail);
+    }
+
+    [TestMethod]
+    public async Task AFullWalkThatDoesNotRead_WalksInFullEveryTime()
+    {
+        // Not refused at load (ADR-0035 §1's blast radius): a typo in one
+        // set's file must not stop it backing up, and every doubt walks in full.
+        WriteTree();
+        WalkInFull("fortnightly");
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+
+        var second = await BackUpAsync(runtime, start.AddHours(1));
+
+        Assert.IsEmpty(_journal.Asked);
+        Assert.AreEqual("2 file(s), 2 unchanged", second.Detail);
+    }
+
+    [TestMethod]
+    public async Task TheStatus_SaysWhenTheSetWasLastWalkedInFull()
+    {
+        WriteTree();
+        await using var runtime = await StartAsync();
+        Assert.IsNull((await StatusAsync(runtime)).LastFullWalkAt, "a set never backed up was never walked in full");
+
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        Assert.AreEqual(
+            (ulong)start.ToUnixTimeMilliseconds(), (await StatusAsync(runtime)).LastFullWalkAt,
+            "the first backup walked in full; the second walked only what the journal named");
+    }
+
+    [TestMethod]
+    public async Task TheStatus_OfASetWhoseBackupsAskNoJournal_SaysNothingOfAFullWalk()
+    {
+        // Every backup of such a set walks in full, and the set's last
+        // completed backup already says when that was.
+        WriteTree();
+        _journal.Keeps = false;
+        await using var runtime = await StartAsync();
+        await BackUpAsync(runtime, DateTimeOffset.Now);
+
+        Assert.IsNull((await StatusAsync(runtime)).LastFullWalkAt);
+    }
+
+    [TestMethod]
+    public void FullWalkDue_ByDefault_IsADayAfterTheLastFullWalk()
+    {
+        var last = new DateTimeOffset(2026, 11, 3, 10, 0, 0, TimeSpan.Zero);
+
+        Assert.IsFalse(ChangeHints.FullWalkDue(null, Ms(last), last.AddHours(23)));
+        Assert.IsTrue(ChangeHints.FullWalkDue(null, Ms(last), last.AddDays(1)));
+    }
+
+    [TestMethod]
+    public void FullWalkDue_OnASchedule_IsWhenTheScheduleSays()
+    {
+        var last = new DateTimeOffset(2026, 11, 3, 10, 0, 0, TimeSpan.Zero);
+
+        Assert.IsFalse(ChangeHints.FullWalkDue("every 7d", Ms(last), last.AddDays(6)));
+        Assert.IsTrue(ChangeHints.FullWalkDue("every 7d", Ms(last), last.AddDays(7)));
+        Assert.IsTrue(ChangeHints.FullWalkDue("every 30m", Ms(last), last.AddMinutes(30)));
+    }
+
+    [TestMethod]
+    public void FullWalkDue_WhereItCannotBeTold_IsDue()
+    {
+        var last = new DateTimeOffset(2026, 11, 3, 10, 0, 0, TimeSpan.Zero);
+
+        Assert.IsTrue(ChangeHints.FullWalkDue("fortnightly", Ms(last), last.AddMinutes(1)), "a schedule that does not read");
+        Assert.IsTrue(ChangeHints.FullWalkDue("every 4000000000d", Ms(last), last.AddMinutes(1)), "an interval too large to mean anything");
+        Assert.IsTrue(ChangeHints.FullWalkDue(null, Ms(last), last.AddMinutes(-1)), "a clock that went back");
+    }
+
+    [TestMethod]
     public void SnapshotPath_InASetOfOneFolder_IsThePathBelowIt()
     {
         ScanRoot[] roots = [new ScanRoot(@"C:\Data")];
@@ -261,6 +376,25 @@ public sealed class ChangeJournalRunTests : IDisposable
 
         Assert.AreEqual("Photos/2026/june", ChangeHints.SnapshotPath(roots, new ChangedFolder(@"D:\Pictures", "2026/june")));
         Assert.AreEqual("Documents", ChangeHints.SnapshotPath(roots, new ChangedFolder(@"C:\Data", string.Empty)));
+    }
+
+    private static ulong Ms(DateTimeOffset at) => (ulong)at.ToUnixTimeMilliseconds();
+
+    private void WalkInFull(string schedule)
+    {
+        var path = Path.Combine(_harness.StateDirectory, "config.json");
+        var configuration = ClientConfiguration.Load(path);
+        (configuration with
+        {
+            BackupSets = [configuration.BackupSets.Single() with { FullWalk = schedule }],
+        }).Save(path);
+    }
+
+    private async Task<BackupSetStatusDescriptor> StatusAsync(ServiceRuntime runtime)
+    {
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<StatusResult>(await handler.ExecuteAsync(new GetStatusCommand(), Timeout), out var status);
+        return status.Sets.Single();
     }
 
     private void WriteTree()

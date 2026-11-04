@@ -8,7 +8,9 @@ namespace FallbackPlan.Application.Tests;
 /// destination references with optional retention overrides, and validation
 /// that refuses what fan-out could not serve (FR-DEST-001/005/006, FR-GC-010,
 /// ADR-0034 §5). The v1 tests here pin the migration refusal, not compatibility
-/// — pre-1.0 the old schema is rejected with directions, never guessed at.
+/// — pre-1.0 the old schema is rejected with directions, never guessed at. A
+/// set's full walk (FR-SNP-012) is written under its own name, and a file that
+/// says nothing of it leaves it daily.
 /// </summary>
 [TestClass]
 public sealed class ClientConfigurationTests
@@ -81,6 +83,30 @@ public sealed class ClientConfigurationTests
         var set = loaded.BackupSets.Single();
         Assert.AreEqual(5, set.Priority);
         Assert.AreEqual(2, set.Destinations.Single().Priority);
+    }
+
+    [TestMethod]
+    public void SaveThenLoad_TheFullWalk_RoundTripsUnderItsName_AndIsNotWrittenWhereUnset()
+    {
+        // ADR-0189: a set says when it is walked in full in the grammar its
+        // schedule uses; a file that says nothing is walked in full daily.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("vault")],
+            BackupSets =
+            [
+                Set("docs", Ref("vault")) with { FullWalk = "daily at 02:00" },
+                Set("photos", Ref("vault")) with { Id = new string('b', 32) },
+            ],
+        }.Save(ConfigPath);
+
+        var text = File.ReadAllText(ConfigPath);
+        Assert.Contains("\"full_walk\": \"daily at 02:00\"", text, StringComparison.Ordinal);
+        Assert.AreEqual(1, text.Split("full_walk").Length - 1, "a set that sets none writes none");
+        var loaded = ClientConfiguration.Load(ConfigPath);
+        Assert.AreEqual("daily at 02:00", loaded.FindSet("docs")!.FullWalk);
+        Assert.IsNull(loaded.FindSet("photos")!.FullWalk);
     }
 
     [TestMethod]

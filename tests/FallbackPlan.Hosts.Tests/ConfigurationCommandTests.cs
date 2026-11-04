@@ -16,7 +16,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// scheduler reads the file.
 /// Establishes FR-DEST-007, FR-DEST-011 and FR-DEST-012 alongside FR-SVC-015,
 /// FR-SVC-020, a destination's half of FR-SVC-021, and the service's half of
-/// FR-GC-014: an edit that cannot see the deleted-file duration keeps it.
+/// FR-GC-014: an edit that cannot see the deleted-file duration keeps it. A
+/// set's full walk (FR-SNP-012) is edited here too: kept where an edit is
+/// silent, cleared back to daily where it speaks empty, refused where it does
+/// not read.
 /// </summary>
 [TestClass]
 public sealed class ConfigurationCommandTests : IDisposable
@@ -939,6 +942,61 @@ public sealed class ConfigurationCommandTests : IDisposable
                 _harness.DocsSetId, "docs", _harness.SourceRoot, "every 2h", [], [], ["vault"])),
             _timeout.Token));
         Assert.AreEqual(5, ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.Priority);
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_TheFullWalk_IsKeptWhereUnspoken_AndSpeakingEmptyGoesBackToDaily()
+    {
+        // Contract 1.82 (ADR-0189): a client before it cannot see the full
+        // walk, so an edit that says nothing of it changes nothing.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 1h", [], [], ["vault"], FullWalk: " daily at 02:00 ")),
+            _timeout.Token));
+        Assert.AreEqual("daily at 02:00", ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.FullWalk);
+        Assert.IsInstanceOfType<BackupSetsResult>(
+            await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var sets);
+        Assert.AreEqual("daily at 02:00", Assert.ContainsSingle(sets.Sets).FullWalk);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 2h", [], [], ["vault"])),
+            _timeout.Token));
+        Assert.AreEqual("daily at 02:00", ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.FullWalk);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 2h", [], [], ["vault"], FullWalk: "")),
+            _timeout.Token));
+        Assert.IsNull(ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.FullWalk, "empty is the default, a day");
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_AFullWalkThatDoesNotRead_IsRefusedNamingTheDefect()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        var before = await File.ReadAllTextAsync(ConfigurationPath, _timeout.Token);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var refused = await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 1h", [], [], ["vault"], FullWalk: "fortnightly")),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(refused, out var error);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("full walk", error.Message, StringComparison.Ordinal);
+        Assert.Contains("fortnightly", error.Message, StringComparison.Ordinal);
+        Assert.AreEqual(before, await File.ReadAllTextAsync(ConfigurationPath, _timeout.Token));
     }
 
     [TestMethod]
