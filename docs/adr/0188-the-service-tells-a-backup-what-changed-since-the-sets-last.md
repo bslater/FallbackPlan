@@ -65,6 +65,8 @@ A backup that reused folders says so in its outcome: `… file(s), … unchanged
 
   > **2026-11 ([ADR-0190](0190-on-linux-the-service-watches-a-sets-folders-itself.md)).** Linux has one now: the service's own watch of a set's folders, asked as this record asks the volume's journal. A backup after the service starts walks in full there, since the watch lasts only as long as the process.
 
+  > **2026-11 ([ADR-0191](0191-on-macos-the-service-asks-the-volumes-event-history.md)).** macOS has one too: the volume's own event history, which outlasts the service as the journal does on Windows.
+
 ## What this does not do
 
 - **Let a person set how often a set is walked in full.** The day is fixed. A setting for each set, in the console and on the command line, and the last full walk shown in status, are the next record.
@@ -74,6 +76,8 @@ A backup that reused folders says so in its outcome: `… file(s), … unchanged
 - **Name changes on macOS or Linux.** The owner has asked for them once Windows works.
 
   > **2026-11 ([ADR-0190](0190-on-linux-the-service-watches-a-sets-folders-itself.md)).** Linux names them. macOS is next.
+
+  > **2026-11 ([ADR-0191](0191-on-macos-the-service-asks-the-volumes-event-history.md)).** macOS names them from the volume's event history.
 - **Let go of a deleted set's kept places.** The file stays until the set's id is used again, and it names a backup no set holds.
 
 ## Alternatives considered
@@ -89,3 +93,4 @@ A backup that reused folders says so in its outcome: `… file(s), … unchanged
 | 2026-11 | Accepted | Built in one slice, tests first, joining folder reuse to the change journal on Windows. |
 | 2026-11 | Accepted | Amended by [ADR-0189](0189-a-sets-full-walk-is-a-setting-of-the-set.md): the day is the default full walk, and a set may name its own in its schedule's grammar. |
 | 2026-11 | Accepted | Noted by [ADR-0190](0190-on-linux-the-service-watches-a-sets-folders-itself.md): on Linux the journal asked is the service's own watch of the set's folders. |
+| 2026-11 | Accepted | Noted by [ADR-0191](0191-on-macos-the-service-asks-the-volumes-event-history.md): on macOS the journal asked is the volume's event history. |
