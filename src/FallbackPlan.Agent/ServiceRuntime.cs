@@ -127,12 +127,14 @@ public sealed record ServiceOptions
     /// <summary>
     /// What says which of a set's folders changed between its backups
     /// (ADR-0188): on Windows the volume's change journal, on Linux the
-    /// process's own watch of the sets' folders (ADR-0190), and elsewhere
-    /// none, so every backup walks in full. A test harness gives its own.
+    /// process's own watch of the sets' folders (ADR-0190), on macOS the
+    /// volume's event history (ADR-0191), and elsewhere none, so every backup
+    /// walks in full. A test harness gives its own.
     /// </summary>
     internal IChangeJournal? ChangeJournal { get; init; } =
         OperatingSystem.IsWindows() ? new WindowsChangeJournal()
         : OperatingSystem.IsLinux() ? LinuxChangeJournal.Shared
+        : OperatingSystem.IsMacOS() ? new MacChangeJournal()
         : null;
 
     /// <summary>
