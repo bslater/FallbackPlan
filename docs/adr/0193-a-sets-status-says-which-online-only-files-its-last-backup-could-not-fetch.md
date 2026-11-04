@@ -13,7 +13,7 @@
 - The clients: `Cli/CliApplication` prints a set's `not-fetched:` token; the console's card says it at a glance and in words.
 - The tests:
   - `Repository.Tests/OnlineOnlyCaptureTests` — a run says how many it did not fetch, how many of them kept the version before, and the file that failed and why; one that fetched every one says nothing.
-  - `Hosts.Tests/NotFetchedStatusTests` — through a stand-in source wrapping the real one: the set's status says it, since the first backup that missed some, kept while each after it misses some, and cleared by one that fetches them all.
+  - `Hosts.Tests/NotFetchedStatusTests` — through a stand-in source wrapping the real one: the set's status says it, since the first backup that missed some, kept while each after it misses some, and cleared by one that fetches them all; the command line's status, asked of the running service, prints it on the set's line.
   - `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/StatusRelayNamesTests` — the wire names at 1.84, the console's names, and an older service's silence.
   - `Cli.Tests/StatusNotFetchedTokenTests` — `not-fetched:3`, and nothing where every one was fetched.
   - `Web.DomTests/NotFetchedDomTests` — the card's count at a glance and in words, each kept, none kept, the file and the provider's words on hover, and nothing where every one was fetched.
