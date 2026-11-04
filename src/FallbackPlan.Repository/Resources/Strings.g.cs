@@ -318,4 +318,26 @@ internal static class Strings
     /// </summary>
     internal static string FormatTreeWalkPublisher_OnlineOnlyNotFetched(object? arg0, object? arg1) =>
         string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyNotFetched, arg0, arg1);
+
+    /// <summary>
+    /// {0}; the version backed up earlier, last modified {1}, stands in its place
+    /// </summary>
+    private static string TreeWalkPublisher_EarlierVersionStands => Get(nameof(TreeWalkPublisher_EarlierVersionStands));
+
+    /// <summary>
+    /// {0}; the version backed up earlier, last modified {1}, stands in its place
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_EarlierVersionStands(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_EarlierVersionStands, arg0, arg1);
+
+    /// <summary>
+    /// {0}; the version backed up earlier stands in its place
+    /// </summary>
+    private static string TreeWalkPublisher_EarlierVersionStandsUndated => Get(nameof(TreeWalkPublisher_EarlierVersionStandsUndated));
+
+    /// <summary>
+    /// {0}; the version backed up earlier stands in its place
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_EarlierVersionStandsUndated(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_EarlierVersionStandsUndated, arg0);
 }

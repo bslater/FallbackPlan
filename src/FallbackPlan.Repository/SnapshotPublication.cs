@@ -2,6 +2,7 @@ using Bodu;
 using System.Security.Cryptography;
 using System.Text;
 using System.Diagnostics;
+using System.Globalization;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
@@ -1015,7 +1016,7 @@ public sealed partial class PublicationOrchestrator
                 RecordFailure(
                     entry,
                     CaptureFailureReason.IoError,
-                    Strings.FormatTreeWalkPublisher_OnlineOnlyNotFetched(notDelivered.Path, notDelivered.Reason));
+                    KeepEarlier(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyNotFetched(notDelivered.Path, notDelivered.Reason)));
                 return;
             }
 
@@ -1077,12 +1078,49 @@ public sealed partial class PublicationOrchestrator
                     RecordFailure(
                         entry,
                         CaptureFailureReason.IoError,
-                        Strings.FormatTreeWalkPublisher_OnlineOnlyFetchFailed(exception.Message));
+                        KeepEarlier(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyFetchFailed(exception.Message)));
                     return;
                 }
 
                 RecordFailure(entry, ClassifyFailure(exception), exception.Message);
             }
+        }
+
+        /// <summary>
+        /// The failure of an online-only file the run did not fetch, with the
+        /// version backed up before put in its place where one is at its name
+        /// (ADR-0185 Amendment 3): the newest snapshot then still restores
+        /// it, and retention cannot let the last copy go while its provider
+        /// stays away. The failure is recorded all the same, so the next
+        /// backup walks its folder and asks again; and the version keeps the
+        /// time it was modified, so that backup sees the file changed.
+        /// </summary>
+        /// <remarks>
+        /// One found only under another name keeps nothing: a manifest states
+        /// its own name, and rewriting it here would claim the earlier content
+        /// was modified when this one was.
+        /// </remarks>
+        private string KeepEarlier(ScanEntry entry, CatalogueTreeEntry? prior, string detail)
+        {
+            if (entry.Kind != ScanEntryKind.File
+                || prior is not { EntryKind: EntryKind.File }
+                || !string.Equals(prior.Path, entry.RelativePath, StringComparison.Ordinal))
+            {
+                return detail;
+            }
+
+            _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
+            _files.Add(new PublishedFileVersion(
+                entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
+                prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true,
+                HasAlternateStreams: prior.HasAlternateStreams));
+            session.BackedUp.RestAlreadyStored();
+            return prior.ModifiedAt is { } modified
+                ? Strings.FormatTreeWalkPublisher_EarlierVersionStands(
+                    detail,
+                    DateTimeOffset.FromUnixTimeMilliseconds((long)modified)
+                        .ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture))
+                : Strings.FormatTreeWalkPublisher_EarlierVersionStandsUndated(detail);
         }
 
         /// <summary>

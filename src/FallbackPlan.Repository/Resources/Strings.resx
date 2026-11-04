@@ -154,4 +154,10 @@
   <data name="TreeWalkPublisher_OnlineOnlyNotFetched" xml:space="preserve">
     <value>online-only, and not fetched, since fetching {0} failed earlier in this run: {1}</value>
   </data>
+  <data name="TreeWalkPublisher_EarlierVersionStands" xml:space="preserve">
+    <value>{0}; the version backed up earlier, last modified {1}, stands in its place</value>
+  </data>
+  <data name="TreeWalkPublisher_EarlierVersionStandsUndated" xml:space="preserve">
+    <value>{0}; the version backed up earlier stands in its place</value>
+  </data>
 </root>
