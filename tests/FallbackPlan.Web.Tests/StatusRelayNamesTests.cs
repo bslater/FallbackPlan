@@ -375,6 +375,39 @@ public sealed class StatusRelayNamesTests
     }
 
     [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesWhatEachSetsLastBackupDidNotFetch()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets:
+            [
+                new BackupSetStatusDescriptor(
+                    "docs", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [], NotFetched: new NotFetchedDescriptor(3, 2, 9_000, "docs/a.docx", "timed out")),
+                new BackupSetStatusDescriptor(
+                    "music", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    []),
+            ],
+            ObservedAt: 10_000,
+            Notices: []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var sets = body.RootElement.GetProperty("sets");
+        var docs = sets[0].GetProperty("notFetched");
+        Assert.AreEqual(3, docs.GetProperty("files").GetInt64());
+        Assert.AreEqual(2, docs.GetProperty("keptEarlier").GetInt64());
+        Assert.AreEqual(9_000, docs.GetProperty("since").GetInt64());
+        Assert.AreEqual("docs/a.docx", docs.GetProperty("path").GetString());
+        Assert.AreEqual("timed out", docs.GetProperty("reason").GetString());
+        Assert.AreEqual(JsonValueKind.Null, sets[1].GetProperty("notFetched").ValueKind);
+    }
+
+    [TestMethod]
     public async Task GetStatus_WithNoLimits_RelaysNullRatherThanOmittingIt()
     {
         await using var harness = await ConsoleHarness.StartAsync();
