@@ -809,8 +809,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// a run with any is refused unless it acknowledges wider access, as one
     /// with such files is. Additive: a pre-1.81 service judges no folder.
     /// </para>
+    /// <para>
+    /// 1.82 makes a set's full walk a setting of the set (FR-SNP-012,
+    /// ADR-0189). `backup_set` gains `full_walk`, when the set is walked in
+    /// full whatever the change journal says, in the grammar its schedule
+    /// uses; an upsert that sends none keeps what the set has, empty clears it
+    /// back to daily, and one that does not read is refused. A set's status
+    /// gains `last_full_walk_at`. Additive: a pre-1.82 service walks every
+    /// set in full daily and says nothing of when it last did.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 81);
+    public static ContractVersion Current { get; } = new(1, 82);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

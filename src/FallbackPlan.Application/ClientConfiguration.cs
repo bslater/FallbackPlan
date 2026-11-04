@@ -32,6 +32,9 @@ public sealed record BackupRootConfiguration
 /// <summary>One configured backup set: its roots, rules, and a name.</summary>
 public sealed record BackupSetConfiguration
 {
+    /// <summary>The full walk of a set that names none (ADR-0188): a day after the last.</summary>
+    public const string DefaultFullWalk = "every 1d";
+
     /// <summary>The set's 16-byte identity, lowercase hex.</summary>
     [JsonPropertyName("id")]
     public required string Id { get; init; }
@@ -67,6 +70,18 @@ public sealed record BackupSetConfiguration
     /// <summary>The set's schedule, evaluated by the scheduler's due-ness pass (ADR-0027 §1); null means manual-only.</summary>
     [JsonPropertyName("schedule")]
     public string? Schedule { get; init; }
+
+    /// <summary>
+    /// When the set is walked in full whatever the change journal says
+    /// (ADR-0189), in the grammar <see cref="Schedule"/> uses: the first
+    /// backup after it falls due looks at every folder. It starts no backup
+    /// of its own. Null means <see cref="DefaultFullWalk"/>; one that does
+    /// not read walks every backup in full, and is refused at the command
+    /// boundary rather than at load, as a schedule is.
+    /// </summary>
+    [JsonPropertyName("full_walk")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FullWalk { get; init; }
 
     /// <summary>The set's retention policy; null defers retention entirely (architecture 07 §2).</summary>
     [JsonPropertyName("retention")]

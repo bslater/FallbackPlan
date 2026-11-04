@@ -32,17 +32,15 @@ internal sealed record ChangeHintPlan(
 /// </summary>
 internal static class ChangeHints
 {
-    /// <summary>How long a set may go without a full walk, whatever the journal says.</summary>
-    public static readonly TimeSpan FullWalkEvery = TimeSpan.FromDays(1);
-
     /// <summary>
     /// What a backup of <paramref name="set"/> is told, and where the journal
     /// stands now for each of its folders. The places are taken first, before
     /// the walk, so what changes while it walks is the next backup's to hear.
+    /// <paramref name="now"/> is a wall-clock time, as a schedule's is.
     /// </summary>
     public static ChangeHintPlan Plan(
         IChangeJournal? journal, KeptJournalPlaces? kept, BackupSetConfiguration set,
-        ReadOnlyMemory<byte>? prior, ulong nowMs, bool full)
+        ReadOnlyMemory<byte>? prior, DateTimeOffset now, bool full)
     {
         ThrowHelper.ThrowIfNull(set);
         if (journal is null)
@@ -65,7 +63,7 @@ internal static class ChangeHints
 
         var changed = full || prior is not { } priorId || kept is null
             ? null
-            : Changed(journal, kept, roots, priorId, nowMs);
+            : Changed(journal, kept, set, roots, priorId, now);
         return new ChangeHintPlan(changed, places, kept?.LastFullWalk);
     }
 
@@ -82,6 +80,39 @@ internal static class ChangeHints
                 plan.ChangedFolders is null || plan.LastFullWalk is not { } last ? nowMs : last,
                 places)
             : null;
+    }
+
+    /// <summary>
+    /// Whether a set's full walk is due at <paramref name="now"/>, a
+    /// wall-clock time, given when it was last walked in full (ADR-0189): its
+    /// own schedule says, or a day after the last where it names none. It is
+    /// due wherever that cannot be told: a schedule that does not read, or a
+    /// clock behind the last full walk.
+    /// </summary>
+    public static bool FullWalkDue(string? fullWalk, ulong lastFullWalk, DateTimeOffset now)
+    {
+        if (now.ToUnixTimeMilliseconds() < 0 || (ulong)now.ToUnixTimeMilliseconds() < lastFullWalk)
+        {
+            return true;
+        }
+
+        Schedule? schedule;
+        try
+        {
+            if (!Schedule.TryParse(
+                    string.IsNullOrWhiteSpace(fullWalk) ? BackupSetConfiguration.DefaultFullWalk : fullWalk,
+                    out schedule, out _))
+            {
+                return true;
+            }
+        }
+        catch (OverflowException)
+        {
+            return true;
+        }
+
+        // In the frame the set's own schedule is judged in (JobStateStore.ScheduleAnchor).
+        return schedule!.IsDue(DateTimeOffset.FromUnixTimeMilliseconds((long)lastFullWalk).ToLocalTime(), now);
     }
 
     /// <summary>
@@ -109,12 +140,11 @@ internal static class ChangeHints
     /// cannot say for one.
     /// </summary>
     private static HashSet<string>? Changed(
-        IChangeJournal journal, KeptJournalPlaces kept, IReadOnlyList<ScanRoot> roots, ReadOnlyMemory<byte> prior, ulong nowMs)
+        IChangeJournal journal, KeptJournalPlaces kept, BackupSetConfiguration set, IReadOnlyList<ScanRoot> roots,
+        ReadOnlyMemory<byte> prior, DateTimeOffset now)
     {
-        // A clock that went back is a doubt too: the walk is due when it cannot be told.
         if (!string.Equals(kept.SnapshotId, Convert.ToHexStringLower(prior.Span), StringComparison.Ordinal)
-            || nowMs < kept.LastFullWalk
-            || nowMs - kept.LastFullWalk >= (ulong)FullWalkEvery.TotalMilliseconds
+            || FullWalkDue(set.FullWalk, kept.LastFullWalk, now)
             || !kept.Places.Select(place => place.Root).SequenceEqual(roots.Select(root => root.Path), StringComparer.Ordinal))
         {
             return null;

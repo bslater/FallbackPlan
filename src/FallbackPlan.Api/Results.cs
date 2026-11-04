@@ -197,6 +197,14 @@ public sealed record BackupRootDescriptor(string Path, string? Label = null);
 /// client compares its derivation against before sending a grant. Null
 /// with <paramref name="KdfSalt"/>.
 /// </param>
+/// <param name="FullWalk">
+/// When the set is walked in full whatever the change journal says
+/// (ADR-0189, contract 1.82), in the grammar <paramref name="Schedule"/>
+/// uses; null in a listing means the default, a day after the last. On an
+/// upsert, null preserves what the set already has — what every pre-1.82
+/// client sends — empty clears it back to the default, and one that does not
+/// read is refused.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -214,7 +222,8 @@ public sealed record BackupSetDescriptor(
     uint? KdfMemoryKib = null,
     uint? KdfIterations = null,
     byte? KdfParallelism = null,
-    string? SealingPublicKey = null);
+    string? SealingPublicKey = null,
+    string? FullWalk = null);
 
 /// <summary>
 /// One declared destination, as the configuration surface sees it
@@ -1446,13 +1455,21 @@ public sealed record DeepSweepDescriptor(
 /// how far the one under way has read, and whether it has stopped. Null for a
 /// set with no staging archive, and from older services.
 /// </param>
+/// <param name="LastFullWalkAt">
+/// When the set was last walked in full, every folder looked at whatever the
+/// change journal said, Unix milliseconds (contract 1.82, FR-SNP-012). Null
+/// for a set whose backups ask no journal — every one of them walks in full,
+/// and <paramref name="LastCompletedAt"/> says when the last did — for a set
+/// never backed up, and from older services.
+/// </param>
 public sealed record BackupSetStatusDescriptor(
     string SetName,
     BackupSetStatus Status,
     string? NextRun,
     IReadOnlyList<DestinationStatusDescriptor> Destinations,
     ulong? LastCompletedAt = null,
-    DeepSweepDescriptor? StagingSweep = null);
+    DeepSweepDescriptor? StagingSweep = null,
+    ulong? LastFullWalkAt = null);
 
 /// <summary>
 /// The background window's state at the instant the status was observed
