@@ -172,6 +172,8 @@ While the provider stays away each backup keeps the same version. The first back
 ### What this does not do
 
 - **Say at restore that a file is older than its source was.** The run's failures say it. A restore plan that names such a file, read from the snapshot's error manifest, is a later record.
+
+  > **2026-11: done ([ADR-0194](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md)).** A restore's plan names each file it restores as a version backed up before, read from the snapshot's failures, with what the backup said of it.
 - **Keep a version for a file that moved and changed.**
 - **Keep a version for any other file that will not read.** The owner kept this to online-only files.
 
@@ -184,3 +186,4 @@ While the provider stays away each backup keeps the same version. The first back
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is unpinned so its provider frees it from the device again. A file changed or replaced while read, one not fetched, and one the person pinned are left alone. A refusal is logged and fails nothing. `Filesystem/ScanModel`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Local/WindowsInterop`; `Agent/PacedFileSystemSource`; `Domain/MetadataRules`; `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests`; `Hosts.Tests/PacedFileSystemSourceTests` |
 | 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name; the failure is still recorded, with what stands in its place, so the next backup walks its folder and asks again. A file new to the set, one found only under another name, and a file on the device that will not read keep nothing. `Repository/SnapshotPublication`; `Repository.Tests/OnlineOnlyCaptureTests` |
 | 2026-11 | Accepted | Noted by [ADR-0193](0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md): a set's status says how many online-only files its last backup did not fetch, how many keep the version before, the file that failed and why, and since when. |
+| 2026-11 | Accepted | Noted by [ADR-0194](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md): a restore's plan names each file it restores as a version backed up before, with what the backup said of it. |
