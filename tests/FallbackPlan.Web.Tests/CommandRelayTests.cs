@@ -242,6 +242,35 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task LeavingOnlineOnlyFiles_RidesTheUpsertThroughTheRelay_AndTheListingCarriesIt()
+    {
+        // Contract 1.89 (FR-SNP-015): the console names it leaveOnlineOnly both ways.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command is ListBackupSetsCommand
+            ? new BackupSetsResult(
+                [new BackupSetDescriptor(new string('a', 32), "docs", "/src", null, [], [], ["vault"], LeaveOnlineOnly: true)])
+            : new AcknowledgedResult();
+
+        using (var request = harness.Command("""
+            {"command":"upsert_backup_set","set":{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"docs",
+             "root":"/src","schedule":null,"includeRules":[],"excludeRules":[],"destinations":["vault"],
+             "leaveOnlineOnly":true}}
+            """))
+        using (var response = await harness.Http.SendAsync(request))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        Assert.IsInstanceOfType<UpsertBackupSetCommand>(Assert.ContainsSingle(harness.Clients.Client.Received), out var upsert);
+        Assert.IsTrue(upsert.Set.LeaveOnlineOnly);
+
+        using var list = harness.Command("""{"command":"list_backup_sets"}""");
+        using var listed = await harness.Http.SendAsync(list);
+        using var body = JsonDocument.Parse(await listed.Content.ReadAsStringAsync());
+        Assert.IsTrue(body.RootElement.GetProperty("sets")[0].GetProperty("leaveOnlineOnly").GetBoolean());
+    }
+
+    [TestMethod]
     public async Task JobDetailVerbs_RelayLikeEveryOther_NoConsoleChangeNeeded()
     {
         // Contract 1.22's drill-down pair rides the same generic relay.
