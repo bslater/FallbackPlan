@@ -1328,6 +1328,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
 
     private static readonly AsyncLocal<Action<Domain.Identifiers.RepositoryId>?> RestoreUnderWayFlow = new();
 
+    private static readonly AsyncLocal<Func<FallbackPlan.Filesystem.IFileSystemSource, FallbackPlan.Filesystem.IFileSystemSource>?> SourceFlow = new();
+
     /// <summary>
     /// A test harness's view of the disk for this flow's restores
     /// (FR-RST-003): directory → available bytes, null meaning the platform
@@ -1362,6 +1364,18 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
     {
         get => RestoreUnderWayFlow.Value;
         set => RestoreUnderWayFlow.Value = value;
+    }
+
+    /// <summary>
+    /// Wraps the source this flow's backups read through: a test harness's
+    /// way to make files online-only and their provider fail, which no runner
+    /// can (ADR-0194), as the service's harness wraps the service's. Null,
+    /// the production value, reads the device as it is.
+    /// </summary>
+    internal static Func<FallbackPlan.Filesystem.IFileSystemSource, FallbackPlan.Filesystem.IFileSystemSource>? SourceInFlow
+    {
+        get => SourceFlow.Value;
+        set => SourceFlow.Value = value;
     }
 
     /// <summary>
@@ -1463,7 +1477,9 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
         var published = await orchestrator.PublishAsync(
             new SnapshotJob
             {
-                Source = new FallbackPlan.Filesystem.Local.LocalFileSystemSource(),
+                Source = SourceInFlow is { } wrap
+                    ? wrap(new FallbackPlan.Filesystem.Local.LocalFileSystemSource())
+                    : new FallbackPlan.Filesystem.Local.LocalFileSystemSource(),
                 Roots = roots,
                 IncludeRules = include,
                 ExcludeRules = exclude,
@@ -1929,7 +1945,10 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
                 probed.Archived.Count == 0 ? null : probed.Archived,
                 request.Resume ? space.Landed : null,
                 wider is { Files: > 0 } ? wider.Files : null,
-                wider is { OpenedFolders: > 0 } ? wider.OpenedFolders : null),
+                wider is { OpenedFolders: > 0 } ? wider.OpenedFolders : null,
+                probed.EarlierVersions.Count == 0
+                    ? null
+                    : [.. probed.EarlierVersions.Select(earlier => new EarlierVersionDescriptor(earlier.Path, earlier.Detail))]),
             request);
     }
 

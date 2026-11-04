@@ -260,6 +260,33 @@ public sealed class RestoreWizardDomTests
     }
 
     [TestMethod]
+    public async Task Wizard_APlanNamingTheFilesAnEarlierVersionStandsIn_SaysWhichAndWhy()
+    {
+        // FR-RST-003, ADR-0194: a file whose backup could not fetch the
+        // version on the device restores the one backed up before, which the
+        // person learns before the restore rather than finds after it.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(2, 8_192, [], WriteBytes: 8_192,
+                EarlierVersions: [new EarlierVersionDescriptor("docs/a.txt", "the cloud provider timed out")])
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        var earlier = page.Locator("#rst-earlier");
+        await Expect(earlier).ToContainTextAsync("1 file(s) will be restored as the version backed up before");
+        await Expect(earlier).ToContainTextAsync("docs/a.txt — the cloud provider timed out");
+
+        // It holds nothing back: the typed word alone arms the restore.
+        await page.FillAsync("#confirm-word", "restore");
+        await Expect(page.Locator("#rst-run-go")).ToBeEnabledAsync();
+    }
+
+    [TestMethod]
     public async Task Wizard_APlanThatDoesNotSayWhatItReads_ShowsNoFigureForIt()
     {
         // A service before contract 1.64 says nothing of it, which is not
@@ -278,6 +305,7 @@ public sealed class RestoreWizardDomTests
         await Expect(page.Locator(".plan-figures")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-read")).ToHaveCountAsync(0);
         await Expect(page.Locator("#rst-archived")).ToHaveCountAsync(0);
+        await Expect(page.Locator("#rst-earlier")).ToHaveCountAsync(0);
     }
 
     [TestMethod]

@@ -1079,6 +1079,28 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheEarlierVersions_WireNamesAndPre185Default()
+    {
+        // Contract 1.85 (FR-RST-003, ADR-0194): a plan names each file whose
+        // version is one backed up before, standing in for one its backup
+        // could not fetch, with what the backup said of it.
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            new RestorePlanResult(2, 9_000, [], EarlierVersions: [new EarlierVersionDescriptor("docs/a.docx", "timed out")]),
+            FrameCodec.SerializerOptions);
+
+        const string Field = ",\"earlier_versions\":[{\"path\":\"docs/a.docx\",\"detail\":\"timed out\"}]";
+        Assert.Contains(Field, modern, StringComparison.Ordinal);
+
+        // A pre-1.85 service's plan carries none, and reads as naming none.
+        var old = modern.Replace(Field, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions), out var read);
+        Assert.IsNull(read.EarlierVersions);
+    }
+
+    [TestMethod]
     public void WhatAClosedCircuitPassedOver_WireNameAndPre166Default()
     {
         // Contract 1.66 (FR-VER-003, ADR-0106): a sweep says how many blobs

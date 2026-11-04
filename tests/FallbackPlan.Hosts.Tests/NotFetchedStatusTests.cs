@@ -2,7 +2,6 @@ using System.CommandLine;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
-using FallbackPlan.Filesystem;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -22,8 +21,6 @@ namespace FallbackPlan.Hosts.Tests;
 [TestClass]
 public sealed class NotFetchedStatusTests : IDisposable
 {
-    private const string TimedOut = "The cloud operation was not completed before the time-out period expired.";
-
     private readonly HostHarness _harness = new();
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(3));
     private bool _delivers = true;
@@ -55,7 +52,7 @@ public sealed class NotFetchedStatusTests : IDisposable
         Assert.AreEqual(3L, missed.Files);
         Assert.AreEqual(2L, missed.KeptEarlier, "a.cloud and b.cloud keep the versions backed up before");
         Assert.AreEqual("docs/a.cloud", missed.Path);
-        Assert.Contains(TimedOut, missed.Reason, StringComparison.Ordinal);
+        Assert.Contains(CloudStandIn.TimedOut, missed.Reason, StringComparison.Ordinal);
         Assert.AreEqual(Ms(start.AddHours(1)), missed.Since);
     }
 
@@ -155,39 +152,5 @@ public sealed class NotFetchedStatusTests : IDisposable
                 WrapSource = source => new CloudStandIn(source, () => _delivers),
             },
             Timeout);
-    }
-
-    /// <summary>
-    /// The real source, with the files named <c>.cloud</c> online-only, and
-    /// their fetch failing as a provider's does while it does not deliver.
-    /// </summary>
-    private sealed class CloudStandIn(IFileSystemSource inner, Func<bool> delivers) : IFileSystemSource
-    {
-        public SourceFilesystemInfo Probe(string rootPath) => inner.Probe(rootPath);
-
-        public RevalidationProbe? Revalidate(ScanEntry entry) => inner.Revalidate(entry);
-
-        public async IAsyncEnumerable<ScanEvent> ScanAsync(
-            string rootPath, ScanOptions options, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            await foreach (var scanEvent in inner.ScanAsync(rootPath, options, cancellationToken).ConfigureAwait(false))
-            {
-                yield return scanEvent is ScanEvent.Leaf leaf && IsCloud(leaf.Entry)
-                    ? new ScanEvent.Leaf(leaf.Entry with { OnlineOnly = true })
-                    : scanEvent;
-            }
-        }
-
-        public Stream OpenRead(ScanEntry entry) =>
-            IsCloud(entry) && !delivers() ? throw new IOException(TimedOut) : inner.OpenRead(entry);
-
-        public Stream OpenAlternateStream(ScanEntry entry, string streamName) => inner.OpenAlternateStream(entry, streamName);
-
-        public ulong? DeviceOf(string path) => inner.DeviceOf(path);
-
-        // Nothing here is a provider's to free.
-        public string? FreeAgain(ScanEntry entry) => null;
-
-        private static bool IsCloud(ScanEntry entry) => entry.RelativePath.EndsWith(".cloud", StringComparison.Ordinal);
     }
 }

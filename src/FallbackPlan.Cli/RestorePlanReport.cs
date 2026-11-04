@@ -86,6 +86,17 @@ internal static class RestorePlanReport
             lines.AddRange(archived.Select(path => "  " + path));
         }
 
+        // They restore: what they restore is older than the file was when its
+        // backup ran, which the person learns here rather than after
+        // (ADR-0194).
+        if (plan.EarlierVersions is { Count: > 0 } earlier)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"earlier: {earlier.Count} file(s) restore the version backed up before, since their backup could not fetch the one on the device:"));
+            lines.AddRange(earlier.Select(version => $"  {version.Path} — {version.Detail}"));
+        }
+
         if (plan.Conflicts > 0)
         {
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"conflicts: {plan.Conflicts}"));
