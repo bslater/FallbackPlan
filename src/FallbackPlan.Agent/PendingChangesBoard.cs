@@ -20,6 +20,12 @@ internal sealed class PendingChangesBoard(ServiceRuntime runtime)
     private readonly ConcurrentDictionary<string, PendingChangesDescriptor> _counted = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _counting = new(StringComparer.Ordinal);
 
+    // Each set's last snapshot's failures, by that snapshot: a snapshot never
+    // changes, so they are read once for it, not once a count, from a store
+    // that may be a destination billed by the request.
+    private readonly ConcurrentDictionary<string, (string Snapshot, IReadOnlyList<string> Failed)> _failed =
+        new(StringComparer.Ordinal);
+
     /// <summary>How long a count stands before a status asks for another.</summary>
     internal static TimeSpan FreshFor { get; } = TimeSpan.FromMinutes(1);
 
@@ -142,9 +148,28 @@ internal sealed class PendingChangesBoard(ServiceRuntime runtime)
             return new PendingChangesDescriptor(null, changes.WalksInFullBecause, countedAt);
         }
 
+        // The next backup also walks every folder its last one failed a file
+        // in, to try it again, and walks in full where it cannot read which
+        // (ADR-0186). The count enters them alike (ADR-0192 Amendment 1).
+        var snapshot = Convert.ToHexString(latest!.SnapshotId.Span);
+        if (!_failed.TryGetValue(set.Id, out var known) || known.Snapshot != snapshot)
+        {
+            if (await SnapshotFailures.PathsAsync(
+                    archive.Store, archive.Repository.RepositoryId, archive.Repository.Keys, catalogue, latest.ObjectId,
+                    cancellationToken).ConfigureAwait(false) is not { } read)
+            {
+                return new PendingChangesDescriptor(null, "its last backup's failures would not read", countedAt);
+            }
+
+            known = (snapshot, read);
+            _failed[set.Id] = known;
+        }
+
+        var failed = known.Failed;
+
         var count = await SourceComparer.CountChangedAsync(
             new LocalFileSystemSource(), SetChangeScan.ScanRootsOf(set), set.IncludeRules, set.ExcludeRules,
-            catalogue, latest!.SnapshotId, folders, cancellationToken).ConfigureAwait(false);
+            catalogue, latest.SnapshotId, [.. folders, .. failed], cancellationToken).ConfigureAwait(false);
         return new PendingChangesDescriptor(count.Total, null, countedAt);
     }
 }

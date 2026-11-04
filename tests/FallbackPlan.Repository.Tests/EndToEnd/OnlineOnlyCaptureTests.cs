@@ -37,7 +37,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// failed and why, and says nothing where it fetched every one (ADR-0193,
 /// FR-SNP-014). A restore's plan names each file whose version is one backed
 /// up before, standing in for one its backup could not fetch, with what the
-/// backup said of it, and names no other (ADR-0194, FR-RST-003).
+/// backup said of it, and names no other (ADR-0194, FR-RST-003). A
+/// snapshot's failures are read as the paths they name, for the count of
+/// what the next backup will try again (ADR-0192 Amendment 1, FR-SNP-013).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -631,6 +633,34 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         // where its failures are.
         await FlipAsync(store, keys, second.SnapshotObjectId);
         Assert.IsTrue((await ProbeAsync(catalogue, store, keys, 0xB2)).FailuresUnread, "the snapshot's manifest would not read");
+    }
+
+    [TestMethod]
+    public async Task ASnapshotsFailures_AreReadAsItsPaths_NoneWhereItFailedNothing_AndNullWhereTheyWillNotRead()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Assert.IsEmpty(
+            await SnapshotFailures.PathsAsync(store, Repo, keys, catalogue, first.SnapshotObjectId, CancellationToken.None) ?? throw new AssertFailedException("it reads"));
+
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+        CollectionAssert.AreEqual(
+            new[] { "docs/doc.bin" },
+            (await SnapshotFailures.PathsAsync(store, Repo, keys, catalogue, second.SnapshotObjectId, CancellationToken.None))?.ToArray());
+
+        await FlipAsync(store, keys, second.ErrorManifestObjectId!.Value);
+        Assert.IsNull(await SnapshotFailures.PathsAsync(store, Repo, keys, catalogue, second.SnapshotObjectId, CancellationToken.None));
     }
 
     /// <summary>Flips one ciphertext byte of a record beneath the store, so it no longer authenticates; flipped again, it does.</summary>

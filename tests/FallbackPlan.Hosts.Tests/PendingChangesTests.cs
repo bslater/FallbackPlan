@@ -13,7 +13,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// no backup yet, no place kept, the set's full walk due, or a journal that
 /// cannot say. A set whose backups ask no journal says nothing. A count moves
 /// no place the backup asks from. The status gives the last count and asks
-/// for another once it is a minute old, never two at once.
+/// for another once it is a minute old, never two at once. The files the last
+/// backup could not read are waiting too, since the next backup walks their
+/// folders to try them again, and where its failures will not read it walks
+/// in full and says why; they are read once for a snapshot, not once a count
+/// (ADR-0192 Amendment 1).
 /// </summary>
 /// <remarks>
 /// The journal is scripted, so this runs on every platform.
@@ -24,6 +28,7 @@ public sealed class PendingChangesTests : IDisposable
     private readonly HostHarness _harness = new();
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(3));
     private readonly ScriptedJournal _journal = new();
+    private bool _delivers = true;
 
     private CancellationToken Timeout => _timeout.Token;
 
@@ -174,6 +179,69 @@ public sealed class PendingChangesTests : IDisposable
         Assert.AreEqual(1L, (await StatusAsync(runtime)).PendingChanges!.Files);
     }
 
+    [TestMethod]
+    public async Task FilesTheLastBackupCouldNotRead_AreWaiting_ThoughNothingIsNamed()
+    {
+        WriteTree();
+        _harness.WriteSourceFile("docs/doc.cloud", "delta");
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        Assert.AreEqual(0L, (await CountAsync(runtime, start.AddMinutes(10)))!.Files, "nothing failed, nothing named");
+
+        // A changed file the provider does not deliver, and a new one it never
+        // does: the backup fails both, and keeps the version before of the one.
+        _harness.WriteSourceFile("docs/doc.cloud", "delta, changed");
+        _harness.WriteSourceFile("docs/new.cloud", "new");
+        _journal.Answer = _ => [new ChangedFolder(_harness.SourceRoot, "docs")];
+        _delivers = false;
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        // A new snapshot, so its failures are read afresh.
+        _journal.Answer = _ => [];
+        var pending = await CountAsync(runtime, start.AddHours(1).AddMinutes(10));
+        Assert.AreEqual(2L, pending!.Files, "both are tried again by the next backup");
+
+        // Which takes them, and walks no folder the count did not.
+        _delivers = true;
+        var next = await BackUpAsync(runtime, start.AddHours(2));
+        Assert.AreEqual("3 file(s), 1 unchanged, 1 folder(s) not walked", next.Detail);
+    }
+
+    [TestMethod]
+    public async Task FailuresThatWillNotRead_WalkInFullNext()
+    {
+        WriteTree();
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+
+        // The snapshot's metadata is gone from the store, its failures with
+        // it: the next backup cannot tell which folders to try again.
+        Directory.Delete(Path.Combine(_harness.RepositoryPath, "blobs", "meta"), recursive: true);
+        var pending = await CountAsync(runtime, start.AddMinutes(10));
+
+        Assert.IsNull(pending!.Files);
+        Assert.Contains("failures would not read", pending.WalksInFullBecause!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ASnapshotsFailures_AreReadOnceForIt_NotOnceACount()
+    {
+        // A snapshot never changes, and its store may be a destination billed
+        // by the request: a count a minute while someone watches reads its
+        // failures once.
+        WriteTree();
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        Assert.AreEqual(0L, (await CountAsync(runtime, start.AddMinutes(10)))!.Files);
+
+        Directory.Delete(Path.Combine(_harness.RepositoryPath, "blobs", "meta"), recursive: true);
+
+        Assert.AreEqual(0L, (await CountAsync(runtime, start.AddMinutes(20)))!.Files, "read once for the snapshot");
+    }
+
     private static ulong Ms(DateTimeOffset at) => (ulong)at.ToUnixTimeMilliseconds();
 
     private ValueTask<PendingChangesDescriptor?> CountAsync(ServiceRuntime runtime, DateTimeOffset now) =>
@@ -222,6 +290,7 @@ public sealed class PendingChangesTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
                 ChangeJournal = _journal,
+                WrapSource = source => new CloudStandIn(source, () => _delivers),
             },
             Timeout);
     }
