@@ -48,7 +48,9 @@ public sealed class PendingChangesDomTests
         await using var harness = await DomHarness.StartAsync();
         harness.Clients.Client.Respond = Service(
             Set("docs", new PendingChangesDescriptor(12, null, NowMs, FilesToFetch: 3, BytesToFetch: 2 * 1024 * 1024)),
-            Set("letters", new PendingChangesDescriptor(4, null, NowMs, FilesToFetch: 0, BytesToFetch: 0)));
+            Set("letters", new PendingChangesDescriptor(4, null, NowMs, FilesToFetch: 0, BytesToFetch: 0)),
+            Set("music", new PendingChangesDescriptor(4, null, NowMs, FilesToFetch: 4, BytesToFetch: 4096)),
+            Set("notes", new PendingChangesDescriptor(1, null, NowMs, FilesToFetch: 1, BytesToFetch: 2048)));
         await using var context = await BrowserSession.NewContextAsync();
         var page = await context.NewPageAsync();
         await page.GotoAsync(harness.TokenedUrl);
@@ -61,6 +63,16 @@ public sealed class PendingChangesDomTests
         var letters = page.Locator("details.set[data-set=\"letters\"]");
         await letters.Locator("summary").ClickAsync();
         await Expect(letters.Locator(".set-body [data-pending]")).ToHaveTextAsync("4 changed files will be backed up next");
+
+        var music = page.Locator("details.set[data-set=\"music\"]");
+        await music.Locator("summary").ClickAsync();
+        await Expect(music.Locator(".set-body [data-pending]")).ToHaveTextAsync(
+            "4 changed files will be backed up next; all of them, 4.0 KiB, must be downloaded from the cloud first");
+
+        var notes = page.Locator("details.set[data-set=\"notes\"]");
+        await notes.Locator("summary").ClickAsync();
+        await Expect(notes.Locator(".set-body [data-pending]")).ToHaveTextAsync(
+            "1 changed file will be backed up next; it, 2.0 KiB, must be downloaded from the cloud first");
     }
 
     [TestMethod]

@@ -1520,7 +1520,19 @@ public sealed record BackupSetStatusDescriptor(
 /// cannot say. Null where <paramref name="Files"/> is counted.
 /// </param>
 /// <param name="CountedAt">When it was counted, Unix milliseconds.</param>
-public sealed record PendingChangesDescriptor(long? Files, string? WalksInFullBecause, ulong CountedAt);
+/// <param name="FilesToFetch">
+/// How many of <paramref name="Files"/> are online-only files the next backup
+/// must fetch from their cloud provider: one new, or whose content changed
+/// (contract 1.86, ADR-0192 Amendment 2). Null where nothing is counted, and
+/// from a service before 1.86.
+/// </param>
+/// <param name="BytesToFetch">The bytes of those files, as the count found them; null where they are.</param>
+public sealed record PendingChangesDescriptor(
+    long? Files,
+    string? WalksInFullBecause,
+    ulong CountedAt,
+    long? FilesToFetch = null,
+    long? BytesToFetch = null);
 
 /// <summary>
 /// The online-only files a set's last backup could not fetch from their

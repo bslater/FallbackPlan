@@ -842,8 +842,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// with its `path` and the backup's `detail`. They restore, and nothing
     /// is refused for them. Additive: a pre-1.85 service names none.
     /// </para>
+    /// <para>
+    /// 1.86 says how much a set's next backup must fetch (FR-SNP-013,
+    /// ADR-0192 Amendment 2). A set's `pending_changes` gains
+    /// `files_to_fetch`, how many of the changed files are online-only ones
+    /// whose content that backup must fetch from their provider, and
+    /// `bytes_to_fetch`, their bytes. Both null where nothing is counted.
+    /// Additive: a pre-1.86 service says nothing of them.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 85);
+    public static ContractVersion Current { get; } = new(1, 86);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -1253,13 +1253,13 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
             FrameCodec.SerializerOptions);
 
         Assert.Contains(
-            "\"pending_changes\":{\"files\":null,\"walks_in_full_because\":\"its full walk is due\",\"counted_at\":5000}",
+            "\"pending_changes\":{\"files\":null,\"walks_in_full_because\":\"its full walk is due\",\"counted_at\":5000,",
             status,
             StringComparison.Ordinal);
 
         // A pre-1.83 frame says nothing: none counted.
         var old = status.Replace(
-            ",\"pending_changes\":{\"files\":null,\"walks_in_full_because\":\"its full walk is due\",\"counted_at\":5000}",
+            ",\"pending_changes\":{\"files\":null,\"walks_in_full_because\":\"its full walk is due\",\"counted_at\":5000,\"files_to_fetch\":null,\"bytes_to_fetch\":null}",
             "",
             StringComparison.Ordinal);
         Assert.AreNotEqual(status, old, "the strip must have removed the field, or the old frame proves nothing");
