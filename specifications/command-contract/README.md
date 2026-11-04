@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.88
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.89
 
 ---
 
@@ -278,3 +278,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.86 | A set's status says how much its next backup must fetch ([ADR-0192 Amendment 2](../../docs/adr/0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch), FR-SNP-013). A set's `pending_changes` gains `files_to_fetch`, how many of the changed files counted are online-only ones whose content that backup must fetch from their provider, and `bytes_to_fetch`, their bytes. Both null where nothing is counted. Additive: a pre-1.86 service says nothing of them. |
 | 1.87 | A restore's run says how many files it restored as a version backed up before ([ADR-0194 Amendment 1](../../docs/adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-1-2026-11--the-run-and-its-receipt-name-them-too), FR-RST-004). `restore` gains `earlier_versions`, the count, and `earlier_versions_sample`, at most twenty `path — detail` lines; the receipt, at schema 12, names each. Additive: a pre-1.87 service says none. |
 | 1.88 | The listing of kept receipts counts each run's files restored as a version backed up before ([ADR-0194 Amendment 2](../../docs/adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-2-2026-11--the-kept-receipts-count-them), FR-RST-004). A `restore_receipts` entry gains `earlier_versions`: the files written that its receipt names so. Additive: a pre-1.88 service says none. |
+| 1.89 | A set may leave its online-only files to their cloud provider ([ADR-0195](../../docs/adr/0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md), FR-SNP-015). `backup_set` gains `leave_online_only`: an upsert that sends none keeps what the set has, true or false sets it, and a listing says true or false. A set's status gains `leaves_online_only`, true where the set leaves them. Additive: a pre-1.89 service fetches them, and its status says nothing of it. |

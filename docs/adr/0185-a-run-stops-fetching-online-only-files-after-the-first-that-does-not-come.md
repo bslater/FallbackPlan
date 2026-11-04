@@ -74,6 +74,8 @@ A file not fetched is in no snapshot this run publishes, so the next run finds n
 ## Alternatives considered
 
 - **Leave online-only files out.** Comparable tools offer this as an option. It never fetches, but it also never backs up a file the person did not keep on the device, and the owner chose to back them up.
+
+  > **2026-11: taken up as a choice of the set ([ADR-0195](0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md)).** Backing them up stays the default. A set may say it leaves them to their provider: its backups fetch none, and a file new or changed is left out of the snapshot without failing it.
 - **A shorter time-out of our own.** The platform owns the wait. A read cannot be cut short below it without abandoning a thread mid-call.
 - **Stop per provider rather than per run.** Telling providers apart needs each provider's interface. The run stopping whole is simpler and loses nothing.
 - **Stop after several failures.** One failure is the evidence there is, and each further one costs a full time-out.
@@ -190,3 +192,4 @@ While the provider stays away each backup keeps the same version. The first back
 | 2026-11 | Accepted | Noted by [ADR-0193](0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md): a set's status says how many online-only files its last backup did not fetch, how many keep the version before, the file that failed and why, and since when. |
 | 2026-11 | Accepted | Noted by [ADR-0194](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md): a restore's plan names each file it restores as a version backed up before, with what the backup said of it. |
 | 2026-11 | Accepted | Noted by [ADR-0192 Amendment 2](0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch): a set's status says how many online-only files its next backup must fetch, and their bytes. |
+| 2026-11 | Accepted | Noted by [ADR-0195](0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md): a set may leave its online-only files to their provider, the alternative set aside here, by its own choice. Its backups fetch none, and a file new or changed is left out without failing it. |

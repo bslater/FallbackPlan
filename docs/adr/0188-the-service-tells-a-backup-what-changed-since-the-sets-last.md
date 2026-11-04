@@ -44,6 +44,8 @@ A backup asks the journal what changed since the places kept and is told the fol
 - the journal cannot say for one of them (ADR-0187 §3); or
 - a full walk is due.
 
+> **2026-11 ([ADR-0195](0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md)).** Also where the set no longer leaves its online-only files to their provider, and the places kept say its last snapshot may lack one it left. A file left earlier, and unchanged since, is in no folder the journal names.
+
 ADR-0186 still reuses nothing where the rules or the folders changed, whatever it is told.
 
 ### 4. A full walk at least once a day
@@ -94,3 +96,4 @@ A backup that reused folders says so in its outcome: `… file(s), … unchanged
 | 2026-11 | Accepted | Amended by [ADR-0189](0189-a-sets-full-walk-is-a-setting-of-the-set.md): the day is the default full walk, and a set may name its own in its schedule's grammar. |
 | 2026-11 | Accepted | Noted by [ADR-0190](0190-on-linux-the-service-watches-a-sets-folders-itself.md): on Linux the journal asked is the service's own watch of the set's folders. |
 | 2026-11 | Accepted | Noted by [ADR-0191](0191-on-macos-the-service-asks-the-volumes-event-history.md): on macOS the journal asked is the volume's event history. |
+| 2026-11 | Accepted | Noted by [ADR-0195](0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md): the places kept say whether the set's last snapshot may lack an online-only file it left, and a set that no longer leaves them walks in full. |

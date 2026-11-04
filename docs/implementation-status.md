@@ -219,6 +219,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0192](adr/0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md) | A set's status says how many changed files its next backup will take: a dry walk of the folders the change journal named since its last backup, entering what folder reuse will enter and judging each file as the backup will, opening nothing; where the next backup walks in full it says why (no backup, no place kept, its full walk due, its folders changed, a journal that cannot say); the count is kept and renewed a minute on, on the reader lane, never two at once; contract 1.83, the command line's `waiting:` token, the console's card; since Amendment 1 it enters the folders the last snapshot's failures name too, read once for a snapshot, and walks in full where they will not read; since Amendment 2 it counts apart the online-only files the backup must fetch, with their bytes, at contract 1.86 | **Built** | `Repository/SourceComparer` · `Repository/SnapshotFailures` · `Agent/ChangeHints` · `Agent/PendingChangesBoard` · `Api/Results` · `Cli/CliApplication` · `Repository.Tests/ChangedFilesCountTests` · `Hosts.Tests/PendingChangesTests` · `Cli.Tests/StatusPendingTokenTests` · `Web.DomTests/PendingChangesDomTests` · [notes](#0192--changes-waiting) |
 | [0193](adr/0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md) | A set's status says which online-only files its last backup could not fetch: the run counts each it did not fetch and how many kept the version backed up before, with the file whose fetch failed and the provider's words; the service keeps that per set once the backup has published, since the first of the backups that each missed some, and lets it go when one fetches them all; contract 1.84, the command line's not-fetched token, the console's card; since Amendment 1 a backup whose every failure kept the version before completes, behind, the set raises no PARTIAL warning for it, and direct mode says so and exits zero | **Built** | `Application/StatusModel` · `Cli/OperationGateway` · `Repository.Tests/ApplicationServiceTests` · `Cli.Tests/BackupNotFetchedDirectTests` · `Repository/SnapshotPublication` · `Agent/NotFetchedStore` · `Agent/BackupRunner` · `Agent/ServiceRuntime` · `Api/Results` · `Cli/CliApplication` · `Repository.Tests/OnlineOnlyCaptureTests` · `Hosts.Tests/NotFetchedStatusTests` · `Cli.Tests/StatusNotFetchedTokenTests` · `Web.DomTests/NotFetchedDomTests` · [notes](#0193--files-not-fetched) |
 | [0194](adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md) | A restore's plan names the files an earlier version stands in for: the probe reads the snapshot's manifest and its failures, and names each file the plan restores that the failures also name, with what the backup said of it; failures that will not read are said among the degradations; nothing is refused for them; contract 1.85, the service's and direct mode's plans, the command line's plan, the console's plan step; since Amendment 1 the run reads them too, before it writes, and its receipt (schema 12) names each and why, or says the failures would not read, and its result counts them at contract 1.87, which the command line and the console's result step say; since Amendment 2 the listing of kept receipts counts them, those written alone, at contract 1.88 | **Built** | `Restore/RestoreBlobSet` · `Restore/RestorePlanFigures` · `Restore/RestoreExecutor` · `Api/Results` · `Cli/RestorePlanReport` · `Cli/OperationGateway` · `Repository.Tests/OnlineOnlyCaptureTests` · `Repository.Tests/RestorePlanTests` · `Hosts.Tests/EarlierVersionPlanTests` · `Cli.Tests/GatewayRestoreReportTests` · `Cli.Tests/RestorePlanCommandTests` · `Cli.Tests/RestoreReceiptDirectTests` · `Cli.Tests/RestoreReceiptsVerbTests` · `Api.Tests/ConfigurationContractTests` · `Web.DomTests/RestoreWizardDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0194--earlier-versions-in-a-plan) |
+| [0195](adr/0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md) | A set may leave its online-only files to their cloud provider: the run asks no provider for a file new or changed in content, leaves it out of the snapshot without a failure, and counts it; one unchanged, only moved, or changed only in its metadata is taken as ever; the changes waiting count none the next backup will leave; the journal places kept say whether the set's last snapshot may lack a file left, and a set that no longer leaves them walks in full; contract 1.89 carries the choice on a set and in its status, the command line's status prints a token, and direct mode says how many it left | **Built** | `Application/ClientConfiguration` · `Repository/SnapshotPublication` · `Repository/SourceComparer` · `Agent/ChangeHints` · `Agent/BackupRunner` · `Agent/PendingChangesBoard` · `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/CliApplication` · `Cli/OperationGateway` · `Repository.Tests/OnlineOnlyCaptureTests` · `Repository.Tests/ChangedFilesCountTests` · `Application.Tests/ClientConfigurationTests` · `Hosts.Tests/LeaveOnlineOnlyTests` · `Hosts.Tests/ConfigurationCommandTests` · `Cli.Tests/BackupNotFetchedDirectTests` · `Cli.Tests/StatusLeavesOnlineOnlyTokenTests` · `Api.Tests/ContractAdditiveFieldsTests` · [notes](#0195--online-only-files-left-to-their-provider) |
 
 ---
 
@@ -5961,3 +5962,43 @@ What remains is recorded rather than done:
   after a run's counts; the run's result counts by the same rule);
 - a file restored from an older snapshot than the one that put it in
   place is said only as that snapshot's own failures say.
+
+### 0195 — online-only files left to their provider
+
+Built in one slice, tests first, after the owner asked whether an
+online-only file the backup cannot fetch should simply be skipped. Not
+by default, since the cloud copy is not a backup; but a set may now say
+so itself.
+
+**The run.** `Repository/SnapshotPublication` checks the set's choice
+after the two paths that never fetch: an unchanged file keeps its
+version, and one only moved or changed only in its metadata is rewritten
+from the version before. What is left to check is what would be
+fetched, a file new or changed in content; it is left out, counted, and
+logged, and the error manifest does not name it. `Repository/SourceComparer`
+counts the changes waiting the same way, so none the next backup will
+leave is counted or to fetch.
+
+**Stopping.** A file left earlier, and unchanged since, is in no folder
+the change journal names. `Agent/ChangeHints` keeps, with the journal
+places, whether the set's last snapshot may lack one: set by a backup
+that left any, carried by one told what changed, cleared by a full walk
+that left none. A set that no longer leaves them, where the places say
+so, walks in full. Kept with the places rather than on the edit, a hand
+edit of the configuration file is seen too.
+
+**The wire and the clients.** `Application/ClientConfiguration` writes
+`leave_online_only` only where it is chosen. `Agent/ServiceCommandHandler`
+keeps it where an edit says nothing of it, lists it, and says it in a
+set's status; `Api/Results` carries both at contract 1.89.
+`Agent/BackupRunner`'s detail says how many a backup left;
+`Cli/CliApplication` prints `online-only:left-to-provider`, and
+`Cli/OperationGateway` says how many direct mode's backup left.
+
+What remains is recorded rather than done:
+
+- the console's set editor does not offer the choice, nor its card say it;
+- the status gives no count of the files left, since a backup told which
+  folders changed sees only those;
+- a changed file left is not kept at the version before in the snapshot,
+  since that needs a failure for a restore to name it.
