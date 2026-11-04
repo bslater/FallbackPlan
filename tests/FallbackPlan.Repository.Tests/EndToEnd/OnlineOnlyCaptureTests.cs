@@ -25,7 +25,13 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// online-only and on the device is no change (ADR-0185 Amendment 1). A
 /// file the run fetched, and read whole as the scan found it, is freed from
 /// the device again; one not fetched, or changed while it was read, is not,
-/// and a refusal to free it fails nothing (ADR-0185 Amendment 2).
+/// and a refusal to free it fails nothing (ADR-0185 Amendment 2). A changed
+/// online-only file the run did not fetch keeps the version backed up before
+/// it, named in the failure with when it was last modified, and the next
+/// backup asks for it again even where nothing is said to have changed; a
+/// file new to the set has none to keep, a file on the device that will not
+/// read keeps none, and nor does one found only under another name
+/// (ADR-0185 Amendment 3).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -364,6 +370,161 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         Assert.AreEqual("kept-here.bin", Assert.ContainsSingle(source.FreedPaths));
     }
 
+    [TestMethod]
+    public async Task AChangedFileNotFetched_KeepsTheVersionBackedUpBefore()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+        var other = Online(source, "docs/other.bin", 2);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        var before = first.Files.ToDictionary(file => file.RelativePath);
+
+        // Both change where the provider keeps them, and then it stops
+        // delivering.
+        Change(doc, 5);
+        Change(other, 6);
+        doc.OpenFailure = new IOException(TimedOut);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        var after = second.Files.ToDictionary(file => file.RelativePath);
+        Assert.AreEqual(before["docs/doc.bin"].ObjectId, after["docs/doc.bin"].ObjectId, "the file whose fetch failed keeps the version before");
+        Assert.AreEqual(before["docs/other.bin"].ObjectId, after["docs/other.bin"].ObjectId, "so does one the run did not ask for after it");
+        Assert.AreEqual(1, other.OpenAttempts, "other.bin was not fetched again");
+
+        // The failure still says what was not backed up, and now what stands
+        // in its place.
+        Assert.HasCount(2, second.Failures);
+        Assert.Contains(TimedOut, Detail(second, "docs/doc.bin"), StringComparison.Ordinal);
+        Assert.Contains("not fetched", Detail(second, "docs/other.bin"), StringComparison.Ordinal);
+        foreach (var path in new[] { "docs/doc.bin", "docs/other.bin" })
+        {
+            Assert.Contains(
+                "the version backed up earlier, last modified 2024-07-26 13:20 UTC, stands in its place",
+                Detail(second, path),
+                StringComparison.Ordinal);
+        }
+
+        // As it was when it was backed up, so the next backup sees it changed.
+        Assert.AreEqual(1_722_000_000_000UL, catalogue.LookupPath(Snapshot(0xB2), "docs/doc.bin")!.ModifiedAt);
+    }
+
+    [TestMethod]
+    public async Task AFileKeptFromBefore_IsAskedForAgain_WhileTheProviderStaysAway()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "doc.bin", 1);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        var third = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xC3, 0xB2, now: 1_722_800_000_001), CancellationToken.None);
+
+        Assert.AreEqual(3, doc.OpenAttempts, "each backup asks the provider again");
+        Assert.AreEqual(Assert.ContainsSingle(first.Files).ObjectId, Assert.ContainsSingle(third.Files).ObjectId);
+        Assert.Contains("stands in its place", Detail(third, "doc.bin"), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AFileKeptFromBefore_IsFetchedOnceTheProviderAnswers_ThoughNothingIsSaidToHaveChanged()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+        source.AddFile("photos/p.bin", Deterministic(4_000, 2));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        // The provider answers again, and the change journal names nothing:
+        // the change it heard was the last backup's to take.
+        doc.OpenFailure = null;
+        var third = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xC3, 0xB2, now: 1_722_800_000_001) with { ChangedFolders = [] }, CancellationToken.None);
+
+        Assert.IsEmpty(third.Failures);
+        var fetched = third.Files.Single(file => file.RelativePath == "docs/doc.bin");
+        Assert.IsFalse(fetched.Reused);
+        Assert.AreNotEqual(first.Files.Single(file => file.RelativePath == "docs/doc.bin").ObjectId, fetched.ObjectId);
+        Assert.AreEqual(2, doc.Opens, "fetched by the first backup, and again by the third");
+    }
+
+    [TestMethod]
+    public async Task AFileOnTheDeviceThatWillNotRead_KeepsNoVersionBefore()
+    {
+        // The owner kept this to what a provider holds: a file here that will
+        // not read is named and left out, as it always has been.
+        var source = new FakeFileSystemSource();
+        var local = source.AddFile("local.bin", Deterministic(4_000, 1));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Change(local, 5);
+        local.OpenFailure = new IOException("a bad sector");
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.IsEmpty(second.Files);
+        Assert.AreEqual("a bad sector", Detail(second, "local.bin"));
+    }
+
+    [TestMethod]
+    public async Task AFileFoundOnlyUnderAnotherName_KeepsNoVersionBefore()
+    {
+        // A file moved as well as changed: the version before is under its old
+        // name, and a manifest states its own name, so it is not put here.
+        var source = new FakeFileSystemSource();
+        source.AddFile("old/doc.bin", Deterministic(4_000, 1), fileId: 500).OnlineOnly = true;
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.Remove("old/doc.bin");
+        var moved = source.AddFile("new/doc.bin", Deterministic(4_100, 5), fileId: 500);
+        moved.OnlineOnly = true;
+        moved.Metadata = moved.Metadata with { ModifiedAt = 1_722_000_060_000 };
+        moved.OpenFailure = new IOException(TimedOut);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.IsEmpty(second.Files);
+        Assert.DoesNotContain("stands in its place", Detail(second, "new/doc.bin"), StringComparison.Ordinal);
+    }
+
     private const uint Archive = 0x20;
     private const uint Directory = 0x10;
     private const uint ReparsePoint = 0x400;
@@ -380,6 +541,22 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         node.OnlineOnly = true;
         return node;
     }
+
+    // Changed where the provider keeps it: other content, modified a minute later.
+    private static void Change(FakeFileSystemSource.Node node, byte seed)
+    {
+        node.Content = Deterministic(node.Content.Length + 100, seed);
+        node.Metadata = node.Metadata with { ModifiedAt = node.Metadata.ModifiedAt + 60_000 };
+    }
+
+    private static byte[] Snapshot(byte seed) => Enumerable.Repeat(seed, 16).ToArray();
+
+    private static SnapshotJob After(FakeFileSystemSource source, byte snapshotSeed, byte priorSeed, ulong now) =>
+        Job(source, snapshotSeed, now) with
+        {
+            PriorSnapshotId = Snapshot(priorSeed),
+            ParentSnapshots = [Snapshot(priorSeed)],
+        };
 
     private static string Detail(PublishedTreeSnapshot published, string path) =>
         published.Failures.Single(failure => PathOf(failure) == path).Detail;
