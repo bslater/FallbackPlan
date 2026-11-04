@@ -38,7 +38,7 @@ public sealed class ConfigurationContractTests : IDisposable
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.87", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.88", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -100,6 +100,26 @@ public sealed class ConfigurationContractTests : IDisposable
         Assert.AreEqual(
             """{"command":"forget_restore_receipt","run":"0123456789abcdef"}""",
             JsonSerializer.Serialize<ServiceCommand>(new ForgetRestoreReceiptCommand("0123456789abcdef"), FrameCodec.SerializerOptions));
+    }
+
+    [TestMethod]
+    public void WhatAKeptReceiptRestoredAsTheVersionBefore_CrossesUnderItsWireName_AndAPre188ServiceSaysNone()
+    {
+        // Contract 1.88 (FR-RST-004, ADR-0194 Amendment 2): how many of a kept
+        // run's files were restored as the version backed up before.
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreReceiptsResult(
+                [new RestoreReceiptDescriptor("0123456789abcdef", "complete", 1_000, new string('e', 32), "/srv/restored", 3, 0, 0, 0, 0, EarlierVersions: 2)],
+                1),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"earlier_versions\":2", listed, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestoreReceiptsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(
+                """{"result":"restore_receipts","receipts":[{"run":"0123456789abcdef","restored":3,"found_in_place":0,"skipped":0,"failed":0,"degraded":0}],"total":1}""",
+                FrameCodec.SerializerOptions),
+            out var older);
+        Assert.AreEqual(0L, Assert.ContainsSingle(older.Receipts).EarlierVersions);
     }
 
     [TestMethod]

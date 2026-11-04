@@ -14,7 +14,8 @@ namespace FallbackPlan.Cli.Tests;
 /// reaches a path, and a receipt that does not read is said to, beside the
 /// rest. A run names the set it restored where its receipt does (ADR-0126),
 /// and says how many of its files were resumed within, from the folder and
-/// through a paired service alike (ADR-0134).
+/// through a paired service alike (ADR-0134), and how many it restored as the
+/// version backed up before (ADR-0194 Amendment 2).
 /// Through a paired service (ADR-0128), a name that is not a run's and a
 /// limit below one are refused before the service is dialled. One run's
 /// receipt is let go by its name, and only that one (ADR-0139): a name that
@@ -244,6 +245,40 @@ public sealed class RestoreReceiptsVerbTests : IDisposable
         Assert.AreEqual(0, await RestoreReceiptReport.WriteServiceKeptAsync(output, client, null, CancellationToken.None));
 
         Assert.Contains("3 restored (2 resumed within), 0 skipped, 0 failed", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARunThatRestoredTheVersionBackedUpBefore_SaysHowManyOfItsFilesWere_AndNoOtherDoes()
+    {
+        const string Said = "timed out; the version backed up earlier, last modified 2024-08-01 00:00:00 UTC, stands in its place";
+        Kept("0123456789abcdef",
+            new ReceiptItem { Path = "a.cloud", Outcome = "restored", Bytes = 5, EarlierVersion = Said },
+            new ReceiptItem { Path = "b.cloud", Outcome = "failed", Bytes = 0, Detail = "the copy went away", EarlierVersion = Said },
+            new ReceiptItem { Path = "c.txt", Outcome = "restored", Bytes = 1 });
+        Kept("fedcba9876543210", new ReceiptItem { Path = "c.txt", Outcome = "restored", Bytes = 1 });
+
+        var listed = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath);
+        var json = await CliHarness.RunRawAsync("restore-receipts", "--state", _cli.StatePath, "--json");
+
+        // Only the file written is counted: one that failed was not restored
+        // as anything, though its version is the one backed up before.
+        Assert.AreEqual(0, listed.ExitCode, listed.All);
+        Assert.Contains("2 restored, 0 skipped, 1 failed; 1 restored as the version backed up before", listed.Output, StringComparison.Ordinal);
+        Assert.AreEqual(1, listed.Output.Split("version backed up before").Length - 1, "the run that restored none says nothing of it");
+        Assert.AreEqual(0, json.ExitCode, json.All);
+        Assert.Contains("\"earlier_versions\":1", json.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ThroughAPairedService_ARunThatRestoredTheVersionBackedUpBefore_SaysHowManyOfItsFilesWere()
+    {
+        await using var client = new ListingClient(
+            new FallbackPlan.Api.RestoreReceiptDescriptor("0123456789abcdef", "complete", 1_700_000_000_000, new string('e', 32), "/srv/restored", 3, 0, 0, 0, 0, EarlierVersions: 2));
+        using var output = new StringWriter();
+
+        Assert.AreEqual(0, await RestoreReceiptReport.WriteServiceKeptAsync(output, client, null, CancellationToken.None));
+
+        Assert.Contains("3 restored, 0 skipped, 0 failed; 2 restored as the version backed up before", output.ToString(), StringComparison.Ordinal);
     }
 
     [TestMethod]
