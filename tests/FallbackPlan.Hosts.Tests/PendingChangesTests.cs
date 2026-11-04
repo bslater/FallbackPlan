@@ -16,7 +16,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// for another once it is a minute old, never two at once. The files the last
 /// backup could not read are waiting too, since the next backup walks their
 /// folders to try them again, and where its failures will not read it walks
-/// in full and says why (ADR-0192 Amendment 1).
+/// in full and says why; they are read once for a snapshot, not once a count
+/// (ADR-0192 Amendment 1).
 /// </summary>
 /// <remarks>
 /// The journal is scripted, so this runs on every platform.
@@ -220,6 +221,23 @@ public sealed class PendingChangesTests : IDisposable
 
         Assert.IsNull(pending!.Files);
         Assert.Contains("failures would not read", pending.WalksInFullBecause!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ASnapshotsFailures_AreReadOnceForIt_NotOnceACount()
+    {
+        // A snapshot never changes, and its store may be a destination billed
+        // by the request: a count a minute while someone watches reads its
+        // failures once.
+        WriteTree();
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        Assert.AreEqual(0L, (await CountAsync(runtime, start.AddMinutes(10)))!.Files);
+
+        Directory.Delete(Path.Combine(_harness.RepositoryPath, "blobs", "meta"), recursive: true);
+
+        Assert.AreEqual(0L, (await CountAsync(runtime, start.AddMinutes(20)))!.Files, "read once for the snapshot");
     }
 
     private static ulong Ms(DateTimeOffset at) => (ulong)at.ToUnixTimeMilliseconds();
