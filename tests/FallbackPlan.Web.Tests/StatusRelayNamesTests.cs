@@ -10,8 +10,9 @@ namespace FallbackPlan.Web.Tests;
 /// (ADR-0047 §§5–6): the destination rows <c>app.js</c> renders as "awaiting
 /// full backup" instead of a bare "behind". Later names ride here too, among
 /// them 1.69's requests a cloud destination's store was sent (FR-DEST-019),
-/// 1.70's replica object a store holds only archived (FR-DEST-020), and
-/// 1.82's last full walk on a set (FR-SNP-012).
+/// 1.70's replica object a store holds only archived (FR-DEST-020),
+/// 1.82's last full walk on a set (FR-SNP-012), and 1.89's word that a set
+/// leaves its online-only files to their cloud provider (FR-SNP-015).
 /// </summary>
 /// <remarks>
 /// Same rationale as <c>DiagnosticsRelayTests</c>: the console serialises
@@ -405,6 +406,34 @@ public sealed class StatusRelayNamesTests
         Assert.AreEqual("docs/a.docx", docs.GetProperty("path").GetString());
         Assert.AreEqual("timed out", docs.GetProperty("reason").GetString());
         Assert.AreEqual(JsonValueKind.Null, sets[1].GetProperty("notFetched").ValueKind);
+    }
+
+    [TestMethod]
+    public async Task GetStatus_OverTheRelay_SaysWhichSetsLeaveTheirOnlineOnlyFiles()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets:
+            [
+                new BackupSetStatusDescriptor(
+                    "docs", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [], LeavesOnlineOnly: true),
+                new BackupSetStatusDescriptor(
+                    "music", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    []),
+            ],
+            ObservedAt: 10_000,
+            Notices: []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var sets = body.RootElement.GetProperty("sets");
+        Assert.IsTrue(sets[0].GetProperty("leavesOnlineOnly").GetBoolean());
+        Assert.AreEqual(JsonValueKind.Null, sets[1].GetProperty("leavesOnlineOnly").ValueKind);
     }
 
     [TestMethod]
