@@ -9,6 +9,7 @@
 - The probe: `Restore/RestoreBlobSet` reads the snapshot's manifest and its failures, and names each file the plan restores that the failures also name.
 - The figures: `Restore/RestorePlanFigures` says, among the plan's degradations, where those will not read.
 - The wire: a plan in `Api/Results` carries them, at contract 1.85; the service's plan and direct mode's carry them alike.
+- The seam: `Cli/OperationGateway` lets a test wrap the source a direct backup reads through, as the service's harness wraps the service's.
 - The clients: `Cli/RestorePlanReport` prints them under an earlier line; the console's plan step says how many, each, and why.
 - The tests:
   - `Repository.Tests/OnlineOnlyCaptureTests` — the probe names the file an earlier version stands in for, with what the backup said of it; no file new to the set, none on the device that would not read, and none outside what the plan restores; none for a backup that fetched every one.
@@ -16,6 +17,7 @@
   - `Hosts.Tests/EarlierVersionPlanTests` — the service's plan names it, through a stand-in source wrapping the real one.
   - `Api.Tests/ContractAdditiveFieldsTests` — the wire names at 1.85, and an older service's silence.
   - `Cli.Tests/GatewayRestoreReportTests` — `restore --plan` prints each, and is still a plan that may run.
+  - `Cli.Tests/RestorePlanCommandTests` — direct mode's plan of a snapshot that kept an earlier version names it and why, and exits zero.
   - `Web.DomTests/RestoreWizardDomTests` — the plan step says which and why, and the typed word alone arms the restore.
 
 ---
