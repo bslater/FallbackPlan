@@ -393,6 +393,10 @@ Object type `0x06`. Present only when something could not be captured.
 | 2 | u16 | `reason` — 1 permission, 2 not found, 3 I/O error, 4 changed during read, 5 unsupported type, 6 too large, 7 excluded by limit, 8 name not representable (§4.2) |
 | 3 | text | `detail` |
 
+A failure may name a path the snapshot's tree also holds. The tree then holds an earlier version, carried from the snapshot before because the content the path held at capture could not be read, and the failure's detail says so. A reader MUST NOT take a failure entry to mean its path is absent from the tree.
+
+> **2026-11 ([ADR-0185 Amendment 3](../../docs/adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before)).** The product writes such a failure for a changed online-only file its provider did not deliver. Nothing a reader accepts changes.
+
 A path **excluded by policy** is not a failure and MUST NOT appear here — it belongs in the policy manifest's exclude rules (§7.1). Conflating the two is how a user comes to believe they have a backup of something they excluded two years ago. → [`06-filesystem-capture.md` §6](../../docs/architecture/06-filesystem-capture.md#6-backup-set-selection)
 
 ## 9 Sharding
