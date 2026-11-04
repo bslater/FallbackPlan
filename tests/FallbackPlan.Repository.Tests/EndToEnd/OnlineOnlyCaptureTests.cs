@@ -722,6 +722,13 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         var unread = await RestoreBlobSet.EarlierVersionsAsync(catalogue, plan, store, [], Repo, keys, stopped.Token);
         Assert.IsTrue(unread.Unread);
         Assert.IsEmpty(unread.Files);
+
+        // Nor one stopped while it reads them, as a caller hanging up mid-read stops it.
+        using var hungUp = new CancellationTokenSource();
+        var midRead = await RestoreBlobSet.EarlierVersionsAsync(
+            catalogue, plan, new HangingUpStore(store, hungUp), [], Repo, keys, hungUp.Token);
+        Assert.IsTrue(midRead.Unread);
+        Assert.IsEmpty(midRead.Files);
     }
 
     [TestMethod]
@@ -879,6 +886,35 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         }
 
         return data;
+    }
+
+    /// <summary>
+    /// Stops the caller's token at the first read it is asked for, and answers
+    /// that read as a store does a cancelled one.
+    /// </summary>
+    private sealed class HangingUpStore(IObjectStore inner, CancellationTokenSource caller) : IObjectStore
+    {
+        public StoreCapabilities Capabilities => inner.Capabilities;
+
+        public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+            inner.GetMetadataAsync(key, cancellationToken);
+
+        public async ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken)
+        {
+            await caller.CancelAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+            return await inner.OpenReadAsync(key, range, cancellationToken);
+        }
+
+        public ValueTask<PutResult> PutAsync(
+            ObjectKey key, Func<CancellationToken, ValueTask<Stream>> openContent, PutConditions conditions, CancellationToken cancellationToken) =>
+            inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+        public IAsyncEnumerable<ObjectEntry> ListAsync(ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+            inner.ListAsync(prefix, options, cancellationToken);
+
+        public ValueTask<DeleteResult> DeleteAsync(ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+            inner.DeleteAsync(key, conditions, cancellationToken);
     }
 
     /// <summary>
