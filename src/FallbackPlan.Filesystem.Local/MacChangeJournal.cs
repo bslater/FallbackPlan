@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Bodu;
@@ -37,19 +36,6 @@ public sealed partial class MacChangeJournal : IChangeJournal
     private const uint CreateNoDefer = 0x02;
     private const uint CreateWatchRoot = 0x04;
     private const uint CreateFileEvents = 0x10;
-
-    private const uint MustScanSubDirs = 0x01;
-    private const uint UserDropped = 0x02;
-    private const uint KernelDropped = 0x04;
-    private const uint EventIdsWrapped = 0x08;
-    private const uint HistoryDone = 0x10;
-    private const uint RootChanged = 0x20;
-    private const uint Mount = 0x40;
-    private const uint Unmount = 0x80;
-    private const uint ItemIsFile = 0x10000;
-    private const uint ItemIsHardlink = 0x100000;
-
-    private const uint LostTrack = MustScanSubDirs | UserDropped | KernelDropped | EventIdsWrapped | RootChanged | Mount | Unmount;
 
     private static readonly Lazy<nint> ArrayCallbacks = new(() =>
         NativeLibrary.GetExport(NativeLibrary.Load(CoreFoundation), "kCFTypeArrayCallBacks"));
@@ -158,63 +144,37 @@ public sealed partial class MacChangeJournal : IChangeJournal
             return null;
         }
 
-        var named = new HashSet<ChangedFolder>();
-        foreach (var (path, flags) in events)
-        {
-            if ((flags & LostTrack) != 0)
-            {
-                doubt = string.Create(CultureInfo.InvariantCulture, $"the history lost track at '{path}' (flags 0x{flags:X})");
-                return null;
-            }
-
-            if (Below(marks, path) is not null)
-            {
-                continue;
-            }
-
-            // The system marks a file it knows has another name; one it does
-            // not mark is asked as it is now.
-            if ((flags & ItemIsFile) != 0
-                && ((flags & ItemIsHardlink) != 0 || (DarwinInterop.TryStat(path, out var file) && file.IsRegularFile && file.LinkCount > 1)))
-            {
-                doubt = $"a file with another name changed: '{path}'";
-                return null;
-            }
-
-            // A file names the folder holding it; anything else names itself,
-            // and a run walks every folder above a path it is told of.
-            var at = path.TrimEnd('/');
-            if ((flags & ItemIsFile) != 0)
-            {
-                at = Path.GetDirectoryName(at) ?? at;
-            }
-
-            foreach (var (root, resolved) in real)
-            {
-                if (Below(resolved, at) is { } relative)
-                {
-                    named.Add(new ChangedFolder(root, relative));
-                }
-            }
-        }
-
-        doubt = null;
-        return [.. named];
+        return FsEventsRecords.Named(
+            events,
+            real,
+            marks,
+            static path => DarwinInterop.TryStat(path, out var file) && file.IsRegularFile && file.LinkCount > 1,
+            SpelledOnDisk,
+            out doubt);
     }
 
-    // Folders on the volumes macOS makes are named without regard to case,
-    // as the history spells them; a sibling differing only in case on a
-    // volume that does regard it is over-named, which costs a walk.
-    private static string? Below(string root, string path)
+    // As the folders are spelled on disk: the nearest that is still there,
+    // resolved, and the rest as heard, which name nothing a walk enters.
+    private static string? SpelledOnDisk(string path)
     {
-        var trimmed = path.TrimEnd('/');
-        if (string.Equals(root, trimmed, StringComparison.OrdinalIgnoreCase))
+        var rest = new Stack<string>();
+        var at = path;
+        while (true)
         {
-            return string.Empty;
-        }
+            if (RealPath(at) is { } resolved)
+            {
+                return rest.Count == 0 ? resolved : resolved.TrimEnd('/') + "/" + string.Join('/', rest);
+            }
 
-        var prefix = root.EndsWith('/') ? root : root + "/";
-        return trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? trimmed[prefix.Length..] : null;
+            var slash = at.LastIndexOf('/');
+            if (slash <= 0)
+            {
+                return null;
+            }
+
+            rest.Push(at[(slash + 1)..]);
+            at = at[..slash];
+        }
     }
 
     private static (string Volume, ulong Id)? HistoryOf(ulong device)
@@ -240,8 +200,7 @@ public sealed partial class MacChangeJournal : IChangeJournal
                     return null;
                 }
 
-                var hex = spelled.Replace("-", string.Empty, StringComparison.Ordinal);
-                return ($"fsevents:{spelled}", ulong.Parse(hex.AsSpan(0, 16), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                return FsEventsRecords.History(spelled);
             }
             finally
             {
@@ -404,7 +363,7 @@ public sealed partial class MacChangeJournal : IChangeJournal
             var names = (byte**)paths;
             for (nuint i = 0; i < count; i++)
             {
-                if ((flags[i] & HistoryDone) != 0)
+                if ((flags[i] & FsEventsRecords.HistoryDone) != 0)
                 {
                     collector.Replayed.Set();
                     continue;
