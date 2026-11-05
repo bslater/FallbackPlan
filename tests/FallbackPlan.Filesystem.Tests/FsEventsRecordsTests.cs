@@ -7,10 +7,12 @@ namespace FallbackPlan.Filesystem.Tests;
 /// in it is doubt (ADR-0191, FR-SNP-011). A file or a link names the folder
 /// holding it; anything else names itself; a path is named under every root
 /// it lies below, as it is spelled on disk, and under none it does not. The
-/// mark's folder is never named. A history that lost track, a changed file
-/// with another name, and a path that cannot be spelled as on disk, or is
-/// spelled outside every root, are doubt. A place's history is the volume's
-/// identity, and its first eight bytes are the journal's.
+/// mark's folder is never named, and a history holds the mark heard before
+/// it was read only where it names that mark, in whatever case. A history
+/// that lost track, a changed file with another name, and a path that
+/// cannot be spelled as on disk, or is spelled outside every root, are
+/// doubt. A place's history is the volume's identity, and its first eight
+/// bytes are the journal's.
 /// </summary>
 /// <remarks>
 /// The events are built here, so this runs on every platform: what a replay
@@ -156,6 +158,26 @@ public sealed class FsEventsRecordsTests
 
         Assert.IsNull(doubt);
         Assert.IsEmpty(named!);
+    }
+
+    [TestMethod]
+    public void AHistoryNamingTheMarkHeardBeforeItWasRead_HoldsIt_HoweverItSpellsIt()
+    {
+        var mark = Marks + "/0123abcd";
+
+        Assert.IsTrue(FsEventsRecords.Holds([Real + "/docs/a.txt", mark], mark), "as it was written");
+        Assert.IsTrue(FsEventsRecords.Holds([mark + "/"], mark), "with a slash after it");
+        Assert.IsTrue(FsEventsRecords.Holds([Marks + "/0123ABCD"], mark), "in another case");
+    }
+
+    [TestMethod]
+    public void AHistoryNamingOnlyAnotherMark_OrAPathTheMarkBegins_OrNothing_DoesNotHoldIt()
+    {
+        var mark = Marks + "/0123abcd";
+
+        Assert.IsFalse(FsEventsRecords.Holds([Marks + "/4567ef01", Marks, Real + "/docs/a.txt"], mark), "another question's mark, and the folder of marks");
+        Assert.IsFalse(FsEventsRecords.Holds([mark + "0"], mark), "a path the mark only begins");
+        Assert.IsFalse(FsEventsRecords.Holds([], mark), "nothing");
     }
 
     [TestMethod]
