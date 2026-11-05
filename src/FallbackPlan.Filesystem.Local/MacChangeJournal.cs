@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Bodu;
@@ -14,9 +15,11 @@ namespace FallbackPlan.Filesystem.Local;
 /// <remarks>
 /// <para>
 /// The system takes changes from the kernel and numbers them a moment after
-/// they are made, so an answer is not given until a mark this process
-/// writes, after the history has been replayed, comes back through the same
-/// stream: every change made before it has been numbered and heard by then.
+/// they are made, and nothing promises that one it has numbered is already
+/// in the history it replays. So a mark this process writes is heard first,
+/// as it happens; then the history is replayed from the place, and taken
+/// only where it holds that mark. Every change made before the question is
+/// numbered before the mark, so a history holding the mark holds it too.
 /// </para>
 /// <para>
 /// A history the system reset, dropped events from, or tells to be scanned
@@ -56,6 +59,20 @@ public sealed partial class MacChangeJournal : IChangeJournal
 
     /// <summary>How long a mark may take to come back before the answer is doubt.</summary>
     internal static TimeSpan MarkTimeout { get; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long the history may take to hold a mark already heard, read again
+    /// and again, before the answer is doubt.
+    /// </summary>
+    internal static TimeSpan HoldTimeout { get; } = TimeSpan.FromSeconds(5);
+
+    private static readonly TimeSpan HoldPause = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// For a test: each read of the history as it is to be taken, as a system
+    /// that has not yet put a mark in its history would give it.
+    /// </summary>
+    internal Func<IReadOnlyList<(string Path, uint Flags, ulong Id)>, IReadOnlyList<(string Path, uint Flags, ulong Id)>>? AsRead { get; init; }
 
     /// <inheritdoc />
     public JournalPosition? PositionOf(string folder) => PositionOf(folder, out _);
@@ -100,13 +117,13 @@ public sealed partial class MacChangeJournal : IChangeJournal
             return [];
         }
 
-        if (Heard(since, roots, out var real, out var marks, out doubt) is not { } events)
+        if (Heard(since, roots, out var real, out var marks, out doubt) is not { } heard)
         {
             return null;
         }
 
         return FsEventsRecords.Named(
-            events.Select(heard => (heard.Path, heard.Flags)),
+            heard.Replayed.Select(replayed => (replayed.Path, replayed.Flags)),
             real,
             marks!,
             static path => DarwinInterop.TryStat(path, out var file) && file.IsRegularFile && file.LinkCount > 1,
@@ -115,13 +132,14 @@ public sealed partial class MacChangeJournal : IChangeJournal
     }
 
     /// <summary>
-    /// Every event a replay since <paramref name="since"/> hears under
-    /// <paramref name="roots"/>, the marks' among them, with its flags and
-    /// number, exactly as the system gave it; or null with
+    /// Every event the history an answer since <paramref name="since"/> is
+    /// read from replayed under <paramref name="roots"/>, the marks' among
+    /// them, with its flags and number, exactly as the system gave it, and
+    /// the mark heard before it was read; or null with
     /// <paramref name="doubt"/> saying why the history cannot be read. For a
     /// test to show what the history said where an answer is wrong.
     /// </summary>
-    internal IReadOnlyList<(string Path, uint Flags, ulong Id)>? HeardSince(
+    internal (IReadOnlyList<(string Path, uint Flags, ulong Id)> Replayed, string Mark)? HeardSince(
         JournalPosition since, IReadOnlyCollection<string> roots, out string? doubt)
     {
         ThrowHelper.ThrowIfNull(since);
@@ -129,7 +147,7 @@ public sealed partial class MacChangeJournal : IChangeJournal
         return Heard(since, roots, out _, out _, out doubt);
     }
 
-    private List<(string Path, uint Flags, ulong Id)>? Heard(
+    private (IReadOnlyList<(string Path, uint Flags, ulong Id)> Replayed, string Mark)? Heard(
         JournalPosition since,
         IReadOnlyCollection<string> roots,
         out List<(string Root, string Real)> real,
@@ -178,7 +196,51 @@ public sealed partial class MacChangeJournal : IChangeJournal
             return null;
         }
 
-        return Replay([.. real.Select(pair => pair.Real), marks], (ulong)since.Usn, marks, out doubt);
+        var mark = Path.Combine(marks, Guid.NewGuid().ToString("n"));
+        try
+        {
+            // Heard as it happens, before the history is read: by then the
+            // system has numbered every change made before the question.
+            if (Hear(marks, mark) is { } unheard)
+            {
+                doubt = unheard;
+                return null;
+            }
+
+            // A change numbered before the mark is in a history holding it.
+            var waited = Stopwatch.StartNew();
+            while (true)
+            {
+                if (Replay([.. real.Select(pair => pair.Real), marks], (ulong)since.Usn, out doubt) is not { } replayed)
+                {
+                    return null;
+                }
+
+                var read = AsRead is { } asRead ? asRead(replayed) : replayed;
+                if (FsEventsRecords.Holds(read.Select(heard => heard.Path), mark))
+                {
+                    return (read, mark);
+                }
+
+                if (waited.Elapsed >= HoldTimeout)
+                {
+                    doubt = $"the history did not hold the mark heard before it was read, '{mark}'";
+                    return null;
+                }
+
+                Thread.Sleep(HoldPause);
+            }
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(mark);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 
     // As the folders are spelled on disk: the nearest that is still there,
@@ -257,20 +319,73 @@ public sealed partial class MacChangeJournal : IChangeJournal
     }
 
     /// <summary>
-    /// Every event in the history under <paramref name="paths"/> since
-    /// <paramref name="since"/>, and every one heard after it until a mark
-    /// written in <paramref name="marks"/> comes back; or null with why.
+    /// Every event the history holds under <paramref name="paths"/> since
+    /// <paramref name="since"/>, as far as the system says its replay is
+    /// done; or null with why.
     /// </summary>
-    private unsafe List<(string Path, uint Flags, ulong Id)>? Replay(
-        IReadOnlyList<string> paths, ulong since, string marks, out string? doubt)
+    private static List<(string Path, uint Flags, ulong Id)>? Replay(IReadOnlyList<string> paths, ulong since, out string? doubt)
     {
         var collector = new Collector();
+        doubt = Streamed(
+            paths,
+            since,
+            collector,
+            () => collector.Replayed.Wait(ReplayTimeout) ? null : "the history was not replayed in time");
+        if (doubt is not null)
+        {
+            return null;
+        }
+
+        lock (collector)
+        {
+            return [.. collector.Events];
+        }
+    }
+
+    /// <summary>
+    /// Null once <paramref name="mark"/>, written in <paramref name="marks"/>
+    /// when a stream over that folder is open, comes back through it; or why
+    /// it did not.
+    /// </summary>
+    private static string? Hear(string marks, string mark)
+    {
+        var collector = new Collector();
+        return Streamed(
+            [marks],
+            FSEventsGetCurrentEventId(),
+            collector,
+            () =>
+            {
+                // The replay done says the stream is open, so the mark is
+                // heard as it happens.
+                if (!collector.Replayed.Wait(ReplayTimeout))
+                {
+                    return "the history was not replayed in time";
+                }
+
+                lock (collector)
+                {
+                    collector.Mark = mark;
+                }
+
+                File.WriteAllBytes(mark, []);
+                return collector.Marked.Wait(MarkTimeout) ? null : "the history did not hear its own mark in time";
+            });
+    }
+
+    /// <summary>
+    /// Runs <paramref name="whileOpen"/> while a stream over
+    /// <paramref name="paths"/> from <paramref name="since"/> gives
+    /// <paramref name="collector"/> what it hears, and returns what it
+    /// returns, or why the stream could not be opened.
+    /// </summary>
+    private static unsafe string? Streamed(IReadOnlyList<string> paths, ulong since, Collector collector, Func<string?> whileOpen)
+    {
         var handle = GCHandle.Alloc(collector);
         var strings = new List<nint>();
         nint array = 0;
         nint stream = 0;
         nint queue = 0;
-        string? mark = null;
         try
         {
             foreach (var path in paths)
@@ -278,8 +393,7 @@ public sealed partial class MacChangeJournal : IChangeJournal
                 var text = CFStringCreateWithCString(0, path, Utf8Encoding);
                 if (text == 0)
                 {
-                    doubt = $"'{path}' could not be given to the history";
-                    return null;
+                    return $"'{path}' could not be given to the history";
                 }
 
                 strings.Add(text);
@@ -295,44 +409,17 @@ public sealed partial class MacChangeJournal : IChangeJournal
                 0, &Heard, ref context, array, since, 0, CreateNoDefer | CreateWatchRoot | CreateFileEvents);
             if (stream == 0)
             {
-                doubt = "the history could not be opened";
-                return null;
+                return "the history could not be opened";
             }
 
             queue = NativeQueueCreate("fallbackplan.change-history", 0);
             FSEventStreamSetDispatchQueue(stream, queue);
             if (!FSEventStreamStart(stream))
             {
-                doubt = "the history could not be read";
-                return null;
+                return "the history could not be read";
             }
 
-            if (!collector.Replayed.Wait(ReplayTimeout))
-            {
-                doubt = "the history was not replayed in time";
-                return null;
-            }
-
-            // Every change made before the mark has been numbered and heard
-            // once the mark is heard.
-            mark = Path.Combine(marks, Guid.NewGuid().ToString("n"));
-            lock (collector)
-            {
-                collector.Mark = mark;
-            }
-
-            File.WriteAllBytes(mark, []);
-            if (!collector.Marked.Wait(MarkTimeout))
-            {
-                doubt = "the history did not hear its own mark in time";
-                return null;
-            }
-
-            doubt = null;
-            lock (collector)
-            {
-                return [.. collector.Events];
-            }
+            return whileOpen();
         }
         finally
         {
@@ -369,19 +456,11 @@ public sealed partial class MacChangeJournal : IChangeJournal
             }
 
             handle.Free();
-            if (mark is not null)
-            {
-                try
-                {
-                    File.Delete(mark);
-                }
-                catch (IOException)
-                {
-                }
-            }
         }
     }
 
+    // What a stream gives is kept until its replay is done, and after that
+    // only while a mark is awaited, up to the mark.
     [UnmanagedCallersOnly]
     private static unsafe void Heard(nint stream, nint info, nuint count, nint paths, uint* flags, ulong* ids)
     {
@@ -400,13 +479,13 @@ public sealed partial class MacChangeJournal : IChangeJournal
                 var path = Marshal.PtrToStringUTF8((nint)names[i]) ?? string.Empty;
                 lock (collector)
                 {
-                    if (collector.Marked.IsSet)
+                    if (collector.Marked.IsSet || (collector.Replayed.IsSet && collector.Mark is null))
                     {
-                        return;
+                        continue;
                     }
 
                     collector.Events.Add((path, flags[i], ids[i]));
-                    if (collector.Mark is { } mark && string.Equals(path.TrimEnd('/'), mark, StringComparison.OrdinalIgnoreCase))
+                    if (collector.Mark is { } mark && FsEventsRecords.IsMark(path, mark))
                     {
                         collector.Marked.Set();
                     }
