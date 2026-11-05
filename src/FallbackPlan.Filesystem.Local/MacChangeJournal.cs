@@ -100,6 +100,45 @@ public sealed partial class MacChangeJournal : IChangeJournal
             return [];
         }
 
+        if (Heard(since, roots, out var real, out var marks, out doubt) is not { } events)
+        {
+            return null;
+        }
+
+        return FsEventsRecords.Named(
+            events.Select(heard => (heard.Path, heard.Flags)),
+            real,
+            marks!,
+            static path => DarwinInterop.TryStat(path, out var file) && file.IsRegularFile && file.LinkCount > 1,
+            SpelledOnDisk,
+            out doubt);
+    }
+
+    /// <summary>
+    /// Every event a replay since <paramref name="since"/> hears under
+    /// <paramref name="roots"/>, the marks' among them, with its flags and
+    /// number, exactly as the system gave it; or null with
+    /// <paramref name="doubt"/> saying why the history cannot be read. For a
+    /// test to show what the history said where an answer is wrong.
+    /// </summary>
+    internal IReadOnlyList<(string Path, uint Flags, ulong Id)>? HeardSince(
+        JournalPosition since, IReadOnlyCollection<string> roots, out string? doubt)
+    {
+        ThrowHelper.ThrowIfNull(since);
+        ThrowHelper.ThrowIfNull(roots);
+        return Heard(since, roots, out _, out _, out doubt);
+    }
+
+    private List<(string Path, uint Flags, ulong Id)>? Heard(
+        JournalPosition since,
+        IReadOnlyCollection<string> roots,
+        out List<(string Root, string Real)> real,
+        out string? marks,
+        out string? doubt)
+    {
+        real = [];
+        marks = null;
+
         if (since.Usn < 0 || (ulong)since.Usn > FSEventsGetCurrentEventId())
         {
             doubt = "the place is ahead of the history";
@@ -108,7 +147,6 @@ public sealed partial class MacChangeJournal : IChangeJournal
 
         // Each root as the history spells it: no link above it, as the
         // system resolves a path before it records it.
-        var real = new List<(string Root, string Real)>();
         foreach (var root in roots)
         {
             if (!DarwinInterop.TryStat(root, out var stat) || !stat.IsDirectory)
@@ -133,24 +171,14 @@ public sealed partial class MacChangeJournal : IChangeJournal
         }
 
         Directory.CreateDirectory(_marks);
-        if (RealPath(_marks) is not { } marks)
+        marks = RealPath(_marks);
+        if (marks is null)
         {
             doubt = $"the folder for marks, '{_marks}', could not be resolved";
             return null;
         }
 
-        if (Replay([.. real.Select(pair => pair.Real), marks], (ulong)since.Usn, marks, out doubt) is not { } events)
-        {
-            return null;
-        }
-
-        return FsEventsRecords.Named(
-            events,
-            real,
-            marks,
-            static path => DarwinInterop.TryStat(path, out var file) && file.IsRegularFile && file.LinkCount > 1,
-            SpelledOnDisk,
-            out doubt);
+        return Replay([.. real.Select(pair => pair.Real), marks], (ulong)since.Usn, marks, out doubt);
     }
 
     // As the folders are spelled on disk: the nearest that is still there,
@@ -233,7 +261,7 @@ public sealed partial class MacChangeJournal : IChangeJournal
     /// <paramref name="since"/>, and every one heard after it until a mark
     /// written in <paramref name="marks"/> comes back; or null with why.
     /// </summary>
-    private unsafe List<(string Path, uint Flags)>? Replay(
+    private unsafe List<(string Path, uint Flags, ulong Id)>? Replay(
         IReadOnlyList<string> paths, ulong since, string marks, out string? doubt)
     {
         var collector = new Collector();
@@ -377,7 +405,7 @@ public sealed partial class MacChangeJournal : IChangeJournal
                         return;
                     }
 
-                    collector.Events.Add((path, flags[i]));
+                    collector.Events.Add((path, flags[i], ids[i]));
                     if (collector.Mark is { } mark && string.Equals(path.TrimEnd('/'), mark, StringComparison.OrdinalIgnoreCase))
                     {
                         collector.Marked.Set();
@@ -398,7 +426,7 @@ public sealed partial class MacChangeJournal : IChangeJournal
 
     private sealed class Collector
     {
-        public List<(string Path, uint Flags)> Events { get; } = [];
+        public List<(string Path, uint Flags, ulong Id)> Events { get; } = [];
 
         public ManualResetEventSlim Replayed { get; } = new();
 
