@@ -130,6 +130,18 @@ internal static class FsEventsRecords
         return [.. named];
     }
 
+    /// <summary>
+    /// Whether a history that replayed <paramref name="heard"/> holds
+    /// <paramref name="mark"/>, a mark heard before it was read: whether it
+    /// names that mark, in whatever case, as the volumes macOS makes compare
+    /// names.
+    /// </summary>
+    public static bool Holds(IEnumerable<string> heard, string mark) => heard.Any(path => IsMark(path, mark));
+
+    /// <summary>Whether <paramref name="heard"/> names <paramref name="mark"/>, in whatever case.</summary>
+    public static bool IsMark(string heard, string mark) =>
+        string.Equals(heard.TrimEnd('/'), mark, StringComparison.OrdinalIgnoreCase);
+
     // Folders on the volumes macOS makes are named without regard to case,
     // as the history spells them; a sibling differing only in case on a
     // volume that does regard it is over-named, which costs a walk.
