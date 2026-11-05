@@ -8,7 +8,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// On macOS the service asks the volume's event history what changed in a
 /// set's folders since the set's last backup (ADR-0191, FR-SNP-012): a
-/// backup after another walks only the folders that changed. The runtime
+/// backup after another walks only the folders that changed, and takes a
+/// change made long enough before it that the history gives it back as
+/// history rather than as it happens. The runtime
 /// gives every backup that history unless a harness gives its own.
 /// </summary>
 /// <remarks>
@@ -60,6 +62,32 @@ public sealed class MacChangeHistoryRunTests : IDisposable
         var second = await BackUpAsync(runtime, start.AddHours(1));
 
         Assert.AreEqual("1 file(s), 0 unchanged, 1 folder(s) not walked", second.Detail);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.MacOs, "the history is FSEvents'")]
+    [PlatformTrait(TestPlatforms.MacOs)]
+    [SupportedOSPlatform("macos")]
+    public async Task ABackupAfterAnother_TakesAChangeMadeWellBeforeIt()
+    {
+        // As a set is backed up hourly: the change is long numbered by the
+        // time the next backup asks.
+        _harness.WriteConfiguration("every 1h");
+        _harness.WriteSourceFile("docs/a.txt", "alpha");
+        _harness.WriteSourceFile("photos/b.jpg", "bravo");
+        await _harness.SetupAsync();
+        Quiet(_harness.SourceRoot);
+        await using var runtime = await ServiceRuntime.StartAsync(
+            new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
+            _timeout.Token);
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+
+        _harness.WriteSourceFile("docs/new.txt", "written well before the next backup");
+        await Task.Delay(TimeSpan.FromSeconds(5), _timeout.Token);
+        var second = await BackUpAsync(runtime, start.AddHours(1));
+
+        Assert.AreEqual("2 file(s), 1 unchanged, 1 folder(s) not walked", second.Detail, "docs walked, photos taken as it was");
     }
 
     // Until a place is found from which nothing under the folder is still to

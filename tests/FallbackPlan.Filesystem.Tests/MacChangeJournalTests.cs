@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FallbackPlan.Filesystem.Local;
@@ -10,7 +11,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// a place in it (ADR-0191, FR-SNP-011): the folder a file was written in, a
 /// folder made, moved or deleted, a folder whose permissions changed. A
 /// folder outside the roots is never named, and a change made a moment
-/// before the question is in its answer. A changed file with another name
+/// before the question is in its answer, and so is one made long enough
+/// before it that the system has numbered it and the replay gives it as
+/// history rather than as it happens. A changed file with another name
 /// cannot be answered, nor a place in another history or ahead of this one,
 /// and a folder not there has no place.
 /// </summary>
@@ -55,6 +58,32 @@ public sealed partial class MacChangeJournalTests : IDisposable
         var changed = Changed(journal, since);
         Assert.Contains("docs", changed, Listed(changed));
         Assert.IsFalse(changed.Any(path => Within(path, "photos")), Listed(changed));
+    }
+
+    [TestMethod]
+    [DataRow(3_000)]
+    [DataRow(35_000)]
+    [PlatformCondition(TestPlatforms.MacOs, "the history is FSEvents'")]
+    [PlatformTrait(TestPlatforms.MacOs)]
+    [SupportedOSPlatform("macos")]
+    public void ChangedSince_AFileWrittenLongBeforeTheQuestion_NamesTheFolderHoldingIt(int waitMs)
+    {
+        // Long enough for the system to have numbered the change, and for
+        // the second, to have written it to the volume's own record: the
+        // replay gives it as history, not as it happens.
+        Make("docs");
+        Make("photos");
+        var journal = new MacChangeJournal();
+        var since = Quiet(journal);
+
+        File.WriteAllText(Path.Combine(_root, "docs", "a.txt"), "new");
+        Thread.Sleep(waitMs);
+
+        var changed = journal.ChangedSince(since, [_root], out var doubt);
+        Assert.IsNotNull(changed, $"the history could not say: {doubt}");
+        var names = changed.Select(folder => folder.Path).ToArray();
+        Assert.Contains("docs", names, $"{Listed(names)}; {Heard(journal, since)}");
+        Assert.IsFalse(names.Any(path => Within(path, "photos")), Listed(names));
     }
 
     [TestMethod]
@@ -207,6 +236,18 @@ public sealed partial class MacChangeJournalTests : IDisposable
         string.Equals(path, folder, StringComparison.Ordinal) || path.StartsWith(folder + "/", StringComparison.Ordinal);
 
     private static string Listed(string[] changed) => $"named: {string.Join(", ", changed.Select(path => $"'{path}'"))}";
+
+    // Every event the replay heard, as the system gave it, so a wrong answer
+    // says what the history held.
+    [SupportedOSPlatform("macos")]
+    private string Heard(MacChangeJournal journal, JournalPosition since)
+    {
+        var heard = journal.HeardSince(since, [_root], out var doubt);
+        return heard is null
+            ? $"the replay could not be read: {doubt}"
+            : $"since {since.Usn}, the replay heard {heard.Count}: "
+                + string.Join("; ", heard.Select(e => string.Create(CultureInfo.InvariantCulture, $"'{e.Path}' 0x{e.Flags:X} #{e.Id}")));
+    }
 
     // A place from which the folder's own making is behind it: what is asked
     // after names only what the test does next.
