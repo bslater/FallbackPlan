@@ -22,7 +22,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// FR-DEST-015, and the direct-ship shape of FR-DEST-002, FR-DEST-003,
 /// FR-DEST-004 and FR-DEST-014. A delete through the sink that a
 /// destination refuses is not done, and what was refused stays listed for
-/// the next pass: the sink's half of FR-GC-010.
+/// the next pass: the sink's half of FR-GC-010. A set naming only object
+/// stores may be direct-ship (FR-DEST-021).
 /// </summary>
 [TestClass]
 public sealed class DirectShipTests : IDisposable

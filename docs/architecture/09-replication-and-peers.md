@@ -23,6 +23,11 @@ never a silent skip, until the peer write adapter lands.
 > destinations are peers still defaults to staging
 > ([ADR-0046](../adr/0046-direct-to-destination-publication.md) §8).
 
+> **2026-11 ([ADR-0196](../adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md)).** A direct-ship set
+> whose only destinations are object stores writes through them as it goes,
+> and keeps no data on the machine. Beside a local path or a peer, a store is
+> still filled by the sync after the run.
+
 Exchange sequence:
 
 1. repository identity and compatible format capabilities;
