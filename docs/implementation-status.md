@@ -6040,8 +6040,8 @@ with no full backup, the one that missed a run. A store that cannot be
 opened before any request is dropped and named. Beside a local path or a
 peer, a store is still left for the sync after the run.
 
-**Reads.** Outside a run, a restore, a preview and a catch-up copy read from
-the set's stores when it writes through them. Each read is a request.
+**Reads.** Outside a run, a restore, a retention pass, a preview and a
+catch-up copy read from the set's stores when it writes through them. Each read is a request.
 
 **The edges.** A run with nowhere to write names each destination it tried
 and why. `Agent/ServiceCommandHandler` accepts a direct-ship set naming only

@@ -12,7 +12,8 @@
   - `Hosts.Tests/ObjectStoreDestinationTests`, run for S3 and for Azure alike, with the store the set's only destination:
     - a backup ships the data to the store and keeps no data blob on the machine;
     - a backup after another puts the new blob and nothing the store held;
-    - the set's own archive restores from the store;
+    - the set's own archive restores from the store, every record from its own archive;
+    - a retention report reads the folder trees from the store, and walks whole;
     - a store that does not answer fails the run, naming it.
     - A set with a local path beside the store: the run itself writes nothing to the store, and leaves it behind for the sync that follows.
   - `Hosts.Tests/DirectShipTests` — a direct-ship set naming only a bucket, or only a container, is accepted; one naming only a reserved kind is still refused.
@@ -49,7 +50,7 @@ For a store, the second does not arise: a put lands whole or not at all (ADR-001
 - **A store-only set can keep no data on the machine.** Its metadata store holds the snapshots and the index. Every blob is at the store.
 - **A capture waits on the network.** A store that does not answer fails the run, as ADR-0046 §4 accepted for every direct-ship set, and the next pass tries again.
 - **Each backup reads the folder trees it builds on from the store.** The metadata store keeps snapshots and the index, not the metadata blobs, so a run reads the trees of the snapshot before it back from the store. At the test store a second backup made sixteen requests: one data put, one metadata put, the snapshot and index objects, and five reads of trees.
-- **A restore, a preview and a catch-up copy read from the store,** each read a request.
+- **A restore, a retention pass, a preview and a catch-up copy read from the store,** each read a request.
 
 ## What this does not do
 
