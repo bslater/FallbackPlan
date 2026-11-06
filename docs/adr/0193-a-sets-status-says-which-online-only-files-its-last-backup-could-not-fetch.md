@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-014 (new: a set's status says how many online-only files its last backup could not fetch, how many of them keep the version backed up before, the file whose fetch failed and why, and since when backups have been missing some); FR-SNP-014 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-that-kept-every-earlier-version-is-behind-not-partial): a backup whose every failure is an online-only file that kept its version before completes, behind, and the set's status raises no PARTIAL warning for it)
+**Requirements:** FR-SNP-014 (new: a set's status says how many online-only files its last backup could not fetch, how many of them keep the version backed up before, the file whose fetch failed and why, and since when backups have been missing some); FR-SNP-014 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-that-kept-every-earlier-version-is-behind-not-partial): a backup whose every failure is an online-only file that kept its version before completes, behind, and the set's status raises no PARTIAL warning for it); FR-SNP-014 (amended by [Amendment 2](#amendment-2-2026-11--the-hover-says-what-else-a-set-may-do): the console's hover of the line also says that the set's Other settings can leave online-only files to their cloud provider instead, and what that costs)
 **Related:** [ADR-0185](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) (a run stops fetching online-only files after the first that does not come, and its Amendment 3: a file not fetched keeps its version before), [ADR-0192](0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md) (a set's status says how many changed files its next backup will take), [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup)
 
 **Built:**
@@ -12,7 +12,7 @@
 - Direct mode: `Cli/OperationGateway` says a backup behind is behind, and it exits zero (Amendment 1).
 - The seam: `Agent/ServiceRuntime` gives a test harness the source every backup reads through.
 - The wire: a set's status in `Api/Results` carries it, at contract 1.84.
-- The clients: `Cli/CliApplication` prints a set's `not-fetched:` token; the console's card says it at a glance and in words.
+- The clients: `Cli/CliApplication` prints a set's `not-fetched:` token; the console's card says it at a glance and in words, and on hover what else a set may do (Amendment 2).
 - The tests:
   - `Repository.Tests/OnlineOnlyCaptureTests` — a run says how many it did not fetch, how many of them kept the version before, and the file that failed and why; one that fetched every one says nothing. A run whose every failure kept the version before is behind, and one that failed nothing, failed a file on the device, or missed a file new to the set is not (Amendment 1).
   - `Repository.Tests/ApplicationServiceTests` — a latest snapshot behind raises no PARTIAL warning (Amendment 1).
@@ -20,7 +20,7 @@
   - `Cli.Tests/BackupNotFetchedDirectTests` — direct mode's backup behind says so and exits zero; one that missed a new file is partial and exits non-zero (Amendment 1).
   - `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/StatusRelayNamesTests` — the wire names at 1.84, the console's names, and an older service's silence.
   - `Cli.Tests/StatusNotFetchedTokenTests` — `not-fetched:3`, and nothing where every one was fetched.
-  - `Web.DomTests/NotFetchedDomTests` — the card's count at a glance and in words, each kept, none kept, the file and the provider's words on hover, and nothing where every one was fetched.
+  - `Web.DomTests/NotFetchedDomTests` — the card's count at a glance and in words, each kept, none kept, the file and the provider's words on hover, and nothing where every one was fetched. The hover also says that the set's Other settings can leave online-only files to their provider instead, and what that costs (Amendment 2).
 
 ---
 
@@ -56,6 +56,8 @@ Once the backup has published, the service keeps what it did not fetch, one reco
 - **Contract 1.84:** a set's status carries `not_fetched`: `files`, `kept_earlier`, `since`, `path` and `reason`. Additive. A service before 1.84 says nothing.
 - **The command line:** a set's status line prints `not-fetched:3`.
 - **The console:** a set's card says `3 not downloaded` at a glance. Opened, it says `3 online-only files were not downloaded by the last backup: 2 keep the version backed up before, 1 is not in it at all · first missed 3 h ago`. On hover it names the file whose download failed and the provider's words.
+
+> **2026-11 ([Amendment 2](#amendment-2-2026-11--the-hover-says-what-else-a-set-may-do)).** The hover then says that the set's Other settings can leave online-only files to their cloud provider instead, and what that costs.
 
 The console says *downloaded*, the word a person uses for a cloud provider's files. The records say *fetched*.
 
@@ -117,9 +119,33 @@ The owner chose to grade them by what is at risk.
 - **Call it behind in a snapshot's listing.** A snapshot's capture status is the format's own, and says only that its error manifest names something.
 - **Say it in direct mode's status.** Direct mode keeps no record of what its backups did not fetch, and its status warns as before.
 
+## Amendment 2 (2026-11) — the hover says what else a set may do
+
+**Requirements:** FR-SNP-014 (amended: the console's hover of the line also says that the set's Other settings can leave online-only files to their cloud provider instead, and what that costs)
+
+### Context
+
+The line says what a provider failed to deliver. The remedy is often the provider's: to sign in again, or to serve the account the service runs as. Where that will not happen, a set may leave its online-only files to their provider instead (ADR-0195), and the console offers that among a set's Other settings (ADR-0195 Amendment 1).
+
+The owner asked that cloud-synced files in a set's sources be handled as another well-known backup tool handles them, where skipping them is an option a person can find. Here the option was in place, but a person reading why files were missed had nothing to point them to it.
+
+### Decision
+
+**The hover says what else a set may do, and what it costs.** After the file and the provider's words it says: `The set's Other settings can leave online-only files to their cloud provider instead: none is downloaded, and one new or changed there is kept only by its provider.` The line and the count are unchanged.
+
+### Consequences
+
+- A person who reads why files were missed reads, in the same place, the choice that stops the backups asking, and what it gives up.
+
+### What this does not do
+
+- **Make the choice from the line.** It says where the setting is, and the set's editor makes it.
+- **Say it on the command line.** The `not-fetched:` token is for a script to read.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first, at contract 1.84. |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-backup-that-kept-every-earlier-version-is-behind-not-partial): a backup whose every failure is an online-only file that kept its version before completes, behind, saying on how many in its detail; the set's status raises no PARTIAL warning for it; direct mode says so and exits zero; anything else completes with failures as before. |
+| 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--the-hover-says-what-else-a-set-may-do): the console's hover of the not-fetched line also says that the set's Other settings can leave online-only files to their cloud provider instead, and that then none is downloaded and one new or changed there is kept only by its provider. |

@@ -2,17 +2,18 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing); FR-SNP-009 (amended by [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name, and the failure says so)
+**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing); FR-SNP-009 (amended by [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name, and the failure says so); FR-SNP-009 (amended by [Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are): on Windows a scan sees a cloud provider's placeholders as they are, even where the system would disguise them from the process)
 **Related:** [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup), [ADR-0026](0026-phase-1-capture-shapes.md) (the capture failure reasons), [ADR-0183](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) (a file a filter keeps is read through the filter)
 
 **Built:**
 - The rule: `Domain/MetadataRules` says which Windows attribute bits make a file online-only.
 - The scan: `Filesystem.Local/LocalFileSystemSource` names an online-only file on the entry it builds.
 - The run: `Repository/SnapshotPublication` stops fetching after the first online-only file that does not come, and names each it passes.
+- The view: `Filesystem.Local/WindowsInterop` has the process see a cloud provider's placeholders as they are, and `Filesystem.Local/LocalFileSystemSource` asks it before a scan reads any attribute (Amendment 4).
 - The tests:
   - `Repository.Tests/OnlineOnlyCaptureTests` — through a stand-in source, on every platform: a fetch that fails before its first byte or part-way stops the run opening any other online-only file, each named with the file that failed and why, while a file on the device is still backed up; a file gone, refused, or on the device that will not read stops nothing; the next backup fetches what was not fetched; an unchanged online-only file is not opened again. A changed one not fetched keeps the version backed up before it, asked for again by each backup and fetched once the provider answers (Amendment 3).
   - `Domain.Tests/OnlineOnlyAttributesTests` — offline, recall on open and recall on data access each make a file online-only; pinned, unpinned and a reparse point do not.
-  - `Filesystem.Tests/LocalScanTests` — an ordinary file is not online-only, and on Windows a file carrying the offline bit is.
+  - `Filesystem.Tests/LocalScanTests` — an ordinary file is not online-only, and on Windows a file carrying the offline bit is. On Windows a scan in a process told to disguise placeholders leaves it seeing them as they are (Amendment 4).
 
 ---
 
@@ -31,6 +32,8 @@ So a set reconfigured to take in a folder of 89 online-only files ran for about 
 ### 1. The scan names an online-only file
 
 On Windows a file is online-only where its attributes carry offline, recall on open or recall on data access. Pinned and unpinned say only what the person wants kept on the device. A reparse point says only that a filter keeps the file (ADR-0183). Neither makes a file online-only.
+
+> **2026-11 ([Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are)).** The scan reads these attributes as they are. Windows can disguise placeholders from a process, as ordinary files without them, so on Windows a scan first asks to see placeholders as they are.
 
 ### 2. The first fetch that fails stops the run fetching
 
@@ -181,6 +184,33 @@ While the provider stays away each backup keeps the same version. The first back
 - **Keep a version for a file that moved and changed.**
 - **Keep a version for any other file that will not read.** The owner kept this to online-only files.
 
+## Amendment 4 (2026-11) — a scan sees placeholders as they are
+
+**Requirements:** FR-SNP-009 (amended: on Windows a scan sees a cloud provider's placeholders as they are, even where the system would disguise them from the process)
+
+### Context
+
+Decision 1 names a file online-only by its attributes. Since Windows 10 1803 the system can show a process a disguised view of a cloud provider's placeholders: ordinary files, without the attributes that say their content is online only. It shows that view to a process it judges not to understand placeholders, and a process can ask for either view for itself.
+
+A scan shown the disguised view names no file online-only. It reads each new or changed one, which downloads it, and Decision 2 never stops the run. A set that leaves its online-only files to their provider (ADR-0195) downloads them too, since it leaves only the files the scan names.
+
+The owner asked that cloud-synced files in a set's sources be handled as another well-known backup tool handles them. That tool asks to see placeholders as they are before it reads its sources. This product named online-only files and left them to their provider already; it did not ask for the view.
+
+### Decision
+
+**On Windows a scan asks to see placeholders as they are, before it reads any attribute.** It sets the process's placeholder mode to expose them. The mode is the whole process's, so a scan after the first changes nothing. Every read of a source file follows a scan in the same process, so the reads see what the scan saw. Before Windows 10 1803 the call does not exist and is skipped, since nothing there disguises a placeholder.
+
+### Consequences
+
+- An online-only file is named whatever view the process was first given. A set that fetches them stops after the first that does not come, and a set that leaves them downloads none.
+- The rest of the service sees placeholders as they are too. Capture already reads a placeholder's reparse point as a file a filter keeps (ADR-0183), which is the view it was written for.
+
+### What this does not do
+
+- **Leave online-only files out as though they were not there.** The other tool can skip them. A backup that skipped them would take each as deleted, and its earlier versions would expire. ADR-0195 chose that a set may leave them to their provider and still hold what it had.
+- **Leave out by name the files a provider keeps for itself.** Those names are one provider's, and a set's exclusions can name them.
+- **Run against a real provider.** No runner has one. The test sets the disguised view itself and sees a scan undo it. That the disguised view hides the attributes is the platform's documented behavior, not shown here.
+
 ## Status history
 
 | Date | Status | Note |
@@ -193,3 +223,4 @@ While the provider stays away each backup keeps the same version. The first back
 | 2026-11 | Accepted | Noted by [ADR-0194](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md): a restore's plan names each file it restores as a version backed up before, with what the backup said of it. |
 | 2026-11 | Accepted | Noted by [ADR-0192 Amendment 2](0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch): a set's status says how many online-only files its next backup must fetch, and their bytes. |
 | 2026-11 | Accepted | Noted by [ADR-0195](0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md): a set may leave its online-only files to their provider, the alternative set aside here, by its own choice. Its backups fetch none, and a file new or changed is left out without failing it. |
+| 2026-11 | Amended | [Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are): on Windows a scan sets the process's placeholder mode to expose a cloud provider's placeholders before it reads any attribute, so a process shown them disguised still names its online-only files; before Windows 10 1803 the call is skipped. `Filesystem.Local/WindowsInterop`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Tests/LocalScanTests` |

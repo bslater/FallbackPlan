@@ -3,6 +3,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Filesystem.Local;
 using FallbackPlan.TestSupport;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace FallbackPlan.Filesystem.Tests;
@@ -22,7 +23,9 @@ namespace FallbackPlan.Filesystem.Tests;
 /// directory junction is named a mount point, and a folder's symbolic link
 /// is not (ADR-0183 Amendment 1). A file whose Windows attributes say its
 /// content is not on this device is named online-only, and an ordinary file
-/// is not (FR-SNP-009, ADR-0185). A folder the run says is unchanged is
+/// is not (FR-SNP-009, ADR-0185); and on Windows a scan sees a cloud
+/// provider's placeholders as they are, even in a process told to disguise
+/// them (ADR-0185 Amendment 4). A folder the run says is unchanged is
 /// named and not entered (FR-SNP-010, ADR-0186). Freeing a file again does nothing on Linux
 /// and macOS; on Windows a file no provider keeps is refused and left as it
 /// was, and a file the person pinned is never asked (ADR-0185 Amendment 2).
@@ -344,6 +347,34 @@ public sealed partial class LocalScanTests : IDisposable
 
         Assert.IsTrue(entry.OnlineOnly);
     }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows disguises a cloud provider's placeholders")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    [DoNotParallelize] // The placeholder mode is the process's, shared by every thread.
+    public async Task Scan_OnWindows_SeesPlaceholdersAsTheyAre_InAProcessToldToDisguiseThem()
+    {
+        // Windows may show a process its cloud placeholders as ordinary
+        // files, without the recall bits that say the content is elsewhere.
+        // A scan must see them, or no file would ever be named online-only.
+        Write("here.txt");
+        Assert.IsGreaterThanOrEqualTo(0, (int)RtlSetProcessPlaceholderCompatibilityMode(DisguisePlaceholders), "the premise: the mode can be set");
+        Assert.AreEqual(DisguisePlaceholders, RtlQueryProcessPlaceholderCompatibilityMode(), "the premise: placeholders are disguised");
+
+        _ = await ScanAsync();
+
+        Assert.AreEqual(ExposePlaceholders, RtlQueryProcessPlaceholderCompatibilityMode());
+    }
+
+    private const sbyte DisguisePlaceholders = 1;
+    private const sbyte ExposePlaceholders = 2;
+
+    [LibraryImport("ntdll")]
+    private static partial sbyte RtlSetProcessPlaceholderCompatibilityMode(sbyte mode);
+
+    [LibraryImport("ntdll")]
+    private static partial sbyte RtlQueryProcessPlaceholderCompatibilityMode();
 
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "only Windows keeps a cloud provider's placeholders to free")]

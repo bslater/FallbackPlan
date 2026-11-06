@@ -951,7 +951,9 @@ function notFetchedLine(set) {
       ? (files === 1 ? "; it is not in that backup at all" : "; none of them is in that backup")
       : `: ${fmtCount(kept)} ${kept === 1 ? "keeps" : "keep"} the version backed up before, ${fmtCount(lost)} ${lost === 1 ? "is" : "are"} not in it at all`;
   const said = /[.!?]$/.test(m.reason) ? m.reason : `${m.reason}.`;
-  const why = `${m.path} could not be downloaded: ${said} No other online-only file was asked for after it.`;
+  // What a person may do instead, with its cost (ADR-0193 Amendment 2).
+  const instead = "The set's Other settings can leave online-only files to their cloud provider instead: none is downloaded, and one new or changed there is kept only by its provider.";
+  const why = `${m.path} could not be downloaded: ${said} No other online-only file was asked for after it. ${instead}`;
   return `<p class="sub" data-not-fetched title="${esc(why)}">${esc(head + which)} · first missed ${esc(rel(m.since))}</p>`;
 }
 

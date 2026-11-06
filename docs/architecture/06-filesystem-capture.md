@@ -22,6 +22,8 @@ The scanner streams directory traversal with memory bounded independently of fil
 
 > **2026-11 ([ADR-0195](../adr/0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md)).** A set may leave its online-only files to their cloud provider. Its backups then fetch none: a file new, or whose content changed, is left out of the snapshot and counted, and is not an entry in the error manifest. One unchanged, only moved, or changed only in its metadata is taken as ever, since none of those is fetched. A set that stops leaving them walks in full at its next backup. The console offers the choice among a set's other settings, and a set's card says it ([Amendment 1](../adr/0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md#amendment-1-2026-11--the-console-offers-the-choice-and-says-it)).
 
+> **2026-11 ([ADR-0185 Amendment 4](../adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are)).** On Windows a scan first asks to see a cloud provider's placeholders as they are. The system can disguise them from a process, as ordinary files without the attributes that name a file online-only.
+
 ## 2. Path handling
 
 Paths are the most common source of silent cross-platform data loss, so the rules are normative.

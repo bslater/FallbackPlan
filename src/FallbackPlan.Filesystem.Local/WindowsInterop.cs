@@ -123,6 +123,35 @@ internal static partial class WindowsInterop
     private static partial bool GetKernelObjectSecurity(
         SafeFileHandle handle, uint requestedInformation, byte[]? descriptor, uint length, out uint lengthNeeded);
 
+    private const sbyte PlaceholdersExposed = 2;
+
+    [LibraryImport("ntdll")]
+    private static partial sbyte RtlSetProcessPlaceholderCompatibilityMode(sbyte mode);
+
+    /// <summary>
+    /// Has this process see a cloud provider's placeholders as they are.
+    /// </summary>
+    /// <remarks>
+    /// Since Windows 10 1803 the system may show a process it judges not to
+    /// understand placeholders a disguised view of them: ordinary files,
+    /// without the attributes that say their content is online only. A scan
+    /// shown that would take every online-only file for a local one and read
+    /// it, which downloads it, whatever the set says. The mode is the
+    /// process's, so setting it again changes nothing; before 1803 the entry
+    /// point is absent and nothing is disguised.
+    /// </remarks>
+    public static void ExposePlaceholders()
+    {
+        try
+        {
+            _ = RtlSetProcessPlaceholderCompatibilityMode(PlaceholdersExposed);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // A system older than placeholders has nothing to disguise.
+        }
+    }
+
     private const int CloudPinStateUnpinned = 2;
     private const int CloudSetPinFlagNone = 0;
 
