@@ -18,7 +18,12 @@ namespace FallbackPlan.Web.DomTests;
 /// in it draws its whole focus ring, and its folder tree shows a folder
 /// nothing in which is captured a shade lighter rather than struck through,
 /// with toggles large enough to hit. Its retention step, and an existing
-/// set's, say how long a deleted file stays restorable (FR-GC-014).
+/// set's, say how long a deleted file stays restorable (FR-GC-014). A new
+/// set's storage shape follows the destinations chosen until the person sets
+/// it, as the service's default does: straight to them where one is a local
+/// path or every one is a store, staged where a peer is all a run could ship
+/// to; and the step that shows it says a set of stores alone is written
+/// through as it runs (ADR-0196 Amendment 1).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -178,6 +183,68 @@ public sealed class NewSetWizardDomTests
         Assert.IsNull(upsert.Set.Priority);
         Assert.IsTrue(upsert.Set.DirectShip, "a new set with a local destination ships straight to it");
     }
+
+    [TestMethod]
+    [DataRow("vault", true)]
+    [DataRow("bucket", true)]
+    [DataRow("friend", false)]
+    public async Task ANewSetsStorageShape_FollowsItsDestinations_WhereThePersonLeavesIt(string destination, bool directShip)
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(destinations: [Vault, Bucket, Friend]);
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenWizardAsync(harness, context);
+
+        await page.FillAsync("#set-name", "docs");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.CheckAsync("input.mark[data-mark-path=\"/data\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.CheckAsync($"[data-dest-check=\"{destination}\"]");
+        await page.ClickAsync("[data-action=\"wiz-create\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertBackupSetCommand>();
+        Assert.AreEqual(directShip, upsert.Set.DirectShip, destination);
+    }
+
+    [TestMethod]
+    [DataRow("bucket", true)]
+    [DataRow("friend", false)]
+    public async Task TheOtherSettingsStep_ShowsTheShapeTheDestinationsGive_AndSaysAStoreAloneIsWrittenThrough(
+        string destination, bool directShip)
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(destinations: [Vault, Bucket, Friend]);
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenWizardAsync(harness, context);
+
+        await page.FillAsync("#set-name", "docs");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.CheckAsync("input.mark[data-mark-path=\"/data\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.CheckAsync($"[data-dest-check=\"{destination}\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+
+        var step = page.Locator("#set-editor");
+        await Expect(step).ToHaveAttributeAsync("data-section", "other");
+        await Expect(step).ToContainTextAsync(
+            "A set whose only destinations are stores writes through them as each backup runs");
+        if (directShip)
+        {
+            await Expect(page.Locator("#set-direct-ship")).ToBeCheckedAsync();
+        }
+        else
+        {
+            await Expect(page.Locator("#set-direct-ship")).Not.ToBeCheckedAsync();
+        }
+    }
+
+    private static DestinationDescriptor Bucket =>
+        new("dest-2", "bucket", "s3", null, null, "https://objects.example.net", Bucket: "family-backups");
+
+    private static DestinationDescriptor Friend =>
+        new("dest-3", "friend", "peer", null, "mgr7e7euwdpfkggmp4astkz5ia", "friend.example:9443");
 
     [TestMethod]
     public async Task Back_AndTheStepsPassed_KeepWhatEachStepHeld()
