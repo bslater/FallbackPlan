@@ -6,7 +6,8 @@ namespace FallbackPlan.Filesystem.Local;
 /// <summary>
 /// The stat result the scanner consumes, platform-neutral: identity,
 /// classification, times in Unix milliseconds, POSIX ownership, the
-/// file's flags (ADR-0180), and a Windows entry's reparse tag (ADR-0183).
+/// file's flags (ADR-0180), a Windows entry's reparse tag (ADR-0183), and
+/// whether macOS says the file is dataless (ADR-0185 Amendment 5).
 /// Public
 /// because pre/post-read revalidation (architecture 06 §1) is part of the
 /// capture contract the publisher consumes.
@@ -25,7 +26,8 @@ public readonly record struct StatResult(
     uint RdevMajor,
     uint RdevMinor,
     FileFlagBits Flags = FileFlagBits.None,
-    uint? ReparseTag = null)
+    uint? ReparseTag = null,
+    bool Dataless = false)
 {
     private const uint TypeMask = 0xF000;
 
@@ -430,7 +432,8 @@ internal static partial class DarwinInterop
         AccessedAtMs: ToMilliseconds(stat.AccessSeconds, stat.AccessNanoseconds),
         RdevMajor: (uint)((stat.Rdev >> 24) & 0xFF),
         RdevMinor: (uint)(stat.Rdev & 0xFFFFFF),
-        Flags: MetadataRules.FileFlagsFromDarwin(stat.Flags));
+        Flags: MetadataRules.FileFlagsFromDarwin(stat.Flags),
+        Dataless: MetadataRules.IsOnlineOnlyOnDarwin(stat.Flags));
 
     private static ulong? ToMilliseconds(long seconds, long nanoseconds) =>
         seconds < 0 ? null : (ulong)seconds * 1_000 + (ulong)nanoseconds / 1_000_000;

@@ -31,6 +31,20 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
 {
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
 
+    /// <summary>
+    /// Marks the stat of each entry it names, by its path relative to the
+    /// scanned root, as macOS marks a file a provider keeps dataless. No
+    /// runner has such a provider. Set it in the flow whose scan it is for;
+    /// null, the production value, marks nothing.
+    /// </summary>
+    internal static Func<string, bool>? MarkedDataless
+    {
+        get => MarkedDatalessInFlow.Value;
+        set => MarkedDatalessInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<Func<string, bool>?> MarkedDatalessInFlow = new();
+
     /// <inheritdoc />
     public SourceFilesystemInfo Probe(string rootPath)
     {
@@ -226,6 +240,11 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
                 continue;
             }
 
+            if (MarkedDataless?.Invoke(relativePath) == true)
+            {
+                stat = stat with { Dataless = true };
+            }
+
             if (stat.IsDirectory)
             {
                 using var childScope = scope?.TryOpenChild(nameBytes);
@@ -309,12 +328,14 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             // A regular file is opened here and read from the handle. Anything
             // else — a link, a FIFO, a device — is described from its stat and
             // never opened: opening it would follow, block, or touch hardware,
-            // and none of them carries content this format stores.
-            using var content = scope is not null && stat.IsRegularFile
-                ? scope.TryOpenContent(nameBytes)
-                : null;
+            // and none of them carries content this format stores. Nor is a
+            // dataless file: opening it can ask its provider for the content,
+            // which is fetched only where the run reads it (ADR-0185
+            // Amendment 5).
+            var opens = scope is not null && stat.IsRegularFile && !stat.Dataless;
+            using var content = opens ? scope!.TryOpenContent(nameBytes) : null;
 
-            if (scope is not null && stat.IsRegularFile)
+            if (opens)
             {
                 if (content is null || content.IsInvalid)
                 {
@@ -491,6 +512,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             : nameInScope is null && scope is not null ? scope.Descriptor : -1;
 
         var metadata = CaptureMetadata(fullPath, stat, options, metadataDescriptor);
+        var onlineOnly = kind == ScanEntryKind.File && (MetadataRules.IsOnlineOnly(metadata.FileAttributes) || stat.Dataless);
 
         ReadOnlyMemory<byte>? linkTarget = null;
         if (kind == ScanEntryKind.Symlink)
@@ -540,7 +562,9 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             Identity = new ScanIdentity(stat.Device, stat.FileId, stat.LinkCount),
             Metadata = metadata,
             LinkTarget = linkTarget,
-            SparseExtents = kind == ScanEntryKind.File
+            // The probe opens the file, and an online-only one has no holes
+            // on this device to find.
+            SparseExtents = kind == ScanEntryKind.File && !onlineOnly
                 ? SparseProbe.FindHoles(fullPath, stat.Size)
                 : [],
             AlternateStreamNames = kind == ScanEntryKind.File && options.CaptureAlternateStreams && OperatingSystem.IsWindows()
@@ -549,7 +573,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             Diagnostics = diagnostics,
             FullPath = fullPath,
             ContentHandle = content,
-            OnlineOnly = kind == ScanEntryKind.File && MetadataRules.IsOnlineOnly(metadata.FileAttributes),
+            OnlineOnly = onlineOnly,
         };
     }
 
@@ -612,8 +636,9 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
 
     /// <inheritdoc />
     /// <remarks>
-    /// Only Windows names an entry online-only, so only there is anything to
-    /// free.
+    /// Only Windows frees one. macOS names a dataless file online-only too,
+    /// but evicts it again only through its provider's own interface, which
+    /// nothing here calls (ADR-0185 Amendment 5).
     /// </remarks>
     public string? FreeAgain(ScanEntry entry)
     {

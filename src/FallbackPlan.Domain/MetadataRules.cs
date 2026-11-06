@@ -122,6 +122,18 @@ public static class MetadataRules
     public static bool IsOnlineOnly(uint? fileAttributes) => (fileAttributes & OnlineOnlyFileAttributes) is > 0;
 
     /// <summary>
+    /// The macOS flag that says a file's content is not on the volume:
+    /// dataless (<c>SF_DATALESS</c>, sys/stat.h). A provider that keeps the
+    /// content sets it, and reading the file asks the provider for it
+    /// (ADR-0185 Amendment 5).
+    /// </summary>
+    public const uint DarwinDatalessFlag = 0x4000_0000;
+
+    /// <summary>Whether a macOS file's <c>st_flags</c> say its content is not on the volume.</summary>
+    /// <param name="flags"><c>st_flags</c>.</param>
+    public static bool IsOnlineOnlyOnDarwin(uint flags) => (flags & DarwinDatalessFlag) != 0;
+
+    /// <summary>
     /// Each bit of <paramref name="captured"/> a restore neither writes back
     /// nor gives an entry by making it, as encrypted, and compressed where the
     /// target keeps no compression, named in the code's words, in the bits'
