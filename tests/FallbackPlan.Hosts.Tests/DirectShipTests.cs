@@ -22,7 +22,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// FR-DEST-015, and the direct-ship shape of FR-DEST-002, FR-DEST-003,
 /// FR-DEST-004 and FR-DEST-014. A delete through the sink that a
 /// destination refuses is not done, and what was refused stays listed for
-/// the next pass: the sink's half of FR-GC-010.
+/// the next pass: the sink's half of FR-GC-010. A set naming only object
+/// stores may be direct-ship (FR-DEST-021).
 /// </summary>
 [TestClass]
 public sealed class DirectShipTests : IDisposable
@@ -703,16 +704,10 @@ public sealed class DirectShipTests : IDisposable
     }
 
     [TestMethod]
-    public async Task UpsertBackupSet_DirectShipWithNoServableDestination_IsRefusedByName()
+    public async Task UpsertBackupSet_DirectShipToAStoreAlone_IsAccepted()
     {
-        // A direct-ship set with nowhere to ship saves cleanly and then
-        // refuses every capture, which is a failure discovered at the worst
-        // possible moment. The configuration boundary is where that dies —
-        // and the rule is about what the sink can write to, not about one
-        // kind: an object store, whether a bucket or a container, is filled
-        // by the sync after a run, never written through during one
-        // (ADR-0091, ADR-0093), and a reserved kind (FR-DEST-005) is served
-        // by nothing.
+        // A bucket or a container is written through during a run when it is
+        // all the set has (ADR-0196), so a set naming only one ships directly.
         Directory.CreateDirectory(VaultA);
         WriteDirectShipConfiguration(vaultBToo: false);
         await using var runtime = await StartAsync();
@@ -732,13 +727,40 @@ public sealed class DirectShipTests : IDisposable
         var set = runtime.Configuration.BackupSets.Single();
         foreach (var store in new[] { "bucket", "container" })
         {
-            Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(
+            Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
                 new UpsertBackupSetCommand(new BackupSetDescriptor(
                     set.Id, set.Name, _harness.SourceRoot, set.Schedule, [], [], [store], DirectShip: true)),
-                Timeout), out var refused);
-            Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason, store);
-            Assert.Contains("nowhere to ship", refused.Message, StringComparison.Ordinal);
+                Timeout), store);
+            var saved = runtime.Configuration.BackupSets.Single();
+            Assert.IsTrue(saved.DirectShip, store);
+            Assert.AreEqual(store, Assert.ContainsSingle(saved.Destinations).Ref);
         }
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_DirectShipWithNoServableDestination_IsRefusedByName()
+    {
+        // A direct-ship set with nowhere to ship saves cleanly and then
+        // refuses every capture, which is a failure discovered at the worst
+        // possible moment. The configuration boundary is where that dies —
+        // and the rule is about what the sink can write to, not about one
+        // kind: a reserved kind (FR-DEST-005) is served by nothing.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(new string('9', 32), "reserved", "dropbox", null, null, null)),
+            Timeout));
+
+        var set = runtime.Configuration.BackupSets.Single();
+        Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                set.Id, set.Name, _harness.SourceRoot, set.Schedule, [], [], ["reserved"], DirectShip: true)),
+            Timeout), out var refused);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason);
+        Assert.Contains("nowhere to ship", refused.Message, StringComparison.Ordinal);
     }
 
     [TestMethod]

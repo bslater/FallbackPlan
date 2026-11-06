@@ -16,7 +16,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// destination's prefix and the repository's id, read back and proven as a
 /// local path's is, but with part of the sample drawn at random because a
 /// provider is on the far side (FR-VER-001); a direct-ship set's run leaves
-/// it to the sync that follows; a restore and a drill read from it, and the
+/// it to the sync that follows, unless the store is all the set has: then the
+/// run ships there as it goes (and beside a local path the run itself writes
+/// nothing there), keeps no data on this machine, puts only what
+/// is new, restores from it, and fails saying where when it does not answer
+/// (FR-DEST-021, ADR-0196); a restore and a drill read from it, and the
 /// schedule drills it only on a cadence somebody stated (FR-DRL-002); the
 /// deep sweep reads it back whole on a cadence somebody stated, or when a
 /// person asks, and replaces what the store altered from a sound copy
@@ -652,6 +656,142 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual("in-sync", cloud.State, cloud.Detail);
         Assert.IsTrue(cloud.HoldsNewest, "the store holds the newest backup whole");
         Assert.IsNotEmpty(Store.KeysIn(Namespace));
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_TheRunItselfWritesNothingToTheStore()
+    {
+        // The run alone, with no pass after it: it lands on the local path and
+        // leaves the store behind for the sync, so a run that can land on a
+        // disk never waits on the network.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var set = runtime.Configuration.BackupSets.Single();
+        var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.IsFalse(Store.KeysIn(Namespace).Any(IsDataBlob), "the run wrote no data to the store");
+        Assert.AreEqual(DestinationSyncState.Behind, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_ShipsTheBackupThere_AndKeepsNoDataHere()
+    {
+        // A set whose only destination is the store: the run writes its blobs
+        // there as it goes, and the machine keeps the metadata alone. With
+        // nowhere else to land, a run that did not write through would fail.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var cloud = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("in-sync", cloud.State, cloud.Detail);
+        Assert.IsTrue(cloud.HoldsNewest, "the store holds the newest backup whole");
+        Assert.IsTrue(Store.KeysIn(Namespace).Any(IsDataBlob), "the data is at the store");
+        var here = DataBlobsHere();
+        Assert.IsEmpty(here, $"no data blob is kept on this machine: {string.Join(", ", here)}");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_ABackupAfterAnother_PutsOnlyWhatIsNew()
+    {
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        var before = Store.KeysIn(Namespace).ToHashSet(StringComparer.Ordinal);
+        var mark = Store.Requests.Count;
+
+        Harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        var put = Store.Requests.Skip(mark).Where(Landed).Select(request => Uri.UnescapeDataString(request.Target)).ToList();
+        Assert.IsTrue(put.Any(IsDataBlob), $"the new file's blob went to the store: {string.Join(", ", put)}");
+        Assert.IsFalse(
+            put.Any(target => before.Any(key => target.EndsWith(key, StringComparison.Ordinal))),
+            $"nothing the store already held was put again: {string.Join(", ", put)}");
+        Assert.IsEmpty(DataBlobsHere());
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_RestoresFromIt()
+    {
+        // Nothing on this machine holds the data, so the set's own archive is
+        // read from the store.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var source = await Harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout);
+        var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
+        var restored = Path.Combine(Harness.WorkPath, "from-the-set");
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, restored, Source: source.SourceId, InPlace: true), Timeout),
+            out var restore);
+        Assert.AreEqual("complete", restore.Outcome);
+        Assert.AreEqual(0L, restore.ReadAround, "every record came from the set's own archive, not read around as missing");
+        Assert.AreEqual("alpha", File.ReadAllText(Path.Combine(restored, "docs", "a.txt")));
+        Assert.AreEqual(new string('b', 40_000), File.ReadAllText(Path.Combine(restored, "docs", "b.txt")));
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_ARetentionReport_ReadsTheFolderTreesFromIt()
+    {
+        // Retention's walk reads the folder trees out of metadata blobs, and
+        // outside a run the store is the only place they are. A restore has
+        // the set's copies to fall back on; this walk has only the sink.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var mark = Store.Requests.Count;
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: false), Timeout), out var report);
+
+        var lines = string.Join(" | ", report.Lines);
+        Assert.DoesNotContain("would not walk", lines, StringComparison.Ordinal);
+        Assert.DoesNotContain("could not", lines, StringComparison.OrdinalIgnoreCase);
+        Assert.IsTrue(
+            Store.Requests.Skip(mark).Any(request =>
+                request.Method == "GET" && Uri.UnescapeDataString(request.Target).Contains("blobs/", StringComparison.Ordinal)),
+            "the report read the trees from the store");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_WhenNothingAnswers_TheRunFails_AndSaysWhere()
+    {
+        // The trade a set with no local copy makes (ADR-0046): with its one
+        // destination away there is nowhere to write, and the run says so.
+        WriteConfiguration(directShip: true, storeOnly: true, endpoint: EndpointAt(new Uri($"http://127.0.0.1:{LoopbackPorts.Refused}")));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var set = runtime.Configuration.BackupSets.Single();
+        var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+
+        Assert.AreEqual("failed", outcome.Outcome);
+        Assert.Contains("cloud", outcome.Detail!, StringComparison.Ordinal);
+        Assert.IsEmpty(DataBlobsHere());
     }
 
     [TestMethod]
@@ -1516,6 +1656,17 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
     }
 
+    /// <summary>Whether an object key, or a request target naming one, is a data blob's.</summary>
+    /// <param name="key">The key or target.</param>
+    private static bool IsDataBlob(string key) => key.Contains("blobs/data/", StringComparison.Ordinal);
+
+    /// <summary>Every data blob this machine holds for the set, under its state and its archives.</summary>
+    private List<string> DataBlobsHere() =>
+        [.. new[] { Harness.StateDirectory, Harness.ArchivesRoot }
+            .Where(Directory.Exists)
+            .SelectMany(root => Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            .Where(path => IsDataBlob(path.Replace('\\', '/')))];
+
     /// <summary>Whether a request was a put the store took.</summary>
     /// <param name="request">The request as the store answered it.</param>
     private static bool Landed(ObjectStoreTestServer.RecordedRequest request) =>
@@ -1598,6 +1749,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="endpoint">The store's endpoint, when not the suite's own store's.</param>
     /// <param name="withVault">Whether the set copies to a local path as well.</param>
     /// <param name="referenced">Whether the set references the store at all.</param>
+    /// <param name="storeOnly">Whether the store is the set's only destination, whatever its shape.</param>
     /// <param name="drillIntervalDays">The store's drill cadence, if one is stated.</param>
     /// <param name="deepVerifyIntervalDays">The store's sweep cadence, if one is stated.</param>
     /// <param name="retention">The retention policy the set keeps at the store, if any.</param>
@@ -1608,7 +1760,8 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         bool referenced = true,
         int? drillIntervalDays = null,
         int? deepVerifyIntervalDays = null,
-        RetentionConfiguration? retention = null)
+        RetentionConfiguration? retention = null,
+        bool storeOnly = false)
     {
         List<DestinationConfiguration> destinations =
         [
@@ -1619,7 +1772,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
 
         // A local path beside the store, which the set copies to as well: a
         // set that does not reference the store still protects something.
-        if (directShip || withVault || !referenced)
+        if (!storeOnly && (directShip || withVault || !referenced))
         {
             destinations.Add(new DestinationConfiguration
             {

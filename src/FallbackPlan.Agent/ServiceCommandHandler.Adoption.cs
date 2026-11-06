@@ -650,9 +650,10 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
-        // A backup does not write through a store (ADR-0091, ADR-0093), so a
-        // set adopted from one is staged here and synced to it; from anything
-        // a run writes through, it ships directly, as ADR-0061 decided.
+        // A set adopted from a store is staged here and synced to it (ADR-0091
+        // Amendment 1, ADR-0093); from a local path or a peer it ships
+        // directly, as ADR-0061 decided. A backup writes through a store that
+        // is all its set has (ADR-0196), but adoption does not yet use it.
         var staged = destination.Kind.IsObjectStore();
         var replacement = new BackupSetConfiguration
         {
@@ -1264,12 +1265,12 @@ public sealed partial class ServiceCommandHandler
         ulong? NewestSnapshotAt,
         IReadOnlyList<string> OtherSetIds);
 
-    /// <summary>What an object store is, said as the reason a set adopted from it is staged.</summary>
+    /// <summary>What an object store is, said as why a set adopted from it is staged.</summary>
     /// <param name="destination">The destination, of a kind <see cref="DestinationKinds.IsObjectStore"/> admits.</param>
     private static string StoreNotWrittenThrough(DestinationConfiguration destination) =>
         destination.Kind == DestinationKind.AzureBlob
-            ? "an Azure Blob container, which a backup does not write through (ADR-0093)"
-            : "an S3-compatible store, which a backup does not write through (ADR-0091)";
+            ? "an Azure Blob container, from which a set is adopted as a staging set (ADR-0093)"
+            : "an S3-compatible store, from which a set is adopted as a staging set (ADR-0091)";
 
     /// <summary>
     /// The destination adoption can read from: declared, and a reachable

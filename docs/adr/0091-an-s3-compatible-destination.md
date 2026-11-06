@@ -74,6 +74,8 @@ Four things stood between the reservation and a served kind.
 
      > **Amended 2026-10 ([ADR-0012](0012-storage-provider-contract.md#amendment-5-2026-10--the-revisit-three-providers-and-the-faults-this-record-named) Amendment 5).** A store that answers is not always refusing. A throttle that outlasts a request's attempts, and a store out of room (a 507), are unavailable as well, each said so by name. A quota the store holds is a failure with a notice for the person who can raise it (FR-QUOTA-001).
    - **Direct-ship.** A run never writes through to a store. It records the store behind, and the sync that follows the run fills it from what the run shipped. A direct-ship set still needs a local path or a peer to write through.
+
+     > **Amended 2026-11 ([ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md)).** Where a set's stores are all it has, no local path and no peer, a run writes through them as it goes, and the set may be direct-ship. Beside a local path or a peer a store is still filled by the sync after the run.
    - **Restore.** A replica opens as a restore source by the repository id staging names. With staging lost, each folder under the prefix is tried. The repair and the restore fallback read it as one of the set's copies.
    - **Drill.** Only on a cadence the operator states, and on the peer's sample budget, because every read is a request and at a provider a cost. A person's drill runs at any time.
    - **Probe.** One listing of one key: the endpoint answers, the key signs, the bucket is there.
@@ -180,6 +182,12 @@ it. Both are built here.
    reads it ([ADR-0075](0075-a-restore-reads-around-damage.md)). The preview
    and the answer both say the set is staged, and why.
 
+   > **Amended 2026-11 ([ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md)).** A run now writes
+   > through a store that is all its set has, so the reason above no longer
+   > holds. Adoption still stages the set; adopting it direct-ship is
+   > ADR-0196's next step. The preview and the answer now say only that a
+   > set adopted from a store is staged.
+
 **Consequences.**
 
 - **A store's replica can be read back whole, at a cost its owner chooses.**
@@ -210,3 +218,4 @@ it. Both are built here.
 | 2026-10 | Amended (related) | [ADR-0103](0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md): the provider says which object its store holds only in an archival tier, from the storage class, the Intelligent-Tiering archive status and the restore status a HEAD answers with, and refuses a read of an archived object as archived, and declares `ArchivalTiers`. A restore's plan names those objects. |
 | 2026-10 | Amended (related) | [ADR-0111](0111-a-cloud-destination-says-what-its-store-was-asked.md): the provider tells an observer in its options of every request it sends, once an attempt, with its body's length and the length its answer said its body was, and the service counts them by destination and by day for the destination's status row (contract 1.69). The S3 provider's delete asks with a head first, and that head is told too, since it is billed. |
 | 2026-10 | Amended (related) | [ADR-0171 Amendment 2](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said): a delete in a bucket that keeps versions is answered with a delete marker, and the provider reports the length of the object it hid, from the head it asks first. |
+| 2026-11 | Amended (related) | [ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md): a run writes through the stores of a set that has nothing else, so a store-only set may be direct-ship. Decision 5 holds for a store beside a local path or a peer. |

@@ -220,6 +220,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0193](adr/0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md) | A set's status says which online-only files its last backup could not fetch: the run counts each it did not fetch and how many kept the version backed up before, with the file whose fetch failed and the provider's words; the service keeps that per set once the backup has published, since the first of the backups that each missed some, and lets it go when one fetches them all; contract 1.84, the command line's not-fetched token, the console's card; since Amendment 1 a backup whose every failure kept the version before completes, behind, the set raises no PARTIAL warning for it, and direct mode says so and exits zero | **Built** | `Application/StatusModel` · `Cli/OperationGateway` · `Repository.Tests/ApplicationServiceTests` · `Cli.Tests/BackupNotFetchedDirectTests` · `Repository/SnapshotPublication` · `Agent/NotFetchedStore` · `Agent/BackupRunner` · `Agent/ServiceRuntime` · `Api/Results` · `Cli/CliApplication` · `Repository.Tests/OnlineOnlyCaptureTests` · `Hosts.Tests/NotFetchedStatusTests` · `Cli.Tests/StatusNotFetchedTokenTests` · `Web.DomTests/NotFetchedDomTests` · [notes](#0193--files-not-fetched) |
 | [0194](adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md) | A restore's plan names the files an earlier version stands in for: the probe reads the snapshot's manifest and its failures, and names each file the plan restores that the failures also name, with what the backup said of it; failures that will not read are said among the degradations; nothing is refused for them; contract 1.85, the service's and direct mode's plans, the command line's plan, the console's plan step; since Amendment 1 the run reads them too, before it writes, and its receipt (schema 12) names each and why, or says the failures would not read, and its result counts them at contract 1.87, which the command line and the console's result step say; since Amendment 2 the listing of kept receipts counts them, those written alone, at contract 1.88 | **Built** | `Restore/RestoreBlobSet` · `Restore/RestorePlanFigures` · `Restore/RestoreExecutor` · `Api/Results` · `Cli/RestorePlanReport` · `Cli/OperationGateway` · `Repository.Tests/OnlineOnlyCaptureTests` · `Repository.Tests/RestorePlanTests` · `Hosts.Tests/EarlierVersionPlanTests` · `Cli.Tests/GatewayRestoreReportTests` · `Cli.Tests/RestorePlanCommandTests` · `Cli.Tests/RestoreReceiptDirectTests` · `Cli.Tests/RestoreReceiptsVerbTests` · `Api.Tests/ConfigurationContractTests` · `Web.DomTests/RestoreWizardDomTests` · `Web.DomTests/RestoreReceiptsDomTests` · [notes](#0194--earlier-versions-in-a-plan) |
 | [0195](adr/0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md) | A set may leave its online-only files to their cloud provider: the run asks no provider for a file new or changed in content, leaves it out of the snapshot without a failure, and counts it; one unchanged, only moved, or changed only in its metadata is taken as ever; the changes waiting count none the next backup will leave; the journal places kept say whether the set's last snapshot may lack a file left, and a set that no longer leaves them walks in full; contract 1.89 carries the choice on a set and in its status, the command line's status prints a token, and direct mode says how many it left; since Amendment 1 the console offers the choice among a set's other settings, and a set's card says it | **Built** | `Application/ClientConfiguration` · `Repository/SnapshotPublication` · `Repository/SourceComparer` · `Agent/ChangeHints` · `Agent/BackupRunner` · `Agent/PendingChangesBoard` · `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/CliApplication` · `Cli/OperationGateway` · `Repository.Tests/OnlineOnlyCaptureTests` · `Repository.Tests/ChangedFilesCountTests` · `Application.Tests/ClientConfigurationTests` · `Hosts.Tests/LeaveOnlineOnlyTests` · `Hosts.Tests/ConfigurationCommandTests` · `Cli.Tests/BackupNotFetchedDirectTests` · `Cli.Tests/StatusLeavesOnlineOnlyTokenTests` · `Api.Tests/ContractAdditiveFieldsTests` · `Web.Tests/CommandRelayTests` · `Web.Tests/StatusRelayNamesTests` · `Web.DomTests/LeaveOnlineOnlyDomTests` · [notes](#0195--online-only-files-left-to-their-provider) |
+| [0196](adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md) | A set whose only destinations are object stores ships straight to them: where a set names no local path and no peer, a run writes its blobs through its stores and keeps only metadata on the machine, a read outside a run asks the stores, a store beside a local path or a peer is still filled after the run, the set check accepts a direct-ship set naming only stores, and a run with nowhere to write names each destination it tried | **Built** | `Agent/DestinationShipSink` · `Agent/StoreComposition` · `Agent/ServiceCommandHandler` · `Hosts.Tests/ObjectStoreDestinationTests` · `Hosts.Tests/DirectShipTests` · [notes](#0196--a-store-only-set-ships-straight-to-its-stores) |
 
 ---
 
@@ -2958,7 +2959,8 @@ waiting changes neither. An unreachable store is unavailable, which closes
 itself when the store answers again.
 
 What is not built, by decision: a direct-ship run does not write through a
-store (the sync after the run fills it). A real store can be put through the
+store (the sync after the run fills it). Since ADR-0196 it does, where the
+stores are all its set has. A real store can be put through the
 contract suite by naming it in `FALLBACKPLAN_S3_TEST_*`
 (`TestSupport/ConfiguredS3Store`); without that, the suite runs against the
 in-process store, which checks every signature itself.
@@ -6019,3 +6021,47 @@ What remains is recorded rather than done:
   folders changed sees only those;
 - a changed file left is not kept at the version before in the snapshot,
   since that needs a failure for a restore to name it.
+
+### 0196 — a store-only set ships straight to its stores
+
+Built in one slice, tests first, at the owner's ask for the local and remote
+split another backup tool uses: the data at the remote store, and only the
+database that indexes it on the machine. This product had that split for a
+direct-ship set writing to a local path or a peer. A set whose only
+destinations were S3 or Azure stores had to stage, since a run never wrote
+through a store, and its trimmed staging archive still held the newest
+backup's data.
+
+**The run.** `Agent/DestinationShipSink` writes through a set's object
+stores where nothing the set names is a local path or a peer
+(`WritesThroughStores`). It opens each through `Agent/StoreComposition`, and
+holds it to every check a local path meets: the address, the destination
+with no full backup, the one that missed a run. A store that cannot be
+opened before any request is dropped and named. Beside a local path or a
+peer, a store is still left for the sync after the run.
+
+**Reads.** Outside a run, a restore, a retention pass, a preview and a
+catch-up copy read from the set's stores when it writes through them. Each read is a request.
+
+**The edges.** A run with nowhere to write names each destination it tried
+and why. `Agent/ServiceCommandHandler` accepts a direct-ship set naming only
+stores; one naming only a reserved kind is still refused.
+`Hosts.Tests/ObjectStoreDestinationTests` holds the run, the second backup,
+the restore and the store that does not answer, against an S3 store and an
+Azure container alike.
+
+A second backup at the test store made sixteen requests: one data put, one
+metadata put, the snapshot and index objects, and five reads of the folder
+trees it builds on, since the metadata store keeps snapshots and the index
+but not the metadata blobs.
+
+What remains is recorded rather than done:
+
+- a new set naming only stores still stages unless made direct-ship, and the
+  console does not say which it does;
+- a set adopted from a store is still staged;
+- existing store-only sets are not moved; a person changes the shape and
+  retires the staging archive;
+- the metadata blobs are not kept on the machine, so each backup reads the
+  trees it builds on from the store.
+
