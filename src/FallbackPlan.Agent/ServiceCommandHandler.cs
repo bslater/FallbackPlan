@@ -754,7 +754,8 @@ public sealed partial class ServiceCommandHandler(
     /// </summary>
     /// <param name="destination">The destination's declaration, or null when the reference dangles.</param>
     private static bool ShipsDirectly(DestinationConfiguration? destination) =>
-        destination?.Kind is DestinationKind.LocalPath or DestinationKind.Peer;
+        destination?.Kind is DestinationKind.LocalPath or DestinationKind.Peer
+        || (destination?.Kind.IsObjectStore() ?? false);
     private static bool TryParseLevel(string text, out VerifyLevel level, out string canonical, out ServiceError? error)
     {
         (level, canonical, error) = text switch
@@ -1860,7 +1861,7 @@ public sealed partial class ServiceCommandHandler(
         {
             return new ServiceError(
                 ServiceErrorReason.InvalidArgument,
-                "A direct-ship set needs at least one local-path or peer destination — a capture with "
+                "A direct-ship set needs at least one local-path, peer or object-store destination — a capture with "
                 + "nowhere to ship has nothing it can promise (ADR-0046).");
         }
 

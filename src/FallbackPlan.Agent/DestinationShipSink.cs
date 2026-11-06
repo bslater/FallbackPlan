@@ -222,6 +222,7 @@ public sealed class DestinationShipSink : IObjectStore
         var inScope = new List<Shipment>();
         var skipped = new List<(string, DestinationSyncState, string)>();
         var dropped = new Dictionary<string, (DestinationSyncState State, string Error)>(StringComparer.Ordinal);
+        var throughStores = WritesThroughStores(configuration, set);
 
         foreach (var reference in set.Destinations)
         {
@@ -232,21 +233,22 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
-            if (destination.Kind.IsObjectStore())
+            if (destination.Kind.IsObjectStore() && !throughStores)
             {
-                // A run writes through the destinations that keep up with a
-                // capture as it goes; an object store, a bucket or a
-                // container, is filled by the sync that follows the run, from
-                // what the run shipped (ADR-0091, ADR-0093). Behind, never
-                // failed: the destination did nothing wrong, and a behind row
-                // syncs at once.
+                // Beside a local path or a peer, which keep up with a capture
+                // as it goes, an object store, a bucket or a container, is
+                // filled by the sync that follows the run, from what the run
+                // shipped (ADR-0091, ADR-0093). Behind, never failed: the
+                // destination did nothing wrong, and a behind row syncs at
+                // once. Where the stores are all the set has, the run writes
+                // through them (ADR-0196).
                 skipped.Add((destination.Name, DestinationSyncState.Behind,
                     (destination.Kind == DestinationKind.AzureBlob ? "an azure-blob" : "an s3")
                     + " destination is filled by the sync that follows the run, from what the run shipped"));
                 continue;
             }
 
-            if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer))
+            if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer) && !destination.Kind.IsObjectStore())
             {
                 // The reserved cloud kinds (FR-DEST-005): configuration models
                 // them, the runtime does not serve them yet. A stated
@@ -375,10 +377,16 @@ public sealed class DestinationShipSink : IObjectStore
                 RecordSkip(set.Id, name, state, error, nowUnixMilliseconds);
             }
 
+            // Each destination the run tried, and why it could not be
+            // written: which one to reconnect is the whole of the remedy.
+            var tried = dropped.Select(drop => $"'{drop.Key}': {drop.Value.Error}")
+                .Concat(skipped.Select(skip => $"'{skip.Item1}': {skip.Item3}"))
+                .ToList();
             throw new IOException(
                 $"Backup set '{set.Name}' has no reachable destination to write to — with no staging archive "
                 + "(ADR-0046), a capture with nowhere to ship has nothing it can promise. "
-                + "Reconnect a destination and run again.");
+                + "Reconnect a destination and run again."
+                + (tried.Count > 0 ? " " + string.Join("; ", tried) + "." : string.Empty));
         }
 
         lock (_gate)
@@ -837,7 +845,27 @@ public sealed class DestinationShipSink : IObjectStore
         return new DeleteResult(deleted ? DeleteOutcome.Deleted : DeleteOutcome.NotFound);
     }
 
-    /// <summary>The destinations a read may consult: every configured, reachable local path, priority first.</summary>
+    /// <summary>
+    /// Whether a run of <paramref name="set"/> writes through its object
+    /// stores: only where nothing it names is a local path or a peer. Those
+    /// keep up with a capture as it goes, so a store beside one is left to
+    /// the sync that follows the run (ADR-0196).
+    /// </summary>
+    /// <param name="configuration">The configuration the set's destinations are declared in.</param>
+    /// <param name="set">The set.</param>
+    internal static bool WritesThroughStores(ClientConfiguration configuration, BackupSetConfiguration set)
+    {
+        ThrowHelper.ThrowIfNull(configuration);
+        ThrowHelper.ThrowIfNull(set);
+        return !set.Destinations.Any(reference =>
+            configuration.FindDestination(reference.Ref)?.Kind is DestinationKind.LocalPath or DestinationKind.Peer);
+    }
+
+    /// <summary>
+    /// The destinations a read may consult: every configured, reachable local
+    /// path, priority first, and the set's object stores where it writes
+    /// through them.
+    /// </summary>
     /// <param name="holdingOnly">
     /// Leaves out, outside a run, a destination with no replica of this
     /// repository yet. A read passes true: such a destination has nothing to
@@ -872,6 +900,22 @@ public sealed class DestinationShipSink : IObjectStore
         }
 
         var holders = new List<Shipment>();
+        if (WritesThroughStores(configuration, set))
+        {
+            // The stores are where the set's data is, so a read outside a
+            // run asks them, each read a request (ADR-0196). One that cannot
+            // be opened has nothing to answer with.
+            foreach (var reference in set.Destinations)
+            {
+                if (configuration.FindDestination(reference.Ref) is { AddressDefect: null } store
+                    && store.Kind.IsObjectStore()
+                    && StoreComposition.OpenObjectStore(_runtime, store, _repositoryIdHex, out _) is { } opened)
+                {
+                    holders.Add(new Shipment(store.Name, opened, SetDestinationReference.EffectivePriority(reference, store)));
+                }
+            }
+        }
+
         foreach (var reference in set.Destinations)
         {
             if (configuration.FindDestination(reference.Ref) is not
@@ -992,6 +1036,14 @@ public sealed class DestinationShipSink : IObjectStore
         ReadOnlyMemory<byte> claimPublicKey,
         CancellationToken cancellationToken)
     {
+        if (destination.Kind.IsObjectStore())
+        {
+            // A refusal before any request (no credential stored, a lapsed
+            // signature) drops this destination as any refusal does.
+            return StoreComposition.OpenObjectStore(_runtime, destination, _repositoryIdHex, out var refusal)
+                ?? throw new IOException(refusal);
+        }
+
         if (destination.Kind != DestinationKind.Peer)
         {
             return ReplicaStoreFor(destination);

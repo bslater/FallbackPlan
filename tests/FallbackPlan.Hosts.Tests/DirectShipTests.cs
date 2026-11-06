@@ -726,7 +726,7 @@ public sealed class DirectShipTests : IDisposable
         var set = runtime.Configuration.BackupSets.Single();
         foreach (var store in new[] { "bucket", "container" })
         {
-            Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
                 new UpsertBackupSetCommand(new BackupSetDescriptor(
                     set.Id, set.Name, _harness.SourceRoot, set.Schedule, [], [], [store], DirectShip: true)),
                 Timeout), store);
