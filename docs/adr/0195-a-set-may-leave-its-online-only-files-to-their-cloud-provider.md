@@ -141,3 +141,4 @@ The console's relay is generic, so the wire's names reach it as `leaveOnlineOnly
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first, at contract 1.89. |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-console-offers-the-choice-and-says-it): the console offers the choice among a set's other settings, unticked by default, and the new-set wizard's last step takes it; the summary says it, an edit sends what it shows, and a set's card says the set leaves them. |
+| 2026-11 | Accepted | Noted by [ADR-0185 Amendment 5](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags): on macOS a dataless file is named online-only, so a set that leaves online-only files leaves those too. |

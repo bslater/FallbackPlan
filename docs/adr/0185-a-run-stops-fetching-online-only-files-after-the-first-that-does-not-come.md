@@ -2,18 +2,18 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing); FR-SNP-009 (amended by [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name, and the failure says so); FR-SNP-009 (amended by [Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are): on Windows a scan sees a cloud provider's placeholders as they are, even where the system would disguise them from the process)
+**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing); FR-SNP-009 (amended by [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name, and the failure says so); FR-SNP-009 (amended by [Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are): on Windows a scan sees a cloud provider's placeholders as they are, even where the system would disguise them from the process); FR-SNP-009 (amended by [Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags): on macOS a file whose flags say it is dataless is online-only, and the walk does not open it)
 **Related:** [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup), [ADR-0026](0026-phase-1-capture-shapes.md) (the capture failure reasons), [ADR-0183](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) (a file a filter keeps is read through the filter)
 
 **Built:**
-- The rule: `Domain/MetadataRules` says which Windows attribute bits make a file online-only.
-- The scan: `Filesystem.Local/LocalFileSystemSource` names an online-only file on the entry it builds.
+- The rule: `Domain/MetadataRules` says which Windows attribute bits make a file online-only, and on macOS the dataless flag (Amendment 5).
+- The scan: `Filesystem.Local/LocalFileSystemSource` names an online-only file on the entry it builds. On macOS it names a dataless file from its flags and does not open it (Amendment 5).
 - The run: `Repository/SnapshotPublication` stops fetching after the first online-only file that does not come, and names each it passes.
 - The view: `Filesystem.Local/WindowsInterop` has the process see a cloud provider's placeholders as they are, and `Filesystem.Local/LocalFileSystemSource` asks it before a scan reads any attribute (Amendment 4).
 - The tests:
   - `Repository.Tests/OnlineOnlyCaptureTests` — through a stand-in source, on every platform: a fetch that fails before its first byte or part-way stops the run opening any other online-only file, each named with the file that failed and why, while a file on the device is still backed up; a file gone, refused, or on the device that will not read stops nothing; the next backup fetches what was not fetched; an unchanged online-only file is not opened again. A changed one not fetched keeps the version backed up before it, asked for again by each backup and fetched once the provider answers (Amendment 3).
-  - `Domain.Tests/OnlineOnlyAttributesTests` — offline, recall on open and recall on data access each make a file online-only; pinned, unpinned and a reparse point do not.
-  - `Filesystem.Tests/LocalScanTests` — an ordinary file is not online-only, and on Windows a file carrying the offline bit is. On Windows a scan in a process told to disguise placeholders leaves it seeing them as they are (Amendment 4).
+  - `Domain.Tests/OnlineOnlyAttributesTests` — offline, recall on open and recall on data access each make a file online-only; pinned, unpinned and a reparse point do not. On macOS the dataless flag does, and it is not a flag a file keeps (Amendment 5).
+  - `Filesystem.Tests/LocalScanTests` — an ordinary file is not online-only, and on Windows a file carrying the offline bit is. On Windows a scan in a process told to disguise placeholders leaves it seeing them as they are (Amendment 4). On Linux and macOS a file whose stat says it is dataless is online-only, and the walk leaves it closed (Amendment 5).
 
 ---
 
@@ -34,6 +34,8 @@ So a set reconfigured to take in a folder of 89 online-only files ran for about 
 On Windows a file is online-only where its attributes carry offline, recall on open or recall on data access. Pinned and unpinned say only what the person wants kept on the device. A reparse point says only that a filter keeps the file (ADR-0183). Neither makes a file online-only.
 
 > **2026-11 ([Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are)).** The scan reads these attributes as they are. Windows can disguise placeholders from a process, as ordinary files without them, so on Windows a scan first asks to see placeholders as they are.
+
+> **2026-11 ([Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags)).** On macOS a file is online-only where its flags say it is dataless, and the walk names it without opening it.
 
 ### 2. The first fetch that fails stops the run fetching
 
@@ -73,6 +75,8 @@ A file not fetched is in no snapshot this run publishes, so the next run finds n
 
   > **2026-11: done ([ADR-0192 Amendment 2](0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch)).** A set's status says how many of the changed files its next backup will take are online-only ones it must fetch, and their bytes.
 - **Name an online-only file on macOS.** There, the walk opens each file it classifies, which may itself fetch one. Linux has no such marker.
+
+  > **2026-11: done ([Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags)).** A file whose flags say it is dataless is online-only, and the walk does not open it.
 
 ## Alternatives considered
 
@@ -136,6 +140,8 @@ The owner chose that a backup should leave such a file as it found it.
 - A backup asks for an online-only file it fetched to be freed as soon as it has read it. The disk keeps the file only until its provider frees it, not until the person does.
 - A later backup of an unchanged file fetches nothing, so it frees nothing. Whatever the person did with the file since is theirs.
 - On Linux and macOS nothing is freed, since nothing there is named online-only.
+
+  > **2026-11 ([Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags)).** macOS now names a dataless file online-only, and frees none: it evicts a file only through its provider's own interface.
 
 ### What this does not do
 
@@ -211,6 +217,36 @@ The owner asked that cloud-synced files in a set's sources be handled as another
 - **Leave out by name the files a provider keeps for itself.** Those names are one provider's, and a set's exclusions can name them.
 - **Run against a real provider.** No runner has one. The test sets the disguised view itself and sees a scan undo it. That the disguised view hides the attributes is the platform's documented behavior, not shown here.
 
+## Amendment 5 (2026-11) — macOS names an online-only file by its flags
+
+**Requirements:** FR-SNP-009 (amended: on macOS a file whose flags say it is dataless is online-only, and the walk does not open it)
+
+### Context
+
+macOS keeps a cloud provider's file on the volume as a dataless file. Its name, size and times are there, its content is not, and its flags carry the dataless flag. Reading it asks the provider for the content, as on Windows, and opening it can too.
+
+The walk opens each regular file it names, to read its content, extended attributes and holes from the one object its stat described. So on macOS every dataless file the walk met was opened, changed or not, and none was named online-only. A provider that did not deliver cost each read its own wait (Context). A set that leaves online-only files to their provider (ADR-0195) left none on macOS, since it leaves only what the scan names.
+
+### Decision
+
+**A file whose flags carry the dataless flag is online-only.** The rule is in the domain, beside the Windows bits. It is not a flag a file keeps: like the Windows bits (Amendment 1), it says how the provider holds the file, not what the file is.
+
+**The walk does not open it.** It names the file from its stat and leaves it closed, reading its extended attributes by its path. The hole probe, which opens a file too, is skipped for an online-only file on either platform, since none of its content is on the device.
+
+**From there it is like any other online-only file.** The run reads one only when it is new or changed, and then by its path, which asks the provider. It fetches no other after the first that does not come (Decision 2), a changed one not fetched keeps its version before (Amendment 3), and none is read where the set leaves them (ADR-0195).
+
+### Consequences
+
+- An unchanged dataless file costs its provider no request.
+- A changed one is read by its path, not from a handle the walk took. The read is still held to the stat the walk took, by path, as on Windows.
+
+### What this does not do
+
+- **Free a fetched file again on macOS.** Amendment 2 unpins a file on Windows. macOS evicts one only through its provider's own interface, which a later record may take.
+- **Leave a dataless folder unlisted.** A provider can keep a folder's listing too, and the walk lists every folder it enters, which asks for it.
+- **Stop a read from fetching.** macOS lets a process refuse to fetch a dataless file. The run reads a changed file to back it up, and that read is the fetch it means.
+- **Run against a real provider.** No runner has one. The test marks a stat dataless and sees the walk name the file and leave it closed.
+
 ## Status history
 
 | Date | Status | Note |
@@ -224,3 +260,4 @@ The owner asked that cloud-synced files in a set's sources be handled as another
 | 2026-11 | Accepted | Noted by [ADR-0192 Amendment 2](0192-a-sets-status-says-how-many-changed-files-its-next-backup-will-take.md#amendment-2-2026-11--the-status-says-how-much-the-next-backup-must-fetch): a set's status says how many online-only files its next backup must fetch, and their bytes. |
 | 2026-11 | Accepted | Noted by [ADR-0195](0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md): a set may leave its online-only files to their provider, the alternative set aside here, by its own choice. Its backups fetch none, and a file new or changed is left out without failing it. |
 | 2026-11 | Amended | [Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are): on Windows a scan sets the process's placeholder mode to expose a cloud provider's placeholders before it reads any attribute, so a process shown them disguised still names its online-only files; before Windows 10 1803 the call is skipped. `Filesystem.Local/WindowsInterop`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Tests/LocalScanTests` |
+| 2026-11 | Amended | [Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags): on macOS a file whose flags carry the dataless flag is online-only; the walk names it from its stat and does not open it, and the hole probe is skipped for an online-only file. Nothing is freed on macOS. `Domain/MetadataRules`; `Filesystem.Local/PosixInterop`; `Filesystem.Local/LocalFileSystemSource`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests` |

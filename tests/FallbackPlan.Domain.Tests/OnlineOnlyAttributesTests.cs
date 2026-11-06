@@ -9,7 +9,9 @@ namespace FallbackPlan.Domain.Tests;
 /// provider's five bits is kept with a file or a folder, or named by a restore
 /// as one it did not give back (ADR-0185 Amendment 1). A file pinned to the
 /// device is one the person wants kept there, which no backup frees
-/// (ADR-0185 Amendment 2).
+/// (ADR-0185 Amendment 2). On macOS the dataless flag alone says a file's
+/// content is not on the volume, and it is not a flag a file keeps
+/// (ADR-0185 Amendment 5).
 /// </summary>
 [TestClass]
 public sealed class OnlineOnlyAttributesTests
@@ -21,6 +23,11 @@ public sealed class OnlineOnlyAttributesTests
     private const uint Unpinned = 0x10_0000;
     private const uint ReparsePoint = 0x400;
     private const uint Archive = 0x20;
+
+    // st_flags, sys/stat.h.
+    private const uint Dataless = 0x4000_0000;
+    private const uint DarwinCompressed = 0x20;
+    private const uint DarwinHidden = 0x8000;
 
     [TestMethod]
     [DataRow(RecallOnDataAccess)]
@@ -51,6 +58,20 @@ public sealed class OnlineOnlyAttributesTests
     [TestMethod]
     public void IsOnlineOnly_WithNoAttributesCaptured_IsFalse() =>
         Assert.IsFalse(MetadataRules.IsOnlineOnly(null));
+
+    [TestMethod]
+    [DataRow(Dataless, true)]
+    [DataRow(Dataless | DarwinCompressed | DarwinHidden, true)]
+    [DataRow(DarwinCompressed, false)]
+    [DataRow(DarwinHidden, false)]
+    [DataRow(0u, false)]
+    public void IsOnlineOnlyOnDarwin_IsTheDatalessFlag(uint flags, bool onlineOnly) =>
+        Assert.AreEqual(onlineOnly, MetadataRules.IsOnlineOnlyOnDarwin(flags));
+
+    [TestMethod]
+    public void FileFlagsFromDarwin_KeepsNoFlagForDataless() =>
+        Assert.AreEqual(
+            FileFlagBits.Compressed, MetadataRules.FileFlagsFromDarwin(Dataless | DarwinCompressed));
 
     [TestMethod]
     [DataRow(Offline)]
