@@ -25,7 +25,8 @@ namespace FallbackPlan.Filesystem.Tests;
 /// content is not on this device is named online-only, and an ordinary file
 /// is not (FR-SNP-009, ADR-0185); and on Windows a scan sees a cloud
 /// provider's placeholders as they are, even in a process told to disguise
-/// them (ADR-0185 Amendment 4). A folder the run says is unchanged is
+/// them (ADR-0185 Amendment 4). A file whose flags say it is dataless is
+/// online-only, and the walk does not open it (ADR-0185 Amendment 5). A folder the run says is unchanged is
 /// named and not entered (FR-SNP-010, ADR-0186). Freeing a file again does nothing on Linux
 /// and macOS; on Windows a file no provider keeps is refused and left as it
 /// was, and a file the person pinned is never asked (ADR-0185 Amendment 2).
@@ -346,6 +347,45 @@ public sealed partial class LocalScanTests : IDisposable
         var entry = (await ScanAsync()).OfType<ScanEvent.Leaf>().Single().Entry;
 
         Assert.IsTrue(entry.OnlineOnly);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "only a POSIX walk opens a file as it names it")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Scan_AFileWhoseFlagsSayItIsDataless_IsOnlineOnly_AndIsNotOpened()
+    {
+        // macOS says by a file's flags alone that a provider keeps its
+        // content. The walk opens each file it names, and opening this one
+        // could ask the provider for it, so it is named from its flags and
+        // left closed; the hole probe, which opens it too, is not run. No
+        // runner has a provider, so the stat is marked here. Both files have
+        // a hole, so a probe that ran would find one.
+        WriteWithAHole("away.bin");
+        WriteWithAHole("here.bin");
+        LocalFileSystemSource.MarkedDataless = relativePath => relativePath == "away.bin";
+
+        var entries = (await ScanAsync()).OfType<ScanEvent.Leaf>().Select(leaf => leaf.Entry).ToList();
+
+        var here = entries.Single(entry => entry.RelativePath == "here.bin");
+        Assert.IsFalse(here.OnlineOnly);
+        Assert.IsNotNull(here.ContentHandle, "the premise: the walk opens a file it names");
+        if (here.SparseExtents.Count == 0)
+        {
+            Assert.Inconclusive("This filesystem keeps no hole, so a probe that ran would find none either.");
+        }
+
+        var away = entries.Single(entry => entry.RelativePath == "away.bin");
+        Assert.IsTrue(away.OnlineOnly);
+        Assert.IsNull(away.ContentHandle, "the walk did not open it");
+        Assert.IsEmpty(away.SparseExtents, "the hole probe was not run on it");
+    }
+
+    private void WriteWithAHole(string relativePath)
+    {
+        using var stream = File.Create(Path.Combine(_root, relativePath));
+        stream.Write("head"u8);
+        stream.Seek(1024 * 1024 + 4, SeekOrigin.Begin);
+        stream.Write("tail"u8);
     }
 
     [TestMethod]
