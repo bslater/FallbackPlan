@@ -14,7 +14,7 @@
     - a backup after another puts the new blob and nothing the store held;
     - the set's own archive restores from the store;
     - a store that does not answer fails the run, naming it.
-    - A set with a local path beside the store still leaves the store to the sync that follows the run.
+    - A set with a local path beside the store: the run itself writes nothing to the store, and leaves it behind for the sync that follows.
   - `Hosts.Tests/DirectShipTests` — a direct-ship set naming only a bucket, or only a container, is accepted; one naming only a reserved kind is still refused.
 
 ---

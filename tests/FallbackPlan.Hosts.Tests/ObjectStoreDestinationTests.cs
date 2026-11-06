@@ -17,7 +17,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// local path's is, but with part of the sample drawn at random because a
 /// provider is on the far side (FR-VER-001); a direct-ship set's run leaves
 /// it to the sync that follows, unless the store is all the set has: then the
-/// run ships there as it goes, keeps no data on this machine, puts only what
+/// run ships there as it goes (and beside a local path the run itself writes
+/// nothing there), keeps no data on this machine, puts only what
 /// is new, restores from it, and fails saying where when it does not answer
 /// (FR-DEST-021, ADR-0196); a restore and a drill read from it, and the
 /// schedule drills it only on a cadence somebody stated (FR-DRL-002); the
@@ -655,6 +656,26 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual("in-sync", cloud.State, cloud.Detail);
         Assert.IsTrue(cloud.HoldsNewest, "the store holds the newest backup whole");
         Assert.IsNotEmpty(Store.KeysIn(Namespace));
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_TheRunItselfWritesNothingToTheStore()
+    {
+        // The run alone, with no pass after it: it lands on the local path and
+        // leaves the store behind for the sync, so a run that can land on a
+        // disk never waits on the network.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var set = runtime.Configuration.BackupSets.Single();
+        var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.IsFalse(Store.KeysIn(Namespace).Any(IsDataBlob), "the run wrote no data to the store");
+        Assert.AreEqual(DestinationSyncState.Behind, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
     }
 
     [TestMethod]
