@@ -11,8 +11,10 @@ namespace FallbackPlan.Web.DomTests;
 /// could not download from their provider (FR-SNP-014, ADR-0193): how many at
 /// a glance on the card itself, and when it is opened, how many keep the
 /// version backed up before and how many are not in that backup, since when,
-/// and on hover the file whose download failed and the provider's words. A
-/// set whose last backup downloaded every one says nothing.
+/// and on hover the file whose download failed and the provider's words,
+/// and that the set may leave online-only files to their provider instead
+/// (ADR-0193 Amendment 2). A set whose last backup downloaded every one says
+/// nothing.
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -38,8 +40,14 @@ public sealed class NotFetchedDomTests
         await Expect(line).ToContainTextAsync("2 keep the version backed up before, 1 is not in it at all");
         await Expect(line).ToContainTextAsync("first missed 3 h ago");
         await Expect(line).ToHaveAttributeAsync(
-            "title", "docs/a.docx could not be downloaded: The cloud operation timed out. No other online-only file was asked for after it.");
+            "title", "docs/a.docx could not be downloaded: The cloud operation timed out. No other online-only file was asked for after it. "
+                + LeaveHint);
     }
+
+    // What a person may do instead of downloading them, said with its cost.
+    private const string LeaveHint =
+        "The set's Other settings can leave online-only files to their cloud provider instead: "
+        + "none is downloaded, and one new or changed there is kept only by its provider.";
 
     [TestMethod]
     public async Task Overview_EachKeptOrNoneKept_SaysWhichInWords()
@@ -58,7 +66,8 @@ public sealed class NotFetchedDomTests
         await Expect(kept).ToContainTextAsync(
             "1 online-only file was not downloaded by the last backup; it keeps the version backed up before");
         await Expect(kept).ToHaveAttributeAsync(
-            "title", "letters/x.docx could not be downloaded: the provider is offline. No other online-only file was asked for after it.");
+            "title", "letters/x.docx could not be downloaded: the provider is offline. No other online-only file was asked for after it. "
+                + LeaveHint);
 
         var photos = page.Locator("details.set[data-set=\"photos\"]");
         await photos.Locator("summary").ClickAsync();
