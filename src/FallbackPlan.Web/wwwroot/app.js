@@ -4015,7 +4015,9 @@ function newDraft(set) {
     retention: set?.retention ?? null,
     overrides: { ...(set?.destinationRetention ?? {}) },
     priority: set?.priority ?? null,
-    directShip: set ? (set.directShip ?? false) : true,
+    // A new set's shape follows its destinations until the person sets it
+    // (null), as the service's default does (ADR-0196 Amendment 1).
+    directShip: set ? (set.directShip ?? false) : null,
     leaveOnlineOnly: set?.leaveOnlineOnly ?? false, // false: fetched, as every set before 1.89
     touched: new Set(),       // sections staged by their dialogs, pending the one confirm
     tree: new Map(),          // full path -> {open, listing}; "" is the machine's drive list
@@ -4102,7 +4104,7 @@ function renderSetSummary() {
     ["sec-retention", "retention", "Retention", esc(retentionProse(E.retention, E.overrides))],
     ["sec-other", "other", "Other settings",
       `${E.priority != null ? `priority ${esc(String(E.priority))}` : "default priority"} · `
-        + (E.directShip ? "ships straight to destinations" : "stages locally, then copies out")
+        + (directShipOf(E) ? "ships straight to destinations" : "stages locally, then copies out")
         + (E.leaveOnlineOnly ? " · online-only files left to their cloud provider" : "")],
   ];
 
@@ -4248,7 +4250,7 @@ function wizardRest(index) {
   if (ahead("other")) {
     parts.push(`schedule: ${describeSchedule(E.schedule)}`);
     parts.push(`walked in full ${describeFullWalk(E.fullWalk)}`);
-    parts.push(E.directShip ? "ships straight to its destinations" : "stages here, then copies out");
+    parts.push(directShipOf(E) ? "ships straight to its destinations" : "stages here, then copies out");
   }
   return parts.length ? `Created now, the rest stays as it is — ${parts.join(" · ")}.` : "";
 }
@@ -4374,16 +4376,18 @@ function setSectionHtml(key) {
         always outranks any priority.</p>
         <label class="mini">priority <input type="text" id="set-priority" class="num" value="${E.priority ?? ""}"></label>
         <label class="field">Storage shape</label>
-        <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into every
-        reachable destination as it runs, and this machine keeps only the catalogue. Needs at least one
-        local-path or paired-peer destination, and a backup waits when none is reachable; an S3-compatible
-        store or an Azure Blob container is filled by the sync after each run, from what the run shipped. With only a peer
-        to ship to, there is no second copy here to check its content against, so it is never reported as
-        verified. Unticked, backups stage into a
-        local archive first and copy outward after — a local buffer at the cost of a second copy on this
-        machine. Changing this on an existing set migrates it; its staging archive stays as a read-only seed
-        until you retire it from the notice.</p>
-        <label class="mini"><input type="checkbox" id="set-direct-ship" ${E.directShip ? "checked" : ""}>
+        <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into its
+        reachable destinations as it runs, and this machine keeps only the catalogue. A local path or a paired
+        peer is written as the backup runs. An S3-compatible store or an Azure Blob container beside one is
+        filled by the sync after each run, from what the run shipped. A set whose only destinations are stores
+        writes through them as each backup runs, each write a request. A backup waits when nothing it can write
+        to is reachable. With only a peer to ship to, there is no second copy here to check its content against,
+        so it is never reported as verified. Unticked, backups stage into a local archive first and copy outward
+        after — a local buffer at the cost of a second copy on this machine. A new set ships straight to its
+        destinations where one is a local path or every one is a store, and stages where a peer is all it could
+        ship to, until you set it here. Changing this on an existing set migrates it; its staging archive stays
+        as a read-only seed until you retire it from the notice.</p>
+        <label class="mini"><input type="checkbox" id="set-direct-ship" ${directShipOf(E) ? "checked" : ""}>
           ship straight to destinations</label>
         <label class="field">Online-only files</label>
         <p class="subtle">A cloud provider can keep a file's content off this device until it is opened. Backups
@@ -4479,7 +4483,7 @@ function payloadFromDraft() {
     // Always explicit from this editor (contract 1.23): null is the
     // preserve-by-omission a pre-1.23 client sends, and an editor that
     // shows the checkbox must say what it shows.
-    directShip: E.directShip,
+    directShip: directShipOf(E),
     // Always explicit from this editor (contract 1.89): null keeps what
     // stands, and the editor says what it shows.
     leaveOnlineOnly: E.leaveOnlineOnly,
@@ -5855,6 +5859,22 @@ function destinationAddress(destination) {
 
 function isObjectStore(destination) {
   return destination.kind === "s3" || destination.kind === "azure-blob";
+}
+
+// The shape a new set is born with where the person leaves it, as the
+// service gives a set that names none (ADR-0196 Amendment 1): straight to its
+// destinations where one is a local path or every one is a store, staged where
+// a peer is all a run could ship to (ADR-0058 §8).
+function bornDirectShip(names) {
+  const chosen = [...names].map(name => S.destinations.find(destination => destination.name === name)).filter(Boolean);
+  return chosen.some(destination => destination.kind === "local-path")
+    || (chosen.length > 0 && chosen.every(isObjectStore));
+}
+
+// The shape the editor shows and sends: the person's, or the one the set's
+// destinations give it.
+function directShipOf(editor) {
+  return editor.directShip ?? bornDirectShip(editor.destinations);
 }
 
 // A held shared access signature past the expiry it states: every request
