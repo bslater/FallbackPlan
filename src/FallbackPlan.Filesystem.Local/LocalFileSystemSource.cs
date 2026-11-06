@@ -100,6 +100,13 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
 
         var full = Path.GetFullPath(rootPath);
 
+        // Before a single attribute is read: a disguised placeholder would
+        // look local, and be read, and so downloaded (ADR-0185 Amendment 4).
+        if (OperatingSystem.IsWindows())
+        {
+            WindowsInterop.ExposePlaceholders();
+        }
+
         // The root's own descriptor, from which every descent below is taken.
         // Null on Windows, and on a POSIX root that cannot be opened as a
         // directory without following a link — both fall back to the
