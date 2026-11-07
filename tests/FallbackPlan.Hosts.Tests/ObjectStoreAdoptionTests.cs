@@ -10,12 +10,13 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// Adopting an archive from an object store after the machine that wrote it
-/// is gone (FR-DR-009, ADR-0061, ADR-0091 Amendment 1, ADR-0093): every case
-/// here runs once for each store API the product speaks. Discovery lists
-/// what the store's prefix holds from each descriptor alone; the preview
-/// shows what the archive recorded; and adoption takes the set back under
-/// its original id as a direct-ship set, since a store that is all its set
-/// has is written through as each backup runs (ADR-0196 Amendment 2). Only
+/// is gone (FR-DR-009, ADR-0061, ADR-0091 Amendment 1, ADR-0093, ADR-0196
+/// Amendment 2): every case here runs once for each store API the product
+/// speaks. Discovery lists what the store's prefix holds from each
+/// descriptor alone; the preview shows what the archive recorded; and
+/// adoption takes the set back under its original id as a direct-ship set,
+/// since a store that is all its set has is written through as each backup
+/// runs. Only
 /// the archive's metadata is copied here: the next backup is incremental
 /// against the store, writes through it, and keeps no data on this machine,
 /// and an older snapshot restores from the store.

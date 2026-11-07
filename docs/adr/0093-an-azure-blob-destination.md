@@ -75,6 +75,8 @@ The Blob API is the S3 API's problem again, with different answers in places tha
 
    > **Amended 2026-11 ([ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md)).** A direct-ship run writes through a container that is all its set has. Beside a local path or a peer, it is still left behind for the sync after the run.
 
+   > **Amended 2026-11 ([ADR-0196 Amendment 2](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it)).** A set adopted from a container is adopted direct-ship, not into a staging set. Only the archive's metadata is copied to the machine.
+
    The host tests became one suite for both stores. Every case `Hosts.Tests/S3DestinationTests` and `Hosts.Tests/S3AdoptionTests` held is now in `Hosts.Tests/ObjectStoreDestinationTests` and `Hosts.Tests/ObjectStoreAdoptionTests`, run once against a bucket and once against a container. The two stores are therefore held to one behaviour, not two that could drift.
 
 6. **Failure domain.** Independent unless declared otherwise, as [ADR-0018](0018-replica-failure-domains.md) Amendment 2 says of a cloud kind.
@@ -150,3 +152,4 @@ A store resolves it at once rather than at the next pass. A credential file that
 | 2026-10 | Amended (related) | [ADR-0111](0111-a-cloud-destination-says-what-its-store-was-asked.md): the provider tells an observer in its options of every request it sends, once an attempt, with its body's length and the length its answer said its body was, and the service counts them by destination and by day for the destination's status row (contract 1.69). |
 | 2026-10 | Amended (related) | [ADR-0171 Amendment 4](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-4-2026-10--a-delete-an-account-keeps-under-soft-delete-is-counted-and-noticed-nowhere): the provider reads from a delete's own answer whether it was permanent, and reports one the account kept under soft delete as such, still in one request. |
 | 2026-11 | Amended (related) | [ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md): a direct-ship run writes through a container that is all its set has. |
+| 2026-11 | Amended (related) | [ADR-0196 Amendment 2](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it): a set adopted from a container is adopted direct-ship, with only the archive's metadata copied to the machine. |

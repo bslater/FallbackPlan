@@ -201,7 +201,7 @@ A replica lands under `<prefix>/<repository id>/`, the layout a bucket gives it.
 
 A replica lands under `<prefix>/<repository id>/`, the layout a local path gives it. The shared suite (§6) runs against an in-process store that checks every signature, and against any real store named in the environment; a store that does not honour the conditional create fails it.
 
-The deep sweep reads a store's replica back whole only on a cadence its operator states, as it reads a peer's, because every read is a request the provider may charge for. What it finds is repaired as at a local path, except that the damaged object is deleted and a sound copy put in its place, since nothing here overwrites. An archive is adopted from a store as from a directory, into a staging set, because a run never writes through a store ([ADR-0091](../adr/0091-an-s3-compatible-destination.md) Amendment 1).
+The deep sweep reads a store's replica back whole only on a cadence its operator states, as it reads a peer's, because every read is a request the provider may charge for. What it finds is repaired as at a local path, except that the damaged object is deleted and a sound copy put in its place, since nothing here overwrites. An archive is adopted from a store as from a directory ([ADR-0091](../adr/0091-an-s3-compatible-destination.md) Amendment 1). The adopted set is direct-ship, keeping only its metadata on the machine, since a run writes through a store that is all its set has ([ADR-0196](../adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it) Amendment 2).
 
 ### 4.5 The ship sink — a composed store, not a provider
 

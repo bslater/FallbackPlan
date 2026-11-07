@@ -126,6 +126,11 @@ apply here.
 > keeps: the metadata, and the data the newest snapshot's files are read
 > from.
 
+> **Amended 2026-11 ([ADR-0196 Amendment 2](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it)).**
+> A run now writes through a store that is all its set has, so a set adopted
+> from a store or a container is appended as direct-ship like any other, and
+> only its metadata is copied into the set's metadata store.
+
 A recorded root missing on this machine is **reported, never refused**: the
 person edits the set, and nothing silently rewrites a path. A set already
 configured against this very archive is acknowledged rather than repeated —
@@ -403,3 +408,4 @@ verb guarantees an adoption as shown, not as understood.
 | 2026-10 | Amended (related) | [ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1: an archive is discovered, previewed and adopted from an S3-compatible store by the same steps (§6), and the set it adopts is a staging set seeded with what a trimmed staging archive keeps, since a run never writes through a store (§3). `Agent/ServiceCommandHandler`; `Hosts.Tests/S3AdoptionTests`, `Web.Tests/AdoptionCeremonyTests` and `Web.DomTests/ConfigEditingDomTests` |
 | 2026-10 | Amended (related) | [ADR-0093](0093-an-azure-blob-destination.md): an archive is discovered, previewed and adopted from an Azure Blob container by the same steps as from a bucket, into a staging set for the same reason (`Agent/ServiceCommandHandler`, `Hosts.Tests/AzureBlobAdoptionTests`) |
 | 2026-10 | Amended (related) | [ADR-0094](0094-a-deleted-file-stays-restorable.md): Amendment 1's retention map gains rule 6, keep_deleted_days, recorded and re-declared with the set's own policy and said in the adoption report (FR-GC-014, contract 1.62). `Repository.Format/Manifests/PolicyManifest`, `Agent/RecordedRetentionMapping`, `Agent/ServiceCommandHandler.Adoption.cs`; `Repository.Tests/Format/ManifestCodecTests`, `Hosts.Tests/DestinationAdoptionTests` |
+| 2026-11 | Amended (related) | [ADR-0196 Amendment 2](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it): a set adopted from a store or a container is appended as direct-ship, as §3 adopts every other set, with only the archive's metadata copied to the machine. |
