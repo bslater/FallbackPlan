@@ -534,7 +534,6 @@ public sealed partial class ServiceCommandHandler
         }
 
         RecordedShape shape;
-        HashSet<string>? newestData = null;
         var survey = await FanOut.PublicationSurveyAsync(replicaStore, cancellationToken).ConfigureAwait(false);
         using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(replicaStore, repository, cancellationToken)
             .ConfigureAwait(false))
@@ -543,10 +542,6 @@ public sealed partial class ServiceCommandHandler
         {
             shape = await ReadRecordedShapeAsync(catalogue, reader, replicaStore, repository, cancellationToken)
                 .ConfigureAwait(false);
-            if (destination.Kind.IsObjectStore() && shape.NewestSnapshotId is { } newest)
-            {
-                newestData = NewestBackupData(catalogue, repository, newest);
-            }
         }
 
         // FR-DR-009: what takes effect is what the person was shown. An
@@ -650,11 +645,10 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
-        // A set adopted from a store is staged here and synced to it (ADR-0091
-        // Amendment 1, ADR-0093); from a local path or a peer it ships
-        // directly, as ADR-0061 decided. A backup writes through a store that
-        // is all its set has (ADR-0196), but adoption does not yet use it.
-        var staged = destination.Kind.IsObjectStore();
+        // The set ships directly, as ADR-0061 decided: the archive it is
+        // adopted from is all it has, and a backup writes through a store that
+        // is all its set has as it does to a local path or a peer (ADR-0196
+        // Amendment 2).
         var replacement = new BackupSetConfiguration
         {
             Id = setId,
@@ -665,7 +659,7 @@ public sealed partial class ServiceCommandHandler
             Schedule = schedule,
             Retention = retention,
             Priority = command.Priority,
-            DirectShip = !staged,
+            DirectShip = true,
             Destinations = [new SetDestinationReference { Ref = destination.Name }],
         };
 
@@ -697,33 +691,11 @@ public sealed partial class ServiceCommandHandler
 
         // ---- writes ----
 
-        string? stagedLine = null;
-        if (staged)
-        {
-            // What a trimmed staging archive holds (ADR-0034 §6): every
-            // metadata object and blob, and the data the newest backup's
-            // files are read from, which the next backup's reuse probes for.
-            // Older data stays at the store, which a restore reads it from.
-            var stagingPath = runtime.ArchivePath(setId);
-            Directory.CreateDirectory(stagingPath);
-            var copied = await ServiceRuntime.CopyBackAsync(
-                replicaStore,
-                new LocalFileSystemObjectStore(stagingPath, runtime.LoggerFor<LocalFileSystemObjectStore>()),
-                key => key.StartsWith("blobs/meta/", StringComparison.Ordinal) || newestData?.Contains(key) == true,
-                cancellationToken).ConfigureAwait(false);
-            stagedLine = $"Destination '{destination.Name}' is {StoreNotWrittenThrough(destination)}, so the set is "
-                + $"staged here: {copied.Objects} object(s), {copied.Bytes} bytes — the archive's metadata and its "
-                + "newest backup's data — were copied into its staging archive, and each backup is synced to the "
-                + "store after it runs.";
-        }
-        else
-        {
-            var metadataPath = runtime.SetMetadataPath(setId);
-            Directory.CreateDirectory(metadataPath);
-            await ServiceRuntime.CopyMetadataAsync(
-                replicaStore, new LocalFileSystemObjectStore(metadataPath, runtime.LoggerFor<LocalFileSystemObjectStore>()),
-                cancellationToken).ConfigureAwait(false);
-        }
+        var metadataPath = runtime.SetMetadataPath(setId);
+        Directory.CreateDirectory(metadataPath);
+        await ServiceRuntime.CopyMetadataAsync(
+            replicaStore, new LocalFileSystemObjectStore(metadataPath, runtime.LoggerFor<LocalFileSystemObjectStore>()),
+            cancellationToken).ConfigureAwait(false);
 
         var writerResumed = await ResumeWriterIdentityAsync(replicaStore, lines, cancellationToken).ConfigureAwait(false);
 
@@ -746,9 +718,11 @@ public sealed partial class ServiceCommandHandler
         var missingRoots = resolvedRoots.Where(root => !Directory.Exists(root.Path)).Select(root => root.Path).ToList();
         lines.Insert(0, $"Set '{name}' adopted from destination '{destination.Name}' under its original id; "
             + $"{shape.SnapshotCount} snapshot(s) resume here, and the next backup is incremental.");
-        if (stagedLine is not null)
+        if (destination.Kind.IsObjectStore())
         {
-            lines.Insert(1, stagedLine);
+            lines.Insert(1, $"Destination '{destination.Name}' is {WrittenThrough(destination)}, so the set "
+                + "ships straight to it: only the archive's metadata was copied here, and each backup writes through "
+                + "the store as it runs.");
         }
         if (missingRoots.Count > 0)
         {
@@ -952,9 +926,9 @@ public sealed partial class ServiceCommandHandler
         if (destination.Kind.IsObjectStore())
         {
             lines.Add(
-                $"Destination '{destination.Name}' is {StoreNotWrittenThrough(destination)}, so the set would be "
-                + "staged on this machine: the archive's metadata and its newest backup's data are copied into its "
-                + "staging archive, and each backup is synced back to the store.");
+                $"Destination '{destination.Name}' is {WrittenThrough(destination)}, so the set "
+                + "ships straight to it: only the archive's metadata is copied here, and each backup writes through "
+                + "the store as it runs.");
         }
 
         lines.AddRange(warnings.Select(warning => $"Catalogue rebuild: {warning}"));
@@ -1115,24 +1089,6 @@ public sealed partial class ServiceCommandHandler
     }
 
     /// <summary>
-    /// The data blobs a staging archive adopted from a store holds beside its
-    /// metadata: those the newest backup's files are read from, as the
-    /// catalogue just rebuilt from the store's index places them. A trimmed
-    /// staging archive keeps the same (ADR-0034 §6), because the next
-    /// backup's reuse is confirmed against staging.
-    /// </summary>
-    private static HashSet<string> NewestBackupData(
-        CatalogueDb catalogue, OpenedRepository repository, string newestSnapshotId)
-    {
-        using var keys = new StoreBlobKeyDeriver(repository.Keys.KeyIdKey);
-        return
-        [
-            .. catalogue.ContentOf(Convert.FromHexString(newestSnapshotId)).Blobs
-                .Select(blob => BlobStoreKeys.ForBlob(blob.Class, blob.StoreBlobKey ?? keys.Derive(blob.BlobId)).Value),
-        ];
-    }
-
-    /// <summary>
     /// Seeds the destination's ledger row as a completed baseline at the
     /// replica's own publication head: the sink then admits the destination
     /// on the next run, and the first fan-out pass reconciles by listing
@@ -1265,12 +1221,11 @@ public sealed partial class ServiceCommandHandler
         ulong? NewestSnapshotAt,
         IReadOnlyList<string> OtherSetIds);
 
-    /// <summary>What an object store is, said as why a set adopted from it is staged.</summary>
+    /// <summary>What an object store is, said as why a set adopted from it writes through it.</summary>
     /// <param name="destination">The destination, of a kind <see cref="DestinationKinds.IsObjectStore"/> admits.</param>
-    private static string StoreNotWrittenThrough(DestinationConfiguration destination) =>
-        destination.Kind == DestinationKind.AzureBlob
-            ? "an Azure Blob container, from which a set is adopted as a staging set (ADR-0093)"
-            : "an S3-compatible store, from which a set is adopted as a staging set (ADR-0091)";
+    private static string WrittenThrough(DestinationConfiguration destination) =>
+        (destination.Kind == DestinationKind.AzureBlob ? "an Azure Blob container" : "an S3-compatible store")
+            + ", which is all the adopted set has (ADR-0196)";
 
     /// <summary>
     /// The destination adoption can read from: declared, and a reachable

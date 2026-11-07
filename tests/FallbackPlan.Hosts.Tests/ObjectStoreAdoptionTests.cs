@@ -10,14 +10,16 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// Adopting an archive from an object store after the machine that wrote it
-/// is gone (FR-DR-009, ADR-0061, ADR-0091 Amendment 1, ADR-0093): every case
-/// here runs once for each store API the product speaks. Discovery lists
-/// what the store's prefix holds from each descriptor alone; the preview
-/// shows what the archive recorded; and adoption takes the set back under
-/// its original id as a staging set, because a direct-ship run never writes
-/// through a store. Its staging archive holds what a trimmed one does — the
-/// archive's metadata and its newest backup's data — so the next backup is
-/// incremental, and it is synced back to the store it came from.
+/// is gone (FR-DR-009, ADR-0061, ADR-0091 Amendment 1, ADR-0093, ADR-0196
+/// Amendment 2): every case here runs once for each store API the product
+/// speaks. Discovery lists what the store's prefix holds from each
+/// descriptor alone; the preview shows what the archive recorded; and
+/// adoption takes the set back under its original id as a direct-ship set,
+/// since a store that is all its set has is written through as each backup
+/// runs. Only
+/// the archive's metadata is copied here: the next backup is incremental
+/// against the store, writes through it, and keeps no data on this machine,
+/// and an older snapshot restores from the store.
 /// </summary>
 public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
 {
@@ -98,7 +100,7 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task Adopt_FromAStore_ResumesTheSetUnderItsOriginalId_AsAStagingSetThatSyncsBackToIt()
+    public async Task Adopt_FromAStore_ResumesTheSetUnderItsOriginalId_AsADirectShipSetThatWritesThroughIt()
     {
         Harness.WriteSourceFile("docs/notes.txt", "the first words");
         WriteIncompressible("docs/big.bin");
@@ -120,30 +122,28 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
         Assert.AreEqual(repositoryId, adopted.RepositoryId);
         Assert.IsTrue(adopted.WriterIdentityResumed, "a never-published installation resumes the archive's writer");
         Assert.IsTrue(
-            preview.Lines.Any(line => line.Contains("staged", StringComparison.Ordinal)),
-            "the preview says the set would be staged: " + string.Join(" | ", preview.Lines));
+            preview.Lines.Any(line => line.Contains("ships straight to it", StringComparison.Ordinal)),
+            "the preview says the set would ship straight to the store: " + string.Join(" | ", preview.Lines));
         Assert.IsTrue(
+            adopted.Lines.Any(line => line.Contains("ships straight to it", StringComparison.Ordinal)),
+            "the answer says the set ships straight to the store: " + string.Join(" | ", adopted.Lines));
+        Assert.IsFalse(
             adopted.Lines.Any(line => line.Contains("staged", StringComparison.Ordinal)),
-            "the answer says the set is staged: " + string.Join(" | ", adopted.Lines));
+            "nothing is staged: " + string.Join(" | ", adopted.Lines));
 
-        // A direct-ship run never writes through a store, so a set adopted
-        // from one is staged, and the store is its destination.
+        // The store is all the set has, so it is written through (ADR-0196),
+        // and the set is adopted direct-ship.
         var set = Assert.ContainsSingle(runtime.Configuration.BackupSets);
         Assert.AreEqual(Harness.DocsSetId, set.Id);
-        Assert.IsFalse(set.DirectShip);
+        Assert.IsTrue(set.DirectShip, "a set adopted from a store ships straight to it");
         Assert.AreEqual(Cloud, Assert.ContainsSingle(set.Destinations).Ref);
 
-        // The staging archive holds what a trimmed one does: every metadata
-        // object, and the data the newest backup needs, which with one
-        // backup is all of it.
-        var staging = runtime.ArchivePath(Harness.DocsSetId);
-        Assert.IsTrue(File.Exists(Path.Combine(staging, "repository-format")));
-        Assert.AreEqual(
-            Under(root + "blobs/meta/").Count, CountFiles(Path.Combine(staging, "blobs", "meta")),
-            "every metadata blob is held");
-        Assert.AreEqual(
-            Under(root + "blobs/data/").Count, CountFiles(Path.Combine(staging, "blobs", "data")),
-            "the newest backup's data is held");
+        // Only the metadata is copied here: no staging archive, no data.
+        Assert.IsFalse(Directory.Exists(runtime.ArchivePath(Harness.DocsSetId)), "no staging archive is made");
+        Assert.IsTrue(
+            Directory.EnumerateFiles(runtime.SetMetadataPath(Harness.DocsSetId), "*", SearchOption.AllDirectories).Any(),
+            "the archive's metadata is copied into the set's metadata store");
+        Assert.IsEmpty(DataBlobsHere(), "no data blob is copied to this machine");
 
         var ledger = runtime.DestinationSync.Find(Harness.DocsSetId, Cloud);
         Assert.IsNotNull(ledger?.BaselineCompletedAt, "the store is admitted without owing it a full copy");
@@ -169,9 +169,10 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
             "a second archive was born beside the adopted one");
         Assert.IsTrue(
             heldBefore.All(Store.KeysIn(Namespace).Contains),
-            "the sync after adoption took something the store held before it — staging is a cache, not the truth");
+            "the backup after adoption took something the store held before it");
         var grown = DataBytes(root) - dataBefore;
         Assert.IsLessThan(64 * 1024, grown, $"the incremental sent {grown} bytes of data — it re-stored what it had");
+        Assert.IsEmpty(DataBlobsHere(), "the backup wrote through the store and kept no data here");
 
         Assert.IsInstanceOfType<SnapshotsResult>(
             await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
@@ -190,11 +191,10 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task Adopt_FromAStore_StagesOnlyTheNewestBackupsData_AndAnOlderSnapshotRestoresFromTheStore()
+    public async Task Adopt_FromAStore_KeepsNoDataHere_AndAnOlderSnapshotRestoresFromTheStore()
     {
-        // What a trimmed staging archive holds (ADR-0034 §6): the newest
-        // backup's data and not the history's. The history stays in the
-        // store, and a restore of an older snapshot reads it there.
+        // Every backup's data stays in the store, the newest's too, and a
+        // restore of an older snapshot reads it there.
         Harness.WriteSourceFile("docs/notes.txt", "the first words");
         var old = File.ReadAllBytes(WriteIncompressible("docs/old.bin"));
         var repositoryId = await BackUpThenLoseTheMachineAsync(beforeASecondBackup: () =>
@@ -214,13 +214,9 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
             out var adopted, "adoption refused");
         Assert.AreEqual(2, adopted.SnapshotCount);
 
-        var staging = runtime.ArchivePath(Harness.DocsSetId);
-        Assert.AreEqual(
-            Under(root + "blobs/meta/").Count, CountFiles(Path.Combine(staging, "blobs", "meta")),
-            "every metadata blob is held");
-        var heldHere = CountFiles(Path.Combine(staging, "blobs", "data"));
-        Assert.IsGreaterThan(0, heldHere, "the newest backup's data is held");
-        Assert.IsLessThan(Under(root + "blobs/data/").Count, heldHere, "the data only the older backup needs stays in the store");
+        Assert.IsFalse(Directory.Exists(runtime.ArchivePath(Harness.DocsSetId)), "no staging archive is made");
+        Assert.IsEmpty(DataBlobsHere(), "no backup's data is copied to this machine");
+        Assert.IsNotEmpty(Under(root + "blobs/data/"), "the premise: the store holds the data");
 
         Assert.IsInstanceOfType<SnapshotsResult>(
             await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
@@ -435,6 +431,10 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
 
     private int Writes() => Store.Requests.Count(request => request.Method is "PUT" or "DELETE" or "POST");
 
-    private static int CountFiles(string directory) =>
-        Directory.Exists(directory) ? Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length : 0;
+    /// <summary>Every data blob this machine holds, under its state and its archives.</summary>
+    private List<string> DataBlobsHere() =>
+        [.. new[] { Harness.StateDirectory, Harness.ArchivesRoot }
+            .Where(Directory.Exists)
+            .SelectMany(root => Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            .Where(path => path.Replace('\\', '/').Contains("blobs/data/", StringComparison.Ordinal))];
 }

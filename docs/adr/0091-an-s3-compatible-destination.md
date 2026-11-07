@@ -188,6 +188,13 @@ it. Both are built here.
    > ADR-0196's next step. The preview and the answer now say only that a
    > set adopted from a store is staged.
 
+   > **Amended 2026-11 ([ADR-0196 Amendment 2](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it)).** A set
+   > adopted from a store is adopted direct-ship, as ADR-0061 adopts every
+   > other. Only the archive's metadata is copied to the machine, into the
+   > set's metadata store; no staging archive is made, and each backup writes
+   > through the store as it runs. The preview and the answer say the set
+   > ships straight to the store.
+
 **Consequences.**
 
 - **A store's replica can be read back whole, at a cost its owner chooses.**
@@ -202,6 +209,10 @@ it. Both are built here.
   store. A destination added to the set later converges from what staging
   holds and lacks the older history, which is ADR-0034 §6's residual cost of a
   trim.
+
+  > **Amended 2026-11 ([ADR-0196 Amendment 2](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it)).** An adopted
+  > set keeps no data on the machine at all now: every snapshot, the newest
+  > included, restores from the store.
 - **The wire is unchanged.** `discover_archives`, `preview_adoption` and
   `adopt_archive` name a destination; they never took a kind, so no contract
   version moved. The console now offers "Find backups…" on a store's row and
@@ -219,3 +230,4 @@ it. Both are built here.
 | 2026-10 | Amended (related) | [ADR-0111](0111-a-cloud-destination-says-what-its-store-was-asked.md): the provider tells an observer in its options of every request it sends, once an attempt, with its body's length and the length its answer said its body was, and the service counts them by destination and by day for the destination's status row (contract 1.69). The S3 provider's delete asks with a head first, and that head is told too, since it is billed. |
 | 2026-10 | Amended (related) | [ADR-0171 Amendment 2](0171-a-destination-that-refuses-a-delete-keeps-what-it-reaches-and-the-sync-goes-on.md#amendment-2-2026-10--a-delete-a-bucket-keeps-is-said): a delete in a bucket that keeps versions is answered with a delete marker, and the provider reports the length of the object it hid, from the head it asks first. |
 | 2026-11 | Amended (related) | [ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md): a run writes through the stores of a set that has nothing else, so a store-only set may be direct-ship. Decision 5 holds for a store beside a local path or a peer. |
+| 2026-11 | Amended (related) | [ADR-0196 Amendment 2](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it): a set adopted from a store is adopted direct-ship, with only the archive's metadata copied to the machine. Decision 6 no longer holds. |
