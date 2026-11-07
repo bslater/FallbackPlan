@@ -23,7 +23,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// FR-DEST-004 and FR-DEST-014. A delete through the sink that a
 /// destination refuses is not done, and what was refused stays listed for
 /// the next pass: the sink's half of FR-GC-010. A set naming only object
-/// stores may be direct-ship (FR-DEST-021).
+/// stores may be direct-ship (FR-DEST-021), and a new one is born so, while a
+/// new set naming a peer and no local path is still born staging (ADR-0196
+/// Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class DirectShipTests : IDisposable
@@ -701,6 +703,73 @@ public sealed class DirectShipTests : IDisposable
         Assert.IsFalse(
             saved.DirectShip,
             "a peer-only set keeps its staging archive by default — the link, the resume and the second copy");
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ANewSetNamingOnlyStores_IsBornDirectShip()
+    {
+        // A store a set has alone is written through as the run goes
+        // (ADR-0196), and a put lands whole or not at all, so what a peer-only
+        // set's staging archive buys does not arise for it. A new one that
+        // names no shape ships straight to its stores.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await DeclareStoresAsync(handler);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('d', 32), "cloud-only", _harness.SourceRoot, null, [], [], ["bucket", "container"])),
+            Timeout));
+
+        var saved = ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json"))
+            .FindSet("cloud-only");
+        Assert.IsNotNull(saved);
+        Assert.IsTrue(saved.DirectShip, "a new set naming only stores is born direct-ship");
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_ANewSetNamingAStoreAndAPeer_StillDefaultsToStaging()
+    {
+        // Beside a peer a store is filled by the sync after the run, and the
+        // run ships only to the peer: the peer-only set's reasons to stage
+        // (ADR-0058 §8) hold for it.
+        Directory.CreateDirectory(VaultA);
+        WriteDirectShipConfiguration(vaultBToo: false);
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await DeclareStoresAsync(handler);
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('6', 32), "friend", "peer", null,
+                "mgr7e7euwdpfkggmp4astkz5ia", "friend.example:9443")),
+            Timeout));
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                new string('e', 32), "outbound", _harness.SourceRoot, null, [], [], ["bucket", "friend"])),
+            Timeout));
+
+        var saved = ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json"))
+            .FindSet("outbound");
+        Assert.IsNotNull(saved);
+        Assert.IsFalse(saved.DirectShip, "a peer beside a store keeps the set staging by default");
+    }
+
+    /// <summary>Declares a bucket and a container.</summary>
+    private async Task DeclareStoresAsync(ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('7', 32), "bucket", "s3", null, null, "https://objects.example.net",
+                Bucket: "family-backups")),
+            Timeout));
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('8', 32), "container", "azure-blob", null, null, null,
+                Prefix: "site-a", Account: "fbptestaccount", Container: "family-backups")),
+            Timeout));
     }
 
     [TestMethod]

@@ -756,6 +756,22 @@ public sealed partial class ServiceCommandHandler(
     private static bool ShipsDirectly(DestinationConfiguration? destination) =>
         destination?.Kind is DestinationKind.LocalPath or DestinationKind.Peer
         || (destination?.Kind.IsObjectStore() ?? false);
+
+    /// <summary>
+    /// The shape a new set that names none is born with: straight to its
+    /// destinations where one is a local path, or where every one is an
+    /// object store; staged otherwise (ADR-0046, ADR-0058 §8, ADR-0196
+    /// Amendment 1).
+    /// </summary>
+    /// <param name="destinations">The set's destinations, null where one is not declared.</param>
+    internal static bool BornDirectShip(IReadOnlyList<DestinationConfiguration?> destinations)
+    {
+        ThrowHelper.ThrowIfNull(destinations);
+        return destinations.Any(destination => destination?.Kind == DestinationKind.LocalPath)
+            || (destinations.Count > 0
+                && destinations.All(destination => destination?.Kind.IsObjectStore() == true));
+    }
+
     private static bool TryParseLevel(string text, out VerifyLevel level, out string canonical, out ServiceError? error)
     {
         (level, canonical, error) = text switch
@@ -1851,11 +1867,15 @@ public sealed partial class ServiceCommandHandler(
         // content against, without which no pass can honestly call it
         // verified (ADR-0058 §8). Direct-ship remains available to a peer-only
         // set as a stated choice, for a machine with no room for the second
-        // copy; it is not one to make on a person's behalf.
+        // copy; it is not one to make on a person's behalf. A set whose only
+        // destinations are stores is born direct-ship too: they are written
+        // through as the run goes, a put lands whole or not at all, and a
+        // sampled blob is proved with a key the store never held
+        // (ADR-0196 Amendment 1). Beside a peer, a store is filled after the
+        // run and the run ships to the peer alone, so the peer's reasons hold.
         var directShip = command.Set.DirectShip
             ?? existing?.DirectShip
-            ?? command.Set.Destinations.Any(name =>
-                configuration.FindDestination(name)?.Kind == DestinationKind.LocalPath);
+            ?? BornDirectShip(command.Set.Destinations.Select(configuration.FindDestination).ToList());
         if (directShip && !command.Set.Destinations.Any(name =>
                 ShipsDirectly(configuration.FindDestination(name))))
         {
