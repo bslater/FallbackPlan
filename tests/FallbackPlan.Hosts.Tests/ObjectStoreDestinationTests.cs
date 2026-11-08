@@ -793,6 +793,112 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_ATreeWithNoCopyHere_IsKeptOnceReadFromTheStore()
+    {
+        // A set made direct-ship before it kept its trees, or healed from a
+        // replica, has none of the trees it built on here. Each one a backup
+        // reads from the store is kept once it verifies, so the backup after
+        // reads none (ADR-0196 Amendment 5).
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        Directory.Delete(Path.Combine(Harness.StateDirectory, "sets", Harness.DocsSetId, "blobs"), recursive: true);
+        Assert.IsEmpty(MetadataBlobsHere(), "the premise: no tree is kept here");
+
+        Harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        var mark = Store.Requests.Count;
+        await BackUpAsync(runtime, start.AddHours(1));
+        Assert.IsTrue(
+            Store.Requests.Skip(mark).Any(request =>
+                request.Method == "GET" && IsMetadataBlob(Uri.UnescapeDataString(request.Target))),
+            "the premise: the backup read the trees it builds on from the store");
+        var readAgain = Store.Requests.Skip(mark)
+            .Where(request => request.Method == "GET" && IsMetadataBlob(Uri.UnescapeDataString(request.Target)))
+            .GroupBy(request => Uri.UnescapeDataString(request.Target), StringComparer.Ordinal)
+            .Where(reads => reads.Count() > 1)
+            .Select(reads => $"{reads.Key} ({reads.Count()} times)")
+            .ToList();
+        Assert.IsEmpty(readAgain, "a tree once kept is read here, not from the store again");
+        CollectionAssert.AreEquivalent(
+            MetadataBlobsAtTheStore(), MetadataBlobsHere(), "each tree read from the store is kept here, with those shipped");
+
+        Harness.WriteSourceFile("docs/d.txt", new string('d', 30_000));
+        mark = Store.Requests.Count;
+        await BackUpAsync(runtime, start.AddHours(2));
+        var asked = Store.Requests.Skip(mark)
+            .Select(request => $"{request.Method} {Uri.UnescapeDataString(request.Target)}")
+            .ToList();
+        Assert.IsFalse(
+            asked.Any(request => request.StartsWith("GET ", StringComparison.Ordinal) && IsMetadataBlob(request)),
+            $"the backup after read a folder tree from the store: {string.Join(", ", asked)}");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_ADamagedTreeReadFromTheStore_IsNotKeptHere()
+    {
+        // A copy is answered before the store, so one kept damaged would be
+        // read for ever, even once the store's object was repaired. A tree
+        // read from the store is kept only once it verifies.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        Directory.Delete(Path.Combine(Harness.StateDirectory, "sets", Harness.DocsSetId, "blobs"), recursive: true);
+
+        var stored = Store.KeysIn(Namespace).First(IsMetadataBlob);
+        var damaged = Store.ObjectIn(Namespace, stored)!;
+        damaged[damaged.Length / 2] ^= 0x5A;
+        Store.Overwrite(Namespace, stored, damaged);
+        var key = ObjectKey.Parse(stored[stored.IndexOf("blobs/meta/", StringComparison.Ordinal)..]);
+
+        var archive = await runtime.ExistingArchiveAsync(Harness.DocsSetId, Timeout);
+        using (var read = await archive!.Store.OpenReadAsync(key, range: null, Timeout))
+        {
+            Assert.AreEqual(OpenReadOutcome.Found, read.Outcome, "the read is still answered, from the store");
+        }
+
+        Assert.DoesNotContain(key.Value, MetadataBlobsHere(), "a tree that does not verify is not kept here");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_ASoundTreeUnderAnotherTreesKey_IsNotKeptHere()
+    {
+        // Whole and authentic is not enough: a store that answers one tree's
+        // key with another sound tree would have the wrong tree kept under
+        // it, and read for ever. The check binds a tree to the key it is read
+        // under.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        Harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await BackUpAsync(runtime, start.AddHours(1));
+        Directory.Delete(Path.Combine(Harness.StateDirectory, "sets", Harness.DocsSetId, "blobs"), recursive: true);
+
+        var trees = Store.KeysIn(Namespace).Where(IsMetadataBlob).ToList();
+        Assert.IsGreaterThanOrEqualTo(2, trees.Count, "the premise: two trees at the store");
+        Store.Overwrite(Namespace, trees[1], Store.ObjectIn(Namespace, trees[0])!);
+        var key = ObjectKey.Parse(trees[1][trees[1].IndexOf("blobs/meta/", StringComparison.Ordinal)..]);
+
+        var archive = await runtime.ExistingArchiveAsync(Harness.DocsSetId, Timeout);
+        using (var read = await archive!.Store.OpenReadAsync(key, range: null, Timeout))
+        {
+            Assert.AreEqual(OpenReadOutcome.Found, read.Outcome, "the read is still answered, from the store");
+        }
+
+        Assert.DoesNotContain(key.Value, MetadataBlobsHere(), "a tree read under another tree's key is not kept here");
+    }
+
+    [TestMethod]
     public async Task DirectShip_ToTheStoreAlone_ARetentionTrim_DeletesTheFolderTreesItDrops_HereAsAtTheStore()
     {
         // What retention drops is deleted at the store and here alike, so

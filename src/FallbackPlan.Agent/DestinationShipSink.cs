@@ -67,6 +67,14 @@ public sealed class DestinationShipSink : IObjectStore
     private StoreCapabilities? _capabilities;
     private bool _runActive;
     private bool _keepsMetadataBlobsThisRun;
+
+    /// <summary>
+    /// Says whether a metadata blob read from a store is sound, against the
+    /// repository's keys: the object in the store given, under its key, of the
+    /// length given. Set once the repository is open; while it is null no
+    /// copy is kept of a blob read from a store.
+    /// </summary>
+    internal Func<IObjectStore, ObjectKey, long, CancellationToken, ValueTask<bool>>? VerifiesMetadataBlob { get; set; }
     private readonly Dictionary<string, (DestinationSyncState State, string Error)> _droppedThisRun = new(StringComparer.Ordinal);
     private readonly List<(string Name, DestinationSyncState State, string Error)> _skippedThisRun = [];
 
@@ -753,6 +761,13 @@ public sealed class DestinationShipSink : IObjectStore
             {
                 return kept;
             }
+
+            if (KeepsMetadataBlobs()
+                && VerifiesMetadataBlob is { } verifies
+                && await KeepFromAStoreAsync(key, verifies, cancellationToken).ConfigureAwait(false))
+            {
+                return await _metadata.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         foreach (var holder in ReadOrder(holdingOnly: true))
@@ -1195,6 +1210,62 @@ public sealed class DestinationShipSink : IObjectStore
     private static bool IsBlobKey(string key) => key.StartsWith("blobs/", StringComparison.Ordinal);
 
     private static bool IsMetadataBlobKey(string key) => key.StartsWith("blobs/meta/", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Reads a metadata blob this set has no copy of whole from the first
+    /// store that holds it, and keeps it once it verifies (ADR-0196
+    /// Amendment 5): a set made direct-ship before it kept its trees, or
+    /// healed from a replica, keeps each tree it reads. A copy is answered
+    /// before any store, so one that does not verify is not kept, and the
+    /// read is answered from the store as before.
+    /// </summary>
+    /// <returns>Whether a copy is kept here now.</returns>
+    private async ValueTask<bool> KeepFromAStoreAsync(
+        ObjectKey key,
+        Func<IObjectStore, ObjectKey, long, CancellationToken, ValueTask<bool>> verifies,
+        CancellationToken cancellationToken)
+    {
+        // Verified apart from the metadata store, so no copy that has not
+        // verified is ever where a read would find it.
+        var scratch = new LocalFileSystemObjectStore(
+            Path.Combine(_runtime.Options.StateDirectory, "tree-fill", _setId),
+            _runtime.LoggerFor<LocalFileSystemObjectStore>());
+        foreach (var holder in ReadOrder(holdingOnly: true))
+        {
+            using var read = await holder.Store.OpenReadAsync(key, range: null, cancellationToken).ConfigureAwait(false);
+            if (read.Outcome != OpenReadOutcome.Found)
+            {
+                continue;
+            }
+
+            try
+            {
+                _ = await scratch.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
+                _ = await scratch.PutAsync(
+                    key, _ => ValueTask.FromResult(read.Content!), PutConditions.IfNotExists, cancellationToken)
+                    .ConfigureAwait(false);
+                var length = (await scratch.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false))
+                    .Metadata?.Length;
+                if (length is not { } whole || !await verifies(scratch, key, whole, cancellationToken).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
+                _ = await _metadata.PutAsync(
+                    key,
+                    async token => (await scratch.OpenReadAsync(key, range: null, token).ConfigureAwait(false)).Content!,
+                    PutConditions.IfNotExists,
+                    cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            finally
+            {
+                _ = await scratch.DeleteAsync(key, DeleteConditions.None, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Whether this set keeps a copy of each metadata blob it ships: where it

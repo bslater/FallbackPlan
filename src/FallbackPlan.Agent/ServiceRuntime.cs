@@ -1322,6 +1322,20 @@ public sealed class ServiceRuntime : IAsyncDisposable
                             : null)
                     : null;
 
+                if (sink is not null)
+                {
+                    // What a tree read from a store must pass before the sink
+                    // keeps a copy: the sweep's own check, bound to the key
+                    // (ADR-0196 Amendment 5).
+                    var opened = repository;
+                    sink.VerifiesMetadataBlob = async (holder, key, length, token) =>
+                    {
+                        using var verifier = new VerifyEngine(opened.RepositoryId, opened.Keys, holder);
+                        return (await verifier.VerifyBlobAsync(key, length, VerifyLevel.FooterAndDigest, bindKey: true, token)
+                            .ConfigureAwait(false)).Ok;
+                    };
+                }
+
                 archive = new ArchiveHandle
                 {
                     Store = (Storage.Abstractions.IObjectStore?)sink ?? store,
