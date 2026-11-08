@@ -85,6 +85,9 @@ public sealed class DirectShipMigrationTests : IDisposable
             Assert.IsTrue(
                 File.Exists(Path.Combine(MetadataRoot, "repository-format")),
                 "the flip must migrate the metadata store into place");
+            Assert.IsFalse(
+                Directory.Exists(Path.Combine(MetadataRoot, "blobs")),
+                "beside a local path the trees are read there, so the flip copies no blob here (ADR-0196 Amendment 4)");
             Assert.IsTrue(File.Exists(Path.Combine(StagingPath, "repository-format")),
                 "migration must never delete staging on its own");
             Assert.IsTrue(

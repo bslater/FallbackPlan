@@ -2,12 +2,13 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-DEST-021 (new: a direct-ship set whose destinations include no local path and no peer writes its backup through its object stores as the run goes, keeps no data on the machine, restores from them, and a run that cannot reach them fails naming them); FR-DEST-015 (amended: the refusal of a capture with nowhere to write names each destination it tried and why); FR-DEST-021 (amended by [Amendment 1](#amendment-1-2026-11--a-new-sets-shape-follows-its-destinations): a new set that names no shape is born direct-ship where every destination it names is a store, and the console's new set follows its destinations as the service does); FR-DR-009 (amended by [Amendment 2](#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it): a set adopted from a store is adopted direct-ship, with only the archive's metadata copied to the machine); FR-DEST-021 (amended by [Amendment 3](#amendment-3-2026-11--a-store-only-set-keeps-its-folder-trees-on-the-machine): a set whose stores are all it has keeps a copy of each metadata blob it ships on the machine, so a backup reads no folder tree from the store)
+**Requirements:** FR-DEST-021 (new: a direct-ship set whose destinations include no local path and no peer writes its backup through its object stores as the run goes, keeps no data on the machine, restores from them, and a run that cannot reach them fails naming them); FR-DEST-015 (amended: the refusal of a capture with nowhere to write names each destination it tried and why); FR-DEST-021 (amended by [Amendment 1](#amendment-1-2026-11--a-new-sets-shape-follows-its-destinations): a new set that names no shape is born direct-ship where every destination it names is a store, and the console's new set follows its destinations as the service does); FR-DR-009 (amended by [Amendment 2](#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it): a set adopted from a store is adopted direct-ship, with only the archive's metadata copied to the machine); FR-DEST-021 (amended by [Amendment 3](#amendment-3-2026-11--a-store-only-set-keeps-its-folder-trees-on-the-machine): a set whose stores are all it has keeps a copy of each metadata blob it ships on the machine, so a backup reads no folder tree from the store); FR-DEST-021 (amended by [Amendment 4](#amendment-4-2026-11--a-staging-set-of-stores-alone-is-told-it-could-ship-straight): a staging set whose destinations are all stores is named in a notice saying it could ship straight to them, and once it does it keeps the staging archive's folder trees)
 **Related:** [ADR-0046](0046-direct-to-destination-publication.md) (direct-to-destination publication: the ship sink, the metadata store, and the capture with nowhere to ship), [ADR-0058](0058-peer-write-adapter.md) §8 (why a peer-only set still stages by default), [ADR-0091](0091-an-s3-compatible-destination.md) decision 5 and [ADR-0093](0093-an-azure-blob-destination.md) (a run never writes through a store), [ADR-0012](0012-storage-provider-contract.md) Amendment 5 (a put lands whole or not at all), [ADR-0061](0061-adopt-a-destinations-archives.md) §3 (adoption, which makes the set direct-ship)
 
 **Built:**
 - The sink: `Agent/DestinationShipSink` writes through a set's object stores when nothing the set names is a local path or a peer (`WritesThroughStores`), opening each through `Agent/StoreComposition`, and reads from them outside a run. A run with nowhere to write names each destination it tried.
 - The kept trees: `Agent/DestinationShipSink` keeps a copy of each metadata blob a set that writes through its stores ships, answers a read of one from that copy first, deletes the copy before the stores' object, and never lists it (Amendment 3).
+- The notice: `Agent/StagingCouldShipWatch`, observed on every pass by `Agent/Scheduler`, names each staging set whose destinations are all stores; the first open after such a set is made direct-ship copies its staging archive's folder trees with its metadata, in `Agent/ServiceRuntime` (Amendment 4).
 - The set check: `Agent/ServiceCommandHandler` accepts a direct-ship set that names only stores, and gives a new set that names no shape the one its destinations call for (Amendment 1).
 - Adoption: `Agent/ServiceCommandHandler.Adoption.cs` adopts a set from a store as direct-ship, copying only the archive's metadata to the machine (Amendment 2).
 - The console: `Web/wwwroot/app.js` gives a new set the shape its destinations call for until the person sets it, and its note says a set of stores alone is written through as it runs (Amendment 1).
@@ -22,6 +23,7 @@
     - a metadata blob put through the set's archive outside a run, as compaction puts what it packs, is kept here too (Amendment 3);
     - a store that does not answer fails the run, naming it.
     - A set with a local path beside the store: the run itself writes nothing to the store, and leaves it behind for the sync that follows.
+    - A staging set with the store its only destination is named in a notice, and one beside a local path is not; once such a set is made direct-ship, the backup after reads no tree from the store, and the notice goes (Amendment 4).
   - `Hosts.Tests/DirectShipTests` — a direct-ship set naming only a bucket, or only a container, is accepted; one naming only a reserved kind is still refused. A new set naming only stores is born direct-ship, and one naming a store and a peer is still born staging (Amendment 1).
   - `Hosts.Tests/ObjectStoreAdoptionTests`, run for S3 and for Azure alike — a set adopted from a store is direct-ship, and the preview and the answer say it ships straight to the store; only the archive's metadata is copied here, with no staging archive and no data blob; the next backup writes through the store and keeps no data here; an older snapshot restores from the store (Amendment 2). The archive's folder trees are copied here too, and a backup of the adopted set reads none from the store (Amendment 3).
   - `Web.DomTests/NewSetWizardDomTests` — a new set naming only a local path or only a store is sent direct-ship, and one naming only a peer staging; the Other settings step shows the shape the destinations give and says a set of stores alone is written through (Amendment 1).
@@ -71,6 +73,8 @@ For a store, the second does not arise: a put lands whole or not at all (ADR-001
 
   > **2026-11: done ([Amendment 2](#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it)).** A set adopted from a store is adopted direct-ship, and only the archive's metadata is copied to the machine.
 - **Move existing store-only sets.** A set that stages can be made direct-ship by changing its shape, and its staging archive retired, through the machinery ADR-0046 built; nothing does it for a person.
+
+  > **2026-11: said, not done ([Amendment 4](#amendment-4-2026-11--a-staging-set-of-stores-alone-is-told-it-could-ship-straight)).** A notice names each such set and says where to change it. Changing it is still a person's.
 - **Keep the metadata blobs on the machine.** Doing so would spare each backup its reads of the trees, at the cost of the metadata's size on disk.
 
   > **2026-11: done ([Amendment 3](#amendment-3-2026-11--a-store-only-set-keeps-its-folder-trees-on-the-machine)).** A set whose stores are all it has keeps a copy of each metadata blob it ships.
@@ -175,7 +179,36 @@ The owner asked for the split another backup tool uses: the data at the remote s
 ### What this does not do
 
 - **Keep the trees of a set made direct-ship before this, or from staging, or healed from a replica.** Each keeps the trees it ships from now on. A tree it built on before, unchanged since, is still read from the store.
+
+  > **2026-11: from staging, done ([Amendment 4](#amendment-4-2026-11--a-staging-set-of-stores-alone-is-told-it-could-ship-straight)).** A set made direct-ship from staging copies its staging archive's trees with its metadata. A set made direct-ship before this amendment, and one healed from a replica, are as said.
 - **Keep the trees beside a local path or a peer.** There a backup reads them from the destination.
+
+## Amendment 4 (2026-11) — a staging set of stores alone is told it could ship straight
+
+**Requirements:** FR-DEST-021 (amended: a staging set whose destinations are all stores is named in a notice saying it could ship straight to them and where to change it; once it does, its staging archive's folder trees are copied here with its metadata)
+
+### Context
+
+Since Amendment 1 a new set naming only stores is born direct-ship. A set made before it still stages: it keeps a staging archive of its data on this machine, the copy the owner asked to be rid of. This record left moving such a set to a person, and nothing told the person a set could move.
+
+A set made direct-ship from staging migrates its metadata at its first open (ADR-0046). That copy left the folder trees behind, so the set's backups read them from the store, as Amendment 3 left for any set made direct-ship from staging. Its staging archive holds every tree it wrote.
+
+### Decision
+
+**A notice names each staging set whose destinations are all stores.** It says the set keeps a staging archive of its data here though a backup writes through its stores, and where to change that: "ship straight to destinations" in the set's Other settings. It says the staging archive then stays as a read-only seed until it is retired from the notice that follows. It changes nothing: a person decides the shape. It reads the same on every pass, so an acknowledgement holds, and it is resolved once the set ships straight or names a local path or a peer.
+
+**A set made direct-ship from staging copies its staging archive's folder trees** with its metadata, where it writes through its stores. Its backups read their trees here from the first.
+
+### Consequences
+
+- **A person learns which sets could keep no data here,** and where to change each.
+- **A moved set reads no tree from the store.** Once its staging archive is retired, it keeps no data here.
+- **The sync after each run still reads the store back** while the staging archive remains, as for any set mid-migration (ADR-0046). That is the store's to answer.
+
+### What this does not do
+
+- **Move a set for the person.** The shape is theirs to choose.
+- **Keep the trees of a set made direct-ship before Amendment 3, or healed from a replica.** Each keeps the trees it ships from now on.
 
 ## Status history
 
@@ -185,3 +218,4 @@ The owner asked for the split another backup tool uses: the data at the remote s
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-new-sets-shape-follows-its-destinations): a new set that names no shape is born direct-ship where it names a local path or every destination it names is a store, and staging where a peer is all a run could ship to; the console's new set follows the same rule until the person sets it (before, it was always direct-ship), and its Storage shape note says a set of stores alone is written through as it runs. `Agent/ServiceCommandHandler`; `Hosts.Tests/DirectShipTests`; `Web.DomTests/NewSetWizardDomTests` |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it): a set adopted from a store is adopted direct-ship, as from a local path or a peer; only the archive's metadata is copied to the machine, with no staging archive and no data, and the preview and the answer say the set ships straight to the store. ADR-0091 Amendment 1 decision 6, ADR-0093 decision 5 and ADR-0061 §3 amended (related). `Agent/ServiceCommandHandler.Adoption.cs`; `Hosts.Tests/ObjectStoreAdoptionTests` |
 | 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-store-only-set-keeps-its-folder-trees-on-the-machine): a set whose stores are all it has keeps a copy of each metadata blob it ships in its metadata store, reads its folder trees there, deletes a copy before the stores' object and never lists it; whether a blob is held is still asked of the stores; a set adopted from a store copies the archive's metadata blobs too. `Agent/DestinationShipSink`; `Agent/ServiceCommandHandler.Adoption.cs`; `Hosts.Tests/ObjectStoreDestinationTests`; `Hosts.Tests/ObjectStoreAdoptionTests` |
+| 2026-11 | Amended | [Amendment 4](#amendment-4-2026-11--a-staging-set-of-stores-alone-is-told-it-could-ship-straight): a notice names each staging set whose destinations are all stores, says it could ship straight to them and where to change that, and is resolved once the set ships straight or names a local path or a peer; a set made direct-ship from staging copies its staging archive's folder trees with its metadata. ADR-0046 amended (related). `Agent/StagingCouldShipWatch`; `Agent/Scheduler`; `Agent/ServiceRuntime`; `Hosts.Tests/ObjectStoreDestinationTests` |

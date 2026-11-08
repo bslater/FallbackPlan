@@ -830,6 +830,84 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task Staging_ToTheStoreAlone_IsNamedInANotice_ThatSaysItCouldShipStraightToIt()
+    {
+        // A staging set whose destinations are all stores keeps a staging
+        // archive here, which a set of stores alone no longer needs (ADR-0196).
+        // A person decides the shape, so the service says so rather than
+        // changing it (Amendment 4).
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var notice = StagingCouldShipNotice(runtime);
+        Assert.IsNotNull(notice, "a staging set of stores alone is named in a notice");
+        Assert.Contains("'docs'", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("ship straight to destinations", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("retire", notice.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Staging_BesideALocalPath_IsNotNamedInThatNotice()
+    {
+        // Beside a local path a store is filled after the run, so the set's
+        // shape is the person's to choose as before, and nothing is said.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false, withVault: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+
+        Assert.IsNull(StagingCouldShipNotice(runtime));
+    }
+
+    [TestMethod]
+    public async Task Staging_ToTheStoreAlone_MadeDirectShip_KeepsTheStagingArchivesTrees_AndTheNoticeGoes()
+    {
+        // The staging archive holds every folder tree the set wrote, so the
+        // switch copies them into the metadata store with the metadata, and
+        // the backups after it read their trees here, not at the store.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+        var start = DateTimeOffset.Now;
+
+        await using (var staging = await StartAsync())
+        {
+            await StoreCredentialAsync(staging);
+            await BackUpAsync(staging, start);
+            Assert.IsNotNull(StagingCouldShipNotice(staging), "the premise: the notice stands");
+        }
+
+        // The backup alone, with no pass around it: while the staging archive
+        // remains, the sync after each run reads the store back to prove it
+        // holds what was shipped, which is the store's to answer.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        Harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await using var runtime = await StartAsync();
+        var mark = Store.Requests.Count;
+        var outcome = await Scheduler.Enqueue(
+            runtime, runtime.Configuration.BackupSets.Single(), start.AddHours(1), userInitiated: true).WaitAsync(Timeout);
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+
+        var asked = Store.Requests.Skip(mark)
+            .Select(request => $"{request.Method} {Uri.UnescapeDataString(request.Target)}")
+            .ToList();
+        Assert.IsFalse(
+            asked.Any(request => request.StartsWith("GET ", StringComparison.Ordinal) && IsMetadataBlob(request)),
+            $"the backup after the switch read a folder tree from the store: {string.Join(", ", asked)}");
+        CollectionAssert.AreEquivalent(
+            MetadataBlobsAtTheStore(), MetadataBlobsHere(), "each tree at the store is kept here, and nothing else");
+
+        await BackUpAsync(runtime, start.AddHours(2));
+        Assert.IsNull(StagingCouldShipNotice(runtime), "the notice goes once the set ships straight to the store");
+    }
+
+    [TestMethod]
     public async Task DirectShip_ToTheStoreAlone_RestoresFromIt()
     {
         // Nothing on this machine holds the data, so the set's own archive is
@@ -1800,6 +1878,11 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="request">The request as the store answered it.</param>
     private static bool Landed(ObjectStoreTestServer.RecordedRequest request) =>
         request.Method == "PUT" && request.Status is >= 200 and < 300;
+
+    /// <summary>The notice that the staging set could ship straight to its stores, or null.</summary>
+    /// <param name="runtime">The service.</param>
+    private Notice? StagingCouldShipNotice(ServiceRuntime runtime) =>
+        runtime.Notices.Unacknowledged.SingleOrDefault(notice => notice.Key == $"staging-could-ship:{Harness.DocsSetId}");
 
     /// <summary>The notice that the store refused deletes its retention asked for, or null.</summary>
     /// <param name="runtime">The service.</param>
