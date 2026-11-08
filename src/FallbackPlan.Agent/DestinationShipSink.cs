@@ -21,7 +21,11 @@ namespace FallbackPlan.Agent;
 /// keys, journal, index, snapshots, hints — goes to the local metadata store
 /// AND the in-scope destinations, so each destination is a whole,
 /// independently restorable repository and the agent still holds the small
-/// planning copy its diffs and listings read.
+/// planning copy its diffs and listings read. The one exception is a set
+/// whose stores are all it has: it keeps a copy of each metadata blob it
+/// ships in the metadata store too, so the folder trees a backup builds on
+/// are read here rather than asked of a store, each read a request (ADR-0196
+/// Amendment 3). A data blob never lands here, and a copy is never listed.
 /// </para>
 /// <para>
 /// Reads route the other way: metadata is answered locally; a <c>blobs/</c>
@@ -62,6 +66,7 @@ public sealed class DestinationShipSink : IObjectStore
     /// <summary>This run's intersected capabilities; null outside a run.</summary>
     private StoreCapabilities? _capabilities;
     private bool _runActive;
+    private bool _keepsMetadataBlobsThisRun;
     private readonly Dictionary<string, (DestinationSyncState State, string Error)> _droppedThisRun = new(StringComparer.Ordinal);
     private readonly List<(string Name, DestinationSyncState State, string Error)> _skippedThisRun = [];
 
@@ -395,6 +400,7 @@ public sealed class DestinationShipSink : IObjectStore
             _capabilities = StoreCapabilities.Intersect(
                 [_metadata.Capabilities, .. seeded.Select(shipment => shipment.Store.Capabilities)]);
             _runActive = true;
+            _keepsMetadataBlobsThisRun = throughStores;
             _droppedThisRun.Clear();
             foreach (var (name, drop) in dropped)
             {
@@ -681,6 +687,15 @@ public sealed class DestinationShipSink : IObjectStore
             Interlocked.Increment(ref _shippedThisRun);
         }
 
+        if (landed.Count > 0 && IsMetadataBlobKey(key.Value) && KeepsMetadataBlobs())
+        {
+            // A copy of what landed, kept only once it has: a copy here never
+            // stands for one at a store. One already here is the same object,
+            // its key its content's.
+            _ = await _metadata.PutAsync(key, openContent, PutConditions.IfNotExists, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         // Created if anyone created; AlreadyExists only when every
         // destination already held it — that is when the byte-identity
         // readback upstream has something real to compare against.
@@ -729,6 +744,17 @@ public sealed class DestinationShipSink : IObjectStore
             return await _metadata.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
         }
 
+        if (IsMetadataBlobKey(key.Value))
+        {
+            // A metadata blob kept here answers before any store is asked.
+            // Whether one is held is still the stores' to say, above.
+            var kept = await _metadata.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
+            if (kept.Outcome != OpenReadOutcome.NotFound)
+            {
+                return kept;
+            }
+        }
+
         foreach (var holder in ReadOrder(holdingOnly: true))
         {
             var result = await holder.Store.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
@@ -766,7 +792,13 @@ public sealed class DestinationShipSink : IObjectStore
         {
             await foreach (var entry in _metadata.ListAsync(prefix, options, cancellationToken).ConfigureAwait(false))
             {
-                yield return entry;
+                // A metadata blob's copy here is never listed: a listing says
+                // what the destinations hold, and a copy taken from it would
+                // put back at a store what the store had dropped.
+                if (!IsBlobKey(entry.Key.Value))
+                {
+                    yield return entry;
+                }
             }
 
             if (value.Length > 0 && !"blobs/".StartsWith(value, StringComparison.Ordinal))
@@ -828,7 +860,17 @@ public sealed class DestinationShipSink : IObjectStore
         // next pass once the destination returns. The staging fallback is
         // never touched: it is a read-only seed, and retire_staging is its
         // one deleter (ADR-0046).
+        // A metadata blob's copy here goes first, the one exception: whether
+        // the blob exists is asked of the destinations alone, so a copy that
+        // outlived theirs would never be condemned again, while a delete cut
+        // short after the copy leaves theirs for the next pass to find.
         var deleted = false;
+        if (IsMetadataBlobKey(key.Value))
+        {
+            var copy = await _metadata.DeleteAsync(key, conditions, cancellationToken).ConfigureAwait(false);
+            deleted |= copy.Outcome == DeleteOutcome.Deleted;
+        }
+
         foreach (var shipment in ReadOrder())
         {
             var outcome = await shipment.Store.DeleteAsync(key, conditions, cancellationToken)
@@ -1151,4 +1193,27 @@ public sealed class DestinationShipSink : IObjectStore
     }
 
     private static bool IsBlobKey(string key) => key.StartsWith("blobs/", StringComparison.Ordinal);
+
+    private static bool IsMetadataBlobKey(string key) => key.StartsWith("blobs/meta/", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether this set keeps a copy of each metadata blob it ships: where it
+    /// writes through its stores, which are then all it has (ADR-0196
+    /// Amendment 3). Beside a local path or a peer, they are read there.
+    /// </summary>
+    private bool KeepsMetadataBlobs()
+    {
+        lock (_gate)
+        {
+            if (_runActive)
+            {
+                return _keepsMetadataBlobsThisRun;
+            }
+        }
+
+        var configuration = _runtime.Configuration;
+        return configuration.BackupSets.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, _setId, StringComparison.Ordinal)) is { } set
+            && WritesThroughStores(configuration, set);
+    }
 }

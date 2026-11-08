@@ -3,6 +3,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
+using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -676,6 +677,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
         Assert.IsFalse(Store.KeysIn(Namespace).Any(IsDataBlob), "the run wrote no data to the store");
         Assert.AreEqual(DestinationSyncState.Behind, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
+        Assert.IsEmpty(MetadataBlobsHere(), "beside a local path the trees are read there, and none is kept here");
     }
 
     [TestMethod]
@@ -724,6 +726,110 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_ABackupAfterAnother_ReadsNoFolderTreeFromTheStore()
+    {
+        // The folder trees a backup builds on are metadata blobs. A set whose
+        // stores are all it has keeps a copy of each one it ships here
+        // (ADR-0196 Amendment 3), so the next backup reads them here and asks
+        // the store for none. The data stays at the store alone.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+        var mark = Store.Requests.Count;
+
+        Harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        var asked = Store.Requests.Skip(mark)
+            .Select(request => $"{request.Method} {Uri.UnescapeDataString(request.Target)}")
+            .ToList();
+        Assert.IsFalse(
+            asked.Any(request => request.StartsWith("GET ", StringComparison.Ordinal) && IsMetadataBlob(request)),
+            $"the backup read a folder tree from the store: {string.Join(", ", asked)}");
+        var here = MetadataBlobsHere();
+        Assert.IsNotEmpty(here, "the set's metadata blobs are kept here");
+        CollectionAssert.AreEquivalent(
+            MetadataBlobsAtTheStore(), here, "each metadata blob at the store is kept here, and nothing else");
+        Assert.IsEmpty(DataBlobsHere(), "the data stays at the store alone");
+
+        // A copy here is never listed: a listing of the set's archive says
+        // what the store holds, each key once.
+        var archive = await runtime.ExistingArchiveAsync(Harness.DocsSetId, Timeout);
+        var listed = new List<string>();
+        await foreach (var entry in archive!.Store.ListAsync(ObjectPrefix.All, ListOptions.Default, Timeout))
+        {
+            listed.Add(entry.Key.Value);
+        }
+
+        Assert.HasCount(
+            listed.Distinct(StringComparer.Ordinal).Count(), listed, "a key is listed twice, a copy here beside the store's");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_AMetadataBlobPutOutsideARun_IsKeptHereToo()
+    {
+        // Compaction writes the blobs it packs through the sink outside a
+        // run, and a tree it moves is read at its new key after it. The copy
+        // of one put then is kept here as a backup's is.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var archive = await runtime.ExistingArchiveAsync(Harness.DocsSetId, Timeout);
+        var key = ObjectKey.Parse("blobs/meta/aaaa/" + new string('a', 26));
+        var put = await archive!.Store.PutAsync(
+            key, _ => ValueTask.FromResult<Stream>(new MemoryStream([1, 2, 3])), PutConditions.IfNotExists, Timeout);
+
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
+        Assert.Contains(key.Value, MetadataBlobsAtTheStore(), "the premise: the put reached the store");
+        Assert.Contains(key.Value, MetadataBlobsHere(), "a metadata blob put outside a run is kept here too");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_ARetentionTrim_DeletesTheFolderTreesItDrops_HereAsAtTheStore()
+    {
+        // What retention drops is deleted at the store and here alike, so
+        // the copies kept here are never more than the store holds.
+        WriteConfiguration(
+            directShip: true, storeOnly: true,
+            setRetention: new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 });
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var grant = await Harness.ReclaimGrantAsync(handler, Timeout);
+
+        // As ADR-0046's drill: an apply tombstones what expired, a later
+        // backup is its grace, and the next apply sweeps it.
+        var start = DateTimeOffset.Now;
+        var peak = 0;
+        for (var run = 0; run < 4; run++)
+        {
+            Harness.WriteSourceFile("docs/a.txt", $"the words of run {run}");
+            await BackUpAsync(runtime, start.AddHours(run));
+            peak = Math.Max(peak, MetadataBlobsAtTheStore().Count);
+            if (run > 0)
+            {
+                Assert.IsInstanceOfType<RetentionResult>(
+                    await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout));
+            }
+        }
+
+        var atTheStore = MetadataBlobsAtTheStore();
+        Assert.IsLessThan(peak, atTheStore.Count, "the premise: the trim deleted folder trees at the store");
+        CollectionAssert.AreEquivalent(
+            atTheStore, MetadataBlobsHere(), "what the trim deleted at the store is deleted here, and what it kept is kept");
+    }
+
+    [TestMethod]
     public async Task DirectShip_ToTheStoreAlone_RestoresFromIt()
     {
         // Nothing on this machine holds the data, so the set's own archive is
@@ -750,11 +856,12 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task DirectShip_ToTheStoreAlone_ARetentionReport_ReadsTheFolderTreesFromIt()
+    public async Task DirectShip_ToTheStoreAlone_ARetentionReport_WalksTheFolderTreesKeptHere()
     {
         // Retention's walk reads the folder trees out of metadata blobs, and
-        // outside a run the store is the only place they are. A restore has
-        // the set's copies to fall back on; this walk has only the sink.
+        // outside a run it reads them through the sink alone, with no copies
+        // of the set's to fall back on. They are kept here (ADR-0196
+        // Amendment 3), so the walk asks the store for none.
         WriteConfiguration(directShip: true, storeOnly: true);
         WriteFiles();
 
@@ -770,10 +877,10 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         var lines = string.Join(" | ", report.Lines);
         Assert.DoesNotContain("would not walk", lines, StringComparison.Ordinal);
         Assert.DoesNotContain("could not", lines, StringComparison.OrdinalIgnoreCase);
-        Assert.IsTrue(
+        Assert.IsFalse(
             Store.Requests.Skip(mark).Any(request =>
-                request.Method == "GET" && Uri.UnescapeDataString(request.Target).Contains("blobs/", StringComparison.Ordinal)),
-            "the report read the trees from the store");
+                request.Method == "GET" && IsMetadataBlob(Uri.UnescapeDataString(request.Target))),
+            "the report read a folder tree from the store");
     }
 
     [TestMethod]
@@ -1667,6 +1774,28 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
             .SelectMany(root => Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             .Where(path => IsDataBlob(path.Replace('\\', '/')))];
 
+    /// <summary>Whether an object key, a path, or a request target naming one, is a metadata blob's.</summary>
+    /// <param name="key">The key, path or target.</param>
+    private static bool IsMetadataBlob(string key) => key.Contains("blobs/meta/", StringComparison.Ordinal);
+
+    /// <summary>Each metadata blob kept in the set's metadata store, by its key from <c>blobs/meta/</c> on.</summary>
+    private List<string> MetadataBlobsHere()
+    {
+        var store = Path.Combine(Harness.StateDirectory, "sets", Harness.DocsSetId);
+        return Directory.Exists(store)
+            ? [.. Directory.EnumerateFiles(store, "*", SearchOption.AllDirectories)
+                .Select(path => path.Replace('\\', '/'))
+                .Where(IsMetadataBlob)
+                .Select(path => path[path.IndexOf("blobs/meta/", StringComparison.Ordinal)..])]
+            : [];
+    }
+
+    /// <summary>Each metadata blob the store holds, by its key from <c>blobs/meta/</c> on.</summary>
+    private List<string> MetadataBlobsAtTheStore() =>
+        [.. Store.KeysIn(Namespace)
+            .Where(IsMetadataBlob)
+            .Select(key => key[key.IndexOf("blobs/meta/", StringComparison.Ordinal)..])];
+
     /// <summary>Whether a request was a put the store took.</summary>
     /// <param name="request">The request as the store answered it.</param>
     private static bool Landed(ObjectStoreTestServer.RecordedRequest request) =>
@@ -1753,6 +1882,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="drillIntervalDays">The store's drill cadence, if one is stated.</param>
     /// <param name="deepVerifyIntervalDays">The store's sweep cadence, if one is stated.</param>
     /// <param name="retention">The retention policy the set keeps at the store, if any.</param>
+    /// <param name="setRetention">The set's own retention policy, if any.</param>
     protected void WriteConfiguration(
         bool directShip,
         string? endpoint = null,
@@ -1761,7 +1891,8 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         int? drillIntervalDays = null,
         int? deepVerifyIntervalDays = null,
         RetentionConfiguration? retention = null,
-        bool storeOnly = false)
+        bool storeOnly = false,
+        RetentionConfiguration? setRetention = null)
     {
         List<DestinationConfiguration> destinations =
         [
@@ -1795,6 +1926,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
                     Schedule = "every 1h",
                     Destinations = references,
                     DirectShip = directShip,
+                    Retention = setRetention,
                 },
             ],
         }.Save(Path.Combine(Harness.StateDirectory, "config.json"));

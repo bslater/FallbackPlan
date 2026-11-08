@@ -138,11 +138,17 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
         Assert.IsTrue(set.DirectShip, "a set adopted from a store ships straight to it");
         Assert.AreEqual(Cloud, Assert.ContainsSingle(set.Destinations).Ref);
 
-        // Only the metadata is copied here: no staging archive, no data.
+        // Only the metadata is copied here: no staging archive, no data. The
+        // folder trees are metadata, so they are kept here as a set that
+        // writes through its stores keeps them (ADR-0196 Amendment 3).
         Assert.IsFalse(Directory.Exists(runtime.ArchivePath(Harness.DocsSetId)), "no staging archive is made");
         Assert.IsTrue(
             Directory.EnumerateFiles(runtime.SetMetadataPath(Harness.DocsSetId), "*", SearchOption.AllDirectories).Any(),
             "the archive's metadata is copied into the set's metadata store");
+        CollectionAssert.AreEquivalent(
+            Under(root + "blobs/meta/").Select(key => key[root.Length..]).ToList(),
+            MetadataBlobsHere(runtime),
+            "each of the archive's folder trees is copied here");
         Assert.IsEmpty(DataBlobsHere(), "no data blob is copied to this machine");
 
         var ledger = runtime.DestinationSync.Find(Harness.DocsSetId, Cloud);
@@ -188,6 +194,24 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
         Assert.AreEqual("complete", restored.Outcome);
         var notes = Assert.ContainsSingle(Directory.GetFiles(output, "notes.txt", SearchOption.AllDirectories));
         Assert.AreEqual("the second words", await File.ReadAllTextAsync(notes, Timeout));
+
+        // The trees a backup builds on are here: those copied at adoption,
+        // and those the backup after it kept as it shipped them. The sync
+        // after that backup reconciled the store by listing it and reading
+        // it back, which is the store's to answer, so the pass measured is
+        // the next one.
+        Harness.WriteSourceFile("docs/notes.txt", "the third words");
+        var mark = Store.Requests.Count;
+        var next = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddHours(1), Timeout);
+        Assert.AreEqual(1, next.Ran, "the pass ran no backup");
+        await next.Transfers.WaitAsync(Timeout);
+        var asked = Store.Requests.Skip(mark)
+            .Select(request => $"{request.Method} {Uri.UnescapeDataString(request.Target)}")
+            .ToList();
+        Assert.IsFalse(
+            asked.Any(request => request.StartsWith("GET ", StringComparison.Ordinal)
+                && request.Contains("blobs/meta/", StringComparison.Ordinal)),
+            $"a backup of the adopted set read a folder tree from the store: {string.Join(", ", asked)}");
     }
 
     [TestMethod]
@@ -430,6 +454,14 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
         Under(root + "blobs/data/").Sum(key => (long)Store.ObjectIn(Namespace, key)!.Length);
 
     private int Writes() => Store.Requests.Count(request => request.Method is "PUT" or "DELETE" or "POST");
+
+    /// <summary>Each metadata blob kept in the set's metadata store, by its key from <c>blobs/meta/</c> on.</summary>
+    /// <param name="runtime">The service.</param>
+    private List<string> MetadataBlobsHere(ServiceRuntime runtime) =>
+        [.. Directory.EnumerateFiles(runtime.SetMetadataPath(Harness.DocsSetId), "*", SearchOption.AllDirectories)
+            .Select(path => path.Replace('\\', '/'))
+            .Where(path => path.Contains("blobs/meta/", StringComparison.Ordinal))
+            .Select(path => path[path.IndexOf("blobs/meta/", StringComparison.Ordinal)..])];
 
     /// <summary>Every data blob this machine holds, under its state and its archives.</summary>
     private List<string> DataBlobsHere() =>

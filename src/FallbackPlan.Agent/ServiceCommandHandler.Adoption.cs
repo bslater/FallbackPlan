@@ -691,10 +691,13 @@ public sealed partial class ServiceCommandHandler
 
         // ---- writes ----
 
+        // From a store, the folder trees come too: the set writes through it,
+        // and keeps here each tree it ships (ADR-0196 Amendment 3).
         var metadataPath = runtime.SetMetadataPath(setId);
         Directory.CreateDirectory(metadataPath);
-        await ServiceRuntime.CopyMetadataAsync(
+        _ = await ServiceRuntime.CopyBackAsync(
             replicaStore, new LocalFileSystemObjectStore(metadataPath, runtime.LoggerFor<LocalFileSystemObjectStore>()),
+            destination.Kind.IsObjectStore() ? key => key.StartsWith("blobs/meta/", StringComparison.Ordinal) : null,
             cancellationToken).ConfigureAwait(false);
 
         var writerResumed = await ResumeWriterIdentityAsync(replicaStore, lines, cancellationToken).ConfigureAwait(false);
