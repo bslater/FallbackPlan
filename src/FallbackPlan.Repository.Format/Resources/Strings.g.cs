@@ -171,6 +171,17 @@ internal static class Strings
     internal static string ErrorManifestCodec_FailureEntryOmitsMandatoryKey => Get(nameof(ErrorManifestCodec_FailureEntryOmitsMandatoryKey));
 
     /// <summary>
+    /// A failure entry's key 4 (stands in) is 1 where present; this one is {0}.
+    /// </summary>
+    private static string ErrorManifestCodec_StandsInNotOne => Get(nameof(ErrorManifestCodec_StandsInNotOne));
+
+    /// <summary>
+    /// A failure entry's key 4 (stands in) is 1 where present; this one is {0}.
+    /// </summary>
+    internal static string FormatErrorManifestCodec_StandsInNotOne(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ErrorManifestCodec_StandsInNotOne, arg0);
+
+    /// <summary>
     /// Failure reason {0} is unassigned (specification 06 §8.1).
     /// </summary>
     private static string ErrorManifestCodec_FailureReasonUnassigned => Get(nameof(ErrorManifestCodec_FailureReasonUnassigned));

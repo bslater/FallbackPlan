@@ -50,6 +50,14 @@ public static class FormatVersions
     /// </summary>
     public const ushort FileFlagsAndLinkForms = 6;
 
+    /// <summary>
+    /// Format 7: a capture failure may say that what stands at its path is
+    /// what the snapshot before held there (06 §8.1 key 4). Manifests are
+    /// format 6's, the index format 5's, records and blobs format 3's
+    /// (ADR-0197).
+    /// </summary>
+    public const ushort StandInFailures = 7;
+
     /// <summary>Whether a descriptor's version is one this implementation reads.</summary>
     public static bool IsReadable(ushort formatVersion) =>
         formatVersion is >= SealedDataPlane and <= FormatLimits.LatestFormatVersion;
@@ -114,6 +122,14 @@ public static class FormatVersions
     public static bool HasFileFlagsAndLinkForms(ushort formatVersion) => formatVersion >= FileFlagsAndLinkForms;
 
     /// <summary>
+    /// Whether a writer at this version may say, in a capture failure, that
+    /// what stands at its path is what the snapshot before held there (06
+    /// §8.1 key 4). Below format 7 it must not: a reader that predates the key
+    /// refuses the error manifest and reports it as damage.
+    /// </summary>
+    public static bool HasStandInFailures(ushort formatVersion) => formatVersion >= StandInFailures;
+
+    /// <summary>
     /// The version a blob of this class is stamped with inside a repository
     /// of <paramref name="repositoryFormatVersion"/> — which is not the same
     /// number, and the one place that says so.
@@ -124,8 +140,9 @@ public static class FormatVersions
     /// construction is the one format 1 defined and format 2 kept byte for
     /// byte (ADR-0014 Amendment 1); a format-3 repository writes
     /// <see cref="RelocatableRecords"/> for both, and so do format-4 and
-    /// format-5 ones, whose changes are to the index alone, and format-6
-    /// ones, whose changes are to what a manifest may say. The stamp is AAD input, so
+    /// format-5 ones, whose changes are to the index alone, format-6
+    /// ones, whose changes are to what a manifest may say, and format-7 ones,
+    /// whose change is to what a failure may say. The stamp is AAD input, so
     /// answering this wrongly does not produce a warning — it produces a blob
     /// whose own repository cannot open it.
     /// </remarks>

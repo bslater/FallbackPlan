@@ -101,11 +101,22 @@ public static class RepositoryDescriptorCodec
     /// </summary>
     public const ushort FeatureFileFlagsAndLinkForms = 0x0006;
 
+    /// <summary>
+    /// <c>stand-in-failures</c>: a capture failure may say that what stands
+    /// at its path is what the snapshot before held there (06 §8.1 key 4)
+    /// ([ADR-0197](../../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md)):
+    /// a format-7 repository names it in <c>required_features</c>, beside
+    /// <c>file-flags-and-link-forms</c>, and no earlier format may. A reader
+    /// that predates format 7 refuses the repository by that name rather than
+    /// reporting its first error manifest carrying the key as damage.
+    /// </summary>
+    public const ushort FeatureStandInFailures = 0x0007;
+
     /// <summary>The feature identifiers this implementation understands.</summary>
     private static readonly HashSet<ushort> Implemented =
     [
         FeatureSealedDataPlane, FeatureReclaimAuthority, FeatureRelocatableRecords, FeatureIndexGenerations,
-        FeatureDeltaCheckpoints, FeatureFileFlagsAndLinkForms,
+        FeatureDeltaCheckpoints, FeatureFileFlagsAndLinkForms, FeatureStandInFailures,
     ];
 
     /// <summary>Serialises a descriptor to its store bytes.</summary>
@@ -118,8 +129,8 @@ public static class RepositoryDescriptorCodec
             throw new ArgumentException(Strings.RepositoryDescriptorCodec_KDFSaltExactlyBytes, nameof(descriptor));
         }
 
-        // Only formats 2 to 6 are written (ADR-0042 §1, ADR-0052, ADR-0096,
-        // ADR-0097, ADR-0184; format 1 withdrawn before freeze), and a descriptor of
+        // Only formats 2 to 7 are written (ADR-0042 §1, ADR-0052, ADR-0096,
+        // ADR-0097, ADR-0184, ADR-0197; format 1 withdrawn before freeze), and a descriptor of
         // any is nothing without its sealing public key — the verifier every
         // open compares against. A caller handing over anything else is a bug
         // refused here rather than a stored contradiction.
@@ -398,7 +409,8 @@ public static class RepositoryDescriptorCodec
     /// they agree (01 §3.2): format 3 and later list relocatable-records,
     /// format 4 and later list index-generations, format 5 and later list
     /// delta-checkpoints, format 6 and later list file-flags-and-link-forms,
-    /// and an earlier format lists none of the four.
+    /// format 7 and later list stand-in-failures, and an earlier format lists
+    /// none of the five.
     /// </summary>
     private static string? FeatureVersionDisagreement(ushort formatVersion, IReadOnlyList<ushort> required) =>
         FeatureDisagreement(
@@ -412,7 +424,10 @@ public static class RepositoryDescriptorCodec
             FormatVersions.HasDeltaCheckpoints(formatVersion))
         ?? FeatureDisagreement(
             formatVersion, required, FeatureFileFlagsAndLinkForms, "file-flags-and-link-forms",
-            FormatVersions.HasFileFlagsAndLinkForms(formatVersion));
+            FormatVersions.HasFileFlagsAndLinkForms(formatVersion))
+        ?? FeatureDisagreement(
+            formatVersion, required, FeatureStandInFailures, "stand-in-failures",
+            FormatVersions.HasStandInFailures(formatVersion));
 
     private static string? FeatureDisagreement(
         ushort formatVersion, IReadOnlyList<ushort> required, ushort feature, string name, bool implied)
