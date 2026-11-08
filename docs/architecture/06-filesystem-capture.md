@@ -26,6 +26,8 @@ The scanner streams directory traversal with memory bounded independently of fil
 
 > **2026-11 ([ADR-0185 Amendment 6](../adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come)).** A folder whose listing its provider keeps, dataless on macOS or carrying an online-only file's bits on Windows, is listed before the walk enters it. Where the listing does not come, the walk names the folder unlisted, and the snapshot keeps the tree backed up before it, with a failure saying so, rather than holding the folder empty.
 
+> **2026-11 ([ADR-0185 Amendment 7](../adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-7-2026-11--the-first-provider-failure-stops-the-run-listing-and-fetching)).** Once a provider has failed in the run, to list such a folder or to fetch a file, the run tells the walk so, and the walk lists no other folder a provider holds. It names each it passes unasked, and the snapshot keeps that folder's tree as it keeps an unlisted one.
+
 ## 2. Path handling
 
 Paths are the most common source of silent cross-platform data loss, so the rules are normative.

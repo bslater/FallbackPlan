@@ -399,6 +399,8 @@ A failure may name a path the snapshot's tree also holds. The tree then holds an
 
 > **2026-11 ([ADR-0185 Amendment 6](../../docs/adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come)).** It writes one too for a folder whose listing its provider did not deliver. The path is the folder's, and the tree holds the folder's earlier tree. Nothing a reader accepts changes.
 
+> **2026-11 ([ADR-0185 Amendment 7](../../docs/adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-7-2026-11--the-first-provider-failure-stops-the-run-listing-and-fetching)).** And for a folder it did not ask its provider to list, once a provider had failed earlier in the run. Nothing a reader accepts changes.
+
 A path **excluded by policy** is not a failure and MUST NOT appear here — it belongs in the policy manifest's exclude rules (§7.1). Conflating the two is how a user comes to believe they have a backup of something they excluded two years ago. → [`06-filesystem-capture.md` §6](../../docs/architecture/06-filesystem-capture.md#6-backup-set-selection)
 
 ## 9 Sharding
