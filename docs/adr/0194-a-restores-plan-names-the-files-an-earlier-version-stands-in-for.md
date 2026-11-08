@@ -163,6 +163,8 @@ A folder whose listing did not come keeps the tree backed up before it ([ADR-018
 ### What this does not do
 
 - **Name a kept file once retention has forgotten every snapshot that held its version.** The snapshot alone does not say which of its failures put an earlier version in place. A later record may have the backup write that beside the failure.
+
+  > **2026-11: the key ([ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md)).** Format 7 gives a failure a key that says so. Nothing writes or reads it yet.
 - **Change what a backup writes.** The failures and the trees are as they were; the probe reads them differently.
 
 ## Status history
@@ -173,3 +175,4 @@ A folder whose listing did not come keeps the tree backed up before it ([ADR-018
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-run-and-its-receipt-name-them-too): a run reads the snapshot's failures as its plan did, before it writes; its receipt, at schema 12, names each file it restored as the version backed up before, with what the backup said, or says the failures would not read; its result says how many and which, at contract 1.87, and the command line and the console say so. |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--the-kept-receipts-count-them): the listing of kept receipts counts each run's files restored as the version backed up before, those written alone, at contract 1.88; the run's result counts by the same rule; the command line and the console say it after a run's counts. |
 | 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--an-earlier-version-is-one-an-earlier-snapshot-holds): a file is named as the version backed up before only where an earlier snapshot of the set holds that very version at its path, so a file whose stream alone failed is not; each file the plan restores below a folder kept from before is named, with the folder's words; the run reads them so for its receipt; a version every earlier holder of which is forgotten is not named. `Restore/RestoreBlobSet`; `Repository.Tests/OnlineOnlyCaptureTests`; `Hosts.Tests/EarlierVersionPlanTests` |
+| 2026-11 | Accepted (related) | [ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md) gives a failure a key, format 7's failure key 4, that says what the tree holds at its path is what the snapshot before held there. Nothing writes or reads it yet, so a plan still names a file by Amendment 3's rule |

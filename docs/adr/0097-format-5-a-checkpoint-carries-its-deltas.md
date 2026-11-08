@@ -96,6 +96,8 @@ Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and 
 
 > **2026-11 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).** A repository is born at format 6 now, and an upgrade lands on 6. Format 6 keeps this record's index whole and changes only what a manifest may say, so a format-6 set checkpoints as a format-5 one does, and format 5 remains creatable on request.
 
+> **2026-11 ([ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md)).** A repository is born at format 7 now, and an upgrade lands on 7. Format 7 keeps this record's index whole and changes only what a capture failure may say, so a format-7 set checkpoints as a format-5 one does, and format 5 remains creatable on request.
+
 ## The six constraints
 
 | | Constraint | How format 5 meets it |
@@ -152,6 +154,7 @@ Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and 
 
 | Date | Status | Note |
 |---|---|---|
+| 2026-11 | Accepted; built (amended) | A repository is born at format 7 ([ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md)), whose index is this record's; a format-7 set checkpoints as a format-5 one does |
 | 2026-11 | Accepted; built (amended) | A repository is born at format 6 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)), whose index is this record's; a format-6 set checkpoints as a format-5 one does |
 | 2026-10 | Accepted; built (amended) | A peer no longer keeps every delta: under a person's reclaim grant the hub judges the peer's replica over retrieval by ADR-0098 §1's rule and names what passes in the signed drop list ([ADR-0098 Amendment 1](0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant)) |
 | 2026-10 | Accepted; built (amended) | Retirement, owed here as constraint 6, is built by [ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md) for staging, a metadata store, a local path and an object store (`Repository.Index/DeltaRetirer`); a carried delta is stored twice only until its checkpoint's writer publishes again. A peer keeps every delta |

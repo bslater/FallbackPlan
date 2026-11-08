@@ -219,6 +219,15 @@ proofs; one is much cheaper.
 > repository created at 6 lists `file-flags-and-link-forms`, and an older
 > build refuses it by name.
 
+> **Amended 2026-11 ([ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md)).**
+> The same record moves a set to format 7, the latest, which changes what a
+> capture failure may say. Nothing writes the new key yet, so an upgraded
+> set's error manifests are format 6's until a writer says what stands in a
+> failure's place. A build older than format 7 will then report each error
+> manifest carrying it as an object it cannot read, and cannot say what that
+> snapshot failed. A repository created at 7 lists `stand-in-failures`, and
+> an older build refuses it by name.
+
 ## Consequences
 
 **The stated price: an older build misdiagnoses.** A build predating format 3
@@ -345,6 +354,7 @@ it.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-11 | Accepted (amended) | The upgrade verb targets the latest format, 7 ([ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md)): an upgraded set's capture failures may say what stands in their place once a writer says it, and an older build will report such an error manifest as damage; a repository created at 7 is refused by name |
 | 2026-11 | Accepted (amended) | The upgrade verb targets the latest format, 6 ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)): an upgraded set's manifests may keep a file's flags and a link's form once a writer keeps them, and an older build will report such a manifest as damage; a repository created at 6 is refused by name |
 | 2026-10 | Accepted (amended) | The record is a named copy phase, so it reaches a destination with the sync after the set's next backup rather than at the daily reconciliation, and that sync's verification no longer fails for lacking it ([ADR-0056 Amendment 1](0056-incremental-reconciliation.md#amendment-1-2026-10--every-prefix-this-build-writes-is-named-and-a-pass-is-asked-only-about-what-it-carries); `Hosts.Tests/FormatUpgradeTests`) |
 | 2026-10 | Accepted (amended) | A destination's delta retirement ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)) is one more act Amendment 1 refuses above the implemented format: the sync still copies the set, and the destination retires nothing (`Agent/FanOut`; `Hosts.Tests/DeltaRetirementServiceTests`) |

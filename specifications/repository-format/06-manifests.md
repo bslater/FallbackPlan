@@ -392,10 +392,18 @@ Object type `0x06`. Present only when something could not be captured.
 | 1 | array | `path_components` — array of raw byte strings |
 | 2 | u16 | `reason` — 1 permission, 2 not found, 3 I/O error, 4 changed during read, 5 unsupported type, 6 too large, 7 excluded by limit, 8 name not representable (§4.2) |
 | 3 | text | `detail` |
+| 4 | u8 | `stands_in` — 1 what the snapshot's tree holds at the path is what the snapshot before held there: a file's version, or a folder's tree; absent otherwise. Format 7 and later |
+
+> **2026-11 ([ADR-0197](../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md)).** Format 7 assigns key 4.
+>
+> - **`stands_in`** is present only with the value 1. It is absent where it would say nothing, so a failure that says nothing is byte for byte the one format 6 writes. A reader MUST reject any other value.
+> - **A writer MUST NOT write it below format 7.** A reader that predates format 7 rejects an error manifest carrying it as an unknown key, so a repository such a reader is entitled to read never holds one.
 
 A failure may name a path the snapshot's tree also holds. The tree then holds an earlier version, carried from the snapshot before because the content the path held at capture could not be read, and the failure's detail says so. A reader MUST NOT take a failure entry to mean its path is absent from the tree.
 
 > **2026-11 ([ADR-0194 Amendment 3](../../docs/adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-3-2026-11--an-earlier-version-is-one-an-earlier-snapshot-holds)).** Not only then: a failure for a file's alternate stream names the file, which the tree holds as captured. The product tells the two apart by whether an earlier snapshot holds the same version at the path. A reader MUST NOT take a failure entry at a path the tree holds to mean the version there is an earlier one.
+
+> **2026-11 ([ADR-0197](../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md)).** From format 7, key 4 (§8.1) says which such failures put an earlier version in place: where a failure carries it, what the tree holds at its path is what the snapshot before held there. A failure without it says nothing either way. No failure carries it below format 7, and the product writes it nowhere yet.
 
 > **2026-11 ([ADR-0185 Amendment 3](../../docs/adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before)).** The product writes such a failure for a changed online-only file its provider did not deliver. Nothing a reader accepts changes.
 

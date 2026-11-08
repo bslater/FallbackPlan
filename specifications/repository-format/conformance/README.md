@@ -112,6 +112,8 @@ The vectors here cover algorithms and encodings. **Fixture repositories** — co
 
 `fixture-repository-v6` is the same repository at **format 6** (ADR-0184). Its index is format 5's, its delta carried in a checkpoint, and everything sealed in it is format 3's, stamped 3. Its descriptor declares `file-flags-and-link-forms` beside the three features before it. Its tree holds a second entry, a junction: a link whose manifest carries key 14, `link_form`, naming it a mount point ([06 §4](../06-manifests.md#4-file-version-manifest)). The file's manifest keeps the no-dump flag in metadata key 11, `file_flags` ([06 §4.1](../06-manifests.md#41-metadata-map)). It holds the same read contract, plus the two keys: each manifest decodes with what it keeps, and the file restores byte for byte.
 
+`fixture-repository-v7` is the same repository at **format 7** (ADR-0197). Its manifests are format 6's, its index format 5's, its delta carried in a checkpoint, and everything sealed in it is format 3's, stamped 3. Its descriptor declares `stand-in-failures` beside the four features before it. Its snapshot is partial, and its error manifest's one failure names `fixture.bin`, which the tree still holds, and carries key 4, `stands_in`, saying that what stands there is what the snapshot before held ([06 §8.1](../06-manifests.md#81-failure-entry)). It holds the same read contract, plus the key: the failure decodes with what it says, and the file restores byte for byte.
+
 A format-1 fixture with byte-identical regeneration existed while format v1 did; it was withdrawn with the format, before any freeze.
 
 Fixtures containing user data are never committed. Everything in this suite is synthetic and constant.
