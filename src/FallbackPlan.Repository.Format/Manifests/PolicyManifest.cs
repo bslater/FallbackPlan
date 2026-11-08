@@ -498,10 +498,19 @@ public static class PolicyManifestCodec
 }
 
 /// <summary>One capture failure (specification 06 §8.1).</summary>
+/// <param name="PathComponents">The path that could not be captured.</param>
+/// <param name="Reason">Why.</param>
+/// <param name="Detail">The platform's words, and what stands in its place.</param>
+/// <param name="StandsIn">
+/// Whether what the snapshot's tree holds at the path is what the snapshot
+/// before held there: a file's version, or a folder's tree (key 4, format 7;
+/// ADR-0197). A writer below format 7 must not set it.
+/// </param>
 public sealed record CaptureFailure(
     IReadOnlyList<ReadOnlyMemory<byte>> PathComponents,
     CaptureFailureReason Reason,
-    string Detail);
+    string Detail,
+    bool StandsIn = false);
 
 /// <summary>
 /// The error manifest (specification 06 §8, object type <c>0x06</c>): what
@@ -525,7 +534,9 @@ public static class ErrorManifestCodec
 
         foreach (var failure in manifest.Failures)
         {
-            writer.WriteStartMap(3);
+            // Key 4 is absent where it would say nothing, so such a failure is
+            // byte for byte the one format 6 writes (ADR-0197).
+            writer.WriteStartMap(failure.StandsIn ? 4 : 3);
             writer.WriteKey(1);
             writer.WriteStartArray(failure.PathComponents.Count);
             foreach (var component in failure.PathComponents)
@@ -538,6 +549,12 @@ public static class ErrorManifestCodec
             writer.WriteUnsignedInteger((ushort)failure.Reason);
             writer.WriteKey(3);
             writer.WriteTextString(failure.Detail);
+            if (failure.StandsIn)
+            {
+                writer.WriteKey(4);
+                writer.WriteUnsignedInteger(1);
+            }
+
             writer.WriteEndMap();
         }
 
@@ -580,6 +597,7 @@ public static class ErrorManifestCodec
             List<ReadOnlyMemory<byte>>? components = null;
             CaptureFailureReason? reason = null;
             string? detail = null;
+            var standsIn = false;
 
             for (var j = 0; j < entryCount; j++)
             {
@@ -612,6 +630,17 @@ public static class ErrorManifestCodec
                     case 3:
                         detail = reader.ReadTextString(maxUtf8Length: 4096);
                         break;
+                    case 4:
+                        // Present only to say yes (ADR-0197): any other value is
+                        // not what a writer writes.
+                        var standing = reader.ReadUnsignedInteger();
+                        if (standing != 1)
+                        {
+                            throw new ManifestValidationException(Strings.FormatErrorManifestCodec_StandsInNotOne(standing));
+                        }
+
+                        standsIn = true;
+                        break;
                     default:
                         throw new ManifestValidationException(Strings.ErrorManifestCodec_FailureEntryCarriesUnknownKey);
                 }
@@ -624,7 +653,7 @@ public static class ErrorManifestCodec
                 throw new ManifestValidationException(Strings.ErrorManifestCodec_FailureEntryOmitsMandatoryKey);
             }
 
-            failures.Add(new CaptureFailure(components, reason.Value, detail));
+            failures.Add(new CaptureFailure(components, reason.Value, detail, standsIn));
         }
 
         reader.ReadEndArray();

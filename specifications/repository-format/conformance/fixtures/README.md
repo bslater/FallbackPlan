@@ -129,6 +129,34 @@ flag and the passphrase restores `fixture.bin` byte for byte, and the
 junction's manifest names it a mount point with its target. Regeneration is
 no more byte-identical than format 3's.
 
+## fixture-repository-v7
+
+The same seven objects, written at **format 7**
+([ADR-0197](../../../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md))
+under the passphrase `fallbackplan-fixture-v7-passphrase`. Format 7 changes
+what a capture failure may say and nothing else, so the checkpoint carries
+the one delta as at format 5, the manifests are format 6's, and everything
+sealed is format 3's and stamped 3. The descriptor declares format 7 and
+lists `stand-in-failures` beside `file-flags-and-link-forms`,
+`delta-checkpoints`, `index-generations` and `relocatable-records` as
+**required** features.
+
+The tree holds format 6's two entries: `fixture.bin`, whose manifest keeps
+the no-dump flag, and `fixture-junction`, whose manifest names it a mount
+point. The snapshot is partial (`capture_status` 2), and the metadata blob
+holds one manifest more, an error manifest. Its one failure names
+`fixture.bin`, which the tree still holds, with reason 3, I/O error, and
+key 4, `stands_in`, at 1, saying that what stands there is what the
+snapshot before held.
+
+`FixtureRepositoryV7Tests` holds the read contract on these bytes: the
+descriptor names format 7 and its five features, every blob is stamped 3,
+the index loads with no finding and its delta is carried in the checkpoint,
+a catalogue rebuilds with no finding, both manifests keep what format 6's
+do, the passphrase restores `fixture.bin` byte for byte, and the snapshot
+is partial and its one failure names the file and carries key 4.
+Regeneration is no more byte-identical than format 3's.
+
 A format-1 fixture (`fixture-repository-v1`, with a key object and a
 byte-identical regeneration) and its committed recovery kit lived here while
 format v1 did. Both were withdrawn with the format, before any freeze; the

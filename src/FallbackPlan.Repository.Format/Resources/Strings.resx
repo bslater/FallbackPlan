@@ -115,6 +115,9 @@
   <data name="ErrorManifestCodec_FailureEntryOmitsMandatoryKey" xml:space="preserve">
     <value>A failure entry omits a mandatory key (specification 06 §8.1).</value>
   </data>
+  <data name="ErrorManifestCodec_StandsInNotOne" xml:space="preserve">
+    <value>A failure entry's key 4 (stands in) is 1 where present; this one is {0}.</value>
+  </data>
   <data name="ErrorManifestCodec_FailureReasonUnassigned" xml:space="preserve">
     <value>Failure reason {0} is unassigned (specification 06 §8.1).</value>
   </data>

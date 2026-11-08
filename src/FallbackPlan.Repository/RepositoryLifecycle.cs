@@ -272,7 +272,8 @@ public static class RepositoryLifecycle
     /// What a new descriptor of this version must declare (01 §3.2): the
     /// sealed data plane and the reclaim authority always; relocatable
     /// records from format 3; index generations from format 4; delta
-    /// checkpoints from format 5; file flags and link forms from format 6.
+    /// checkpoints from format 5; file flags and link forms from format 6;
+    /// stand-in failures from format 7.
     /// </summary>
     private static ushort[] RequiredFeaturesFor(ushort formatVersion)
     {
@@ -299,6 +300,11 @@ public static class RepositoryLifecycle
         if (FormatVersions.HasFileFlagsAndLinkForms(formatVersion))
         {
             features.Add(RepositoryDescriptorCodec.FeatureFileFlagsAndLinkForms);
+        }
+
+        if (FormatVersions.HasStandInFailures(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureStandInFailures);
         }
 
         return [.. features];

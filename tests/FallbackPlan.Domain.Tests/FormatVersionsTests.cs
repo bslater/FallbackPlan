@@ -7,7 +7,9 @@ namespace FallbackPlan.Domain.Tests;
 /// records and blobs are format 3's byte for byte. Format 5 adds a
 /// checkpoint that carries deltas verbatim and changes nothing else. Format 6
 /// adds two manifest keys, a file's flags and a link's form, and keeps
-/// format 5's index and format 3's blobs (ADR-0184). A
+/// format 5's index and format 3's blobs (ADR-0184). Format 7 adds a key
+/// to a capture failure, saying what stands in its place, and keeps format
+/// 6's manifests, format 5's index and format 3's blobs (ADR-0197). A
 /// version above the newest this build knows is never written (NFR-COMP-003;
 /// specification 11 §5.3): what such a repository's objects must carry is the
 /// newer build's to say.
@@ -82,7 +84,32 @@ public sealed class FormatVersionsTests
     }
 
     [TestMethod]
-    public void ThisBuild_ReadsFormatsTwoToSix_AndNothingAfter()
+    public void FormatSeven_HasStandInFailures_AndNoEarlierFormatDoes()
+    {
+        Assert.AreEqual((ushort)7, FormatVersions.StandInFailures);
+        Assert.IsTrue(FormatVersions.HasStandInFailures(FormatVersions.StandInFailures));
+        Assert.IsFalse(FormatVersions.HasStandInFailures(FormatVersions.FileFlagsAndLinkForms));
+        Assert.IsFalse(FormatVersions.HasStandInFailures(FormatVersions.RelocatableRecords));
+    }
+
+    [TestMethod]
+    public void FormatSeven_KeepsFormatSixsManifestsFormatFivesIndexAndFormatThreesBlobs()
+    {
+        // Format 7 adds a key a failure may carry and changes nothing a
+        // manifest, a delta, a checkpoint or a blob's container carries
+        // (ADR-0197).
+        Assert.IsTrue(FormatVersions.HasFileFlagsAndLinkForms(FormatVersions.StandInFailures));
+        Assert.IsTrue(FormatVersions.HasDeltaCheckpoints(FormatVersions.StandInFailures));
+        Assert.IsTrue(FormatVersions.HasIndexGenerations(FormatVersions.StandInFailures));
+        Assert.IsTrue(FormatVersions.HasRelocatableRecords(FormatVersions.StandInFailures));
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, FormatVersions.ContainerVersion(FormatVersions.StandInFailures, dataClass: true));
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, FormatVersions.ContainerVersion(FormatVersions.StandInFailures, dataClass: false));
+    }
+
+    [TestMethod]
+    public void ThisBuild_ReadsFormatsTwoToSeven_AndNothingAfter()
     {
         Assert.IsFalse(FormatVersions.IsReadable(1));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.SealedDataPlane));
@@ -90,19 +117,21 @@ public sealed class FormatVersionsTests
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.IndexGenerations));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.DeltaCheckpoints));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.FileFlagsAndLinkForms));
-        Assert.IsFalse(FormatVersions.IsReadable(7));
-        Assert.AreEqual((ushort)6, FormatLimits.LatestFormatVersion);
-        Assert.AreEqual((ushort)6, FormatLimits.FormatVersion);
+        Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.StandInFailures));
+        Assert.IsFalse(FormatVersions.IsReadable(8));
+        Assert.AreEqual((ushort)7, FormatLimits.LatestFormatVersion);
+        Assert.AreEqual((ushort)7, FormatLimits.FormatVersion);
     }
 
     [TestMethod]
-    public void ThisBuild_WritesFormatsTwoToSix_AndNothingAfter()
+    public void ThisBuild_WritesFormatsTwoToSeven_AndNothingAfter()
     {
         Assert.IsFalse(FormatVersions.IsWritable(FormatVersions.Symmetric));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.SealedDataPlane));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.RelocatableRecords));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.IndexGenerations));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.DeltaCheckpoints));
+        Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.FileFlagsAndLinkForms));
         Assert.IsTrue(FormatVersions.IsWritable(FormatLimits.LatestFormatVersion));
         Assert.IsFalse(FormatVersions.IsWritable(FormatLimits.LatestFormatVersion + 1));
     }
@@ -110,7 +139,7 @@ public sealed class FormatVersionsTests
     [TestMethod]
     public void ContainerVersion_OfAFormatThisBuildDoesNotKnow_IsRefused()
     {
-        // Answering 3 for a format-7 repository, as every version from 3 up
+        // Answering 3 for a format-8 repository, as every version from 3 up
         // once did, would stamp a container this build cannot vouch for into
         // a repository whose rules it has never seen.
         const ushort unknown = FormatLimits.LatestFormatVersion + 1;

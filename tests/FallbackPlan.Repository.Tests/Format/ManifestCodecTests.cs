@@ -16,7 +16,10 @@ namespace FallbackPlan.Repository.Tests.Format;
 /// round-trip and are held to one encoding: a file's or a folder's flags in
 /// metadata key 11, present only when some flag is set and refused with a
 /// reserved bit, and a link's form in key 14, carried only by a link that is
-/// a mount point (FR-MAN-003; ADR-0184).
+/// a mount point (FR-MAN-003; ADR-0184). Format 7's failure key 4 says that
+/// what stands at a failure's path is what the snapshot before held there;
+/// it round-trips, is absent where it would say nothing, so such a failure
+/// is byte for byte format 6's, and is refused at any value but 1 (ADR-0197).
 /// </summary>
 [TestClass]
 public sealed class ManifestCodecTests
@@ -794,6 +797,81 @@ public sealed class ManifestCodecTests
                 Assert.ContainsSingle(decoded.Failures).Reason,
                 $"reason {reason} is assigned by 06 §8.1 and must survive the round trip");
         }
+    }
+
+    [TestMethod]
+    public void ErrorManifest_AFailureThatSaysWhatStandsInItsPlace_RoundTrips_InKeyFour()
+    {
+        // Format 7 (ADR-0197): the snapshot's tree holds, at this path, what
+        // the snapshot before held there.
+        var manifest = new ErrorManifest(
+        [
+            new CaptureFailure(["docs"u8.ToArray(), "doc.bin"u8.ToArray()], CaptureFailureReason.IoError, "not fetched", StandsIn: true),
+            new CaptureFailure(["docs"u8.ToArray(), "other.bin"u8.ToArray()], CaptureFailureReason.IoError, "not fetched"),
+        ]);
+
+        var bytes = ErrorManifestCodec.Encode(manifest);
+        var decoded = ErrorManifestCodec.Decode(bytes);
+
+        Assert.IsTrue(decoded.Failures[0].StandsIn);
+        Assert.IsFalse(decoded.Failures[1].StandsIn);
+        SequenceAssert.AreEqual(bytes, ErrorManifestCodec.Encode(decoded));
+        SequenceAssert.AreEqual(Failures((4, 1)), ErrorManifestCodec.Encode(new ErrorManifest(
+            [new CaptureFailure(["a"u8.ToArray()], CaptureFailureReason.IoError, "why", StandsIn: true)])));
+    }
+
+    [TestMethod]
+    public void ErrorManifest_AFailureThatSaysNothingStandsIn_IsByteForByteFormatSixs()
+    {
+        // Key 4 is absent where it would say nothing, so a repository below
+        // format 7 never holds it from a writer that never sets it.
+        SequenceAssert.AreEqual(
+            Failures(),
+            ErrorManifestCodec.Encode(new ErrorManifest([new CaptureFailure(["a"u8.ToArray()], CaptureFailureReason.IoError, "why")])));
+    }
+
+    [TestMethod]
+    [DataRow(0UL)]
+    [DataRow(2UL)]
+    public void ErrorManifest_KeyFourOtherThanOne_IsRefused(ulong value)
+    {
+        var exception = Assert.ThrowsExactly<ManifestValidationException>(() => ErrorManifestCodec.Decode(Failures((4, value))));
+        Assert.Contains("stands", exception.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void ErrorManifest_KeyFive_IsUnknown() =>
+        Assert.ThrowsExactly<ManifestValidationException>(() => ErrorManifestCodec.Decode(Failures((5, 1))));
+
+    /// <summary>
+    /// An error manifest of one failure at <c>a</c>, reason I/O error,
+    /// detail <c>why</c>, with <paramref name="extra"/> keys after key 3.
+    /// </summary>
+    private static byte[] Failures(params (uint Key, ulong Value)[] extra)
+    {
+        var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
+        writer.WriteStartMap(1);
+        writer.WriteKey(1);
+        writer.WriteStartArray(1);
+        writer.WriteStartMap(3 + extra.Length);
+        writer.WriteKey(1);
+        writer.WriteStartArray(1);
+        writer.WriteByteString("a"u8);
+        writer.WriteEndArray();
+        writer.WriteKey(2);
+        writer.WriteUnsignedInteger((ulong)CaptureFailureReason.IoError);
+        writer.WriteKey(3);
+        writer.WriteTextString("why");
+        foreach (var (key, value) in extra)
+        {
+            writer.WriteKey(key);
+            writer.WriteUnsignedInteger(value);
+        }
+
+        writer.WriteEndMap();
+        writer.WriteEndArray();
+        writer.WriteEndMap();
+        return writer.Encode();
     }
 
     [TestMethod]

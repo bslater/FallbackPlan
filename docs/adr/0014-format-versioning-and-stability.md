@@ -101,6 +101,10 @@ Format v1 freezes only when all of the following pass ([`../roadmap.md`](../road
 > ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)), and reads 2 to
 > 6. The criterion above covers all five, and each has a committed fixture.
 
+> **Amended 2026-11.** The product now creates format 7
+> ([ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md)), and reads 2 to
+> 7. The criterion above covers all six, and each has a committed fixture.
+
 **What the gate means now.** The freeze gate's six items are unchanged and read against format 2 — see the second amendment note at the gate for what format 3's arrival does and does not change. The conformance vectors and the committed fixture are format 2's ([conformance](../../specifications/repository-format/conformance/README.md)); the independent-reader criterion is a reader of format 2.
 
 **What was given up.** The choice at creation between two formats, and with it the service's passphrase mode, its platform keystore and the `unlock`/`lock` verbs ([ADR-0028 §9](0028-service-boundary-and-deployment-topologies.md), [ADR-0033](0033-hosting-under-an-os-service-manager.md), both amended). A format-1 recovery kit still parses — its wire shape is pinned until the kit itself goes — but cannot be opened.
@@ -170,12 +174,21 @@ one restores only part of it (NFR-COMP-004 as amended).
 > flags ([ADR-0180 Amendment 3](0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too))
 > and a junction's form ([ADR-0183 Amendment 1](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md#amendment-1-2026-11--capture-keeps-a-junctions-form)).
 
+> **Amended 2026-11 ([ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md)).**
+> Format 7 is what the product creates now, and formats 2 to 6 remain
+> creatable and frozen as fixtures. A format-7 repository's newer objects are
+> error manifests whose failures say what stands in their place, so a build
+> that predates it and opens an upgraded repository will refuse each such
+> error manifest, as damage, and cannot say what that snapshot failed.
+> Nothing writes the key yet.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-09 | Amended | Format 1 withdrawn before freeze; the gate reads against format 2 ([Amendment 1](#amendment-1-2026-09--format-1-withdrawn-before-freeze)). |
+| 2026-11 | Amended | Format 7 admitted beside formats 2 to 6, and created by default ([ADR-0197](0197-format-7-a-failure-says-what-stands-in-its-place.md)): a format-7 descriptor lists `0x0007` beside `0x0003`, `0x0004`, `0x0005` and `0x0006`, either mismatch is a violation, and a version above 7 is refused naming 2 to 7 (`Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/FormatVersions`). A capture failure may say in key 4 that what the tree holds at its path is what the snapshot before held there; nothing writes it yet. Blobs are still stamped 3, the index is format 5's and the manifests format 6's. The committed fixture-repository-v7 joins the fixtures (`Repository.ConformanceTests/FixtureRepositoryV7Tests`) |
 | 2026-11 | Amended | Format 6 admitted beside formats 2 to 5, and created by default ([ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)): a format-6 descriptor lists `0x0006` beside `0x0003`, `0x0004` and `0x0005`, either mismatch is a violation, and a version above 6 is refused naming 2 to 6 (`Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/FormatVersions`). A manifest may keep a file's flags in metadata key 11 and name a link a mount point in key 14; nothing writes either yet. Blobs are still stamped 3 and the index is format 5's. `fixture-repository-v6` joins the fixtures |
 | 2026-10 | Amended | Format 5 admitted beside formats 2 to 4, and created by default ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)): a format-5 descriptor lists `0x0005` beside `0x0003` and `0x0004`, either mismatch is a violation, and a version above 5 is refused naming 2 to 5 (`Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/FormatVersions`). Blobs are still stamped 3 and deltas are format 4's. `fixture-repository-v5` joins the fixtures |
 | 2026-10 | Amended | Format 4 admitted beside formats 2 and 3, and created by default ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)): a format-4 descriptor lists `0x0004` beside `0x0003`, either mismatch is a violation, and a version above 4 is refused naming 2 to 4 (`Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/FormatVersions`). Blobs are still stamped 3. `fixture-repository-v4` joins the fixtures |

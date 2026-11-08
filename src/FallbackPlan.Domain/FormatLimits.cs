@@ -10,10 +10,10 @@ public static class FormatLimits
 {
     /// <summary>
     /// The repository format version a new repository is created with unless
-    /// told otherwise: format 6, whose records are format 3's, whose index is
-    /// format 5's, and whose manifests may keep a file's flags and say that a
-    /// link is a mount point
-    /// ([ADR-0184](../../docs/adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).
+    /// told otherwise: format 7, whose records are format 3's, whose index is
+    /// format 5's, whose manifests are format 6's, and whose capture failures
+    /// may say that what stands at their path is what the snapshot before held
+    /// ([ADR-0197](../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md)).
     /// The descriptor carries it.
     /// </summary>
     /// <remarks>
@@ -26,10 +26,10 @@ public static class FormatLimits
     /// migrated by this: its version is fixed at creation and moves only
     /// under a signed upgrade record.
     /// </remarks>
-    public const ushort FormatVersion = FormatVersions.FileFlagsAndLinkForms;
+    public const ushort FormatVersion = FormatVersions.StandInFailures;
 
     /// <summary>
-    /// The newest repository format this implementation reads: format 6.
+    /// The newest repository format this implementation reads: format 7.
     /// Readers accept every version from <see cref="FormatVersions.SealedDataPlane"/>
     /// to this one (<see cref="FormatVersions.IsReadable"/>), so a format-2
     /// repository written before the default moved is read in place and never
@@ -37,7 +37,7 @@ public static class FormatLimits
     /// not renumbered, because they are bound into every descriptor and every
     /// sealed blob's AAD already on disk.
     /// </summary>
-    public const ushort LatestFormatVersion = FormatVersions.FileFlagsAndLinkForms;
+    public const ushort LatestFormatVersion = FormatVersions.StandInFailures;
 
     /// <summary>
     /// The version stamped on a <b>symmetric</b> container — a metadata blob
