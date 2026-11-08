@@ -172,6 +172,8 @@ The owner chose that such a file keep the version backed up before it. The owner
 
 **The failure is still recorded.** It is the same entry in the error manifest, with what stands in its place added: `…; the version backed up earlier, last modified <time> UTC, stands in its place`. The person sees it among the run's failures, and the run still completes with failures.
 
+> **2026-11 ([ADR-0197 Amendment 1](0197-format-7-a-failure-says-what-stands-in-its-place.md#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it)).** From format 7 the failure also says so in key 4, so a restore names the file without asking an earlier snapshot.
+
 **The next backup asks again.** Two things make sure of it.
 - The folder holding a failure is walked even where the change journal names nothing (ADR-0186).
 - The version kept carries the modification time it had when it was backed up, so the file is seen as changed.
@@ -271,6 +273,8 @@ Where the provider did not answer, the walk entered the folder, failed its listi
 
 **The failure is still recorded,** at the folder's path, reason I/O error: `online-only, and listing it failed: …; the folder as backed up earlier stands in its place`. The run completes with failures.
 
+> **2026-11 ([ADR-0197 Amendment 1](0197-format-7-a-failure-says-what-stands-in-its-place.md#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it)).** From format 7 a folder that kept its tree says so in key 4 as well.
+
 **A folder the prior snapshot does not hold has nothing to keep.** It is in the snapshot as before, empty, and its failure reads `online-only, and listing it failed: …`. **A folder the account may not list** is the account's (Decision 3), and is entered and fails as before.
 
 **The next backup lists it again.** A run told what changed walks a folder holding a failure (ADR-0186), and a full walk lists every folder.
@@ -353,3 +357,4 @@ Decision 2 stops the run fetching once one online-only file does not come, since
 | 2026-11 | Amended | [Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags): on macOS a file whose flags carry the dataless flag is online-only; the walk names it from its stat and does not open it, and the hole probe is skipped for an online-only file. Nothing is freed on macOS. `Domain/MetadataRules`; `Filesystem.Local/PosixInterop`; `Filesystem.Local/LocalFileSystemSource`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests` |
 | 2026-11 | Amended | [Amendment 6](#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come): a folder its provider holds (dataless on macOS; offline, recall on open or recall on data access on Windows) is listed before it is entered; where the listing raises an I/O fault, the folder keeps the tree the prior snapshot held for it and the failure says so, while a folder that snapshot does not hold is empty as before; a refusal is the account's and fails as before; a full walk reads the prior snapshot's folders only on meeting such a folder; a comparison names none of its files deleted. `Filesystem.Local/LocalFileSystemSource`; `Repository/SnapshotPublication`; `Repository/FolderReuse`; `Repository/SourceComparer`; `Filesystem.Tests/LocalScanTests`; `Repository.Tests/OnlineOnlyCaptureTests` |
 | 2026-11 | Amended | [Amendment 7](#amendment-7-2026-11--the-first-provider-failure-stops-the-run-listing-and-fetching): the first failure of either kind, a file's fetch or a folder's listing, stops the run fetching online-only files and listing the folders a provider holds; the walk that counts and the walk that captures share what failed first, and the walk is told it and names each folder it passes unasked; each folder passed over keeps its tree, and each failure names the first. `Repository/ProviderFailures`; `Filesystem/ScanModel`; `Filesystem/MultiRootScan`; `Filesystem.Local/LocalFileSystemSource`; `Repository/SnapshotPublication`; `Filesystem.Tests/LocalScanTests`; `Repository.Tests/OnlineOnlyCaptureTests` |
+| 2026-11 | Accepted (related) | [ADR-0197 Amendment 1](0197-format-7-a-failure-says-what-stands-in-its-place.md#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it): from format 7 the failure of a file that kept its version, or a folder that kept its tree, says so in key 4. |
