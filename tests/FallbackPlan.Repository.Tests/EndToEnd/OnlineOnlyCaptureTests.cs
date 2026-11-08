@@ -76,7 +76,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// once every earlier snapshot that held it is forgotten. It names each file
 /// below a folder kept from before, with what the backup said of the folder,
 /// and the run reads them so for its receipt (ADR-0194 Amendment 3,
-/// FR-RST-003).
+/// FR-RST-003). From format 7 a failure says what stands in its place: the
+/// backup sets it for a file that kept its version and a folder that kept
+/// its tree, and for nothing else, and sets it nowhere below format 7; and a
+/// restore's plan names such a file, and each file below such a folder,
+/// though every earlier snapshot that held it is forgotten (ADR-0197
+/// Amendment 1, FR-RST-003).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -1307,6 +1312,115 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task FromFormatSeven_AFailureSaysWhatStandsInItsPlace_ForAKeptFileAndAKeptFolder_AndNothingElse()
+    {
+        var (source, doc) = SourceForStandIns();
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue, FormatVersions.StandInFailures)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        AwayFromStandIns(source, doc);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue, FormatVersions.StandInFailures)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.IsTrue(StandsIn(second, "docs/doc.bin"), "a file that kept its version");
+        Assert.IsTrue(StandsIn(second, "cloud"), "a folder that kept its tree");
+        Assert.IsFalse(StandsIn(second, "docs/new.bin"), "a file new to the set keeps nothing");
+        Assert.IsFalse(StandsIn(second, "fresh-cloud"), "a folder new to the set keeps nothing");
+        Assert.IsFalse(StandsIn(second, "streamed.bin"), "a file whose stream alone failed was captured afresh");
+        Assert.IsFalse(StandsIn(second, "local.bin"), "a file the device would not read keeps nothing");
+    }
+
+    [TestMethod]
+    public async Task BelowFormatSeven_NoFailureSaysWhatStandsInItsPlace()
+    {
+        // A reader that predates format 7 refuses an error manifest carrying
+        // the key, so a repository it may read never holds one (ADR-0197).
+        var (source, doc) = SourceForStandIns();
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue, FormatVersions.FileFlagsAndLinkForms)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        AwayFromStandIns(source, doc);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue, FormatVersions.FileFlagsAndLinkForms)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.IsTrue(second.Failures.Count >= 2, "the premise: the run kept a file and a folder");
+        Assert.IsFalse(second.Failures.Any(static failure => failure.StandsIn));
+    }
+
+    [TestMethod]
+    public async Task FromFormatSeven_ARestoresPlan_NamesWhatStandsIn_ThoughEveryEarlierSnapshotThatHeldItIsForgotten()
+    {
+        var (source, doc) = SourceForStandIns();
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue, FormatVersions.StandInFailures)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        AwayFromStandIns(source, doc);
+        await CreateOrchestrator(store, keys, credential, catalogue, FormatVersions.StandInFailures)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        // The backup said so itself: no earlier snapshot is asked.
+        catalogue.ForgetSnapshot(Snapshot(0xA1));
+        CollectionAssert.AreEqual(
+            new[] { "cloud/a.bin", "docs/doc.bin" },
+            (await ProbeAsync(catalogue, store, keys, 0xB2)).EarlierVersions.Select(static version => version.Path).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "cloud/a.bin", "docs/doc.bin" },
+            (await EarlierAsync(catalogue, store, keys, 0xB2)).Files.Select(static version => version.Path).ToArray());
+    }
+
+    /// <summary>
+    /// A set with an online-only file, a cloud folder, two files on the
+    /// device and nothing new, for the format-7 cases.
+    /// </summary>
+    private static (FakeFileSystemSource Source, FakeFileSystemSource.Node Doc) SourceForStandIns()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 2));
+        source.AddFile("streamed.bin", Deterministic(4_000, 3));
+        source.AddFile("local.bin", Deterministic(4_000, 9));
+        return (source, doc);
+    }
+
+    /// <summary>
+    /// The provider stays away from the cloud folder and the online-only
+    /// file, which changed; a file and a folder new to the set come where it
+    /// keeps them; one file on the device changed with a stream too large to
+    /// keep, and the other changed and would not read.
+    /// </summary>
+    private static void AwayFromStandIns(FakeFileSystemSource source, FakeFileSystemSource.Node doc)
+    {
+        source.UnlistedFolders["cloud"] = TimedOut;
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        Online(source, "docs/new.bin", 4);
+        source.AddFile("fresh-cloud/x.bin", Deterministic(4_000, 6));
+        source.UnlistedFolders["fresh-cloud"] = TimedOut;
+        var streamed = source.AddFile("streamed.bin", Deterministic(5_000, 7));
+        streamed.AlternateStreams["big"] = Deterministic(40 * 1024 * 1024, 8);
+        streamed.Metadata = streamed.Metadata with { ModifiedAt = streamed.Metadata.ModifiedAt + 60_000 };
+        source.AddFile("local.bin", Deterministic(5_000, 10)).OpenFailure = new IOException("a bad sector");
+    }
+
+    private static bool StandsIn(PublishedTreeSnapshot published, string path) =>
+        published.Failures.Single(failure => PathOf(failure) == path).StandsIn;
+
+    [TestMethod]
     public async Task ARestoresPlan_WhoseSnapshotOrItsFailuresWillNotRead_SaysItCannotName_AndNamesNone()
     {
         var source = new FakeFileSystemSource();
@@ -1568,7 +1682,8 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue,
+        ushort formatVersion = FormatVersions.SealedDataPlane) =>
         new(
             SmallBlobPolicy,
             Repo,
@@ -1579,7 +1694,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
-            FormatVersions.SealedDataPlane,
+            formatVersion,
             observer: null,
             catalogue);
 
