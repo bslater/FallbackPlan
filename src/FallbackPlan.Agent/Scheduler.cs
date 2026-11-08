@@ -99,6 +99,10 @@ public static class Scheduler
         // the service holds, and asks nothing of the machine or the link.
         SignatureLapseWatch.Observe(runtime, configuration.Destinations, now);
 
+        // So is whether a staging set could ship straight to its stores: it
+        // reads the configuration alone (ADR-0196 Amendment 4).
+        StagingCouldShipWatch.Observe(runtime, configuration, now);
+
         // The window is read from the configuration this pass loaded, not
         // pinned at service start like the pool width: a limit whose whole
         // point is that it changes during the day would be useless fixed at

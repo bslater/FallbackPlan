@@ -900,11 +900,22 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// direct-ship set's metadata store, once, at the first open after the
     /// flip (ADR-0046). Idempotent: every put is if-absent.
     /// </summary>
-    private ValueTask MigrateStagingMetadataAsync(
-        string setId, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken) =>
-        CopyMetadataAsync(
+    /// <remarks>
+    /// A set whose stores are all it has keeps its folder trees here too
+    /// (ADR-0196 Amendment 3). Its staging archive holds every tree it wrote,
+    /// so they come with the metadata (Amendment 4).
+    /// </remarks>
+    private async ValueTask MigrateStagingMetadataAsync(
+        string setId, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken)
+    {
+        var keepsTrees = FindConfiguredSet(setId) is { } set
+            && DestinationShipSink.WritesThroughStores(Configuration, set);
+        _ = await CopyBackAsync(
             new LocalFileSystemObjectStore(ArchivePath(setId), LoggerFor<LocalFileSystemObjectStore>()),
-            metadata, cancellationToken);
+            metadata,
+            keepsTrees ? key => key.StartsWith("blobs/meta/", StringComparison.Ordinal) : null,
+            cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Copies a repository's metadata — everything except blob content and
