@@ -320,6 +320,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyNotFetched, arg0, arg1);
 
     /// <summary>
+    /// online-only, and not fetched, since listing {0} failed earlier in this run: {1}
+    /// </summary>
+    private static string TreeWalkPublisher_OnlineOnlyNotFetchedSinceListing => Get(nameof(TreeWalkPublisher_OnlineOnlyNotFetchedSinceListing));
+
+    /// <summary>
+    /// online-only, and not fetched, since listing {0} failed earlier in this run: {1}
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_OnlineOnlyNotFetchedSinceListing(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyNotFetchedSinceListing, arg0, arg1);
+
+    /// <summary>
     /// {0}; the version backed up earlier, last modified {1}, stands in its place
     /// </summary>
     private static string TreeWalkPublisher_EarlierVersionStands => Get(nameof(TreeWalkPublisher_EarlierVersionStands));
@@ -351,6 +362,28 @@ internal static class Strings
     /// </summary>
     internal static string FormatTreeWalkPublisher_OnlineOnlyFolderNotListed(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyFolderNotListed, arg0);
+
+    /// <summary>
+    /// online-only, and not listed, since listing {0} failed earlier in this run: {1}
+    /// </summary>
+    private static string TreeWalkPublisher_OnlineOnlyFolderNotListedSinceListing => Get(nameof(TreeWalkPublisher_OnlineOnlyFolderNotListedSinceListing));
+
+    /// <summary>
+    /// online-only, and not listed, since listing {0} failed earlier in this run: {1}
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_OnlineOnlyFolderNotListedSinceListing(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyFolderNotListedSinceListing, arg0, arg1);
+
+    /// <summary>
+    /// online-only, and not listed, since fetching {0} failed earlier in this run: {1}
+    /// </summary>
+    private static string TreeWalkPublisher_OnlineOnlyFolderNotListedSinceFetching => Get(nameof(TreeWalkPublisher_OnlineOnlyFolderNotListedSinceFetching));
+
+    /// <summary>
+    /// online-only, and not listed, since fetching {0} failed earlier in this run: {1}
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_OnlineOnlyFolderNotListedSinceFetching(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyFolderNotListedSinceFetching, arg0, arg1);
 
     /// <summary>
     /// {0}; the folder as backed up earlier stands in its place

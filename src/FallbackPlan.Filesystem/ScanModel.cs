@@ -141,6 +141,14 @@ public abstract record ScanEvent
     /// words.
     /// </summary>
     public sealed record UnlistedDirectory(ScanEntry Entry, ScanFailure Detail) : ScanEvent;
+
+    /// <summary>
+    /// A directory its cloud provider holds, whose listing the walk did not
+    /// ask for, because a provider failed earlier in the run (ADR-0185
+    /// Amendment 7). The walk did not enter it, and nothing below it
+    /// follows.
+    /// </summary>
+    public sealed record UnaskedDirectory(ScanEntry Entry) : ScanEvent;
 }
 
 /// <summary>Scanner behaviour switches. Defaults are the architecture's rules.</summary>
@@ -182,6 +190,15 @@ public sealed record ScanOptions
     /// every directory.
     /// </summary>
     public Func<string, bool>? Unchanged { get; init; }
+
+    /// <summary>
+    /// Whether a cloud provider failed earlier in the run, to fetch a file or
+    /// to list a folder. Asked as the walk meets each folder a provider
+    /// holds: where it answers true, the walk does not ask for the folder's
+    /// listing and names it with <see cref="ScanEvent.UnaskedDirectory"/>
+    /// (ADR-0185 Amendment 7). Null asks for every one.
+    /// </summary>
+    public Func<bool>? ProviderFailedEarlier { get; init; }
 }
 
 /// <summary>

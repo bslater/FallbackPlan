@@ -334,10 +334,18 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
                 // do not come the run keeps the tree it held before rather
                 // than an empty folder (ADR-0185 Amendment 6). A folder the
                 // account may not list is the account's, and is entered and
-                // fails as any other.
+                // fails as any other. Once a provider has failed in the run,
+                // none is asked: it would wait out the same time-out again
+                // (ADR-0185 Amendment 7).
                 List<(string Name, byte[] NameBytes, string FullPath)>? listed = null;
                 if (stat.Dataless || MetadataRules.IsOnlineOnly(directoryEntry.Metadata.FileAttributes))
                 {
+                    if (options.ProviderFailedEarlier?.Invoke() == true)
+                    {
+                        yield return new ScanEvent.UnaskedDirectory(directoryEntry);
+                        continue;
+                    }
+
                     ScanFailure? unlisted = null;
                     try
                     {

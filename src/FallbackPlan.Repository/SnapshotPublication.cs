@@ -370,6 +370,12 @@ public sealed partial class PublicationOrchestrator
             options = options with { Unchanged = reuse.IsUnchanged };
         }
 
+        // Once a provider has failed in the run, to list a folder or to fetch
+        // a file, neither walk asks it for anything more (ADR-0185
+        // Amendment 7).
+        var providers = new ProviderFailures();
+        options = options with { ProviderFailedEarlier = () => providers.Any };
+
         var reporter = new PublicationProgress(_progress, job.SnapshotId);
         reporter.Enter(JobState.Scanning);
 
@@ -409,6 +415,10 @@ public sealed partial class PublicationOrchestrator
                 plannedFiles++;
                 plannedBytes += leaf.Entry.Length;
                 reporter.Counting(plannedFiles);
+            }
+            else if (counted is ScanEvent.UnlistedDirectory unlisted)
+            {
+                providers.Record(unlisted.Entry.RelativePath, unlisted.Detail.Detail, listing: true);
             }
         }
 
@@ -491,7 +501,7 @@ public sealed partial class PublicationOrchestrator
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, gated, sourceKeys,
                 hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, job.DeviceId, bound) : null,
-                reader, _repositoryFormatVersion, _logger, reuse);
+                reader, _repositoryFormatVersion, _logger, reuse, providers);
 
             // Steps 2–4 interleave by design: the scan streams, and each
             // file's content is archived as its event arrives — memory is
@@ -821,7 +831,8 @@ public sealed partial class PublicationOrchestrator
         TargetedRecordReader? manifests,
         ushort repositoryFormatVersion,
         ILogger logger,
-        FolderReuse? reuse = null)
+        FolderReuse? reuse = null,
+        ProviderFailures? providers = null)
     {
         internal static readonly byte[] EmptyHash = SHA256.HashData([]);
 
@@ -836,16 +847,12 @@ public sealed partial class PublicationOrchestrator
         private bool _treesBeforeRead;
 
         /// <summary>
-        /// The online-only file whose fetch failed, and why: from then on the
-        /// run fetches no other (ADR-0185).
+        /// What a provider failed first in the run, a file's fetch or a
+        /// folder's listing: from then on the run asks it for neither
+        /// (ADR-0185 Decision 2 and Amendment 7), and the set's status names
+        /// it (ADR-0193 Amendment 3).
         /// </summary>
-        private (string Path, string Reason)? _notDelivered;
-
-        /// <summary>
-        /// What the provider failed first in this walk, a file's fetch or a
-        /// folder's listing, and why (ADR-0193 Amendment 3).
-        /// </summary>
-        private (string Path, string Reason, bool Listing)? _firstFailure;
+        private readonly ProviderFailures _providers = providers ?? new();
 
         private int _notFetched;
         private int _keptEarlier;
@@ -867,7 +874,7 @@ public sealed partial class PublicationOrchestrator
         /// Amendment 3).
         /// </summary>
         public NotFetchedFiles? NotFetched =>
-            _firstFailure is { } first
+            _providers.First is { } first && _notFetched + _foldersNotListed > 0
                 ? new NotFetchedFiles(
                     _notFetched, _keptEarlier, first.Path, first.Reason, _foldersNotListed, _foldersKept, first.Listing)
                 : null;
@@ -958,33 +965,58 @@ public sealed partial class PublicationOrchestrator
                     break;
 
                 case ScanEvent.UnlistedDirectory unlisted:
-                    // A folder its provider holds, whose listing did not come,
-                    // keeps the tree the prior snapshot held for it, as a file
-                    // not fetched keeps its version (ADR-0185 Amendment 6). A
-                    // folder that snapshot does not hold is in this one as it
-                    // was before: empty, with its failure.
-                    var notListed = Strings.FormatTreeWalkPublisher_OnlineOnlyFolderNotListed(unlisted.Detail.Detail);
-                    _foldersNotListed++;
-                    _firstFailure ??= (unlisted.Entry.RelativePath, unlisted.Detail.Detail, Listing: true);
-                    if (await TreesBeforeAsync(cancellationToken).ConfigureAwait(false) is { } before
-                        && before.HeldBefore(unlisted.Entry.RelativePath))
-                    {
-                        _foldersKept++;
-                        TakeAsHeldBefore(before, unlisted.Entry);
-                        _failures.Add(ToCaptureFailure(
-                            unlisted.Detail with { Detail = Strings.FormatTreeWalkPublisher_FolderBeforeStands(notListed) }));
-                    }
-                    else
-                    {
-                        _frames.Push(new Frame(Kept(unlisted.Entry), []));
-                        _failures.Add(ToCaptureFailure(unlisted.Detail with { Detail = notListed }));
-                        await CloseDirectoryAsync(cancellationToken).ConfigureAwait(false);
-                    }
+                    _providers.Record(unlisted.Entry.RelativePath, unlisted.Detail.Detail, listing: true);
+                    await NotListedAsync(
+                        unlisted.Entry,
+                        unlisted.Detail with { Detail = Strings.FormatTreeWalkPublisher_OnlineOnlyFolderNotListed(unlisted.Detail.Detail) },
+                        cancellationToken).ConfigureAwait(false);
+                    break;
 
+                case ScanEvent.UnaskedDirectory unasked:
+                    // The walk asks for no listing once a provider has failed
+                    // (ADR-0185 Amendment 7). The folder whose listing failed
+                    // while the run counted is passed over too, and its
+                    // failure is its own.
+                    var first = _providers.First
+                        ?? throw new InvalidOperationException(Strings.FormatFrame_UnknownScanEvent(scanEvent.GetType().Name));
+                    var notAsked = !first.Listing
+                        ? Strings.FormatTreeWalkPublisher_OnlineOnlyFolderNotListedSinceFetching(first.Path, first.Reason)
+                        : first.Path == unasked.Entry.RelativePath
+                            ? Strings.FormatTreeWalkPublisher_OnlineOnlyFolderNotListed(first.Reason)
+                            : Strings.FormatTreeWalkPublisher_OnlineOnlyFolderNotListedSinceListing(first.Path, first.Reason);
+                    await NotListedAsync(
+                        unasked.Entry,
+                        new ScanFailure(unasked.Entry.RelativePath, CaptureFailureReason.IoError, notAsked),
+                        cancellationToken).ConfigureAwait(false);
                     break;
 
                 default:
                     throw new InvalidOperationException(Strings.FormatFrame_UnknownScanEvent(scanEvent.GetType().Name));
+            }
+        }
+
+        /// <summary>
+        /// A folder its provider holds that the run did not list keeps the
+        /// tree the prior snapshot held for it, as a file not fetched keeps
+        /// its version (ADR-0185 Amendment 6). A folder that snapshot does not
+        /// hold is in this one as it was before: empty, with its failure.
+        /// </summary>
+        private async ValueTask NotListedAsync(ScanEntry entry, ScanFailure failure, CancellationToken cancellationToken)
+        {
+            _foldersNotListed++;
+            if (await TreesBeforeAsync(cancellationToken).ConfigureAwait(false) is { } before
+                && before.HeldBefore(entry.RelativePath))
+            {
+                _foldersKept++;
+                TakeAsHeldBefore(before, entry);
+                _failures.Add(ToCaptureFailure(
+                    failure with { Detail = Strings.FormatTreeWalkPublisher_FolderBeforeStands(failure.Detail) }));
+            }
+            else
+            {
+                _frames.Push(new Frame(Kept(entry), []));
+                _failures.Add(ToCaptureFailure(failure));
+                await CloseDirectoryAsync(cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -1190,11 +1222,14 @@ public sealed partial class PublicationOrchestrator
                 return;
             }
 
-            // A provider that failed to deliver one file is not asked for
-            // another in this run: each would wait out the same time-out.
-            if (entry.OnlineOnly && _notDelivered is { } notDelivered)
+            // A provider that failed to deliver one file, or to list one
+            // folder, is not asked for another file in this run: each would
+            // wait out the same time-out (ADR-0185 Amendment 7).
+            if (entry.OnlineOnly && _providers.First is { } first)
             {
-                RecordNotFetched(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyNotFetched(notDelivered.Path, notDelivered.Reason));
+                RecordNotFetched(entry, prior, first.Listing
+                    ? Strings.FormatTreeWalkPublisher_OnlineOnlyNotFetchedSinceListing(first.Path, first.Reason)
+                    : Strings.FormatTreeWalkPublisher_OnlineOnlyNotFetched(first.Path, first.Reason));
                 return;
             }
 
@@ -1251,8 +1286,7 @@ public sealed partial class PublicationOrchestrator
                 // failing to deliver it.
                 if (entry.OnlineOnly && ClassifyFailure(exception) == CaptureFailureReason.IoError)
                 {
-                    _notDelivered = (entry.RelativePath, exception.Message);
-                    _firstFailure ??= (entry.RelativePath, exception.Message, Listing: false);
+                    _providers.Record(entry.RelativePath, exception.Message, listing: false);
                     Log.OnlineOnlyNotDelivered(logger, new LogPath(entry.RelativePath), exception.Message);
                     RecordNotFetched(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyFetchFailed(exception.Message));
                     return;
