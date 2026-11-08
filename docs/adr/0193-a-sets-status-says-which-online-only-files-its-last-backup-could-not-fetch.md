@@ -173,6 +173,8 @@ A folder whose listing its provider keeps, and whose listing does not come, keep
   > **2026-11: done ([ADR-0185 Amendment 7](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-7-2026-11--the-first-provider-failure-stops-the-run-listing-and-fetching)).** The first failure of either kind stops the run fetching files and listing folders, and the record counts each folder passed over.
 - **Name a folder's files in a restore's plan.** The plan names files whose failure is their own (ADR-0194).
 
+  > **2026-11: done ([ADR-0194 Amendment 3](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-3-2026-11--an-earlier-version-is-one-an-earlier-snapshot-holds)).** The plan names each file it restores below a folder kept from before.
+
 ## Status history
 
 | Date | Status | Note |

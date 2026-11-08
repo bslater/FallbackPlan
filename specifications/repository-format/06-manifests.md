@@ -395,6 +395,8 @@ Object type `0x06`. Present only when something could not be captured.
 
 A failure may name a path the snapshot's tree also holds. The tree then holds an earlier version, carried from the snapshot before because the content the path held at capture could not be read, and the failure's detail says so. A reader MUST NOT take a failure entry to mean its path is absent from the tree.
 
+> **2026-11 ([ADR-0194 Amendment 3](../../docs/adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-3-2026-11--an-earlier-version-is-one-an-earlier-snapshot-holds)).** Not only then: a failure for a file's alternate stream names the file, which the tree holds as captured. The product tells the two apart by whether an earlier snapshot holds the same version at the path. A reader MUST NOT take a failure entry at a path the tree holds to mean the version there is an earlier one.
+
 > **2026-11 ([ADR-0185 Amendment 3](../../docs/adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before)).** The product writes such a failure for a changed online-only file its provider did not deliver. Nothing a reader accepts changes.
 
 > **2026-11 ([ADR-0185 Amendment 6](../../docs/adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come)).** It writes one too for a folder whose listing its provider did not deliver. The path is the folder's, and the tree holds the folder's earlier tree. Nothing a reader accepts changes.
