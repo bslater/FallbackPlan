@@ -167,7 +167,7 @@ The owner asked for the split another backup tool uses: the data at the remote s
 
 ### Consequences
 
-- **A backup reads no folder tree from the store.** At the test store the second backup's five reads of its root tree are gone. Whether the store holds each new blob is still asked, once.
+- **A backup reads no folder tree from the store.** At the test store the second backup's five reads of its root tree are gone. Its three probes of whether the store holds that tree remain, since that is the store's to answer.
 - **A retention walk reads the trees here.** A restore still reads the data from the store.
 - **The machine holds the trees' size on disk.** The data stays at the store alone.
 - **A damaged copy here is read as a damaged copy at a local path would be.** The reader checks every blob it opens, and a restore reads around what fails.
