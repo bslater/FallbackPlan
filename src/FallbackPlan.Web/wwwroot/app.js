@@ -972,10 +972,12 @@ function notFetchedLine(set) {
   const words = /[.!?]$/.test(m.reason) ? m.reason : `${m.reason}.`;
   // What a person may do instead, with its cost (ADR-0193 Amendment 2).
   const instead = "The set's Other settings can leave online-only files to their cloud provider instead: none is downloaded, and one new or changed there is kept only by its provider.";
-  // A file whose download failed stops the backup asking for any other; a
-  // folder's listing does not.
+  // The first failure of either kind stops the backup asking for any other
+  // online-only file or folder (ADR-0185 Amendment 7). Only a service that
+  // stops so names a folder's listing; one before it went on listing folders
+  // after a file's download failed, so that keeps its words.
   const why = m.listing === true
-    ? `${m.path} could not be listed: ${words} ${instead}`
+    ? `${m.path} could not be listed: ${words} No other online-only file or folder was asked for after it. ${instead}`
     : `${m.path} could not be downloaded: ${words} No other online-only file was asked for after it. ${instead}`;
   return `<p class="sub" data-not-fetched title="${esc(why)}">${esc(said.join(". "))} · first missed ${esc(rel(m.since))}</p>`;
 }

@@ -159,6 +159,8 @@ A folder whose listing its provider keeps, and whose listing does not come, keep
 - **The command line** prints `not-listed:N` beside `not-fetched:N`, and no `not-fetched:` token where only folders were missed.
 - **The console's card** counts both at a glance, `2 not downloaded, 3 not listed`. Opened, it says how many folders keep what was backed up before and how many are empty in that backup. On hover it names the folder whose listing failed, where that came first. It does not say that nothing was asked for after it, since a folder's listing does not stop the run asking.
 
+  > **2026-11: no longer ([ADR-0185 Amendment 7](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-7-2026-11--the-first-provider-failure-stops-the-run-listing-and-fetching)).** A folder's listing that fails stops the run asking, and the hover says that no other online-only file or folder was asked for after it.
+
 ### Consequences
 
 - A provider that keeps away from a folder's listing makes each backup behind, not partial, while the folder keeps its tree, as it does for a file.
@@ -167,6 +169,8 @@ A folder whose listing its provider keeps, and whose listing does not come, keep
 ### What this does not do
 
 - **Stop the run asking after a listing that fails.** The folders and the files after it are still asked for (ADR-0185 Amendment 6). A later record may have the first failure of either kind stop both.
+
+  > **2026-11: done ([ADR-0185 Amendment 7](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-7-2026-11--the-first-provider-failure-stops-the-run-listing-and-fetching)).** The first failure of either kind stops the run fetching files and listing folders, and the record counts each folder passed over.
 - **Name a folder's files in a restore's plan.** The plan names files whose failure is their own (ADR-0194).
 
 ## Status history
@@ -177,3 +181,4 @@ A folder whose listing its provider keeps, and whose listing does not come, keep
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-backup-that-kept-every-earlier-version-is-behind-not-partial): a backup whose every failure is an online-only file that kept its version before completes, behind, saying on how many in its detail; the set's status raises no PARTIAL warning for it; direct mode says so and exits zero; anything else completes with failures as before. |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--the-hover-says-what-else-a-set-may-do): the console's hover of the not-fetched line also says that the set's Other settings can leave online-only files to their cloud provider instead, and that then none is downloaded and one new or changed there is kept only by its provider. |
 | 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-folder-not-listed-is-counted-and-a-backup-that-kept-it-is-behind): the run counts the folders its provider holds that it could not list, and how many kept their tree, and names whichever of a file or a folder the provider failed first; a backup whose every failure kept what was backed up before, file or folder, is behind, and says on what; contract 1.90 carries the folders on a set's not-fetched record; the command line prints `not-listed:`, and the console counts and names them. `Repository/SnapshotPublication`; `Agent/NotFetchedStore`; `Agent/BackupRunner`; `Api/Results`; `Cli/CliApplication`; `Cli/OperationGateway`; `Repository.Tests/OnlineOnlyCaptureTests`; `Hosts.Tests/NotFetchedStatusTests`; `Cli.Tests/StatusNotFetchedTokenTests`; `Cli.Tests/BackupNotFetchedDirectTests`; `Api.Tests/ContractAdditiveFieldsTests`; `Web.Tests/StatusRelayNamesTests`; `Web.DomTests/NotFetchedDomTests` |
+| 2026-11 | Accepted | Noted by [ADR-0185 Amendment 7](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-7-2026-11--the-first-provider-failure-stops-the-run-listing-and-fetching): the first failure of either kind stops the run asking; the folders it passes over are counted with those not listed, and the console's hover for a folder whose listing failed first says no other online-only file or folder was asked for after it. |

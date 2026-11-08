@@ -31,7 +31,10 @@ namespace FallbackPlan.Filesystem.Tests;
 /// entered; an ordinary folder whose listing fails, and a provider's folder
 /// the account may not list, are entered and fail as before, and a
 /// provider's folder that lists is walked as any other (ADR-0185
-/// Amendment 6). A folder the run says is unchanged is
+/// Amendment 6). Once a provider has failed earlier in the run, a folder it
+/// holds is not asked for its listing and is named unasked, while a folder
+/// no provider holds is listed as ever (ADR-0185 Amendment 7). A folder the
+/// run says is unchanged is
 /// named and not entered (FR-SNP-010, ADR-0186). Freeing a file again does nothing on Linux
 /// and macOS; on Windows a file no provider keeps is refused and left as it
 /// was, and a file the person pinned is never asked (ADR-0185 Amendment 2).
@@ -479,6 +482,46 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.IsEmpty(events.OfType<ScanEvent.UnlistedDirectory>());
         Assert.IsTrue(events.OfType<ScanEvent.EnterDirectory>().Any(enter => enter.Entry.RelativePath == "cloud"));
         Assert.IsTrue(events.OfType<ScanEvent.Leaf>().Any(leaf => leaf.Entry.RelativePath == "cloud/a.txt"));
+    }
+
+    [TestMethod]
+    public async Task Scan_AfterAProviderFailedEarlierInTheRun_AFolderItHolds_IsNotAsked_AndIsNamedUnasked()
+    {
+        // Once a provider has failed in the run, a folder it holds is not
+        // asked for its listing: the provider would only wait out the same
+        // time-out again (ADR-0185 Amendment 7). The run says so between
+        // events, here as it does once the first listing fails.
+        Write("a-cloud/a.txt");
+        Write("b-cloud/b.txt");
+        Write("c-plain/c.txt");
+        var asked = new List<string>();
+        LocalFileSystemSource.MarkedDataless = relativePath => relativePath is "a-cloud" or "b-cloud";
+        LocalFileSystemSource.ListingRefused = relativePath =>
+        {
+            asked.Add(relativePath);
+            return relativePath == "a-cloud" ? new IOException(TimedOut) : null;
+        };
+
+        var failed = false;
+        var events = new List<ScanEvent>();
+        await foreach (var scanEvent in _source.ScanAsync(
+            _root, new ScanOptions { ProviderFailedEarlier = () => failed }, CancellationToken.None))
+        {
+            events.Add(scanEvent);
+            failed |= scanEvent is ScanEvent.UnlistedDirectory;
+        }
+
+        Assert.AreEqual("a-cloud", Assert.ContainsSingle(events.OfType<ScanEvent.UnlistedDirectory>()).Entry.RelativePath);
+        var unasked = Assert.ContainsSingle(events.OfType<ScanEvent.UnaskedDirectory>());
+        Assert.AreEqual("b-cloud", unasked.Entry.RelativePath);
+        Assert.AreEqual(ScanEntryKind.Directory, unasked.Entry.Kind);
+        Assert.DoesNotContain("b-cloud", asked, "its provider was not asked for its listing");
+        Assert.IsFalse(
+            events.OfType<ScanEvent.EnterDirectory>().Any(enter => enter.Entry.RelativePath == "b-cloud"),
+            "the walk did not enter it");
+        Assert.IsFalse(events.OfType<ScanEvent.Leaf>().Any(leaf => leaf.Entry.RelativePath.StartsWith("b-cloud/", StringComparison.Ordinal)));
+        Assert.Contains("c-plain", asked, "a folder no provider holds is listed as ever");
+        Assert.IsTrue(events.OfType<ScanEvent.Leaf>().Any(leaf => leaf.Entry.RelativePath == "c-plain/c.txt"));
     }
 
     private const string TimedOut = "The cloud operation was not completed before the time-out period expired.";

@@ -103,6 +103,7 @@ public static class MultiRootScan
                     ScanEvent.UnlistedDirectory unlisted => new ScanEvent.UnlistedDirectory(
                         Prefix(unlisted.Entry, label),
                         unlisted.Detail with { RelativePath = label + "/" + unlisted.Detail.RelativePath }),
+                    ScanEvent.UnaskedDirectory unasked => new ScanEvent.UnaskedDirectory(Prefix(unasked.Entry, label)),
                     ScanEvent.Failure failure => new ScanEvent.Failure(failure.Detail with
                     {
                         RelativePath = failure.Detail.RelativePath.Length == 0
