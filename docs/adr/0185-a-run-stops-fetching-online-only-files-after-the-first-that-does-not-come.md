@@ -282,11 +282,15 @@ Where the provider did not answer, the walk entered the folder, failed its listi
 - A file changed in such a folder while it was not listed is taken by the first backup that lists it, since its version kept carries the time it was backed up.
 - A backup that kept such a folder is completed with failures, not behind (ADR-0193 Amendment 1): its failure is no file's.
 
+  > **2026-11: no longer ([ADR-0193 Amendment 3](0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md#amendment-3-2026-11--a-folder-not-listed-is-counted-and-a-backup-that-kept-it-is-behind)).** A backup whose every failure kept what was backed up before, file or folder, is behind.
+
 ### What this does not do
 
 - **Stop listing after the first that does not come.** Each such folder is asked for its listing. Decision 2 stops the run fetching files, not listing folders.
 - **Leave such a folder unlisted where the set leaves its online-only files** (ADR-0195). A listing asks for names, not content, and the set's unchanged files are kept only by listing them.
 - **Count the folder in the set's status.** The count of files not fetched (ADR-0193) names files; a folder kept this way is among the run's failures.
+
+  > **2026-11: done ([ADR-0193 Amendment 3](0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md#amendment-3-2026-11--a-folder-not-listed-is-counted-and-a-backup-that-kept-it-is-behind)).** The set's status counts the folders its last backup could not list, and how many kept their tree.
 - **Name the folder's files in a restore's plan.** The plan names files whose failure is their own (ADR-0194); a folder's failure names the folder.
 - **Run against a real provider.** No runner has one. The tests mark a folder dataless, or set the offline bit on Windows, and refuse its listing.
 
