@@ -182,6 +182,9 @@ one restores only part of it (NFR-COMP-004 as amended).
 > error manifest, as damage, and cannot say what that snapshot failed.
 > Nothing writes the key yet.
 
+> **2026-11.** Capture writes it from format 7, where a file kept its
+> version or a folder its tree ([ADR-0197 Amendment 1](0197-format-7-a-failure-says-what-stands-in-its-place.md#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it)).
+
 ## Status history
 
 | Date | Status | Note |

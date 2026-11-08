@@ -228,6 +228,10 @@ proofs; one is much cheaper.
 > snapshot failed. A repository created at 7 lists `stand-in-failures`, and
 > an older build refuses it by name.
 
+> **2026-11 ([ADR-0197 Amendment 1](0197-format-7-a-failure-says-what-stands-in-its-place.md#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it)).** Capture writes the key
+> from format 7, so an upgraded set's error manifests say what stands in a
+> failure's place from its next backup.
+
 ## Consequences
 
 **The stated price: an older build misdiagnoses.** A build predating format 3

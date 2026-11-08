@@ -496,8 +496,12 @@ public static class RestoreBlobSet
     /// of the set holds at the same path (ADR-0194 Amendment 3).
     /// </para>
     /// <para>
-    /// Where every earlier snapshot that held it has been forgotten, nothing
-    /// shows the version is an earlier one, and it is not named.
+    /// From format 7 the backup says so itself: a failure that says what
+    /// stands in its place is taken at its word, and no earlier snapshot is
+    /// asked (ADR-0197 Amendment 1). Below it, or where a failure does not
+    /// say, the snapshots before are asked; where every one that held the
+    /// version has been forgotten, nothing shows it is an earlier one, and it
+    /// is not named.
     /// </para>
     /// </remarks>
     private static async ValueTask<(IReadOnlyList<RestoreEarlierVersion> Earlier, bool Unread)> EarlierVersionsAsync(
@@ -554,8 +558,9 @@ public static class RestoreBlobSet
         {
             var path = string.Join('/', failure.PathComponents.Select(static component => System.Text.Encoding.UTF8.GetString(component.Span)));
             if (path.Length == 0
-                || catalogue.LookupPath(snapshotId.Span, path) is not { } held
-                || !before.Any(other => catalogue.LookupPath(other.SnapshotId.Span, path) is { } then && then.ObjectId.Equals(held.ObjectId)))
+                || (!failure.StandsIn
+                    && (catalogue.LookupPath(snapshotId.Span, path) is not { } held
+                        || !before.Any(other => catalogue.LookupPath(other.SnapshotId.Span, path) is { } then && then.ObjectId.Equals(held.ObjectId)))))
             {
                 continue;
             }

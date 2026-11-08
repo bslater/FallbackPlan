@@ -405,6 +405,8 @@ A failure may name a path the snapshot's tree also holds. The tree then holds an
 
 > **2026-11 ([ADR-0197](../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md)).** From format 7, key 4 (§8.1) says which such failures put an earlier version in place: where a failure carries it, what the tree holds at its path is what the snapshot before held there. A failure without it says nothing either way. No failure carries it below format 7, and the product writes it nowhere yet.
 
+> **2026-11 ([ADR-0197 Amendment 1](../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it)).** The product writes it from format 7, on the failure of a file that kept its version or a folder that kept its tree, and on no other. A format-7 snapshot written before then carries it nowhere. Nothing a reader accepts changes.
+
 > **2026-11 ([ADR-0185 Amendment 3](../../docs/adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before)).** The product writes such a failure for a changed online-only file its provider did not deliver. Nothing a reader accepts changes.
 
 > **2026-11 ([ADR-0185 Amendment 6](../../docs/adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come)).** It writes one too for a folder whose listing its provider did not deliver. The path is the folder's, and the tree holds the folder's earlier tree. Nothing a reader accepts changes.

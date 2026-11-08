@@ -1010,7 +1010,10 @@ public sealed partial class PublicationOrchestrator
                 _foldersKept++;
                 TakeAsHeldBefore(before, entry);
                 _failures.Add(ToCaptureFailure(
-                    failure with { Detail = Strings.FormatTreeWalkPublisher_FolderBeforeStands(failure.Detail) }));
+                    failure with { Detail = Strings.FormatTreeWalkPublisher_FolderBeforeStands(failure.Detail) }) with
+                {
+                    StandsIn = StandInsSaid,
+                });
             }
             else
             {
@@ -1303,7 +1306,8 @@ public sealed partial class PublicationOrchestrator
         private void RecordNotFetched(ScanEntry entry, CatalogueTreeEntry? prior, string detail)
         {
             _notFetched++;
-            RecordFailure(entry, CaptureFailureReason.IoError, KeepEarlier(entry, prior, detail));
+            var said = KeepEarlier(entry, prior, detail, out var kept);
+            RecordFailure(entry, CaptureFailureReason.IoError, said, standsIn: kept && StandInsSaid);
         }
 
         /// <summary>
@@ -1320,14 +1324,17 @@ public sealed partial class PublicationOrchestrator
         /// its own name, and rewriting it here would claim the earlier content
         /// was modified when this one was.
         /// </remarks>
-        private string KeepEarlier(ScanEntry entry, CatalogueTreeEntry? prior, string detail)
+        private string KeepEarlier(ScanEntry entry, CatalogueTreeEntry? prior, string detail, out bool kept)
         {
+            kept = false;
             if (entry.Kind != ScanEntryKind.File
                 || prior is not { EntryKind: EntryKind.File }
                 || !string.Equals(prior.Path, entry.RelativePath, StringComparison.Ordinal))
             {
                 return detail;
             }
+
+            kept = true;
 
             _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
             _files.Add(new PublishedFileVersion(
@@ -1757,12 +1764,19 @@ public sealed partial class PublicationOrchestrator
             session.IsUploadFailure(exception) || builder.IsUploadFailure(exception);
 
         /// <summary>Counts, logs and records one file's failure — the walker's single door out.</summary>
-        private void RecordFailure(ScanEntry entry, CaptureFailureReason reason, string detail)
+        private void RecordFailure(ScanEntry entry, CaptureFailureReason reason, string detail, bool standsIn = false)
         {
             EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
             Log.FileFailed(logger, new LogPath(entry.RelativePath), detail);
-            _failures.Add(new CaptureFailure(SplitPath(entry.RelativePath), reason, detail));
+            _failures.Add(new CaptureFailure(SplitPath(entry.RelativePath), reason, detail, standsIn));
         }
+
+        /// <summary>
+        /// Whether a failure may say what stands in its place: from format 7,
+        /// where a file kept its version or a folder its tree (ADR-0197). A
+        /// reader that predates format 7 refuses an error manifest saying it.
+        /// </summary>
+        private bool StandInsSaid => FormatVersions.HasStandInFailures(repositoryFormatVersion);
 
         private static CaptureFailure ToCaptureFailure(ScanFailure failure) =>
             new(SplitPath(failure.RelativePath), failure.Reason, failure.Detail);

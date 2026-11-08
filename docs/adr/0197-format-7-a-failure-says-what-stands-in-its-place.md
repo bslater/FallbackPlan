@@ -2,13 +2,15 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** NFR-COMP-004 (amended: `fixture-repository-v7`). Does not establish FR-RST-003 or FR-RST-004: no restore reads the key yet, and nothing writes it
+**Requirements:** NFR-COMP-004 (amended: `fixture-repository-v7`); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it): from format 7 a failure says so where the backup kept a file's version or a folder's tree); FR-RST-003 (amended by [Amendment 1](#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it): a restore's plan names a file from the key, though every earlier snapshot that held it is forgotten), and through it FR-RST-004, whose receipt names them by the plan's rule
 **Related:** [ADR-0194](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md) (a restore's plan names the files an earlier version stands in for, and its Amendment 3: by whether an earlier snapshot holds the version), [ADR-0185](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md) (a file not fetched keeps its version before, Amendment 3, and a folder not listed its tree, Amendment 6), [ADR-0014](0014-format-versioning-and-stability.md) (refuse by name), [ADR-0066](0066-the-format-upgrade-record.md) (the upgrade record), [ADR-0184](0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md) (format 6, whose manifests this keeps)
 
 **Built:**
 - The constants: `Domain/FormatVersions` (`StandInFailures` = 7) and `Domain/FormatLimits`, which create and upgrade at 7.
 - The wire: `Repository.Format/Manifests/PolicyManifest` carries the failure's new field, and its error manifest codec reads and writes failure key 4, refusing any value but 1. `Repository.Format/Descriptor/RepositoryDescriptorCodec` adds feature `0x0007`, and `Repository/RepositoryLifecycle` lists it at format 7.
+- The writer and the reader: `Repository/SnapshotPublication` sets the key where it keeps a file's version or a folder's tree, from format 7, and `Restore/RestoreBlobSet` names a file from it (Amendment 1).
 - The tests:
+  - `Repository.Tests/EndToEnd/OnlineOnlyCaptureTests`: from format 7 a failure says what stands in its place for a file that kept its version and a folder that kept its tree, and for nothing else; below format 7 for none; and a restore's plan and a run's read name such a file, and each file below such a folder, though every earlier snapshot that held it is forgotten (Amendment 1)
   - `Repository.Tests/Format/ManifestCodecTests`: key 4 round-trips; a failure that says nothing is byte for byte format 6's; a key 4 of 0 or 2 is refused; key 5 is unknown
   - `Repository.Tests/Format/RepositoryDescriptorCodecTests`, `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Domain.Tests/FormatVersionsTests`: a format-7 descriptor lists all five features, either mismatch is a violation, format 8 is refused naming 2 to 7, a repository is born at 7, and format 6 is still creatable without `0x0007`
   - `Hosts.Tests/CreatedFormatTests`: a set created today is format 7 and lists its feature
@@ -48,6 +50,8 @@ A reader that predates format 7 refuses an error manifest carrying key 4 as an u
 
 Nothing writes the key yet. The writer and the reader come in the next record: publication sets it where it keeps a file's version or a folder's tree, from format 7, and a restore's plan names a file from it where the snapshot carries it, and by ADR-0194 Amendment 3's rule where it does not.
 
+> **2026-11 ([Amendment 1](#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it)).** Written and read: publication sets it from format 7 where it keeps a file's version or a folder's tree, and a restore's plan names a file from it.
+
 ## Consequences
 
 **Positive**
@@ -68,10 +72,43 @@ Nothing writes the key yet. The writer and the reader come in the next record: p
 ## What this record does not do
 
 - **Write or read the key.** Publication sets nothing yet, and no restore reads it. Both are the next record's, held to format 7.
+
+  > **2026-11: done ([Amendment 1](#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it)).**
 - **Say why in a key.** The detail says why, as before.
+
+## Amendment 1 (2026-11) — the backup writes the key, and a restore reads it
+
+**Requirements:** FR-SNP-009 (amended: from format 7 a failure says so where the backup kept a file's version or a folder's tree); FR-RST-003 (amended: a restore's plan names a file from the key, though every earlier snapshot that held it is forgotten), and through it FR-RST-004, whose receipt names them by the plan's rule
+
+### Context
+
+Format 7 gave a capture failure key 4, and nothing set or read it (Decision 3). A restore's plan still asked the snapshots before whether a version was an earlier one ([ADR-0194 Amendment 3](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-3-2026-11--an-earlier-version-is-one-an-earlier-snapshot-holds)), and named nothing once retention had forgotten them.
+
+### Decision
+
+**The backup sets the key where it keeps what was there before,** from format 7:
+
+- a file it could not fetch, whose version before it puts in its place ([ADR-0185 Amendment 3](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before));
+- a folder it could not list, or did not ask for, whose tree before it puts in its place ([Amendments 6 and 7](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come)).
+
+It sets it on no other failure: not on a file or folder new to the set, which keeps nothing, and not on a file whose stream alone failed, which it captured afresh. Below format 7 it sets it nowhere (Decision 3).
+
+**A restore's plan takes the key at its word.** A file whose failure carries it is named, and so is each file the plan restores below a folder whose failure carries it, with no earlier snapshot asked. A failure without it is judged as ADR-0194 Amendment 3 says, by the snapshots before, since a format-7 snapshot written before this amendment carries no key where it kept something. The run reads them the same way for its receipt.
+
+### Consequences
+
+- A kept file, or a file below a kept folder, is named in a restore's plan however much retention has forgotten, in a snapshot this build writes at format 7.
+- A snapshot below format 7, or a format-7 one written before this amendment, is named as Amendment 3 of ADR-0194 says.
+- A build that predates format 7 cannot read an error manifest this build writes at 7 with a kept file or folder in it (Decision 2, ADR-0066).
+
+### What this does not do
+
+- **Set the key on a snapshot already written.** A snapshot is immutable; one written before this amendment says nothing either way.
+- **Change a failure's words.** The detail still says why, and what stands in its place.
 
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first, as format 6 was: failure key 4 and feature `0x0007`; a repository is born at 7, formats 2 to 6 stay creatable, and format 8 is refused naming 2 to 7; the committed `fixture-repository-v7` holds a partial snapshot whose failure carries the key. Nothing writes or reads it yet. `Domain/FormatVersions`; `Domain/FormatLimits`; `Repository.Format/Manifests/PolicyManifest`; `Repository.Format/Descriptor/RepositoryDescriptorCodec`; `Repository/RepositoryLifecycle`; `Repository.Tests/Format/ManifestCodecTests`; `Repository.ConformanceTests/FixtureRepositoryV7Tests` |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-backup-writes-the-key-and-a-restore-reads-it): publication sets key 4 from format 7 where it keeps a file's version or a folder's tree, and on no other failure; a restore's plan and a run's read name a file from it, and each file below such a folder, with no earlier snapshot asked, and judge a failure without it as ADR-0194 Amendment 3 says. `Repository/SnapshotPublication`; `Restore/RestoreBlobSet`; `Repository.Tests/EndToEnd/OnlineOnlyCaptureTests` |
