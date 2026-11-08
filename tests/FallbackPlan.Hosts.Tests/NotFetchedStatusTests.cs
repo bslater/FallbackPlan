@@ -15,12 +15,17 @@ namespace FallbackPlan.Hosts.Tests;
 /// every one clears it. A backup whose every failure is such a file that
 /// kept its version before completes behind, and the set is not said to be
 /// partial; one that missed a file new to the set still completes with
-/// failures (ADR-0193 Amendment 1).
+/// failures (ADR-0193 Amendment 1). A folder whose listing did not come is
+/// counted with them, with how many kept what was backed up before and
+/// whether the failure it names was a listing, kept by the service, while a
+/// record kept before says nothing of folders; a backup whose only failure is
+/// such a folder that kept its tree completes behind (ADR-0193 Amendment 3).
 /// </summary>
 /// <remarks>
 /// No runner has a cloud provider, so a stand-in source marks the files
 /// named <c>.cloud</c> online-only and fails their fetch while told to; the
-/// rest of the backup is the service's own.
+/// rest of the backup is the service's own. A folder named <c>.cloud</c> is
+/// one whose listing its provider keeps, named unlisted while told to.
 /// </remarks>
 [TestClass]
 public sealed class NotFetchedStatusTests : IDisposable
@@ -132,6 +137,60 @@ public sealed class NotFetchedStatusTests : IDisposable
         var job = LastJob(runtime);
         Assert.AreEqual(Domain.Jobs.JobState.CompletedWithFailures, job.State, job.Detail);
         Assert.Contains(warning => warning.Contains("PARTIAL", StringComparison.Ordinal), (await StatusAsync(runtime)).Status.Warnings);
+    }
+
+    [TestMethod]
+    public async Task AFolderNotListed_IsNamedInTheSetsStatus_AndABackupThatKeptIt_CompletesBehind()
+    {
+        WriteTree();
+        _harness.WriteSourceFile("docs/drive.cloud/d.txt", "delta, kept by the provider's folder");
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+
+        // Nothing changed, so no file is fetched; only the folder's listing
+        // is asked for, and does not come.
+        _delivers = false;
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        var job = LastJob(runtime);
+        Assert.AreEqual(Domain.Jobs.JobState.Complete, job.State, job.Detail);
+        Assert.Contains(
+            "behind: 1 online-only folder(s) not listed keep what was backed up before", job.Detail!, StringComparison.Ordinal);
+        var status = await StatusAsync(runtime);
+        Assert.DoesNotContain(warning => warning.Contains("PARTIAL", StringComparison.Ordinal), status.Status.Warnings);
+        var missed = status.NotFetched!;
+        Assert.AreEqual(0L, missed.Files);
+        Assert.AreEqual(1L, missed.Folders);
+        Assert.AreEqual(1L, missed.FoldersKeptEarlier);
+        Assert.AreEqual("docs/drive.cloud", missed.Path);
+        Assert.IsTrue(missed.Listing, "the failure it names was a folder's listing");
+        Assert.Contains(CloudStandIn.TimedOut, missed.Reason, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void TheRecord_KeepsTheFoldersNotListed_AndOneKeptBeforeItDidReadsNone()
+    {
+        var setId = new string('b', 32);
+        var store = new NotFetchedStore(_harness.StateDirectory);
+        byte[] snapshot = [.. Enumerable.Repeat((byte)0xB2, 16)];
+
+        store.Keep(
+            setId,
+            new Repository.NotFetchedFiles(Files: 1, KeptEarlier: 1, Path: "docs/drive.cloud", Reason: "timed out", Folders: 2, FoldersKept: 1, Listing: true),
+            1_000, snapshot, isBehind: false);
+        var read = store.Read(setId)!;
+        Assert.AreEqual(2L, read.Folders);
+        Assert.AreEqual(1L, read.FoldersKeptEarlier);
+        Assert.IsTrue(read.Listing);
+
+        File.WriteAllText(
+            Path.Combine(_harness.StateDirectory, "not-fetched", $"{setId}.json"),
+            """{"files":1,"keptEarlier":1,"since":1000,"path":"docs/a.cloud","reason":"timed out"}""");
+        var older = store.Read(setId)!;
+        Assert.IsNull(older.Folders);
+        Assert.IsNull(older.FoldersKeptEarlier);
+        Assert.IsNull(older.Listing);
     }
 
     [TestMethod]

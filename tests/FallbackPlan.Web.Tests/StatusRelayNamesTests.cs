@@ -11,8 +11,9 @@ namespace FallbackPlan.Web.Tests;
 /// full backup" instead of a bare "behind". Later names ride here too, among
 /// them 1.69's requests a cloud destination's store was sent (FR-DEST-019),
 /// 1.70's replica object a store holds only archived (FR-DEST-020),
-/// 1.82's last full walk on a set (FR-SNP-012), and 1.89's word that a set
-/// leaves its online-only files to their cloud provider (FR-SNP-015).
+/// 1.82's last full walk on a set (FR-SNP-012), 1.89's word that a set
+/// leaves its online-only files to their cloud provider (FR-SNP-015), and
+/// 1.90's folders a set's last backup could not list (FR-SNP-014).
 /// </summary>
 /// <remarks>
 /// Same rationale as <c>DiagnosticsRelayTests</c>: the console serialises
@@ -406,6 +407,32 @@ public sealed class StatusRelayNamesTests
         Assert.AreEqual("docs/a.docx", docs.GetProperty("path").GetString());
         Assert.AreEqual("timed out", docs.GetProperty("reason").GetString());
         Assert.AreEqual(JsonValueKind.Null, sets[1].GetProperty("notFetched").ValueKind);
+    }
+
+    [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesTheFoldersALastBackupCouldNotList()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets:
+            [
+                new BackupSetStatusDescriptor(
+                    "docs", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [], NotFetched: new NotFetchedDescriptor(0, 0, 9_000, "docs/drive", "timed out", Folders: 2, FoldersKeptEarlier: 1, Listing: true)),
+            ],
+            ObservedAt: 10_000,
+            Notices: []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var docs = body.RootElement.GetProperty("sets")[0].GetProperty("notFetched");
+        Assert.AreEqual(2, docs.GetProperty("folders").GetInt64());
+        Assert.AreEqual(1, docs.GetProperty("foldersKeptEarlier").GetInt64());
+        Assert.IsTrue(docs.GetProperty("listing").GetBoolean());
     }
 
     [TestMethod]
