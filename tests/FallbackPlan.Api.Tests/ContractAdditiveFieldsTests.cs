@@ -36,9 +36,11 @@ namespace FallbackPlan.Api.Tests;
 /// wire half of FR-DEST-019; 1.70's replica object a store holds only
 /// archived without which nothing restores, the wire half of FR-DEST-020;
 /// 1.82's full walk on a set and when its status says it last walked in
-/// full, the wire half of FR-SNP-012; and 1.89's choice of a set to leave its
+/// full, the wire half of FR-SNP-012; 1.89's choice of a set to leave its
 /// online-only files to their cloud provider, on the set and in its status,
-/// the wire half of FR-SNP-015.
+/// the wire half of FR-SNP-015; and 1.90's folders a set's last backup could
+/// not list, with how many kept what was backed up before and whether the
+/// failure named was a listing, the wire half of FR-SNP-014's amendment.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1304,14 +1306,46 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
                 NotFetched: new NotFetchedDescriptor(Files: 3, KeptEarlier: 2, Since: 5_000, Path: "docs/a.docx", Reason: "timed out")),
             FrameCodec.SerializerOptions);
 
-        const string Field =
-            ",\"not_fetched\":{\"files\":3,\"kept_earlier\":2,\"since\":5000,\"path\":\"docs/a.docx\",\"reason\":\"timed out\"}";
-        Assert.Contains(Field, status, StringComparison.Ordinal);
+        Assert.Contains(
+            ",\"not_fetched\":{\"files\":3,\"kept_earlier\":2,\"since\":5000,\"path\":\"docs/a.docx\",\"reason\":\"timed out\",",
+            status,
+            StringComparison.Ordinal);
 
         // A pre-1.84 frame says nothing: none missed.
-        var old = status.Replace(Field, "", StringComparison.Ordinal);
+        var old = status.Replace(
+            ",\"not_fetched\":{\"files\":3,\"kept_earlier\":2,\"since\":5000,\"path\":\"docs/a.docx\",\"reason\":\"timed out\","
+                + "\"folders\":null,\"folders_kept_earlier\":null,\"listing\":null}",
+            "",
+            StringComparison.Ordinal);
         Assert.AreNotEqual(status, old, "the strip must have removed the field, or the old frame proves nothing");
         Assert.IsNull(JsonSerializer.Deserialize<BackupSetStatusDescriptor>(old, FrameCodec.SerializerOptions)!.NotFetched);
+    }
+
+    [TestMethod]
+    public void TheFoldersNotListed_WireNamesAndPre190Default()
+    {
+        // Contract 1.90 (ADR-0193 Amendment 3): of what a set's last backup
+        // missed, how many folders it could not list, how many of them kept
+        // what was backed up before, and whether the failure named was a
+        // folder's listing rather than a file's fetch.
+        var status = JsonSerializer.Serialize(
+            new BackupSetStatusDescriptor(
+                "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null, Destinations: [],
+                NotFetched: new NotFetchedDescriptor(
+                    Files: 0, KeptEarlier: 0, Since: 5_000, Path: "docs/drive", Reason: "timed out",
+                    Folders: 2, FoldersKeptEarlier: 1, Listing: true)),
+            FrameCodec.SerializerOptions);
+
+        const string Field = ",\"folders\":2,\"folders_kept_earlier\":1,\"listing\":true";
+        Assert.Contains(Field, status, StringComparison.Ordinal);
+
+        // A pre-1.90 frame says nothing of folders.
+        var old = status.Replace(Field, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(status, old, "the strip must have removed the fields, or the old frame proves nothing");
+        var read = JsonSerializer.Deserialize<BackupSetStatusDescriptor>(old, FrameCodec.SerializerOptions)!.NotFetched!;
+        Assert.IsNull(read.Folders);
+        Assert.IsNull(read.FoldersKeptEarlier);
+        Assert.IsNull(read.Listing);
     }
 
     [TestMethod]

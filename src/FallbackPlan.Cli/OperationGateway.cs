@@ -1563,7 +1563,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
         report.Add(published.ErrorManifestObjectId is null
             ? "status         complete"
             : published.Behind
-                ? string.Create(CultureInfo.InvariantCulture, $"status         behind — {published.NotFetched!.KeptEarlier} online-only file(s) not downloaded keep the version backed up before")
+                ? $"status         behind — {published.NotFetched!.KeptInWords}"
                 : "status         PARTIAL — see the error manifest");
 
         return new OperationReport(published.ErrorManifestObjectId is null || published.Behind, report);

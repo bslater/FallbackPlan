@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.89
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.90
 
 ---
 
@@ -279,3 +279,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.87 | A restore's run says how many files it restored as a version backed up before ([ADR-0194 Amendment 1](../../docs/adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-1-2026-11--the-run-and-its-receipt-name-them-too), FR-RST-004). `restore` gains `earlier_versions`, the count, and `earlier_versions_sample`, at most twenty `path — detail` lines; the receipt, at schema 12, names each. Additive: a pre-1.87 service says none. |
 | 1.88 | The listing of kept receipts counts each run's files restored as a version backed up before ([ADR-0194 Amendment 2](../../docs/adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-2-2026-11--the-kept-receipts-count-them), FR-RST-004). A `restore_receipts` entry gains `earlier_versions`: the files written that its receipt names so. Additive: a pre-1.88 service says none. |
 | 1.89 | A set may leave its online-only files to their cloud provider ([ADR-0195](../../docs/adr/0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md), FR-SNP-015). `backup_set` gains `leave_online_only`: an upsert that sends none keeps what the set has, true or false sets it, and a listing says true or false. A set's status gains `leaves_online_only`, true where the set leaves them. Additive: a pre-1.89 service fetches them, and its status says nothing of it. |
+| 1.90 | A set's status counts the folders its last backup could not list, as well as the files it could not fetch ([ADR-0193 Amendment 3](../../docs/adr/0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md#amendment-3-2026-11--a-folder-not-listed-is-counted-and-a-backup-that-kept-it-is-behind), FR-SNP-014). `not_fetched` gains `folders`, how many folders its provider holds the backup could not list; `folders_kept_earlier`, how many of them keep what was backed up before; and `listing`, true where the failure it names is a folder's listing rather than a file's fetch. A record of files alone carries none of them. Additive: a pre-1.90 service names files alone. |

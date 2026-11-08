@@ -9,9 +9,10 @@ namespace FallbackPlan.Agent;
 
 /// <summary>
 /// What each set's last backup could not fetch of its online-only files
-/// (ADR-0193): one file per set under <c>&lt;state&gt;/not-fetched/</c>, by
-/// the set's id, replaced atomically, and none where that backup fetched every
-/// one. It names that backup's snapshot and whether it was behind (ADR-0193
+/// (ADR-0193), and could not list of the folders their provider holds
+/// (Amendment 3): one file per set under <c>&lt;state&gt;/not-fetched/</c>,
+/// by the set's id, replaced atomically, and none where that backup missed
+/// none. It names that backup's snapshot and whether it was behind (ADR-0193
 /// Amendment 1). A file that does not read says nothing, which costs the set's
 /// status the word until its next backup.
 /// </summary>
@@ -32,12 +33,17 @@ internal sealed class NotFetchedStore(string stateDirectory)
         {
             using var document = JsonDocument.Parse(AtomicFile.ReadAllText(path));
             var root = document.RootElement;
+            // A record kept before folders were counted says nothing of them
+            // (ADR-0193 Amendment 3), nor does one of files alone.
             return new NotFetchedDescriptor(
                 root.GetProperty("files").GetInt64(),
                 root.GetProperty("keptEarlier").GetInt64(),
                 root.GetProperty("since").GetUInt64(),
                 root.GetProperty("path").GetString() ?? throw new FormatException("no path"),
-                root.GetProperty("reason").GetString() ?? throw new FormatException("no reason"));
+                root.GetProperty("reason").GetString() ?? throw new FormatException("no reason"),
+                root.TryGetProperty("folders", out var folders) ? folders.GetInt64() : null,
+                root.TryGetProperty("foldersKeptEarlier", out var foldersKept) ? foldersKept.GetInt64() : null,
+                root.TryGetProperty("listing", out var listing) ? listing.GetBoolean() : null);
         }
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException
             or InvalidOperationException or FormatException or IOException or UnauthorizedAccessException)
@@ -106,6 +112,17 @@ internal sealed class NotFetchedStore(string stateDirectory)
             writer.WriteNumber("since", since);
             writer.WriteString("path", notFetched.Path);
             writer.WriteString("reason", notFetched.Reason);
+            if (notFetched.Folders > 0)
+            {
+                writer.WriteNumber("folders", notFetched.Folders);
+                writer.WriteNumber("foldersKeptEarlier", notFetched.FoldersKept);
+            }
+
+            if (notFetched.Listing)
+            {
+                writer.WriteBoolean("listing", true);
+            }
+
             writer.WriteString("snapshot", Convert.ToHexStringLower(snapshotId));
             writer.WriteBoolean("behind", isBehind);
             writer.WriteEndObject();

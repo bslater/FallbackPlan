@@ -936,25 +936,48 @@ function pendingChip(set) {
 // many are not in that backup at all — a full backup keeps none, though older
 // ones may hold them — since when backups have been missing some, and on
 // hover the file whose download failed and the provider's words — after it the
-// backup asked for no other. Nothing where the last backup downloaded every
-// one, and from a service older than 1.84.
+// backup asked for no other. Since 1.90, the folders it could not list as
+// well, how many keep what was backed up before and how many are empty in it,
+// and on hover the folder whose listing failed where that came first
+// (ADR-0193 Amendment 3). Nothing where the last backup missed none, and from
+// a service older than 1.84.
 function notFetchedLine(set) {
   const m = set.notFetched;
   if (m == null) return "";
+  const said = [];
   const files = Number(m.files), kept = Number(m.keptEarlier), lost = files - kept;
-  const head = files === 1
-    ? "1 online-only file was not downloaded by the last backup"
-    : `${fmtCount(files)} online-only files were not downloaded by the last backup`;
-  const which = kept === files
-    ? (files === 1 ? "; it keeps the version backed up before" : "; each keeps the version backed up before")
-    : kept === 0
-      ? (files === 1 ? "; it is not in that backup at all" : "; none of them is in that backup")
-      : `: ${fmtCount(kept)} ${kept === 1 ? "keeps" : "keep"} the version backed up before, ${fmtCount(lost)} ${lost === 1 ? "is" : "are"} not in it at all`;
-  const said = /[.!?]$/.test(m.reason) ? m.reason : `${m.reason}.`;
+  if (files > 0) {
+    const head = files === 1
+      ? "1 online-only file was not downloaded by the last backup"
+      : `${fmtCount(files)} online-only files were not downloaded by the last backup`;
+    const which = kept === files
+      ? (files === 1 ? "; it keeps the version backed up before" : "; each keeps the version backed up before")
+      : kept === 0
+        ? (files === 1 ? "; it is not in that backup at all" : "; none of them is in that backup")
+        : `: ${fmtCount(kept)} ${kept === 1 ? "keeps" : "keep"} the version backed up before, ${fmtCount(lost)} ${lost === 1 ? "is" : "are"} not in it at all`;
+    said.push(head + which);
+  }
+  const folders = Number(m.folders ?? 0), foldersKept = Number(m.foldersKeptEarlier ?? 0), empty = folders - foldersKept;
+  if (folders > 0) {
+    const head = folders === 1
+      ? "1 online-only folder could not be listed by the last backup"
+      : `${fmtCount(folders)} online-only folders could not be listed by the last backup`;
+    const which = foldersKept === folders
+      ? (folders === 1 ? "; it keeps what was backed up before" : "; each keeps what was backed up before")
+      : foldersKept === 0
+        ? (folders === 1 ? "; it is empty in that backup" : "; each is empty in that backup")
+        : `: ${fmtCount(foldersKept)} ${foldersKept === 1 ? "keeps" : "keep"} what was backed up before, ${fmtCount(empty)} ${empty === 1 ? "is" : "are"} empty in it`;
+    said.push(head + which);
+  }
+  const words = /[.!?]$/.test(m.reason) ? m.reason : `${m.reason}.`;
   // What a person may do instead, with its cost (ADR-0193 Amendment 2).
   const instead = "The set's Other settings can leave online-only files to their cloud provider instead: none is downloaded, and one new or changed there is kept only by its provider.";
-  const why = `${m.path} could not be downloaded: ${said} No other online-only file was asked for after it. ${instead}`;
-  return `<p class="sub" data-not-fetched title="${esc(why)}">${esc(head + which)} · first missed ${esc(rel(m.since))}</p>`;
+  // A file whose download failed stops the backup asking for any other; a
+  // folder's listing does not.
+  const why = m.listing === true
+    ? `${m.path} could not be listed: ${words} ${instead}`
+    : `${m.path} could not be downloaded: ${words} No other online-only file was asked for after it. ${instead}`;
+  return `<p class="sub" data-not-fetched title="${esc(why)}">${esc(said.join(". "))} · first missed ${esc(rel(m.since))}</p>`;
 }
 
 // A set that leaves its online-only files to their cloud provider
@@ -966,11 +989,14 @@ function leavesOnlineOnlyLine(set) {
   return `<p class="sub" data-leaves-online-only>Online-only files are left to their cloud provider: one new or changed there is not downloaded, and is kept only by its provider.</p>`;
 }
 
-// The same count at a glance, on the card itself.
+// The same counts at a glance, on the card itself.
 function notFetchedChip(set) {
   const m = set.notFetched;
   if (m == null) return "";
-  return `<span class="detail" title="Online-only files the last backup could not download">${esc(fmtCount(m.files))} not downloaded</span>`;
+  const said = [];
+  if (Number(m.files) > 0) said.push(`${fmtCount(m.files)} not downloaded`);
+  if (Number(m.folders ?? 0) > 0) said.push(`${fmtCount(m.folders)} not listed`);
+  return `<span class="detail" title="Online-only files the last backup could not download, and folders it could not list">${esc(said.join(", "))}</span>`;
 }
 
 // The ring: an SVG arc whose offset is set from script, because the CSP

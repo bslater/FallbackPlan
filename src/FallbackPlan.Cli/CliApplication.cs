@@ -3729,7 +3729,7 @@ public static class CliApplication
                     foreach (var set in result.Sets)
                     {
                         output.WriteLine(
-                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}{(DescribePending(set) is { Length: > 0 } waiting ? $"  {waiting}" : string.Empty)}{(DescribeToFetch(set) is { Length: > 0 } fetching ? $"  {fetching}" : string.Empty)}{(DescribeNotFetched(set) is { Length: > 0 } missed ? $"  {missed}" : string.Empty)}{(DescribeLeavesOnlineOnly(set) is { Length: > 0 } left ? $"  {left}" : string.Empty)}");
+                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}{(DescribeFullWalk(set) is { Length: > 0 } walked ? $"  {walked}" : string.Empty)}{(DescribePending(set) is { Length: > 0 } waiting ? $"  {waiting}" : string.Empty)}{(DescribeToFetch(set) is { Length: > 0 } fetching ? $"  {fetching}" : string.Empty)}{(DescribeNotFetched(set) is { Length: > 0 } missed ? $"  {missed}" : string.Empty)}{(DescribeNotListed(set) is { Length: > 0 } unlisted ? $"  {unlisted}" : string.Empty)}{(DescribeLeavesOnlineOnly(set) is { Length: > 0 } left ? $"  {left}" : string.Empty)}");
 
                         // Under the set's own line, as offline status prints
                         // them: the state says what, the warnings say why
@@ -4187,10 +4187,19 @@ public static class CliApplication
     /// <summary>
     /// The not-fetched token on a set's line (FR-SNP-014, contract 1.84): how
     /// many online-only files its last backup could not fetch, or nothing
-    /// where it fetched every one.
+    /// where it fetched every one, though it missed folders.
     /// </summary>
-    internal static string DescribeNotFetched(BackupSetStatusDescriptor set) => set.NotFetched is { } missed
+    internal static string DescribeNotFetched(BackupSetStatusDescriptor set) => set.NotFetched is { Files: > 0 } missed
         ? string.Create(CultureInfo.InvariantCulture, $"not-fetched:{missed.Files}")
+        : string.Empty;
+
+    /// <summary>
+    /// The not-listed token on a set's line (FR-SNP-014, contract 1.90): how
+    /// many folders their provider holds its last backup could not list, or
+    /// nothing where it listed every one and from an older service.
+    /// </summary>
+    internal static string DescribeNotListed(BackupSetStatusDescriptor set) => set.NotFetched is { Folders: > 0 and var folders }
+        ? string.Create(CultureInfo.InvariantCulture, $"not-listed:{folders}")
         : string.Empty;
 
     /// <summary>

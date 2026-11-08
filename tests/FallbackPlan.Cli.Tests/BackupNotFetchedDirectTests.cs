@@ -8,7 +8,8 @@ namespace FallbackPlan.Cli.Tests;
 /// not fetch, and whose version backed up before it kept, says it is behind
 /// and on how many, and exits zero; one that missed a file new to the set,
 /// which is in no backup at all, is partial and exits non-zero (FR-SNP-014,
-/// ADR-0193 Amendment 1). A set that leaves its online-only files to their
+/// ADR-0193 Amendment 1). So does one whose only failure is a folder it
+/// could not list that kept what was backed up before (ADR-0193 Amendment 3). A set that leaves its online-only files to their
 /// cloud provider fetches none, says how many it left, and completes
 /// (FR-SNP-015, ADR-0195).
 /// </summary>
@@ -47,6 +48,27 @@ public sealed class BackupNotFetchedDirectTests : IDisposable
             behind.Output,
             StringComparison.Ordinal);
         Assert.DoesNotContain("PARTIAL", behind.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ABackupThatKeptAFolderItCouldNotList_SaysItIsBehind_AndExitsZero()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/drive.cloud/d.txt", "delta");
+        _cli.WriteFile("tree/b.txt", "bravo");
+        var delivers = true;
+        DirectGateway.SourceInFlow = source => new CloudStandIn(source, () => delivers);
+        var first = await _cli.RunAsync("backup", Tree);
+        Assert.AreEqual(0, first.ExitCode, first.All);
+
+        delivers = false;
+        var behind = await _cli.RunAsync("backup", Tree);
+
+        Assert.AreEqual(0, behind.ExitCode, behind.All);
+        Assert.Contains(
+            "status         behind — 1 online-only folder(s) not listed keep what was backed up before",
+            behind.Output,
+            StringComparison.Ordinal);
     }
 
     [TestMethod]

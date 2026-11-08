@@ -57,7 +57,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// said to have changed. In a set of several folders it is kept at its path
 /// under its folder's label, and it counts among the folders the run did
 /// not walk. A comparison counts it a failure and names none of its files
-/// deleted (ADR-0185 Amendment 6, FR-SNP-009).
+/// deleted (ADR-0185 Amendment 6, FR-SNP-009). A run counts the folders
+/// whose listing did not come with the files it did not fetch, and how many
+/// of them kept their tree, names whichever failed first, and is behind where
+/// every failure kept what it had (ADR-0193 Amendment 3, FR-SNP-014).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -742,6 +745,84 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
 
         Assert.AreEqual(new NotFetchedFiles(Files: 3, KeptEarlier: 2, Path: "docs/doc.bin", Reason: TimedOut), second.NotFetched);
+    }
+
+    [TestMethod]
+    public async Task ARunWhoseOnlyFailureIsAFolderThatKeptItsTree_IsBehind_AndNamesTheFolder()
+    {
+        // A folder whose listing did not come, kept as it was backed up
+        // before, is behind as a file kept so is (ADR-0193 Amendment 3).
+        var source = new FakeFileSystemSource();
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("local.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.UnlistedFolders["cloud"] = TimedOut;
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.AreEqual(
+            new NotFetchedFiles(Files: 0, KeptEarlier: 0, Path: "cloud", Reason: TimedOut, Folders: 1, FoldersKept: 1, Listing: true),
+            second.NotFetched);
+        Assert.IsTrue(second.Behind);
+    }
+
+    [TestMethod]
+    public async Task ARunWithAFolderThatHadNoTreeToKeep_IsNotBehind()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("local.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        source.UnlistedFolders["cloud"] = TimedOut;
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.AreEqual(
+            new NotFetchedFiles(Files: 0, KeptEarlier: 0, Path: "cloud", Reason: TimedOut, Folders: 1, FoldersKept: 0, Listing: true),
+            second.NotFetched);
+        Assert.IsFalse(second.Behind, "the folder is empty in this backup, so it is not behind on it");
+    }
+
+    [TestMethod]
+    public async Task ARunThatKeptAFileAndAFolder_IsBehind_AndNamesWhicheverFailedFirst()
+    {
+        // The walk meets the folder first, and the file's fetch fails after
+        // it: the record names the first failure, and counts both.
+        var source = new FakeFileSystemSource();
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        var doc = Online(source, "doc.bin", 2);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.UnlistedFolders["cloud"] = TimedOut;
+        Change(doc, 5);
+        doc.OpenFailure = new IOException("offline");
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.AreEqual(
+            new NotFetchedFiles(Files: 1, KeptEarlier: 1, Path: "cloud", Reason: TimedOut, Folders: 1, FoldersKept: 1, Listing: true),
+            second.NotFetched);
+        Assert.IsTrue(second.Behind);
     }
 
     [TestMethod]

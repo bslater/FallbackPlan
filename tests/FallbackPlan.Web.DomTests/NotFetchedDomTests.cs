@@ -14,7 +14,9 @@ namespace FallbackPlan.Web.DomTests;
 /// and on hover the file whose download failed and the provider's words,
 /// and that the set may leave online-only files to their provider instead
 /// (ADR-0193 Amendment 2). A set whose last backup downloaded every one says
-/// nothing.
+/// nothing. A folder its last backup could not list is said beside them,
+/// how many kept what was backed up before, and on hover the folder whose
+/// listing failed (ADR-0193 Amendment 3).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -73,6 +75,37 @@ public sealed class NotFetchedDomTests
         await photos.Locator("summary").ClickAsync();
         await Expect(photos.Locator(".set-body [data-not-fetched]")).ToContainTextAsync(
             "2 online-only files were not downloaded by the last backup; none of them is in that backup");
+    }
+
+    [TestMethod]
+    public async Task Overview_ASetWhoseLastBackupCouldNotListAFolder_SaysSo_AndWhichFolderFailed()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(
+            Set("drive", new NotFetchedDescriptor(0, 0, NowMs, "drive/shared", "the provider is offline", Folders: 1, FoldersKeptEarlier: 1, Listing: true)),
+            Set("both", new NotFetchedDescriptor(2, 2, NowMs, "both/a.docx", "offline", Folders: 3, FoldersKeptEarlier: 1)));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync(harness.TokenedUrl);
+
+        var drive = page.Locator("details.set[data-set=\"drive\"]");
+        await Expect(drive.Locator("summary")).ToContainTextAsync("1 not listed");
+        await Expect(drive.Locator("summary")).Not.ToContainTextAsync("not downloaded");
+        await drive.Locator("summary").ClickAsync();
+        var folder = drive.Locator(".set-body [data-not-fetched]");
+        await Expect(folder).ToContainTextAsync(
+            "1 online-only folder could not be listed by the last backup; it keeps what was backed up before");
+        await Expect(folder).Not.ToContainTextAsync("not downloaded");
+        await Expect(folder).ToHaveAttributeAsync(
+            "title", "drive/shared could not be listed: the provider is offline. " + LeaveHint);
+
+        var both = page.Locator("details.set[data-set=\"both\"]");
+        await Expect(both.Locator("summary")).ToContainTextAsync("2 not downloaded, 3 not listed");
+        await both.Locator("summary").ClickAsync();
+        var line = both.Locator(".set-body [data-not-fetched]");
+        await Expect(line).ToContainTextAsync(
+            "2 online-only files were not downloaded by the last backup; each keeps the version backed up before. "
+                + "3 online-only folders could not be listed by the last backup: 1 keeps what was backed up before, 2 are empty in it");
     }
 
     [TestMethod]
