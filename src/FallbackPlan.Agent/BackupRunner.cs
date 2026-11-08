@@ -533,10 +533,9 @@ public static class BackupRunner
     internal static IFileSystemSource WrapSource(ServiceRuntime runtime, IFileSystemSource source) =>
         runtime.Options.WrapSource is { } wrap ? wrap(source) : source;
 
-    /// <summary>What the detail of a backup behind says of it (ADR-0193 Amendment 1).</summary>
-    private static string Behind(Repository.PublishedTreeSnapshot published) => string.Create(
-        System.Globalization.CultureInfo.InvariantCulture,
-        $"behind: {published.NotFetched!.KeptEarlier} online-only file(s) not downloaded keep the version backed up before");
+    /// <summary>What the detail of a backup behind says of it (ADR-0193 Amendments 1 and 3).</summary>
+    private static string Behind(Repository.PublishedTreeSnapshot published) =>
+        "behind: " + published.NotFetched!.KeptInWords;
 
     private static JobRunStats StatsOf(JobProgress latest) => new()
     {

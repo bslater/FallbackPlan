@@ -202,15 +202,19 @@ public sealed record PublishedTreeSnapshot(
     /// <summary>
     /// Whether every failure the run recorded is an online-only file it did
     /// not fetch whose version backed up before it kept (ADR-0193 Amendment
-    /// 1): the snapshot holds a version of every file it names, some older
-    /// than the file is, and misses none it was asked to keep. Never for a
-    /// run that failed nothing, which is complete.
+    /// 1), or a folder its provider holds whose listing did not come, which
+    /// kept the tree backed up before it (Amendment 3): the snapshot holds a
+    /// version of every file it names, some older than the file is, and
+    /// misses none it was asked to keep. Never for a run that failed nothing,
+    /// which is complete.
     /// </summary>
     /// <remarks>
-    /// Each file that kept its version before records one failure, so the
-    /// counts match only where no other file failed.
+    /// Each file or folder that kept what was backed up before records one
+    /// failure, so the counts match only where nothing else failed.
     /// </remarks>
-    public bool Behind => NotFetched is { KeptEarlier: > 0 } notFetched && notFetched.KeptEarlier == Failures.Count;
+    public bool Behind => NotFetched is { } notFetched
+        && notFetched.KeptEarlier + notFetched.FoldersKept is > 0 and var kept
+        && kept == Failures.Count;
 
     /// <summary>
     /// How many online-only files the run left to their cloud provider, new or
@@ -221,16 +225,46 @@ public sealed record PublishedTreeSnapshot(
 }
 
 /// <summary>
-/// The online-only files a run did not fetch (ADR-0193, FR-SNP-014).
+/// The online-only files a run did not fetch (ADR-0193, FR-SNP-014), and the
+/// folders its provider holds whose listing did not come (Amendment 3).
 /// </summary>
-/// <param name="Files">How many it did not fetch.</param>
+/// <param name="Files">How many files it did not fetch.</param>
 /// <param name="KeptEarlier">
 /// How many of them kept the version backed up before (ADR-0185 Amendment 3);
 /// the rest are not in the run's snapshot at all.
 /// </param>
-/// <param name="Path">The file whose fetch failed, after which the run asked for no other.</param>
+/// <param name="Path">
+/// What the provider failed first: the file whose fetch failed, after which
+/// the run asked for no other file, or the folder whose listing failed.
+/// </param>
 /// <param name="Reason">The provider's words for that failure.</param>
-public sealed record NotFetchedFiles(int Files, int KeptEarlier, string Path, string Reason);
+/// <param name="Folders">How many folders it could not list (ADR-0185 Amendment 6).</param>
+/// <param name="FoldersKept">
+/// How many of them kept the tree backed up before; the rest are empty in
+/// the run's snapshot.
+/// </param>
+/// <param name="Listing">Whether <paramref name="Path"/> is a folder whose listing failed, rather than a file whose fetch did.</param>
+public sealed record NotFetchedFiles(
+    int Files, int KeptEarlier, string Path, string Reason, int Folders = 0, int FoldersKept = 0, bool Listing = false)
+{
+    /// <summary>
+    /// What a run behind kept of what it missed, in words (ADR-0193
+    /// Amendments 1 and 3): the files that kept their version before, and the
+    /// folders that kept their tree.
+    /// </summary>
+    public string KeptInWords => (KeptEarlier, FoldersKept) switch
+    {
+        ( > 0, > 0) => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{KeptEarlier} online-only file(s) not downloaded keep the version backed up before, and {FoldersKept} online-only folder(s) not listed keep what was backed up before"),
+        (_, > 0) => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{FoldersKept} online-only folder(s) not listed keep what was backed up before"),
+        _ => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{KeptEarlier} online-only file(s) not downloaded keep the version backed up before"),
+    };
+}
 
 /// <summary>
 /// The multi-file publication path: the same canonical nine-step order as
@@ -807,8 +841,16 @@ public sealed partial class PublicationOrchestrator
         /// </summary>
         private (string Path, string Reason)? _notDelivered;
 
+        /// <summary>
+        /// What the provider failed first in this walk, a file's fetch or a
+        /// folder's listing, and why (ADR-0193 Amendment 3).
+        /// </summary>
+        private (string Path, string Reason, bool Listing)? _firstFailure;
+
         private int _notFetched;
         private int _keptEarlier;
+        private int _foldersNotListed;
+        private int _foldersKept;
         private int _leftOnlineOnly;
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
@@ -819,10 +861,15 @@ public sealed partial class PublicationOrchestrator
 
         public List<CaptureFailure> Failures => _failures;
 
-        /// <summary>The online-only files this walk did not fetch, or null where it fetched every one (ADR-0193).</summary>
+        /// <summary>
+        /// The online-only files this walk did not fetch, and the folders it
+        /// could not list, or null where it missed none (ADR-0193 and its
+        /// Amendment 3).
+        /// </summary>
         public NotFetchedFiles? NotFetched =>
-            _notDelivered is { } notDelivered
-                ? new NotFetchedFiles(_notFetched, _keptEarlier, notDelivered.Path, notDelivered.Reason)
+            _firstFailure is { } first
+                ? new NotFetchedFiles(
+                    _notFetched, _keptEarlier, first.Path, first.Reason, _foldersNotListed, _foldersKept, first.Listing)
                 : null;
 
         /// <summary>How many online-only files this walk left to their provider (ADR-0195).</summary>
@@ -917,9 +964,12 @@ public sealed partial class PublicationOrchestrator
                     // folder that snapshot does not hold is in this one as it
                     // was before: empty, with its failure.
                     var notListed = Strings.FormatTreeWalkPublisher_OnlineOnlyFolderNotListed(unlisted.Detail.Detail);
+                    _foldersNotListed++;
+                    _firstFailure ??= (unlisted.Entry.RelativePath, unlisted.Detail.Detail, Listing: true);
                     if (await TreesBeforeAsync(cancellationToken).ConfigureAwait(false) is { } before
                         && before.HeldBefore(unlisted.Entry.RelativePath))
                     {
+                        _foldersKept++;
                         TakeAsHeldBefore(before, unlisted.Entry);
                         _failures.Add(ToCaptureFailure(
                             unlisted.Detail with { Detail = Strings.FormatTreeWalkPublisher_FolderBeforeStands(notListed) }));
@@ -1202,6 +1252,7 @@ public sealed partial class PublicationOrchestrator
                 if (entry.OnlineOnly && ClassifyFailure(exception) == CaptureFailureReason.IoError)
                 {
                     _notDelivered = (entry.RelativePath, exception.Message);
+                    _firstFailure ??= (entry.RelativePath, exception.Message, Listing: false);
                     Log.OnlineOnlyNotDelivered(logger, new LogPath(entry.RelativePath), exception.Message);
                     RecordNotFetched(entry, prior, Strings.FormatTreeWalkPublisher_OnlineOnlyFetchFailed(exception.Message));
                     return;

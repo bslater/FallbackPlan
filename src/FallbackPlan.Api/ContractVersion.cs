@@ -871,8 +871,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// leaves them. Additive: a pre-1.89 service fetches them, and its status
     /// says nothing of it.
     /// </para>
+    /// <para>
+    /// 1.90 has a set's status count the folders its last backup could not
+    /// list, as well as the files it could not fetch (FR-SNP-014, ADR-0193
+    /// Amendment 3). `not_fetched` gains `folders`, how many folders its
+    /// provider holds the backup could not list; `folders_kept_earlier`, how
+    /// many of them keep what was backed up before; and `listing`, true where
+    /// the failure it names is a folder's listing rather than a file's fetch.
+    /// A record of files alone carries none of them. Additive: a pre-1.90
+    /// service names files alone.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 89);
+    public static ContractVersion Current { get; } = new(1, 90);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

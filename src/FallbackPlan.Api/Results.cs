@@ -1585,9 +1585,35 @@ public sealed record PendingChangesDescriptor(
 /// milliseconds: kept while every backup after it misses some, and let go of
 /// by the first that fetches every one.
 /// </param>
-/// <param name="Path">The file whose fetch failed, as the set's backup names it.</param>
+/// <param name="Path">
+/// What the provider failed first, as the set's backup names it: the file
+/// whose fetch failed, or since contract 1.90 the folder whose listing failed.
+/// </param>
 /// <param name="Reason">The provider's words for that failure.</param>
-public sealed record NotFetchedDescriptor(long Files, long KeptEarlier, ulong Since, string Path, string Reason);
+/// <param name="Folders">
+/// How many folders its provider holds the last backup could not list
+/// (contract 1.90, ADR-0193 Amendment 3), or null where it missed none and
+/// from an older service.
+/// </param>
+/// <param name="FoldersKeptEarlier">
+/// How many of those folders keep what was backed up before (ADR-0185
+/// Amendment 6); the rest are empty in that backup. Null where
+/// <paramref name="Folders"/> is.
+/// </param>
+/// <param name="Listing">
+/// True where <paramref name="Path"/> is a folder whose listing failed,
+/// rather than a file whose fetch did; null otherwise and from an older
+/// service.
+/// </param>
+public sealed record NotFetchedDescriptor(
+    long Files,
+    long KeptEarlier,
+    ulong Since,
+    string Path,
+    string Reason,
+    long? Folders = null,
+    long? FoldersKeptEarlier = null,
+    bool? Listing = null);
 
 /// <summary>
 /// The background window's state at the instant the status was observed
