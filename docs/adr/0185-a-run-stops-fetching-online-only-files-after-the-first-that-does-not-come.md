@@ -297,6 +297,8 @@ Where the provider did not answer, the walk entered the folder, failed its listi
 
   > **2026-11: done ([ADR-0193 Amendment 3](0193-a-sets-status-says-which-online-only-files-its-last-backup-could-not-fetch.md#amendment-3-2026-11--a-folder-not-listed-is-counted-and-a-backup-that-kept-it-is-behind)).** The set's status counts the folders its last backup could not list, and how many kept their tree.
 - **Name the folder's files in a restore's plan.** The plan names files whose failure is their own (ADR-0194); a folder's failure names the folder.
+
+  > **2026-11: done ([ADR-0194 Amendment 3](0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md#amendment-3-2026-11--an-earlier-version-is-one-an-earlier-snapshot-holds)).** The plan names each file it restores below a folder kept from before, with what the backup said of the folder.
 - **Run against a real provider.** No runner has one. The tests mark a folder dataless, or set the offline bit on Windows, and refuse its listing.
 
 ## Amendment 7 (2026-11) — the first provider failure stops the run listing and fetching

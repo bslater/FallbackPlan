@@ -12,7 +12,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// backup said of it (ADR-0194 Amendment 1, FR-RST-004), read from the copy
 /// that holds them where the set's own copy does not (FR-RST-007). The
 /// service's listing of the receipts it keeps counts them (ADR-0194
-/// Amendment 2).
+/// Amendment 2). The plan names each file below a folder whose listing did
+/// not come, kept as the backup before held it, with what the backup said of
+/// the folder (ADR-0194 Amendment 3).
 /// </summary>
 /// <remarks>
 /// No runner has a cloud provider, so a stand-in source marks the files
@@ -55,6 +57,31 @@ public sealed class EarlierVersionPlanTests : IDisposable
         Assert.AreEqual("docs/a.cloud", earlier.Path);
         Assert.Contains(CloudStandIn.TimedOut, earlier.Detail, StringComparison.Ordinal);
         Assert.Contains("stands in its place", earlier.Detail, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ThePlan_NamesEachFileBelowAFolderKeptFromBefore()
+    {
+        _harness.WriteConfiguration("every 1h");
+        _harness.WriteSourceFile("drive.cloud/a.txt", "alpha");
+        _harness.WriteSourceFile("drive.cloud/deep/b.txt", "bravo");
+        _harness.WriteSourceFile("here.txt", "here");
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var start = DateTimeOffset.Now;
+        await BackUpAsync(runtime, start);
+
+        _delivers = false;
+        await BackUpAsync(runtime, start.AddHours(1));
+
+        var earlier = (await PlanAsync(handler)).EarlierVersions!;
+        CollectionAssert.AreEqual(new[] { "drive.cloud/a.txt", "drive.cloud/deep/b.txt" }, earlier.Select(version => version.Path).ToArray());
+        foreach (var version in earlier)
+        {
+            Assert.AreEqual(
+                $"its folder drive.cloud: online-only, and listing it failed: {CloudStandIn.TimedOut}; the folder as backed up earlier stands in its place",
+                version.Detail);
+        }
     }
 
     [TestMethod]

@@ -481,12 +481,25 @@ public static class RestoreBlobSet
     }
 
     /// <summary>
-    /// The plan's files the snapshot's failures name though its tree holds
-    /// them (ADR-0194). A failed file is in no tree, but for one whose version
-    /// before was put in its place (ADR-0185 Amendment 3), so each such file
-    /// is one an earlier version stands in for. Unread where the snapshot's
-    /// manifest or its failures will not read.
+    /// The plan's files whose version is one backed up before, standing in
+    /// for one the backup could not read (ADR-0194). Unread where the
+    /// snapshot's manifest or its failures will not read.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A failure names a path the tree also holds where the backup carried
+    /// the version before into its place: a file it could not fetch
+    /// (ADR-0185 Amendment 3), or a folder it could not list, with every file
+    /// below it (ADR-0185 Amendment 6). It names one too where only a file's
+    /// stream failed, and the file itself was captured afresh. The version
+    /// tells them apart: one carried from before is one an earlier snapshot
+    /// of the set holds at the same path (ADR-0194 Amendment 3).
+    /// </para>
+    /// <para>
+    /// Where every earlier snapshot that held it has been forgotten, nothing
+    /// shows the version is an earlier one, and it is not named.
+    /// </para>
+    /// </remarks>
     private static async ValueTask<(IReadOnlyList<RestoreEarlierVersion> Earlier, bool Unread)> EarlierVersionsAsync(
         Catalogue catalogue,
         RestorePlan plan,
@@ -530,16 +543,39 @@ public static class RestoreBlobSet
             return ([], true);
         }
 
-        return (
-            [
-                .. failures.Failures
-                    .Select(static failure => new RestoreEarlierVersion(
-                        string.Join('/', failure.PathComponents.Select(static component => System.Text.Encoding.UTF8.GetString(component.Span))),
-                        failure.Detail))
-                    .Where(failure => files.Contains(failure.Path))
-                    .OrderBy(static failure => failure.Path, StringComparer.Ordinal),
-            ],
-            false);
+        // Newest first, as the catalogue lists them, so a version carried
+        // from the snapshot just before is found at the first look.
+        var before = catalogue.EnumerateSnapshots()
+            .Where(other => other.BackupSetId.Span.SequenceEqual(row.BackupSetId.Span) && other.CapturedAt < row.CapturedAt)
+            .ToList();
+
+        var earlier = new Dictionary<string, RestoreEarlierVersion>(StringComparer.Ordinal);
+        foreach (var failure in failures.Failures)
+        {
+            var path = string.Join('/', failure.PathComponents.Select(static component => System.Text.Encoding.UTF8.GetString(component.Span)));
+            if (path.Length == 0
+                || catalogue.LookupPath(snapshotId.Span, path) is not { } held
+                || !before.Any(other => catalogue.LookupPath(other.SnapshotId.Span, path) is { } then && then.ObjectId.Equals(held.ObjectId)))
+            {
+                continue;
+            }
+
+            if (files.Contains(path))
+            {
+                earlier.TryAdd(path, new RestoreEarlierVersion(path, failure.Detail));
+                continue;
+            }
+
+            // A folder carried from before: each file below it.
+            var below = path + "/";
+            var said = $"its folder {path}: {failure.Detail}";
+            foreach (var file in files.Where(file => file.StartsWith(below, StringComparison.Ordinal)))
+            {
+                earlier.TryAdd(file, new RestoreEarlierVersion(file, said));
+            }
+        }
+
+        return ([.. earlier.Values.OrderBy(static version => version.Path, StringComparer.Ordinal)], false);
     }
 
     /// <summary>
