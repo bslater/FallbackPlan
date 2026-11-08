@@ -28,10 +28,12 @@ internal static class StagingCouldShipWatch
     {
         var nowMs = (ulong)now.ToUnixTimeMilliseconds();
         var standing = new HashSet<string>(StringComparer.Ordinal);
+        // A set naming no destination is refused when the configuration
+        // loads (FR-DEST-001), so "all its destinations are stores" never
+        // holds of nothing.
         foreach (var set in configuration.BackupSets)
         {
             if (set.DirectShip
-                || set.Destinations.Count == 0
                 || !set.Destinations.All(reference =>
                     configuration.FindDestination(reference.Ref)?.Kind.IsObjectStore() == true))
             {
