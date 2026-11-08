@@ -50,7 +50,14 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// files to their cloud provider fetches none: one new or changed is left out
 /// of the snapshot and counted, and fails nothing, while one unchanged keeps
 /// the version backed up, and one only moved is still taken without a fetch
-/// (ADR-0195, FR-SNP-015).
+/// (ADR-0195, FR-SNP-015). A folder its provider holds, whose listing does
+/// not come, keeps its tree from the backup before, in a full walk and in a
+/// run told it changed, and the failure says so; one new to the set has no
+/// tree to keep, and the next backup lists it again even where nothing is
+/// said to have changed. In a set of several folders it is kept at its path
+/// under its folder's label, and it counts among the folders the run did
+/// not walk. A comparison counts it a failure and names none of its files
+/// deleted (ADR-0185 Amendment 6, FR-SNP-009).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -545,6 +552,170 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
 
         Assert.IsEmpty(second.Files);
         Assert.DoesNotContain("stands in its place", Detail(second, "new/doc.bin"), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow(false, DisplayName = "a full walk")]
+    [DataRow(true, DisplayName = "a run told the folder changed")]
+    public async Task AFolderItsProviderHolds_WhoseListingDoesNotCome_KeepsItsTreeBefore(bool told)
+    {
+        // A provider can keep a folder's listing as it keeps a file's
+        // content, and listing the folder asks it for the names. Where it
+        // does not answer, the folder keeps its tree from the backup before,
+        // as a file not fetched keeps its version, rather than going empty.
+        var source = new FakeFileSystemSource();
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("cloud/deep/b.bin", Deterministic(4_000, 2));
+        source.AddFile("local.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        source.UnlistedFolders["cloud"] = TimedOut;
+        var job = After(source, 0xB2, 0xA1, now: 1_722_700_000_001);
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(told ? job with { ChangedFolders = ["cloud"] } : job, CancellationToken.None);
+
+        Assert.AreEqual(
+            catalogue.LookupPath(Snapshot(0xA1), "cloud")!.ObjectId,
+            catalogue.LookupPath(Snapshot(0xB2), "cloud")?.ObjectId,
+            "the folder's tree is the one backed up before");
+        foreach (var path in new[] { "cloud/a.bin", "cloud/deep/b.bin" })
+        {
+            Assert.AreEqual(
+                catalogue.LookupPath(Snapshot(0xA1), path)!.ObjectId,
+                catalogue.LookupPath(Snapshot(0xB2), path)?.ObjectId,
+                $"{path} is restored from the newest snapshot as it was backed up before");
+        }
+
+        // The failure still says the folder was not listed, and what stands
+        // in its place.
+        Assert.AreEqual(
+            $"online-only, and listing it failed: {TimedOut}; the folder as backed up earlier stands in its place",
+            Detail(second, "cloud"));
+        Assert.AreEqual(CaptureFailureReason.IoError, ReasonFor(second, "cloud"));
+        Assert.HasCount(1, second.Failures);
+        Assert.AreEqual(1, second.FoldersReused, "the folder kept is one the run did not walk");
+    }
+
+    [TestMethod]
+    public async Task AFolderItsProviderHolds_InASetOfSeveralFolders_KeepsItsTreeBefore_AtItsPathUnderItsLabel()
+    {
+        // A set of several folders names each under its label (ADR-0040),
+        // and so does the folder kept and its failure.
+        var source = new FakeFileSystemSource();
+        source.AddFile("alpha/cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("alpha/local.bin", Deterministic(4_000, 3));
+        source.AddFile("bravo/p.bin", Deterministic(4_000, 4));
+        IReadOnlyList<ScanRoot> roots = [new ScanRoot("alpha", "Docs"), new ScanRoot("bravo", "Photos")];
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1) with { Roots = roots }, CancellationToken.None);
+
+        source.UnlistedFolders["alpha/cloud"] = TimedOut;
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001) with { Roots = roots }, CancellationToken.None);
+
+        Assert.AreEqual(
+            catalogue.LookupPath(Snapshot(0xA1), "Docs/cloud/a.bin")!.ObjectId,
+            catalogue.LookupPath(Snapshot(0xB2), "Docs/cloud/a.bin")?.ObjectId);
+        Assert.Contains("stands in its place", Detail(second, "Docs/cloud"), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AFolderItsProviderHolds_NewToTheSet_WhoseListingDoesNotCome_HasNoTreeToKeep()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("local.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        source.UnlistedFolders["cloud"] = TimedOut;
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.AreEqual(
+            EntryKind.DirectoryPlaceholder,
+            catalogue.LookupPath(Snapshot(0xB2), "cloud")?.EntryKind,
+            "the folder is still in the snapshot, as a folder not listed was before");
+        Assert.IsNull(catalogue.LookupPath(Snapshot(0xB2), "cloud/a.bin"));
+        Assert.AreEqual($"online-only, and listing it failed: {TimedOut}", Detail(second, "cloud"));
+    }
+
+    [TestMethod]
+    public async Task AFolderKeptFromBefore_IsListedByTheNextBackup_ThoughNothingIsSaidToHaveChanged()
+    {
+        var source = new FakeFileSystemSource();
+        var a = source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("local.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.UnlistedFolders["cloud"] = TimedOut;
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        // The provider answers again, and a file in the folder changed while
+        // it was away; the change journal names nothing.
+        source.UnlistedFolders.Remove("cloud");
+        Change(a, 5);
+        source.ListedFolders.Clear();
+        var third = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xC3, 0xB2, now: 1_722_800_000_001) with { ChangedFolders = [] }, CancellationToken.None);
+
+        Assert.Contains("cloud", source.ListedFolders, "the folder was listed again");
+        Assert.IsEmpty(third.Failures);
+        Assert.AreNotEqual(
+            catalogue.LookupPath(Snapshot(0xA1), "cloud/a.bin")!.ObjectId,
+            catalogue.LookupPath(Snapshot(0xC3), "cloud/a.bin")?.ObjectId,
+            "the file changed while the folder was not listed is taken");
+    }
+
+    [TestMethod]
+    public async Task AComparison_CountsAFolderWhoseListingDoesNotCome_AsAFailure_AndNamesNoneOfItsFilesDeleted()
+    {
+        // What the backup would keep is not what the disk lost.
+        var source = new FakeFileSystemSource();
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("local.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.UnlistedFolders["cloud"] = TimedOut;
+
+        var comparison = await SourceComparer.CompareAsync(
+            source, [new ScanRoot("/")], [], [], catalogue, Snapshot(0xA1), sampleLimit: 20, CancellationToken.None);
+
+        Assert.AreEqual(1, comparison.Failures);
+        Assert.AreEqual(0, comparison.Deleted.Count, string.Join(", ", comparison.Deleted.Sample));
+        Assert.AreEqual(1, comparison.Unchanged);
     }
 
     [TestMethod]

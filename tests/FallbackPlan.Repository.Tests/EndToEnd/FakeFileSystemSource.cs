@@ -133,6 +133,13 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
     /// </summary>
     public Dictionary<string, EntryMetadata> Folders { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// A folder its cloud provider holds whose listing does not come, by its
+    /// path in the fake, with the platform's words for why: the walk names it
+    /// unlisted and does not enter it (ADR-0185 Amendment 6).
+    /// </summary>
+    public Dictionary<string, string> UnlistedFolders { get; } = new(StringComparer.Ordinal);
+
     public Node AddFile(string relativePath, byte[] content, uint linkCount = 1, ulong? fileId = null)
     {
         var node = new Node
@@ -292,6 +299,13 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
                 if (options.Unchanged?.Invoke(subject) == true)
                 {
                     yield return new ScanEvent.UnchangedDirectory(entry);
+                    continue;
+                }
+
+                if (UnlistedFolders.TryGetValue(childPath, out var why))
+                {
+                    yield return new ScanEvent.UnlistedDirectory(
+                        entry, new ScanFailure(relativePath, CaptureFailureReason.IoError, why));
                     continue;
                 }
 
