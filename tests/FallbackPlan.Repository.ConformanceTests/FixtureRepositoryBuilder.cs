@@ -22,7 +22,9 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// 5, a checkpoint carrying the delta — the shared-sequence layout of
 /// specification 08 §2. From format 6 the file keeps a flag in its manifest
 /// (06 §4.1 key 11), and the tree holds a link that is a mount point (06 §4
-/// key 14).
+/// key 14). From format 7 the snapshot is partial, and its one failure names
+/// the file its tree holds, saying what stands there is what the snapshot
+/// before held (06 §8.1 key 4).
 /// </summary>
 /// <remarks>
 /// One generator, one identity per fixture. It exists parameterised rather
@@ -118,6 +120,11 @@ internal static class FixtureRepositoryBuilder
         if (FormatVersions.HasFileFlagsAndLinkForms(formatVersion))
         {
             features.Add(RepositoryDescriptorCodec.FeatureFileFlagsAndLinkForms);
+        }
+
+        if (FormatVersions.HasStandInFailures(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureStandInFailures);
         }
 
         return [.. features];
@@ -272,6 +279,25 @@ internal static class FixtureRepositoryBuilder
                 metaWriter, objectIds, ObjectType.PolicyManifest,
                 PolicyManifestCodec.Encode(policy), cancellationToken).ConfigureAwait(false);
 
+            // A failure that says what stands in its place rides only at
+            // format 7 (06 §8.1 key 4): a reader that predates it refuses an
+            // error manifest carrying it.
+            ObjectId? errorId = null;
+            if (FormatVersions.HasStandInFailures(identity.FormatVersion))
+            {
+                var errors = new ErrorManifest(
+                [
+                    new CaptureFailure(
+                        ["fixture.bin"u8.ToArray()],
+                        CaptureFailureReason.IoError,
+                        "online-only, and fetching it failed: the fixture's provider; the version backed up earlier stands in its place",
+                        StandsIn: true),
+                ]);
+                errorId = await AppendManifestAsync(
+                    metaWriter, objectIds, ObjectType.ErrorManifest,
+                    ErrorManifestCodec.Encode(errors), cancellationToken).ConfigureAwait(false);
+            }
+
             var snapshot = new SnapshotManifest
             {
                 SnapshotId = identity.SnapshotId,
@@ -282,7 +308,8 @@ internal static class FixtureRepositoryBuilder
                 RootTree = treeId,
                 PolicyManifest = policyId,
                 ConsistencyMethod = 1,
-                CaptureStatus = 1,
+                CaptureStatus = (byte)(errorId is null ? 1 : 2),
+                ErrorManifest = errorId,
                 SourceFilesystem = new SourceFilesystem(true, true, "fixture"),
                 PublicationGeneration = 0,
                 ClientVersion = "fallbackplan-fixture/1.0",

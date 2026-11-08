@@ -10,12 +10,13 @@ namespace FallbackPlan.Hosts.Tests;
 /// [ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md),
 /// [ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md),
 /// [ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md),
-/// [ADR-0184](../../docs/adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md)).
+/// [ADR-0184](../../docs/adr/0184-format-6-a-manifest-keeps-a-files-flags-and-a-links-form.md),
+/// [ADR-0197](../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md)).
 /// Format 3 was built over two slices and nothing live wrote it: the only
 /// opt-in was the CLI's <c>--format-version</c>, and the service created at
 /// format 2, so no installation published a Merkle commitment and no peer
 /// could be challenged by chunk. A product that can read a format creates at
-/// it, and that is format 6 now.
+/// it, and that is format 7 now.
 /// </summary>
 /// <remarks>
 /// These assert the <b>literal</b> version rather than
@@ -41,8 +42,8 @@ public sealed class CreatedFormatTests : IDisposable
             new LocalFileSystemObjectStore(_harness.RepositoryPath), _timeout.Token);
 
         Assert.AreEqual(
-            FormatVersions.FileFlagsAndLinkForms, descriptor.FormatVersion,
-            "a set created today is a format-6 repository, or its manifests have nowhere to keep a file's flags");
+            FormatVersions.StandInFailures, descriptor.FormatVersion,
+            "a set created today is a format-7 repository, or its failures have nowhere to say what stands in their place");
         Assert.Contains(
             RepositoryDescriptorCodec.FeatureRelocatableRecords,
             descriptor.RequiredFeatures,
@@ -59,6 +60,10 @@ public sealed class CreatedFormatTests : IDisposable
             RepositoryDescriptorCodec.FeatureFileFlagsAndLinkForms,
             descriptor.RequiredFeatures,
             "and this one makes a reader that cannot read a file's flags or a link's form refuse by name (ADR-0184)");
+        Assert.Contains(
+            RepositoryDescriptorCodec.FeatureStandInFailures,
+            descriptor.RequiredFeatures,
+            "and this one makes a reader that cannot read what stands in a failure's place refuse by name (ADR-0197)");
     }
 
     [TestMethod]

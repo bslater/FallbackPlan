@@ -165,6 +165,17 @@ internal static class FuzzCorpus
                 ])),
                 bytes => ErrorManifestCodec.Decode(bytes)),
 
+            new("error-manifest-format-7",
+                ErrorManifestCodec.Encode(new ErrorManifest(
+                [
+                    new CaptureFailure(
+                        ["cloud"u8.ToArray(), "doc.bin"u8.ToArray()],
+                        CaptureFailureReason.IoError,
+                        "online-only, and fetching it failed",
+                        StandsIn: true),
+                ])),
+                bytes => ErrorManifestCodec.Decode(bytes)),
+
             new("index-delta",
                 IndexDeltaCodec.Encode(new IndexDelta
                 {
