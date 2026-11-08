@@ -2,18 +2,19 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing); FR-SNP-009 (amended by [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name, and the failure says so); FR-SNP-009 (amended by [Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are): on Windows a scan sees a cloud provider's placeholders as they are, even where the system would disguise them from the process); FR-SNP-009 (amended by [Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags): on macOS a file whose flags say it is dataless is online-only, and the walk does not open it)
-**Related:** [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup), [ADR-0026](0026-phase-1-capture-shapes.md) (the capture failure reasons), [ADR-0183](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) (a file a filter keeps is read through the filter)
+**Requirements:** FR-SNP-009 (new: an online-only file is read only when it is new or changed; once the provider fails to deliver one, the run fetches no other, names each it passes with the file whose fetch failed, and the next backup fetches it again); NFR-PERF-003 (unchanged: an unchanged online-only file is never fetched); FR-SNP-009 (amended by [Amendment 1](#amendment-1-2026-11--a-providers-bits-are-not-kept): a provider's bits are not kept with a file or a folder, so going between online-only and on the device is no change, and a restore names none of them); FR-SNP-009 (amended again by [Amendment 2](#amendment-2-2026-11--a-file-the-run-fetched-is-freed-again): a file the run fetched, and read whole as the scan found it, is freed from the device again, unless the person pinned it, and a refusal fails nothing); FR-SNP-009 (amended by [Amendment 3](#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before): a changed online-only file the run did not fetch keeps the version backed up before it, at its name, and the failure says so); FR-SNP-009 (amended by [Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are): on Windows a scan sees a cloud provider's placeholders as they are, even where the system would disguise them from the process); FR-SNP-009 (amended by [Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags): on macOS a file whose flags say it is dataless is online-only, and the walk does not open it); FR-SNP-009 (amended by [Amendment 6](#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come): a folder its provider holds, whose listing does not come, keeps the tree backed up before it, and the failure says so)
+**Related:** [architecture 06 §1](../architecture/06-filesystem-capture.md#1-scanner) (an unreadable file is an entry in the error manifest, not a failed backup), [ADR-0026](0026-phase-1-capture-shapes.md) (the capture failure reasons), [ADR-0183](0183-capture-reads-a-reparse-point-as-a-link-only-where-its-tag-names-one.md) (a file a filter keeps is read through the filter), [ADR-0186](0186-a-run-reuses-a-folder-it-was-told-did-not-change.md) (a folder taken as the prior snapshot held it)
 
 **Built:**
 - The rule: `Domain/MetadataRules` says which Windows attribute bits make a file online-only, and on macOS the dataless flag (Amendment 5).
 - The scan: `Filesystem.Local/LocalFileSystemSource` names an online-only file on the entry it builds. On macOS it names a dataless file from its flags and does not open it (Amendment 5).
 - The run: `Repository/SnapshotPublication` stops fetching after the first online-only file that does not come, and names each it passes.
+- The unlisted folder: `Filesystem.Local/LocalFileSystemSource` lists a folder its provider holds before it enters it, and names one whose listing does not come unlisted. `Repository/SnapshotPublication` keeps that folder's tree from the prior snapshot, through `Repository/FolderReuse`, and `Repository/SourceComparer` counts it a failure with none of its files deleted (Amendment 6).
 - The view: `Filesystem.Local/WindowsInterop` has the process see a cloud provider's placeholders as they are, and `Filesystem.Local/LocalFileSystemSource` asks it before a scan reads any attribute (Amendment 4).
 - The tests:
-  - `Repository.Tests/OnlineOnlyCaptureTests` — through a stand-in source, on every platform: a fetch that fails before its first byte or part-way stops the run opening any other online-only file, each named with the file that failed and why, while a file on the device is still backed up; a file gone, refused, or on the device that will not read stops nothing; the next backup fetches what was not fetched; an unchanged online-only file is not opened again. A changed one not fetched keeps the version backed up before it, asked for again by each backup and fetched once the provider answers (Amendment 3).
+  - `Repository.Tests/OnlineOnlyCaptureTests` — through a stand-in source, on every platform: a fetch that fails before its first byte or part-way stops the run opening any other online-only file, each named with the file that failed and why, while a file on the device is still backed up; a file gone, refused, or on the device that will not read stops nothing; the next backup fetches what was not fetched; an unchanged online-only file is not opened again. A changed one not fetched keeps the version backed up before it, asked for again by each backup and fetched once the provider answers (Amendment 3). A folder its provider holds, whose listing does not come, keeps the tree backed up before it, in a full walk and in a run told it changed, and in a set of several folders under its folder's label; one new to the set has none to keep; the next backup lists it again; and a comparison names none of its files deleted (Amendment 6).
   - `Domain.Tests/OnlineOnlyAttributesTests` — offline, recall on open and recall on data access each make a file online-only; pinned, unpinned and a reparse point do not. On macOS the dataless flag does, and it is not a flag a file keeps (Amendment 5).
-  - `Filesystem.Tests/LocalScanTests` — an ordinary file is not online-only, and on Windows a file carrying the offline bit is. On Windows a scan in a process told to disguise placeholders leaves it seeing them as they are (Amendment 4). On Linux and macOS a file whose stat says it is dataless is online-only, and the walk leaves it closed (Amendment 5).
+  - `Filesystem.Tests/LocalScanTests` — an ordinary file is not online-only, and on Windows a file carrying the offline bit is. On Windows a scan in a process told to disguise placeholders leaves it seeing them as they are (Amendment 4). On Linux and macOS a file whose stat says it is dataless is online-only, and the walk leaves it closed (Amendment 5). A folder marked dataless, or on Windows carrying the offline bit, whose listing fails is named unlisted and not entered; an ordinary folder, and a provider's folder the account may not list, are entered and fail as before (Amendment 6).
 
 ---
 
@@ -244,8 +245,50 @@ The walk opens each regular file it names, to read its content, extended attribu
 
 - **Free a fetched file again on macOS.** Amendment 2 unpins a file on Windows. macOS evicts one only through its provider's own interface, which a later record may take.
 - **Leave a dataless folder unlisted.** A provider can keep a folder's listing too, and the walk lists every folder it enters, which asks for it.
+
+  > **2026-11: in part ([Amendment 6](#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come)).** The walk still lists such a folder. Where the listing does not come, the folder keeps the tree backed up before it.
 - **Stop a read from fetching.** macOS lets a process refuse to fetch a dataless file. The run reads a changed file to back it up, and that read is the fetch it means.
 - **Run against a real provider.** No runner has one. The test marks a stat dataless and sees the walk name the file and leave it closed.
+
+## Amendment 6 (2026-11) — a folder its provider holds keeps its tree when its listing does not come
+
+**Requirements:** FR-SNP-009 (amended: a folder its provider holds, whose listing does not come, keeps the tree backed up before it, and the failure says so)
+
+### Context
+
+A provider can keep a folder's listing as it keeps a file's content (Amendment 5). macOS marks such a folder dataless. Windows gives it the bits it gives an online-only file. Listing the folder asks the provider for its names.
+
+Where the provider did not answer, the walk entered the folder, failed its listing, and the snapshot held the folder empty. The newest snapshot lost every file in it, though the person still had them at the provider. Amendment 3 keeps the version before for a file the run did not fetch, because a provider can stay away for weeks; a folder's files were not kept so.
+
+### Decision
+
+**A folder its provider holds is listed before the walk enters it.** That is a folder whose flags say it is dataless, on macOS, or whose attributes carry offline, recall on open or recall on data access (Decision 1), on Windows. Where it lists, the walk descends with the names it has.
+
+**One whose listing does not come keeps the tree backed up before it.** That is a listing that raises an I/O fault. The walk does not enter the folder, and the snapshot holds the tree the prior snapshot held there, as a folder the change journal did not name is taken (ADR-0186). Every file below it restores as it was backed up.
+
+**The failure is still recorded,** at the folder's path, reason I/O error: `online-only, and listing it failed: …; the folder as backed up earlier stands in its place`. The run completes with failures.
+
+**A folder the prior snapshot does not hold has nothing to keep.** It is in the snapshot as before, empty, and its failure reads `online-only, and listing it failed: …`. **A folder the account may not list** is the account's (Decision 3), and is entered and fails as before.
+
+**The next backup lists it again.** A run told what changed walks a folder holding a failure (ADR-0186), and a full walk lists every folder.
+
+**A run that walks everything reads the prior snapshot's folders only when it meets such a folder.** It reads them once, then. A folder kept this way counts among the folders the run did not walk.
+
+**A comparison counts the folder a failure** and names none of its files deleted, since the backup keeps them.
+
+### Consequences
+
+- The newest snapshot holds every file a provider's folder held before, however long the provider stays away from its listing.
+- A file changed in such a folder while it was not listed is taken by the first backup that lists it, since its version kept carries the time it was backed up.
+- A backup that kept such a folder is completed with failures, not behind (ADR-0193 Amendment 1): its failure is no file's.
+
+### What this does not do
+
+- **Stop listing after the first that does not come.** Each such folder is asked for its listing. Decision 2 stops the run fetching files, not listing folders.
+- **Leave such a folder unlisted where the set leaves its online-only files** (ADR-0195). A listing asks for names, not content, and the set's unchanged files are kept only by listing them.
+- **Count the folder in the set's status.** The count of files not fetched (ADR-0193) names files; a folder kept this way is among the run's failures.
+- **Name the folder's files in a restore's plan.** The plan names files whose failure is their own (ADR-0194); a folder's failure names the folder.
+- **Run against a real provider.** No runner has one. The tests mark a folder dataless, or set the offline bit on Windows, and refuse its listing.
 
 ## Status history
 
@@ -261,3 +304,4 @@ The walk opens each regular file it names, to read its content, extended attribu
 | 2026-11 | Accepted | Noted by [ADR-0195](0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md): a set may leave its online-only files to their provider, the alternative set aside here, by its own choice. Its backups fetch none, and a file new or changed is left out without failing it. |
 | 2026-11 | Amended | [Amendment 4](#amendment-4-2026-11--a-scan-sees-placeholders-as-they-are): on Windows a scan sets the process's placeholder mode to expose a cloud provider's placeholders before it reads any attribute, so a process shown them disguised still names its online-only files; before Windows 10 1803 the call is skipped. `Filesystem.Local/WindowsInterop`; `Filesystem.Local/LocalFileSystemSource`; `Filesystem.Tests/LocalScanTests` |
 | 2026-11 | Amended | [Amendment 5](#amendment-5-2026-11--macos-names-an-online-only-file-by-its-flags): on macOS a file whose flags carry the dataless flag is online-only; the walk names it from its stat and does not open it, and the hole probe is skipped for an online-only file. Nothing is freed on macOS. `Domain/MetadataRules`; `Filesystem.Local/PosixInterop`; `Filesystem.Local/LocalFileSystemSource`; `Domain.Tests/OnlineOnlyAttributesTests`; `Filesystem.Tests/LocalScanTests` |
+| 2026-11 | Amended | [Amendment 6](#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come): a folder its provider holds (dataless on macOS; offline, recall on open or recall on data access on Windows) is listed before it is entered; where the listing raises an I/O fault, the folder keeps the tree the prior snapshot held for it and the failure says so, while a folder that snapshot does not hold is empty as before; a refusal is the account's and fails as before; a full walk reads the prior snapshot's folders only on meeting such a folder; a comparison names none of its files deleted. `Filesystem.Local/LocalFileSystemSource`; `Repository/SnapshotPublication`; `Repository/FolderReuse`; `Repository/SourceComparer`; `Filesystem.Tests/LocalScanTests`; `Repository.Tests/OnlineOnlyCaptureTests` |
