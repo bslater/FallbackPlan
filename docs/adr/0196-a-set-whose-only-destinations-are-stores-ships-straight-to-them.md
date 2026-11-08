@@ -19,6 +19,7 @@
     - a retention report walks whole, reading the folder trees from the store, and since Amendment 3 from the trees kept here;
     - a backup after another reads no folder tree from the store, and the metadata blobs here are those at the store (Amendment 3);
     - a retention trim deletes the trees it drops here as at the store (Amendment 3);
+    - a metadata blob put through the set's archive outside a run, as compaction puts what it packs, is kept here too (Amendment 3);
     - a store that does not answer fails the run, naming it.
     - A set with a local path beside the store: the run itself writes nothing to the store, and leaves it behind for the sync that follows.
   - `Hosts.Tests/DirectShipTests` — a direct-ship set naming only a bucket, or only a container, is accepted; one naming only a reserved kind is still refused. A new set naming only stores is born direct-ship, and one naming a store and a peer is still born staging (Amendment 1).

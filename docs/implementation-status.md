@@ -6124,8 +6124,9 @@ stores' object for the next sweep, and it is never listed.
 Adoption from a store copies the archive's metadata blobs too. At the test
 store a second backup no longer reads its root tree five times.
 `Hosts.Tests/ObjectStoreDestinationTests` holds the backup, the retention
-report and the trim, and `Hosts.Tests/ObjectStoreAdoptionTests` the
-adopted set, for S3 and for Azure. A set made direct-ship before this, or
+report, the trim, and a metadata blob put outside a run, as compaction puts
+what it packs; `Hosts.Tests/ObjectStoreAdoptionTests` holds the adopted
+set; both for S3 and for Azure. A set made direct-ship before this, or
 from staging, or healed from a replica keeps the trees it ships from now
 on; one it built on before is still read from the store.
 

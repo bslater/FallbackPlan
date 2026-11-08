@@ -770,6 +770,29 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task DirectShip_ToTheStoreAlone_AMetadataBlobPutOutsideARun_IsKeptHereToo()
+    {
+        // Compaction writes the blobs it packs through the sink outside a
+        // run, and a tree it moves is read at its new key after it. The copy
+        // of one put then is kept here as a backup's is.
+        WriteConfiguration(directShip: true, storeOnly: true);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var archive = await runtime.ExistingArchiveAsync(Harness.DocsSetId, Timeout);
+        var key = ObjectKey.Parse("blobs/meta/aaaa/" + new string('a', 26));
+        var put = await archive!.Store.PutAsync(
+            key, _ => ValueTask.FromResult<Stream>(new MemoryStream([1, 2, 3])), PutConditions.IfNotExists, Timeout);
+
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
+        Assert.Contains(key.Value, MetadataBlobsAtTheStore(), "the premise: the put reached the store");
+        Assert.Contains(key.Value, MetadataBlobsHere(), "a metadata blob put outside a run is kept here too");
+    }
+
+    [TestMethod]
     public async Task DirectShip_ToTheStoreAlone_ARetentionTrim_DeletesTheFolderTreesItDrops_HereAsAtTheStore()
     {
         // What retention drops is deleted at the store and here alike, so
