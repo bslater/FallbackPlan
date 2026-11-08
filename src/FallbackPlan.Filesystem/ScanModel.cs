@@ -133,6 +133,14 @@ public abstract record ScanEvent
     /// follows.
     /// </summary>
     public sealed record UnchangedDirectory(ScanEntry Entry) : ScanEvent;
+
+    /// <summary>
+    /// A directory its cloud provider holds, whose listing did not come
+    /// (ADR-0185 Amendment 6). The walk did not enter it, and nothing below
+    /// it follows; <paramref name="Detail"/> says why, in the platform's
+    /// words.
+    /// </summary>
+    public sealed record UnlistedDirectory(ScanEntry Entry, ScanFailure Detail) : ScanEvent;
 }
 
 /// <summary>Scanner behaviour switches. Defaults are the architecture's rules.</summary>

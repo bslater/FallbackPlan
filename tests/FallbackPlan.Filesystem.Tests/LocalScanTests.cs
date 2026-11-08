@@ -26,7 +26,12 @@ namespace FallbackPlan.Filesystem.Tests;
 /// is not (FR-SNP-009, ADR-0185); and on Windows a scan sees a cloud
 /// provider's placeholders as they are, even in a process told to disguise
 /// them (ADR-0185 Amendment 4). A file whose flags say it is dataless is
-/// online-only, and the walk does not open it (ADR-0185 Amendment 5). A folder the run says is unchanged is
+/// online-only, and the walk does not open it (ADR-0185 Amendment 5). A
+/// folder its provider holds, whose listing fails, is named unlisted and not
+/// entered; an ordinary folder whose listing fails, and a provider's folder
+/// the account may not list, are entered and fail as before, and a
+/// provider's folder that lists is walked as any other (ADR-0185
+/// Amendment 6). A folder the run says is unchanged is
 /// named and not entered (FR-SNP-010, ADR-0186). Freeing a file again does nothing on Linux
 /// and macOS; on Windows a file no provider keeps is refused and left as it
 /// was, and a file the person pinned is never asked (ADR-0185 Amendment 2).
@@ -379,6 +384,104 @@ public sealed partial class LocalScanTests : IDisposable
         Assert.IsNull(away.ContentHandle, "the walk did not open it");
         Assert.IsEmpty(away.SparseExtents, "the hole probe was not run on it");
     }
+
+    [TestMethod]
+    public async Task Scan_AFolderItsProviderHolds_WhoseListingFails_IsNamedUnlisted_AndNotEntered()
+    {
+        // A provider can keep a folder's listing as it keeps a file's
+        // content: macOS marks such a folder dataless, and listing it asks
+        // the provider for the names. Where the listing does not come, the
+        // walk names the folder unlisted, with why, so the run can keep the
+        // tree it held before (ADR-0185 Amendment 6). No runner has a
+        // provider, so the folder is marked here and its listing refused.
+        Write("cloud/a.txt");
+        Write("here.txt");
+        LocalFileSystemSource.MarkedDataless = relativePath => relativePath == "cloud";
+        LocalFileSystemSource.ListingRefused = relativePath => relativePath == "cloud" ? new IOException(TimedOut) : null;
+
+        var events = await ScanAsync();
+
+        var unlisted = Assert.ContainsSingle(events.OfType<ScanEvent.UnlistedDirectory>());
+        Assert.AreEqual("cloud", unlisted.Entry.RelativePath);
+        Assert.AreEqual(ScanEntryKind.Directory, unlisted.Entry.Kind);
+        Assert.AreEqual("cloud", unlisted.Detail.RelativePath);
+        Assert.AreEqual(CaptureFailureReason.IoError, unlisted.Detail.Reason);
+        Assert.IsFalse(
+            events.OfType<ScanEvent.EnterDirectory>().Any(enter => enter.Entry.RelativePath == "cloud"),
+            "the walk did not enter it");
+        Assert.IsFalse(events.OfType<ScanEvent.Leaf>().Any(leaf => leaf.Entry.RelativePath.StartsWith("cloud/", StringComparison.Ordinal)));
+        Assert.IsEmpty(events.OfType<ScanEvent.Failure>(), "the folder is named once, as unlisted");
+        Assert.IsTrue(events.OfType<ScanEvent.Leaf>().Any(leaf => leaf.Entry.RelativePath == "here.txt"), "the walk goes on");
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "only Windows keeps the offline attribute")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    [SupportedOSPlatform("windows")]
+    public async Task Scan_OnWindows_AFolderMarkedOffline_WhoseListingFails_IsNamedUnlisted()
+    {
+        // Windows gives a folder whose listing its provider keeps the same
+        // bits it gives a file. Offline is the one a test can set.
+        Write("cloud/a.txt");
+        var folder = Path.Combine(_root, "cloud");
+        File.SetAttributes(folder, File.GetAttributes(folder) | FileAttributes.Offline);
+        Assert.IsTrue(
+            (File.GetAttributes(folder) & FileAttributes.Offline) != 0,
+            "the premise: the folder carries the offline bit");
+        LocalFileSystemSource.ListingRefused = relativePath => relativePath == "cloud" ? new IOException(TimedOut) : null;
+
+        var events = await ScanAsync();
+
+        Assert.AreEqual("cloud", Assert.ContainsSingle(events.OfType<ScanEvent.UnlistedDirectory>()).Entry.RelativePath);
+    }
+
+    [TestMethod]
+    public async Task Scan_AnOrdinaryFolderWhoseListingFails_IsEnteredAndFails_AsBefore()
+    {
+        // No provider keeps this folder: its listing failing is the device's,
+        // and the folder is entered and fails as ever.
+        Write("plain/a.txt");
+        LocalFileSystemSource.ListingRefused = relativePath => relativePath == "plain" ? new IOException(TimedOut) : null;
+
+        var events = await ScanAsync();
+
+        Assert.IsEmpty(events.OfType<ScanEvent.UnlistedDirectory>());
+        Assert.AreEqual("plain", Assert.ContainsSingle(events.OfType<ScanEvent.Failure>()).Detail.RelativePath);
+        Assert.IsTrue(events.OfType<ScanEvent.EnterDirectory>().Any(enter => enter.Entry.RelativePath == "plain"));
+    }
+
+    [TestMethod]
+    public async Task Scan_AFolderItsProviderHolds_ThatTheAccountMayNotList_IsEnteredAndFails_AsBefore()
+    {
+        // A refusal is the account's, not the provider failing (ADR-0185
+        // Decision 3), and keeps no tree from before.
+        Write("cloud/a.txt");
+        LocalFileSystemSource.MarkedDataless = relativePath => relativePath == "cloud";
+        LocalFileSystemSource.ListingRefused = relativePath =>
+            relativePath == "cloud" ? new UnauthorizedAccessException("Access to the path is denied.") : null;
+
+        var events = await ScanAsync();
+
+        Assert.IsEmpty(events.OfType<ScanEvent.UnlistedDirectory>());
+        var failure = Assert.ContainsSingle(events.OfType<ScanEvent.Failure>()).Detail;
+        Assert.AreEqual("cloud", failure.RelativePath);
+        Assert.AreEqual(CaptureFailureReason.Permission, failure.Reason);
+    }
+
+    [TestMethod]
+    public async Task Scan_AFolderItsProviderHolds_WhoseListingComes_IsWalkedAsAnyOther()
+    {
+        Write("cloud/a.txt");
+        LocalFileSystemSource.MarkedDataless = relativePath => relativePath == "cloud";
+
+        var events = await ScanAsync();
+
+        Assert.IsEmpty(events.OfType<ScanEvent.UnlistedDirectory>());
+        Assert.IsTrue(events.OfType<ScanEvent.EnterDirectory>().Any(enter => enter.Entry.RelativePath == "cloud"));
+        Assert.IsTrue(events.OfType<ScanEvent.Leaf>().Any(leaf => leaf.Entry.RelativePath == "cloud/a.txt"));
+    }
+
+    private const string TimedOut = "The cloud operation was not completed before the time-out period expired.";
 
     private void WriteWithAHole(string relativePath)
     {

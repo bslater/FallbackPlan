@@ -44,6 +44,8 @@ The run walks a folder, listing it and asking of each folder in it in turn, wher
 
 The root is always walked. Every other folder is reused. The walk does not enter it. Its parent's tree names the tree the prior snapshot recorded for it, and the new snapshot is made of every tree at and below it. Naming a folder says nothing of the folders in it, each of which is asked in its own right.
 
+> **2026-11 ([ADR-0185 Amendment 6](0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-6-2026-11--a-folder-its-provider-holds-keeps-its-tree-when-its-listing-does-not-come)).** A folder its cloud provider holds, whose listing does not come, is taken as the prior snapshot held it too, whether or not the run was told what changed. A run that walks everything reads the prior snapshot's folders for it, under the rules of Decision 3, only when it meets such a folder. Such a folder holds a failure, so the next run told what changed walks it.
+
 ### 3. Nothing is reused where the set's configuration changed
 
 A change source sees the files, not the set. A folder the set's new rules cut into, or a label that now names another folder, is one the prior snapshot holds otherwise. So the run reuses nothing where the prior snapshot was captured under other include or exclude rules, or other folders or labels, as its recorded configuration says.

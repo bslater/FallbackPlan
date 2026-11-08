@@ -45,6 +45,21 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
 
     private static readonly AsyncLocal<Func<string, bool>?> MarkedDatalessInFlow = new();
 
+    /// <summary>
+    /// What listing each folder it names raises instead, by the folder's path
+    /// relative to the scanned root, as a provider that does not answer, or
+    /// an account that may not list it, refuses it. No runner has such a
+    /// provider. Set it in the flow whose scan it is for; null, the
+    /// production value, refuses nothing.
+    /// </summary>
+    internal static Func<string, Exception?>? ListingRefused
+    {
+        get => ListingRefusedInFlow.Value;
+        set => ListingRefusedInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<Func<string, Exception?>?> ListingRefusedInFlow = new();
+
     /// <inheritdoc />
     public SourceFilesystemInfo Probe(string rootPath)
     {
@@ -141,7 +156,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
         var failures = 0;
 
         yield return new ScanEvent.EnterDirectory(rootEntry);
-        await foreach (var scanEvent in WalkAsync(full, root, "", rootStat.Device, options, cancellationToken)
+        await foreach (var scanEvent in WalkAsync(full, root, "", rootStat.Device, options, listedAlready: null, cancellationToken)
             .ConfigureAwait(false))
         {
             switch (scanEvent)
@@ -165,6 +180,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
         string relativePrefix,
         ulong rootDevice,
         ScanOptions options,
+        List<(string Name, byte[] NameBytes, string FullPath)>? listedAlready,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -173,7 +189,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
         ScanFailure? listingFailure = null;
         try
         {
-            children = ListChildren(directory, scope);
+            children = listedAlready ?? ListChildren(directory, scope, relativePrefix);
         }
         catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
         {
@@ -255,7 +271,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
                 // into, so the descriptor is what must be described.
                 if (childScope is not null && childScope.TryStatSelf(out var opened))
                 {
-                    stat = opened;
+                    stat = MarkedDataless?.Invoke(relativePath) == true ? opened with { Dataless = true } : opened;
                 }
                 else if (scope is not null)
                 {
@@ -313,10 +329,41 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
                     continue;
                 }
 
+                // A folder its provider holds is listed before it is entered:
+                // listing it asks the provider for its names, and where they
+                // do not come the run keeps the tree it held before rather
+                // than an empty folder (ADR-0185 Amendment 6). A folder the
+                // account may not list is the account's, and is entered and
+                // fails as any other.
+                List<(string Name, byte[] NameBytes, string FullPath)>? listed = null;
+                if (stat.Dataless || MetadataRules.IsOnlineOnly(directoryEntry.Metadata.FileAttributes))
+                {
+                    ScanFailure? unlisted = null;
+                    try
+                    {
+                        listed = ListChildren(fullPath, childScope, relativePath);
+                    }
+                    catch (IOException exception)
+                    {
+                        unlisted = new ScanFailure(relativePath, CaptureFailureReason.IoError, exception.Message);
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        // Listed again as it is entered, and failed there.
+                    }
+
+                    if (unlisted is not null)
+                    {
+                        Log.ListingFailed(_logger, new LogPath(fullPath), unlisted.Detail);
+                        yield return new ScanEvent.UnlistedDirectory(directoryEntry, unlisted);
+                        continue;
+                    }
+                }
+
                 Log.EnteringDirectory(_logger, new LogPath(relativePath));
                 yield return new ScanEvent.EnterDirectory(directoryEntry);
                 await foreach (var scanEvent in WalkAsync(
-                    fullPath, childScope, relativePath, rootDevice, options, cancellationToken).ConfigureAwait(false))
+                    fullPath, childScope, relativePath, rootDevice, options, listed, cancellationToken).ConfigureAwait(false))
                 {
                     yield return scanEvent;
                 }
@@ -397,8 +444,13 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
     /// during the encode.
     /// </remarks>
     private static List<(string Name, byte[] NameBytes, string FullPath)> ListChildren(
-        string directory, PosixDirectoryScope? scope)
+        string directory, PosixDirectoryScope? scope, string relativePath)
     {
+        if (ListingRefused?.Invoke(relativePath) is { } refused)
+        {
+            throw refused;
+        }
+
         // From the descriptor when the walk holds one: the directory being
         // listed is then the directory that was descended into, not whatever
         // the path names now.

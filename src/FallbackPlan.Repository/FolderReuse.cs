@@ -8,6 +8,7 @@ namespace FallbackPlan.Repository;
 /// them, without walking them (ADR-0186), and what each brings.
 /// </summary>
 /// <remarks>
+/// <para>
 /// A folder is walked where it, or a folder below it, is named changed;
 /// where the prior snapshot names a failure at or below it, so the file is
 /// tried again; where the prior snapshot holds no folder there; and where a
@@ -15,15 +16,21 @@ namespace FallbackPlan.Repository;
 /// names. Every other folder is reused, and it stands for everything below
 /// it. Nothing is reused where the prior snapshot was captured under other
 /// rules or other folders, which no change source sees.
+/// </para>
+/// <para>
+/// A run that walks everything takes no folder unwalked, but a folder its
+/// cloud provider holds, whose listing did not come, keeps the tree the
+/// prior snapshot held for it (ADR-0185 Amendment 6).
+/// </para>
 /// </remarks>
 internal sealed class FolderReuse
 {
-    private readonly HashSet<string> _walked;
+    private readonly HashSet<string>? _walked;
     private readonly CatalogueGate _catalogue;
     private readonly ReadOnlyMemory<byte> _prior;
     private readonly Dictionary<string, CatalogueSubtree> _reused = new(StringComparer.Ordinal);
 
-    private FolderReuse(HashSet<string> walked, CatalogueGate catalogue, ReadOnlyMemory<byte> prior)
+    private FolderReuse(HashSet<string>? walked, CatalogueGate catalogue, ReadOnlyMemory<byte> prior)
     {
         _walked = walked;
         _catalogue = catalogue;
@@ -39,16 +46,13 @@ internal sealed class FolderReuse
     public static async ValueTask<FolderReuse?> ForAsync(
         SnapshotJob job, CatalogueGate? catalogue, TargetedRecordReader? reader, CancellationToken cancellationToken)
     {
-        if (job.ChangedFolders is not { } changed || job.PriorSnapshotId is not { } prior
-            || catalogue is null || reader is null
-            || catalogue.Read(c => c.EnumerateSnapshots()).FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(prior.Span)) is not { } row
-            || await reader.TryReadSnapshotAsync(row.ObjectId, cancellationToken).ConfigureAwait(false) is not { } manifest
-            || await reader.TryReadPolicyAsync(manifest.PolicyManifest, cancellationToken).ConfigureAwait(false) is not { } policy
-            || !CapturedAlike(policy, job))
+        if (job.ChangedFolders is not { } changed || catalogue is null || reader is null
+            || await PriorAsync(job, catalogue, reader, cancellationToken).ConfigureAwait(false) is not { } found)
         {
             return null;
         }
 
+        var (prior, manifest) = found;
         IReadOnlyList<string> failed = [];
         if (manifest.ErrorManifest is { } errors)
         {
@@ -76,12 +80,45 @@ internal sealed class FolderReuse
         return new FolderReuse(walked, catalogue, prior);
     }
 
+    /// <summary>
+    /// The prior snapshot's folders for a run that walks everything, which
+    /// takes none unwalked, or null where it has none to give: no prior
+    /// snapshot or catalogue, or one captured under other rules or other
+    /// folders, or one that cannot be read (ADR-0185 Amendment 6).
+    /// </summary>
+    public static async ValueTask<FolderReuse?> ForWalkOfEverythingAsync(
+        SnapshotJob job, CatalogueGate? catalogue, TargetedRecordReader? reader, CancellationToken cancellationToken) =>
+        catalogue is not null && reader is not null
+        && await PriorAsync(job, catalogue, reader, cancellationToken).ConfigureAwait(false) is { } found
+            ? new FolderReuse(walked: null, catalogue, found.Prior)
+            : null;
+
+    private static async ValueTask<(ReadOnlyMemory<byte> Prior, SnapshotManifest Manifest)?> PriorAsync(
+        SnapshotJob job, CatalogueGate catalogue, TargetedRecordReader reader, CancellationToken cancellationToken)
+    {
+        if (job.PriorSnapshotId is not { } prior
+            || catalogue.Read(c => c.EnumerateSnapshots()).FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(prior.Span)) is not { } row
+            || await reader.TryReadSnapshotAsync(row.ObjectId, cancellationToken).ConfigureAwait(false) is not { } manifest
+            || await reader.TryReadPolicyAsync(manifest.PolicyManifest, cancellationToken).ConfigureAwait(false) is not { } policy
+            || !CapturedAlike(policy, job))
+        {
+            return null;
+        }
+
+        return (prior, manifest);
+    }
+
     /// <summary>How many folders the run reused without walking them.</summary>
     public int Reused { get; private set; }
 
     /// <summary>Whether the folder at <paramref name="path"/> is taken as the prior snapshot held it.</summary>
     public bool IsUnchanged(string path)
     {
+        if (_walked is null)
+        {
+            return false;
+        }
+
         if (_reused.ContainsKey(path))
         {
             return true;
@@ -95,6 +132,27 @@ internal sealed class FolderReuse
         if (_catalogue.Read(c => c.ReadSubtree(_prior.Span, path, TreeChainWriter.DefaultShardBudget)) is not { } subtree)
         {
             _walked.Add(path);
+            return false;
+        }
+
+        _reused[path] = subtree;
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the prior snapshot holds a folder at <paramref name="path"/>,
+    /// walked or not: a folder whose listing did not come keeps that tree,
+    /// which <see cref="Take"/> then gives (ADR-0185 Amendment 6).
+    /// </summary>
+    public bool HeldBefore(string path)
+    {
+        if (_reused.ContainsKey(path))
+        {
+            return true;
+        }
+
+        if (_catalogue.Read(c => c.ReadSubtree(_prior.Span, path, TreeChainWriter.DefaultShardBudget)) is not { } subtree)
+        {
             return false;
         }
 
