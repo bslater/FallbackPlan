@@ -16,7 +16,8 @@ namespace FallbackPlan.Web.DomTests;
 /// (ADR-0193 Amendment 2). A set whose last backup downloaded every one says
 /// nothing. A folder its last backup could not list is said beside them,
 /// how many kept what was backed up before, and on hover the folder whose
-/// listing failed (ADR-0193 Amendment 3).
+/// listing failed (ADR-0193 Amendment 3), and that no other online-only file
+/// or folder was asked for after it (ADR-0185 Amendment 7).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -97,7 +98,8 @@ public sealed class NotFetchedDomTests
             "1 online-only folder could not be listed by the last backup; it keeps what was backed up before");
         await Expect(folder).Not.ToContainTextAsync("not downloaded");
         await Expect(folder).ToHaveAttributeAsync(
-            "title", "drive/shared could not be listed: the provider is offline. " + LeaveHint);
+            "title", "drive/shared could not be listed: the provider is offline. "
+                + "No other online-only file or folder was asked for after it. " + LeaveHint);
 
         var both = page.Locator("details.set[data-set=\"both\"]");
         await Expect(both.Locator("summary")).ToContainTextAsync("2 not downloaded, 3 not listed");

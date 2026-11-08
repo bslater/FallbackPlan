@@ -60,7 +60,16 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// deleted (ADR-0185 Amendment 6, FR-SNP-009). A run counts the folders
 /// whose listing did not come with the files it did not fetch, and how many
 /// of them kept their tree, names whichever failed first, and is behind where
-/// every failure kept what it had (ADR-0193 Amendment 3, FR-SNP-014).
+/// every failure kept what it had (ADR-0193 Amendment 3, FR-SNP-014). Once
+/// a provider has failed in a run, to list a folder or to fetch a file, the
+/// run asks it for neither again: a folder it holds after that is not listed
+/// and keeps its tree, an online-only file is not fetched, and each failure
+/// names what failed first. A folder whose listing failed while the run
+/// counted is not asked again while it captures, and its failure is its
+/// own; one gone by then leaves the run nothing to name; and one whose
+/// listing fails only as the run captures stops it there. In a set of
+/// several folders a folder not asked is kept at its path under its
+/// folder's label (ADR-0185 Amendment 7, FR-SNP-009).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -800,8 +809,8 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
     [TestMethod]
     public async Task ARunThatKeptAFileAndAFolder_IsBehind_AndNamesWhicheverFailedFirst()
     {
-        // The walk meets the folder first, and the file's fetch fails after
-        // it: the record names the first failure, and counts both.
+        // The walk meets the folder first, and does not ask for the file
+        // after it: the record names the folder, and counts both.
         var source = new FakeFileSystemSource();
         source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
         var doc = Online(source, "doc.bin", 2);
@@ -823,6 +832,215 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             new NotFetchedFiles(Files: 1, KeptEarlier: 1, Path: "cloud", Reason: TimedOut, Folders: 1, FoldersKept: 1, Listing: true),
             second.NotFetched);
         Assert.IsTrue(second.Behind);
+    }
+
+    [TestMethod]
+    public async Task AFolderWhoseListingDoesNotCome_StopsTheRunListingTheRest_AndFetchingAny()
+    {
+        // A provider that did not list one folder is asked for nothing more
+        // in the run, as one that did not deliver a file is not: each would
+        // wait out the same time-out (ADR-0185 Amendment 7).
+        var source = new FakeFileSystemSource();
+        source.AddFile("a-cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("b-cloud/b.bin", Deterministic(4_000, 2));
+        var doc = Online(source, "c.bin", 3);
+        var local = source.AddFile("d/local.bin", Deterministic(4_000, 4));
+        source.ProviderFolders.Add("a-cloud");
+        source.ProviderFolders.Add("b-cloud");
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        source.UnlistedFolders["a-cloud"] = TimedOut;
+        Change(doc, 5);
+        Change(local, 6);
+        var fetched = doc.OpenAttempts;
+        source.AskedFolders.Clear();
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        // Asked once, while the run counted: not again as it captured, and
+        // not for the folder after it, nor for the file.
+        CollectionAssert.AreEqual(new[] { "a-cloud" }, source.AskedFolders);
+        Assert.AreEqual(fetched, doc.OpenAttempts, "c.bin was not fetched");
+
+        Assert.AreEqual(
+            $"online-only, and listing it failed: {TimedOut}; the folder as backed up earlier stands in its place",
+            Detail(second, "a-cloud"),
+            "the folder that failed says so, though the capture did not ask for it again");
+        Assert.AreEqual(
+            $"online-only, and not listed, since listing a-cloud failed earlier in this run: {TimedOut}; "
+                + "the folder as backed up earlier stands in its place",
+            Detail(second, "b-cloud"));
+        Assert.AreEqual(
+            catalogue.LookupPath(Snapshot(0xA1), "b-cloud/b.bin")!.ObjectId,
+            catalogue.LookupPath(Snapshot(0xB2), "b-cloud/b.bin")?.ObjectId,
+            "the folder not asked keeps its tree");
+        Assert.StartsWith(
+            $"online-only, and not fetched, since listing a-cloud failed earlier in this run: {TimedOut}; the version backed up earlier",
+            Detail(second, "c.bin"),
+            StringComparison.Ordinal);
+        Assert.HasCount(3, second.Failures);
+
+        // A file on the device is still backed up.
+        Assert.Contains("d/local.bin", second.Files.Select(file => file.RelativePath));
+
+        Assert.AreEqual(
+            new NotFetchedFiles(Files: 1, KeptEarlier: 1, Path: "a-cloud", Reason: TimedOut, Folders: 2, FoldersKept: 2, Listing: true),
+            second.NotFetched);
+        Assert.IsTrue(second.Behind);
+    }
+
+    [TestMethod]
+    public async Task AFolderWhoseListingFailsOnlyAsTheRunCaptures_StopsItListingTheRest()
+    {
+        // The provider answered while the run counted, and did not once it
+        // captured: the capture stops asking from there.
+        var source = new FakeFileSystemSource();
+        source.AddFile("a-cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("b-cloud/b.bin", Deterministic(4_000, 2));
+        source.ProviderFolders.Add("a-cloud");
+        source.ProviderFolders.Add("b-cloud");
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        source.WhenWalked = walks =>
+        {
+            // The second run's capture.
+            if (walks == 3)
+            {
+                source.UnlistedFolders["a-cloud"] = TimedOut;
+            }
+        };
+        source.AskedFolders.Clear();
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        CollectionAssert.AreEqual(new[] { "a-cloud", "b-cloud", "a-cloud" }, source.AskedFolders);
+        Assert.AreEqual(
+            $"online-only, and not listed, since listing a-cloud failed earlier in this run: {TimedOut}; "
+                + "the folder as backed up earlier stands in its place",
+            Detail(second, "b-cloud"));
+        Assert.AreEqual(
+            new NotFetchedFiles(Files: 0, KeptEarlier: 0, Path: "a-cloud", Reason: TimedOut, Folders: 2, FoldersKept: 2, Listing: true),
+            second.NotFetched);
+    }
+
+    [TestMethod]
+    public async Task AFileNotDelivered_StopsTheRunListingTheFoldersItsProviderHolds()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "a.bin", 1);
+        source.AddFile("b-cloud/b.bin", Deterministic(4_000, 2));
+        source.ProviderFolders.Add("b-cloud");
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        source.AskedFolders.Clear();
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        // The run counted before it fetched anything, and asked for the
+        // folder then; once the file's fetch failed, the capture did not ask
+        // for it again.
+        CollectionAssert.AreEqual(new[] { "b-cloud" }, source.AskedFolders);
+        Assert.AreEqual(
+            $"online-only, and not listed, since fetching a.bin failed earlier in this run: {TimedOut}; "
+                + "the folder as backed up earlier stands in its place",
+            Detail(second, "b-cloud"));
+        Assert.AreEqual(
+            catalogue.LookupPath(Snapshot(0xA1), "b-cloud/b.bin")!.ObjectId,
+            catalogue.LookupPath(Snapshot(0xB2), "b-cloud/b.bin")?.ObjectId);
+        Assert.AreEqual(
+            new NotFetchedFiles(Files: 1, KeptEarlier: 1, Path: "a.bin", Reason: TimedOut, Folders: 1, FoldersKept: 1),
+            second.NotFetched);
+        Assert.IsTrue(second.Behind);
+    }
+
+    [TestMethod]
+    public async Task AFolderWhoseListingFailedWhileTheRunCounted_AndGoneWhenItCaptures_LeavesNothingToName()
+    {
+        // The run stops asking from the count on, but names what the
+        // provider failed only beside what it missed.
+        var source = new FakeFileSystemSource();
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("local.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        source.UnlistedFolders["cloud"] = TimedOut;
+        source.WhenWalked = walks =>
+        {
+            // The second run's capture: the folder is gone.
+            if (walks == 3)
+            {
+                source.Remove("cloud/a.bin");
+                source.UnlistedFolders.Remove("cloud");
+            }
+        };
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.IsNull(catalogue.LookupPath(Snapshot(0xB2), "cloud"), "the premise: the capture found the folder gone");
+        Assert.IsEmpty(second.Failures);
+        Assert.IsNull(second.NotFetched);
+        Assert.IsFalse(second.Behind);
+    }
+
+    [TestMethod]
+    public async Task InASetOfSeveralFolders_AFolderNotAsked_IsKeptAtItsPathUnderItsLabel()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("alpha/cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("bravo/cloud/b.bin", Deterministic(4_000, 2));
+        source.ProviderFolders.Add("alpha/cloud");
+        source.ProviderFolders.Add("bravo/cloud");
+        IReadOnlyList<ScanRoot> roots = [new ScanRoot("alpha", "Docs"), new ScanRoot("bravo", "Photos")];
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1) with { Roots = roots }, CancellationToken.None);
+
+        source.UnlistedFolders["alpha/cloud"] = TimedOut;
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001) with { Roots = roots }, CancellationToken.None);
+
+        Assert.AreEqual(
+            catalogue.LookupPath(Snapshot(0xA1), "Photos/cloud/b.bin")!.ObjectId,
+            catalogue.LookupPath(Snapshot(0xB2), "Photos/cloud/b.bin")?.ObjectId);
+        Assert.AreEqual(
+            $"online-only, and not listed, since listing Docs/cloud failed earlier in this run: {TimedOut}; "
+                + "the folder as backed up earlier stands in its place",
+            Detail(second, "Photos/cloud"));
     }
 
     [TestMethod]

@@ -140,6 +140,29 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
     /// </summary>
     public Dictionary<string, string> UnlistedFolders { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// A folder its cloud provider holds whose listing comes, by its path in
+    /// the fake: the walk asks the provider for it before entering it, as it
+    /// does one in <see cref="UnlistedFolders"/> (ADR-0185 Amendment 6).
+    /// </summary>
+    public HashSet<string> ProviderFolders { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Every folder its provider holds whose listing the walk asked for,
+    /// whether it came or not, by its path in the fake, in the order asked
+    /// across every walk of a run.
+    /// </summary>
+    public List<string> AskedFolders { get; } = [];
+
+    /// <summary>
+    /// Called as each walk of the fake starts, with how many walks came
+    /// before it. A run walks twice, once to count and once to capture, so
+    /// a test can change the fake between the two.
+    /// </summary>
+    public Action<int>? WhenWalked { get; set; }
+
+    private int _walks;
+
     public Node AddFile(string relativePath, byte[] content, uint linkCount = 1, ulong? fileId = null)
     {
         var node = new Node
@@ -198,6 +221,8 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         string rootPath, ScanOptions options, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await Task.Yield();
+        var walks = _walks++;
+        WhenWalked?.Invoke(walks);
 
         var root = new ScanEntry
         {
@@ -302,11 +327,24 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
                     continue;
                 }
 
-                if (UnlistedFolders.TryGetValue(childPath, out var why))
+                var unlisted = UnlistedFolders.TryGetValue(childPath, out var why);
+                if (unlisted || ProviderFolders.Contains(childPath))
                 {
-                    yield return new ScanEvent.UnlistedDirectory(
-                        entry, new ScanFailure(relativePath, CaptureFailureReason.IoError, why));
-                    continue;
+                    // Once a provider has failed in the run, the walk asks
+                    // none for a folder's listing (ADR-0185 Amendment 7).
+                    if (options.ProviderFailedEarlier?.Invoke() == true)
+                    {
+                        yield return new ScanEvent.UnaskedDirectory(entry);
+                        continue;
+                    }
+
+                    AskedFolders.Add(childPath);
+                    if (unlisted)
+                    {
+                        yield return new ScanEvent.UnlistedDirectory(
+                            entry, new ScanFailure(relativePath, CaptureFailureReason.IoError, why!));
+                        continue;
+                    }
                 }
 
                 yield return new ScanEvent.EnterDirectory(entry);
