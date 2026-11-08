@@ -340,4 +340,26 @@ internal static class Strings
     /// </summary>
     internal static string FormatTreeWalkPublisher_EarlierVersionStandsUndated(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_EarlierVersionStandsUndated, arg0);
+
+    /// <summary>
+    /// online-only, and listing it failed: {0}
+    /// </summary>
+    private static string TreeWalkPublisher_OnlineOnlyFolderNotListed => Get(nameof(TreeWalkPublisher_OnlineOnlyFolderNotListed));
+
+    /// <summary>
+    /// online-only, and listing it failed: {0}
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_OnlineOnlyFolderNotListed(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_OnlineOnlyFolderNotListed, arg0);
+
+    /// <summary>
+    /// {0}; the folder as backed up earlier stands in its place
+    /// </summary>
+    private static string TreeWalkPublisher_FolderBeforeStands => Get(nameof(TreeWalkPublisher_FolderBeforeStands));
+
+    /// <summary>
+    /// {0}; the folder as backed up earlier stands in its place
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_FolderBeforeStands(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_FolderBeforeStands, arg0);
 }

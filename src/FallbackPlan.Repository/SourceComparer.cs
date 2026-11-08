@@ -151,6 +151,24 @@ public static class SourceComparer
                     failures++;
                     break;
 
+                case ScanEvent.UnlistedDirectory unlisted:
+                    // A folder its provider holds, whose listing did not come,
+                    // keeps the tree the baseline held for it in the backup
+                    // (ADR-0185 Amendment 6): a failure, and nothing in it
+                    // lost from the disk.
+                    failures++;
+                    var below = unlisted.Entry.RelativePath + "/";
+                    var spelled = filesystem.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+                    foreach (var path in byPath.Keys)
+                    {
+                        if (path.StartsWith(below, spelled))
+                        {
+                            consumed.Add(path);
+                        }
+                    }
+
+                    break;
+
                 default:
                     break; // directory brackets carry no per-file judgement
             }

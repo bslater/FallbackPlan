@@ -661,7 +661,7 @@ public sealed partial class PublicationOrchestrator
                 session.Blobs,
                 builder.Blobs)
             {
-                FoldersReused = reuse?.Reused ?? 0,
+                FoldersReused = walker.FoldersReused,
                 NotFetched = walker.NotFetched,
                 LeftOnlineOnly = walker.LeftOnlineOnly,
             };
@@ -798,6 +798,8 @@ public sealed partial class PublicationOrchestrator
         private readonly List<ObjectId> _trees = [];
         private readonly List<(ObjectId TreeId, ulong AccessedAt)> _accessTimes = [];
         private readonly Dictionary<SourceKey, SourceIdentityPackEntry?> _hints = [];
+        private FolderReuse? _treesBefore;
+        private bool _treesBeforeRead;
 
         /// <summary>
         /// The online-only file whose fetch failed, and why: from then on the
@@ -903,21 +905,32 @@ public sealed partial class PublicationOrchestrator
                     break;
 
                 case ScanEvent.UnchangedDirectory unchanged:
-                    // Taken as the prior snapshot held it: its tree, and every
-                    // tree below it, are this snapshot's too (ADR-0186). Its
-                    // folders are recorded again with the walked ones, as a
-                    // forget may let go of them before this snapshot's row
-                    // reaches them (ADR-0151 §4).
-                    var subtree = (reuse ?? throw new InvalidOperationException(
-                        Strings.FormatFrame_UnknownScanEvent(scanEvent.GetType().Name))).Take(unchanged.Entry.RelativePath);
-                    _frames.Peek().Entries.Add(new TreeEntry(unchanged.Entry.NameBytes, subtree.TreeId, EntryKind.DirectoryPlaceholder));
-                    foreach (var (treeId, entries) in subtree.Folders)
+                    TakeAsHeldBefore(
+                        reuse ?? throw new InvalidOperationException(Strings.FormatFrame_UnknownScanEvent(scanEvent.GetType().Name)),
+                        unchanged.Entry);
+                    break;
+
+                case ScanEvent.UnlistedDirectory unlisted:
+                    // A folder its provider holds, whose listing did not come,
+                    // keeps the tree the prior snapshot held for it, as a file
+                    // not fetched keeps its version (ADR-0185 Amendment 6). A
+                    // folder that snapshot does not hold is in this one as it
+                    // was before: empty, with its failure.
+                    var notListed = Strings.FormatTreeWalkPublisher_OnlineOnlyFolderNotListed(unlisted.Detail.Detail);
+                    if (await TreesBeforeAsync(cancellationToken).ConfigureAwait(false) is { } before
+                        && before.HeldBefore(unlisted.Entry.RelativePath))
                     {
-                        _trees.Add(treeId);
-                        _folders.Add((treeId, entries));
+                        TakeAsHeldBefore(before, unlisted.Entry);
+                        _failures.Add(ToCaptureFailure(
+                            unlisted.Detail with { Detail = Strings.FormatTreeWalkPublisher_FolderBeforeStands(notListed) }));
+                    }
+                    else
+                    {
+                        _frames.Push(new Frame(Kept(unlisted.Entry), []));
+                        _failures.Add(ToCaptureFailure(unlisted.Detail with { Detail = notListed }));
+                        await CloseDirectoryAsync(cancellationToken).ConfigureAwait(false);
                     }
 
-                    _accessTimes.AddRange(subtree.AccessTimes);
                     break;
 
                 default:
@@ -1010,6 +1023,51 @@ public sealed partial class PublicationOrchestrator
         /// (ADR-0185 Amendment 1). Every manifest, tree and digest below is
         /// made from what this returns.
         /// </summary>
+        /// <summary>How many folders the run took as the prior snapshot held them, without walking them.</summary>
+        public int FoldersReused => (reuse ?? _treesBefore)?.Reused ?? 0;
+
+        /// <summary>
+        /// Takes a folder the walk did not enter as the prior snapshot held
+        /// it: its tree, and every tree below it, are this snapshot's too
+        /// (ADR-0186). Its folders are recorded again with the walked ones,
+        /// as a forget may let go of them before this snapshot's row reaches
+        /// them (ADR-0151 §4).
+        /// </summary>
+        private void TakeAsHeldBefore(FolderReuse from, ScanEntry entry)
+        {
+            var subtree = from.Take(entry.RelativePath);
+            _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, subtree.TreeId, EntryKind.DirectoryPlaceholder));
+            foreach (var (treeId, entries) in subtree.Folders)
+            {
+                _trees.Add(treeId);
+                _folders.Add((treeId, entries));
+            }
+
+            _accessTimes.AddRange(subtree.AccessTimes);
+        }
+
+        /// <summary>
+        /// The prior snapshot's folders, for one whose listing did not come:
+        /// the run's own where it was told what changed, and otherwise read
+        /// once, at the first such folder (ADR-0185 Amendment 6).
+        /// </summary>
+        private async ValueTask<FolderReuse?> TreesBeforeAsync(CancellationToken cancellationToken)
+        {
+            if (reuse is not null)
+            {
+                return reuse;
+            }
+
+            if (!_treesBeforeRead)
+            {
+                _treesBefore = await FolderReuse.ForWalkOfEverythingAsync(job, catalogue, manifests, cancellationToken)
+                    .ConfigureAwait(false);
+                _treesBeforeRead = true;
+            }
+
+            return _treesBefore;
+        }
+
         private ScanEntry Kept(ScanEntry entry)
         {
             var (metadata, diagnostics) = MetadataRules.KeepFileFlags(
