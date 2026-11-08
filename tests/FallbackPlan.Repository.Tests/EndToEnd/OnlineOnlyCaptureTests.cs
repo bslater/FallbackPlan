@@ -69,7 +69,14 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// own; one gone by then leaves the run nothing to name; and one whose
 /// listing fails only as the run captures stops it there. In a set of
 /// several folders a folder not asked is kept at its path under its
-/// folder's label (ADR-0185 Amendment 7, FR-SNP-009).
+/// folder's label (ADR-0185 Amendment 7, FR-SNP-009). A restore's plan
+/// names a file as the version backed up before only where an earlier
+/// snapshot of the set holds that very version: a file captured afresh,
+/// whose failure was only its stream's, is not named, and nor is a kept file
+/// once every earlier snapshot that held it is forgotten. It names each file
+/// below a folder kept from before, with what the backup said of the folder,
+/// and the run reads them so for its receipt (ADR-0194 Amendment 3,
+/// FR-RST-003).
 /// </summary>
 /// <remarks>
 /// The fake source is what makes the provider's failure assertable on every
@@ -1188,6 +1195,115 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
 
         // Named only where the plan restores it.
         Assert.IsEmpty((await ProbeAsync(catalogue, store, keys, 0xB2, "docs/still.bin")).EarlierVersions);
+    }
+
+    [TestMethod]
+    public async Task ARestoresPlan_NamesEachFileBelowAFolderKeptFromBefore_WithWhatTheBackupSaidOfTheFolder()
+    {
+        // A folder whose listing did not come keeps its tree from the backup
+        // before (ADR-0185 Amendment 6), so every file below it restores as
+        // the version backed up before.
+        var source = new FakeFileSystemSource();
+        source.AddFile("cloud/a.bin", Deterministic(4_000, 1));
+        source.AddFile("cloud/deep/b.bin", Deterministic(4_000, 2));
+        source.AddFile("local.bin", Deterministic(4_000, 3));
+
+        // Beside the folder, and below none of it, though its name begins as
+        // the folder's does.
+        source.AddFile("cloudy.bin", Deterministic(4_000, 4));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.UnlistedFolders["cloud"] = TimedOut;
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        var said = $"its folder cloud: online-only, and listing it failed: {TimedOut}; the folder as backed up earlier stands in its place";
+        var probed = await ProbeAsync(catalogue, store, keys, 0xB2);
+        CollectionAssert.AreEqual(
+            new[] { new RestoreEarlierVersion("cloud/a.bin", said), new RestoreEarlierVersion("cloud/deep/b.bin", said) },
+            probed.EarlierVersions.ToArray());
+
+        // The run reads them for its receipt as the plan did.
+        CollectionAssert.AreEqual(
+            probed.EarlierVersions.ToArray(), (await EarlierAsync(catalogue, store, keys, 0xB2)).Files.ToArray());
+
+        // Named only where the plan restores it.
+        Assert.AreEqual(
+            "cloud/deep/b.bin",
+            Assert.ContainsSingle((await ProbeAsync(catalogue, store, keys, 0xB2, "cloud/deep")).EarlierVersions).Path);
+    }
+
+    [TestMethod]
+    public async Task ARestoresPlan_DoesNotNameAFileCapturedAfresh_WhoseFailureWasOnlyItsStream()
+    {
+        // A stream too large for one segment is a failure at its file's path
+        // (ADR-0026 Decision 5), while the file itself is captured afresh: its
+        // version is no earlier one.
+        var source = new FakeFileSystemSource();
+        var doc = source.AddFile("docs/doc.bin", Deterministic(4_000, 1));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "docs/doc.bin",
+            Content = Deterministic(5_000, 2),
+            Identity = doc.Identity,
+            Metadata = doc.Metadata with { ModifiedAt = doc.Metadata.ModifiedAt + 60_000 },
+            AlternateStreams = new() { ["big"] = Deterministic(40 * 1024 * 1024, 3) },
+        });
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+
+        Assert.AreEqual(CaptureFailureReason.TooLarge, ReasonFor(second, "docs/doc.bin"), "the premise: the stream failed");
+        Assert.AreNotEqual(
+            catalogue.LookupPath(Snapshot(0xA1), "docs/doc.bin")!.ObjectId,
+            catalogue.LookupPath(Snapshot(0xB2), "docs/doc.bin")?.ObjectId,
+            "the premise: the file was captured afresh");
+        Assert.IsEmpty((await ProbeAsync(catalogue, store, keys, 0xB2)).EarlierVersions);
+        Assert.IsEmpty((await EarlierAsync(catalogue, store, keys, 0xB2)).Files);
+    }
+
+    [TestMethod]
+    public async Task ARestoresPlan_FindsTheVersionInAnySnapshotBefore_AndNamesItNoLongerOnceEveryOneThatHeldItIsForgotten()
+    {
+        var source = new FakeFileSystemSource();
+        var doc = Online(source, "docs/doc.bin", 1);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+        Change(doc, 5);
+        doc.OpenFailure = new IOException(TimedOut);
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(After(source, 0xC3, 0xB2, now: 1_722_800_000_001), CancellationToken.None);
+
+        // The snapshot just before is forgotten; the one before that holds
+        // the same version still.
+        catalogue.ForgetSnapshot(Snapshot(0xB2));
+        Assert.AreEqual("docs/doc.bin", Assert.ContainsSingle((await ProbeAsync(catalogue, store, keys, 0xC3)).EarlierVersions).Path);
+
+        // With every one that held it forgotten, nothing says the version is
+        // an earlier one, and the plan does not guess.
+        catalogue.ForgetSnapshot(Snapshot(0xA1));
+        Assert.IsEmpty((await ProbeAsync(catalogue, store, keys, 0xC3)).EarlierVersions);
     }
 
     [TestMethod]
