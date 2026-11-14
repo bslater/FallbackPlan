@@ -660,24 +660,127 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task DirectShip_BesideALocalPath_TheRunItselfWritesNothingToTheStore()
+    public async Task DirectShip_BesideALocalPath_TheRunSendsItsBlobsOnToTheStore_AsItGoes()
     {
-        // The run alone, with no pass after it: it lands on the local path and
-        // leaves the store behind for the sync, so a run that can land on a
-        // disk never waits on the network.
+        // The run alone, with no pass after it. It lands on the local path
+        // and sends each blob on to the store behind it: the local path's
+        // snapshot waits until a blob is at the store, which only an upload
+        // made during the run can have put there. The snapshot and the index
+        // are the sync's to send, so the store never holds a backup whose
+        // blobs it lacks, and the store stays behind until that sync.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        WriteFiles();
+        var aBlobWentUpFirst = false;
+
+        await using var runtime = await StartAsync(replicaStoreDecorator: (name, store) => name == "vault"
+            ? new DeferringObjectStore(store, IsSnapshotKey, async () =>
+                aBlobWentUpFirst = await EventuallyAsync(() => Store.KeysIn(Namespace).Any(IsDataBlob)))
+            : store);
+        await StoreCredentialAsync(runtime);
+        var outcome = await RunAloneAsync(runtime);
+
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.IsTrue(aBlobWentUpFirst, "a data blob reached the store while the run went on");
+        var others = Store.KeysIn(Namespace).Where(key => !key.Contains("/blobs/", StringComparison.Ordinal)).ToList();
+        Assert.IsEmpty(others, $"only blobs go up with the run: {string.Join(", ", others)}");
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
+        var cloud = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
+        Assert.Contains("went up as the run went", cloud.LastError!, StringComparison.Ordinal);
+        Assert.IsEmpty(MetadataBlobsHere(), "beside a local path the trees are read there, and none is kept here");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_AStoreThatTakesNoUpload_NeverHoldsTheRun()
+    {
+        // The store holds every upload unanswered, and the local path's
+        // snapshot waits until one is being held, so the run reaches its end
+        // with an upload in flight. It ends all the same, the store behind;
+        // the sync after it brings the store current once it answers.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        WriteFiles();
+        Store.HoldPuts();
+
+        await using var runtime = await StartAsync(replicaStoreDecorator: (name, store) => name == "vault"
+            ? new DeferringObjectStore(store, IsSnapshotKey, () => WithinAsync(Store.APutIsHeld))
+            : store);
+        await StoreCredentialAsync(runtime);
+        var outcome = await RunAloneAsync(runtime, TimeSpan.FromMinutes(1));
+
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.IsTrue(Store.APutIsHeld.IsCompleted, "the run sent the store a blob as it went");
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
+        Assert.AreEqual(DestinationSyncState.Behind, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
+
+        Store.ReleasePuts();
+        await SyncAsync(runtime);
+
+        var cloud = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("in-sync", cloud.State, cloud.Detail);
+        Assert.IsTrue(cloud.HoldsNewest, "the store holds the newest backup whole");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_AStoreThatRefusesAnUpload_IsSentNothingMore_AndTheRunGoesOn()
+    {
+        // The store refuses the first blob the run sends it, and the local
+        // path's snapshot waits until it has. The run sends the store nothing
+        // more, ends as it would have, and leaves the store behind saying
+        // why; once the store takes uploads again the sync brings it current.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        WriteFiles();
+        Store.FailFrom(servedFirst: 0, 403, RefusalCode, method: "PUT");
+
+        await using var runtime = await StartAsync(replicaStoreDecorator: (name, store) => name == "vault"
+            ? new DeferringObjectStore(store, IsSnapshotKey, () => EventuallyAsync(() =>
+                Store.Requests.Any(request => request.Method == "PUT" && request.Status == 403)))
+            : store);
+        await StoreCredentialAsync(runtime);
+        var outcome = await RunAloneAsync(runtime);
+
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
+        var behind = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, behind.State, behind.LastError);
+        Assert.Contains(RefusalCode, behind.LastError!, StringComparison.Ordinal);
+        var sent = Store.Requests.Where(request => request.Method == "PUT")
+            .Select(request => request.Target).Distinct(StringComparer.Ordinal).ToList();
+        Assert.ContainsSingle(sent, $"the run sent nothing more once the store refused a blob: {string.Join(", ", sent)}");
+        Assert.IsEmpty(Store.KeysIn(Namespace), "the store took nothing");
+
+        Store.Recover();
+        await SyncAsync(runtime);
+
+        var cloud = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("in-sync", cloud.State, cloud.Detail);
+        Assert.IsTrue(cloud.HoldsNewest, "the store holds the newest backup whole");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_AStoreWhoseCredentialIsDamaged_DoesNotFailTheRun()
+    {
+        // The run opens the store to send it blobs, and a credential that no
+        // longer reads is the store's fault, never the run's: the sync after
+        // the run is where it is met and said. Before the run sent the store
+        // anything it never opened it, and a run beside a local path must not
+        // have gained a way to fail that it did not have.
         Directory.CreateDirectory(Vault);
         WriteConfiguration(directShip: true);
         WriteFiles();
 
         await using var runtime = await StartAsync();
         await StoreCredentialAsync(runtime);
-        var set = runtime.Configuration.BackupSets.Single();
-        var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+        File.WriteAllText(
+            Path.Combine(Harness.StateDirectory, "destination-credentials", $"{CloudId}.json"), "{ not a credential");
+        var outcome = await RunAloneAsync(runtime);
 
         Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
-        Assert.IsFalse(Store.KeysIn(Namespace).Any(IsDataBlob), "the run wrote no data to the store");
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
         Assert.AreEqual(DestinationSyncState.Behind, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
-        Assert.IsEmpty(MetadataBlobsHere(), "beside a local path the trees are read there, and none is kept here");
+        Assert.IsEmpty(Store.Requests, "nothing is sent under a credential that does not read");
     }
 
     [TestMethod]
@@ -1947,6 +2050,59 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
     }
 
+    /// <summary>Runs the set's backup at a person's asking, with no pass after it, and returns how it ended.</summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="within">How long the run may take, when not the test's own deadline.</param>
+    private async Task<BackupOutcome> RunAloneAsync(ServiceRuntime runtime, TimeSpan? within = null)
+    {
+        var set = runtime.Configuration.BackupSets.Single();
+        var run = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true);
+        return within is { } bound ? await run.WaitAsync(bound, Timeout) : await run.WaitAsync(Timeout);
+    }
+
+    /// <summary>
+    /// Waits, as long as a run could reasonably take, for a condition another
+    /// actor brings about, and says whether it came about: false is the
+    /// answer a test then fails on, never a hang.
+    /// </summary>
+    /// <param name="condition">The condition.</param>
+    private async Task<bool> EventuallyAsync(Func<bool> condition)
+    {
+        var giveUp = DateTimeOffset.UtcNow + Patience;
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow > giveUp)
+            {
+                return false;
+            }
+
+            await Task.Delay(20, Timeout);
+        }
+
+        return true;
+    }
+
+    /// <summary>As <see cref="EventuallyAsync"/>, for a task another actor completes.</summary>
+    /// <param name="task">The task.</param>
+    private async Task WithinAsync(Task task)
+    {
+        try
+        {
+            await task.WaitAsync(Patience, Timeout);
+        }
+        catch (TimeoutException)
+        {
+            // The test asks the task itself whether it completed.
+        }
+    }
+
+    /// <summary>How long a test waits on another actor before it goes on without it.</summary>
+    private static TimeSpan Patience => TimeSpan.FromSeconds(20);
+
+    /// <summary>Whether a key a replica's store is asked to write is a snapshot's.</summary>
+    /// <param name="key">The key, from the replica's root.</param>
+    private static bool IsSnapshotKey(string key) => key.StartsWith("snapshots/", StringComparison.Ordinal);
+
     /// <summary>Whether an object key, or a request target naming one, is a data blob's.</summary>
     /// <param name="key">The key or target.</param>
     private static bool IsDataBlob(string key) => key.Contains("blobs/data/", StringComparison.Ordinal);
@@ -2123,7 +2279,9 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
 
     /// <summary>Starts the service over the harness.</summary>
     /// <param name="checkpointThreshold">How many deltas make a checkpoint due, when not the default.</param>
-    protected async Task<ServiceRuntime> StartAsync(int? checkpointThreshold = null)
+    /// <param name="replicaStoreDecorator">Wraps a local path's replica store, by the destination's name, when given.</param>
+    protected async Task<ServiceRuntime> StartAsync(
+        int? checkpointThreshold = null, Func<string, IObjectStore, IObjectStore>? replicaStoreDecorator = null)
     {
         await Harness.SetupAsync();
 
@@ -2134,6 +2292,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
                 StateDirectory = Harness.StateDirectory,
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 CheckpointThresholdOverride = checkpointThreshold,
+                ReplicaStoreDecorator = replicaStoreDecorator,
             },
             Timeout);
     }
