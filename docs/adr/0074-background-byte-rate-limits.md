@@ -141,6 +141,8 @@ the waits it asked for, with no process-wide state.
 | A scheduled sweep segment | The replica store it reads. |
 | A drill | The restore source it reads through: a local replica or a peer's retrieval session. |
 
+> **2026-11 ([ADR-0196 Amendment 6](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path)).** A direct-ship run beside a local path also sends each blob it lands there on to the set's stores as it goes. Those uploads go through each store's limit, as its sync's do; a person's run is not paced. Held by a test since [Amendment 7](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-7-2026-11--the-console-says-a-store-beside-a-local-path-is-sent-data-as-each-backup-runs).
+
 Pacing the peer push at its source store would have been simpler. It would
 also have charged local-only reads, such as the hash that checks a resumable
 prefix. The wire is what the limit is about.
@@ -263,3 +265,4 @@ as container measurement.
 |------|--------|------|
 | 2026-09 | Accepted | The disk and network limits built together, the second and third of NFR-PERF-013's four; red tests first, then the limiter, the seams and contract 1.43, with each seam's removal confirmed to turn its test red. CPU remains unbuilt and named |
 | 2026-09 | Accepted (related) | The control §7 left owed is built, as ADR-0037 Amendment 1: contract 1.44 sets the read limit and a destination's transfer limit through the service, the CLI and the console |
+| 2026-11 | Accepted (related) | [ADR-0196 Amendment 6](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path): a direct-ship run's uploads to a store beside a local path, made as it goes, are paced at the store's limit; held by a test since [Amendment 7](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-7-2026-11--the-console-says-a-store-beside-a-local-path-is-sent-data-as-each-backup-runs) |
