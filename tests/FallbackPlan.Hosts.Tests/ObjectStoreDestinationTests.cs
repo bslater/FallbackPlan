@@ -24,8 +24,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// (FR-DEST-021, ADR-0196). Beside a local path the run sends its blobs on to
 /// the store as it goes and nothing else, never waiting on it: a store that
 /// takes no upload does not hold the run, one that refuses an upload is sent
-/// nothing more, one whose credential no longer reads does not fail it, and
-/// the store is behind until the sync after the run brings
+/// nothing more, one whose credential no longer reads does not fail it, a
+/// scheduled run's uploads go through the store's transfer limit and a
+/// person's do not (NFR-PERF-013), and the store is behind until the sync
+/// after the run brings
 /// it current (FR-DEST-021, ADR-0196 Amendment 6); a restore and a drill read from it, and the
 /// schedule drills it only on a cadence somebody stated (FR-DRL-002); the
 /// deep sweep reads it back whole on a cadence somebody stated, or when a
@@ -762,6 +764,42 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         var cloud = await RowAsync(runtime, "cloud");
         Assert.AreEqual("in-sync", cloud.State, cloud.Detail);
         Assert.IsTrue(cloud.HoldsNewest, "the store holds the newest backup whole");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_ABackgroundRunsUploadsToTheStore_GoThroughItsTransferLimit_AndAPersonsDoNot()
+    {
+        // What a scheduled run sends the store as it goes is that job's
+        // traffic to the store, so it goes through the store's one limiter,
+        // as the sync's would (NFR-PERF-013); a person's run is never paced.
+        // The limit is generous, so nothing waits on the clock: what the
+        // limiter counts is what went through it. The local path's snapshot
+        // waits for an upload to land, so each run is seen to send.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true, storeTransferLimit: "64 MiB/s");
+        WriteFiles();
+        var dataBlobsBefore = 0;
+
+        await using var runtime = await StartAsync(replicaStoreDecorator: (name, store) => name == "vault"
+            ? new DeferringObjectStore(store, IsSnapshotKey, () => EventuallyAsync(() =>
+                Store.KeysIn(Namespace).Count(IsDataBlob) > Volatile.Read(ref dataBlobsBefore)))
+            : store);
+        await StoreCredentialAsync(runtime);
+        var limiter = runtime.Pacing.ForDestination(runtime.Configuration.FindDestination("cloud")!);
+        Assert.IsNotNull(limiter, "the premise: the store has a transfer limit");
+
+        var scheduled = await RunAloneAsync(runtime, userInitiated: false);
+        Assert.AreEqual("ran", scheduled.Outcome, scheduled.Detail);
+        Assert.IsGreaterThan(0, Store.KeysIn(Namespace).Count(IsDataBlob), "the premise: the scheduled run sent the store a blob");
+        var paced = limiter.BytesPaced;
+        Assert.IsGreaterThan(0L, paced, "a scheduled run's uploads to the store went through its limit");
+
+        Volatile.Write(ref dataBlobsBefore, Store.KeysIn(Namespace).Count(IsDataBlob));
+        Harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        var persons = await RunAloneAsync(runtime);
+        Assert.AreEqual("ran", persons.Outcome, persons.Detail);
+        Assert.IsGreaterThan(dataBlobsBefore, Store.KeysIn(Namespace).Count(IsDataBlob), "the premise: the person's run sent the store a blob");
+        Assert.AreEqual(paced, limiter.BytesPaced, "a person's run is never paced");
     }
 
     [TestMethod]
@@ -2066,10 +2104,11 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <summary>Runs the set's backup at a person's asking, with no pass after it, and returns how it ended.</summary>
     /// <param name="runtime">The service.</param>
     /// <param name="within">How long the run may take, when not the test's own deadline.</param>
-    private async Task<BackupOutcome> RunAloneAsync(ServiceRuntime runtime, TimeSpan? within = null)
+    /// <param name="userInitiated">Whether a person asked for the run, as against the schedule.</param>
+    private async Task<BackupOutcome> RunAloneAsync(ServiceRuntime runtime, TimeSpan? within = null, bool userInitiated = true)
     {
         var set = runtime.Configuration.BackupSets.Single();
-        var run = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true);
+        var run = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated);
         return within is { } bound ? await run.WaitAsync(bound, Timeout) : await run.WaitAsync(Timeout);
     }
 
@@ -2241,6 +2280,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="deepVerifyIntervalDays">The store's sweep cadence, if one is stated.</param>
     /// <param name="retention">The retention policy the set keeps at the store, if any.</param>
     /// <param name="setRetention">The set's own retention policy, if any.</param>
+    /// <param name="storeTransferLimit">The store's transfer limit, if one is stated.</param>
     protected void WriteConfiguration(
         bool directShip,
         string? endpoint = null,
@@ -2250,11 +2290,13 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         int? deepVerifyIntervalDays = null,
         RetentionConfiguration? retention = null,
         bool storeOnly = false,
-        RetentionConfiguration? setRetention = null)
+        RetentionConfiguration? setRetention = null,
+        string? storeTransferLimit = null)
     {
         List<DestinationConfiguration> destinations =
         [
-            DeclareStore(endpoint ?? EndpointAt(Store.Origin), drillIntervalDays, deepVerifyIntervalDays),
+            DeclareStore(endpoint ?? EndpointAt(Store.Origin), drillIntervalDays, deepVerifyIntervalDays)
+                with { TransferLimit = storeTransferLimit },
         ];
         List<SetDestinationReference> references =
             referenced ? [new SetDestinationReference { Ref = "cloud", Retention = retention }] : [];

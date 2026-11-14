@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-DEST-021 (new: a direct-ship set whose destinations include no local path and no peer writes its backup through its object stores as the run goes, keeps no data on the machine, restores from them, and a run that cannot reach them fails naming them); FR-DEST-015 (amended: the refusal of a capture with nowhere to write names each destination it tried and why); FR-DEST-021 (amended by [Amendment 1](#amendment-1-2026-11--a-new-sets-shape-follows-its-destinations): a new set that names no shape is born direct-ship where every destination it names is a store, and the console's new set follows its destinations as the service does); FR-DR-009 (amended by [Amendment 2](#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it): a set adopted from a store is adopted direct-ship, with only the archive's metadata copied to the machine); FR-DEST-021 (amended by [Amendment 3](#amendment-3-2026-11--a-store-only-set-keeps-its-folder-trees-on-the-machine): a set whose stores are all it has keeps a copy of each metadata blob it ships on the machine, so a backup reads no folder tree from the store); FR-DEST-021 (amended by [Amendment 4](#amendment-4-2026-11--a-staging-set-of-stores-alone-is-told-it-could-ship-straight): a staging set whose destinations are all stores is named in a notice saying it could ship straight to them, and once it does it keeps the staging archive's folder trees); FR-DEST-021 (amended by [Amendment 5](#amendment-5-2026-11--a-tree-read-from-the-store-is-kept-once-it-verifies): a tree such a set has no copy of is kept the first time it is read from a store, once it verifies); FR-DEST-021 (amended by [Amendment 6](#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path): beside a local path, a direct-ship run sends each blob it lands there on to the set's stores as it goes, never waiting on them, and leaves the snapshot and the index to the sync after the run)
+**Requirements:** FR-DEST-021 (new: a direct-ship set whose destinations include no local path and no peer writes its backup through its object stores as the run goes, keeps no data on the machine, restores from them, and a run that cannot reach them fails naming them); FR-DEST-015 (amended: the refusal of a capture with nowhere to write names each destination it tried and why); FR-DEST-021 (amended by [Amendment 1](#amendment-1-2026-11--a-new-sets-shape-follows-its-destinations): a new set that names no shape is born direct-ship where every destination it names is a store, and the console's new set follows its destinations as the service does); FR-DR-009 (amended by [Amendment 2](#amendment-2-2026-11--a-set-adopted-from-a-store-ships-straight-to-it): a set adopted from a store is adopted direct-ship, with only the archive's metadata copied to the machine); FR-DEST-021 (amended by [Amendment 3](#amendment-3-2026-11--a-store-only-set-keeps-its-folder-trees-on-the-machine): a set whose stores are all it has keeps a copy of each metadata blob it ships on the machine, so a backup reads no folder tree from the store); FR-DEST-021 (amended by [Amendment 4](#amendment-4-2026-11--a-staging-set-of-stores-alone-is-told-it-could-ship-straight): a staging set whose destinations are all stores is named in a notice saying it could ship straight to them, and once it does it keeps the staging archive's folder trees); FR-DEST-021 (amended by [Amendment 5](#amendment-5-2026-11--a-tree-read-from-the-store-is-kept-once-it-verifies): a tree such a set has no copy of is kept the first time it is read from a store, once it verifies); FR-DEST-021 (amended by [Amendment 6](#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path): beside a local path, a direct-ship run sends each blob it lands there on to the set's stores as it goes, never waiting on them, and leaves the snapshot and the index to the sync after the run); FR-DEST-021 (amended by [Amendment 7](#amendment-7-2026-11--the-console-says-a-store-beside-a-local-path-is-sent-data-as-each-backup-runs): the console's storage shape note says a store beside a local path is sent each backup's data as it runs, and one beside a peer alone is filled by the sync after each run)
 **Related:** [ADR-0046](0046-direct-to-destination-publication.md) (direct-to-destination publication: the ship sink, the metadata store, and the capture with nowhere to ship), [ADR-0058](0058-peer-write-adapter.md) §8 (why a peer-only set still stages by default), [ADR-0091](0091-an-s3-compatible-destination.md) decision 5 and [ADR-0093](0093-an-azure-blob-destination.md) (a run never writes through a store), [ADR-0012](0012-storage-provider-contract.md) Amendment 5 (a put lands whole or not at all), [ADR-0061](0061-adopt-a-destinations-archives.md) §3 (adoption, which makes the set direct-ship)
 
 **Built:**
@@ -13,7 +13,7 @@
 - The write-behind: for each store beside a local path, `Agent/DestinationShipSink` starts an `Agent/StoreWriteBehind` that sends each blob the run lands on a local path on to the store, read back from there, and ends it with the run (Amendment 6).
 - The set check: `Agent/ServiceCommandHandler` accepts a direct-ship set that names only stores, and gives a new set that names no shape the one its destinations call for (Amendment 1).
 - Adoption: `Agent/ServiceCommandHandler.Adoption.cs` adopts a set from a store as direct-ship, copying only the archive's metadata to the machine (Amendment 2).
-- The console: `Web/wwwroot/app.js` gives a new set the shape its destinations call for until the person sets it, and its note says a set of stores alone is written through as it runs (Amendment 1).
+- The console: `Web/wwwroot/app.js` gives a new set the shape its destinations call for until the person sets it, and its note says a set of stores alone is written through as it runs (Amendment 1), and that a store beside a local path is sent each backup's data as it runs while one beside a peer alone is filled by the sync after it (Amendment 7).
 - The tests:
   - `Hosts.Tests/ObjectStoreDestinationTests`, run for S3 and for Azure alike, with the store the set's only destination:
     - a backup ships the data to the store and keeps no data blob on the machine;
@@ -24,12 +24,12 @@
     - a retention trim deletes the trees it drops here as at the store (Amendment 3);
     - a metadata blob put through the set's archive outside a run, as compaction puts what it packs, is kept here too (Amendment 3);
     - a store that does not answer fails the run, naming it.
-    - A set with a local path beside the store: the run sends its blobs on to the store as it goes, and nothing else, and leaves it behind for the sync that follows; a store that holds every upload never holds the run; a store that refuses an upload is sent nothing more, and the run goes on; a store whose stored credential no longer reads is sent nothing and does not fail the run (Amendment 6).
+    - A set with a local path beside the store: the run sends its blobs on to the store as it goes, and nothing else, and leaves it behind for the sync that follows; a store that holds every upload never holds the run; a store that refuses an upload is sent nothing more, and the run goes on; a store whose stored credential no longer reads is sent nothing and does not fail the run; a scheduled run's uploads go through the store's transfer limit, and a person's do not (Amendment 6, held since Amendment 7).
     - A tree with no copy here is read from the store once and kept, and the backup after reads none; a damaged tree read from the store is not kept, nor a sound tree at the store under another tree's key (Amendment 5).
     - A staging set with the store its only destination is named in a notice, and one beside a local path is not; once such a set is made direct-ship, the backup after reads no tree from the store, and the notice goes (Amendment 4).
   - `Hosts.Tests/DirectShipTests` — a direct-ship set naming only a bucket, or only a container, is accepted; one naming only a reserved kind is still refused. A new set naming only stores is born direct-ship, and one naming a store and a peer is still born staging (Amendment 1).
   - `Hosts.Tests/ObjectStoreAdoptionTests`, run for S3 and for Azure alike — a set adopted from a store is direct-ship, and the preview and the answer say it ships straight to the store; only the archive's metadata is copied here, with no staging archive and no data blob; the next backup writes through the store and keeps no data here; an older snapshot restores from the store (Amendment 2). The archive's folder trees are copied here too, and a backup of the adopted set reads none from the store (Amendment 3).
-  - `Web.DomTests/NewSetWizardDomTests` — a new set naming only a local path or only a store is sent direct-ship, and one naming only a peer staging; the Other settings step shows the shape the destinations give and says a set of stores alone is written through (Amendment 1).
+  - `Web.DomTests/NewSetWizardDomTests` — a new set naming only a local path or only a store is sent direct-ship, and one naming only a peer staging; the Other settings step shows the shape the destinations give and says a set of stores alone is written through (Amendment 1), and says a store beside a local path is sent each backup's data as it runs and one beside a peer alone is filled by the sync after it (Amendment 7).
 
 ---
 
@@ -112,6 +112,8 @@ The console did not follow the service's default at all. Its new-set wizard sent
 **The console gives a new set the same shape** until the person sets it in the set's Other settings. The summary, the wizard's account of what Create leaves, the checkbox and the upsert all read that one shape.
 
 **The note says what the shapes do:** a local path or a peer is written as the backup runs; a store beside one is filled by the sync after each run; a set whose only destinations are stores writes through them as each backup runs, each write a request.
+
+> **Amended 2026-11 ([Amendment 7](#amendment-7-2026-11--the-console-says-a-store-beside-a-local-path-is-sent-data-as-each-backup-runs)).** Beside a local path, the note says, a store is sent each backup's data as it runs, without the backup waiting on it, and the sync after each run sends the rest; beside a peer alone it is filled by the sync after each run.
 
 ### Consequences
 
@@ -279,7 +281,33 @@ The owner asked for the store to be fed while the run goes on, with the rule tha
 
 - **Send the snapshot or the index during the run.** They stay the sync's, for the reason in decision 2.
 - **Make the store current at the run's end.** It is behind until the sync, as before. The console's note that a store beside a local path is filled by the sync after each run still holds.
+
+  > **2026-11: the note now says more ([Amendment 7](#amendment-7-2026-11--the-console-says-a-store-beside-a-local-path-is-sent-data-as-each-backup-runs)).** It says a store beside a local path is sent each backup's data as it runs, and the sync after each run sends the rest.
 - **Send blobs to a store beside a peer alone.**
+
+## Amendment 7 (2026-11) — the console says a store beside a local path is sent data as each backup runs
+
+**Requirements:** FR-DEST-021 (amended: the console's storage shape note says a store beside a local path is sent each backup's data as it runs, without the backup waiting on it, and one beside a peer alone is filled by the sync after each run)
+
+### Context
+
+Amendment 1 gave the console a note saying what each shape does, and it said a store beside a local path or a peer is filled by the sync after each run. Since [Amendment 6](#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path) that holds only beside a peer alone. Amendment 6 left the note as it was, since a store is still behind until that sync, but a person choosing a shape is not told that the run sends the store anything.
+
+### Decision
+
+**The note says each case.** Beside a local path, a store is sent each backup's data as it runs, without the backup waiting on it, and the sync after each run sends the rest. Beside a peer alone, a store is filled by the sync after each run, from what the run shipped. The sentence on a set whose only destinations are stores is unchanged.
+
+**The store's row needs nothing new.** The destination card already shows a behind row's detail, and since Amendment 6 that detail says how many of the run's blobs went up as it went, or why the sending stopped.
+
+**Amendment 6's pacing is held by a test.** Its decision 5 paces a background run's uploads at the store's transfer limit, and nothing tested it. Now a test does: with a limit on the store, a scheduled run's uploads go through the store's limiter, and a person's run adds nothing to it (NFR-PERF-013).
+
+### Consequences
+
+- **A person choosing a shape reads what a store is sent during a backup,** and when it is current.
+
+### What this does not do
+
+- **Say in the note how far behind a store is.** That is the destination card's, from the row's detail.
 
 ## Status history
 
@@ -292,3 +320,4 @@ The owner asked for the store to be fed while the run goes on, with the rule tha
 | 2026-11 | Amended | [Amendment 4](#amendment-4-2026-11--a-staging-set-of-stores-alone-is-told-it-could-ship-straight): a notice names each staging set whose destinations are all stores, says it could ship straight to them and where to change that, and is resolved once the set ships straight or names a local path or a peer; a set made direct-ship from staging copies its staging archive's folder trees with its metadata. ADR-0046 amended (related). `Agent/StagingCouldShipWatch`; `Agent/Scheduler`; `Agent/ServiceRuntime`; `Hosts.Tests/ObjectStoreDestinationTests` |
 | 2026-11 | Amended | [Amendment 5](#amendment-5-2026-11--a-tree-read-from-the-store-is-kept-once-it-verifies): a tree a set that keeps its trees has no copy of is read whole from the store once, verified by the sweep's own check in a scratch store, and kept only if it verifies; one that does not is not kept, and the read is answered from the store. `Agent/DestinationShipSink`; `Agent/ServiceRuntime`; `Repository/VerifyEngine`; `Hosts.Tests/ObjectStoreDestinationTests` |
 | 2026-11 | Amended | [Amendment 6](#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path): beside a local path, a direct-ship run sends each blob it lands there on to the set's stores as it goes, one at a time and in order, read back from the local path, never waiting on them; the snapshot and the index are left to the sync after the run; the first failure ends it and never the run; the store is behind until that sync, saying what went up or why it stopped. ADR-0091 decision 5 and ADR-0093 decision 5 amended (related). `Agent/StoreWriteBehind`; `Agent/DestinationShipSink`; `Hosts.Tests/ObjectStoreDestinationTests` |
+| 2026-11 | Amended | [Amendment 7](#amendment-7-2026-11--the-console-says-a-store-beside-a-local-path-is-sent-data-as-each-backup-runs): the console's storage shape note says a store beside a local path is sent each backup's data as it runs, without the backup waiting on it, and the sync after each run sends the rest; beside a peer alone, it is filled by the sync after each run. A test holds Amendment 6's pacing: a scheduled run's uploads go through the store's transfer limit and a person's do not. ADR-0074 §5 amended (related). `Web/wwwroot/app.js`; `Web.DomTests/NewSetWizardDomTests`; `Hosts.Tests/ObjectStoreDestinationTests` |
