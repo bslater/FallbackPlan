@@ -18,10 +18,14 @@ namespace FallbackPlan.Hosts.Tests;
 /// local path's is, but with part of the sample drawn at random because a
 /// provider is on the far side (FR-VER-001); a direct-ship set's run leaves
 /// it to the sync that follows, unless the store is all the set has: then the
-/// run ships there as it goes (and beside a local path the run itself writes
-/// nothing there), keeps no data on this machine, puts only what
+/// run ships there as it goes, keeps no data on this machine, puts only what
 /// is new, restores from it, and fails saying where when it does not answer
-/// (FR-DEST-021, ADR-0196); a restore and a drill read from it, and the
+/// (FR-DEST-021, ADR-0196). Beside a local path the run sends its blobs on to
+/// the store as it goes and nothing else, never waiting on it: a store that
+/// takes no upload does not hold the run, one that refuses an upload is sent
+/// nothing more, one whose credential no longer reads does not fail it, and
+/// the store is behind until the sync after the run brings
+/// it current (FR-DEST-021, ADR-0196 Amendment 6); a restore and a drill read from it, and the
 /// schedule drills it only on a cadence somebody stated (FR-DRL-002); the
 /// deep sweep reads it back whole on a cadence somebody stated, or when a
 /// person asks, and replaces what the store altered from a sound copy
