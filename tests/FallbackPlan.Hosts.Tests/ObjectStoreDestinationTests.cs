@@ -3,6 +3,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
+using FallbackPlan.Filesystem;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.TestSupport;
 
@@ -906,10 +907,18 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         // replica, has none of the trees it built on here. Each one a backup
         // reads from the store is kept once it verifies, so the backup after
         // reads none (ADR-0196 Amendment 5).
+        //
+        // A backup reads the trees it builds on where it takes the folders
+        // its change journal did not name as its last snapshot held them; one
+        // that walks in full reads none. The journal here always answers, as
+        // one that can say what changed does: a real one on a volume where
+        // other tests make and delete folders may doubt, and its backup walk
+        // in full (ADR-0187 Amendment 2), which leaves this test nothing to
+        // keep.
         WriteConfiguration(directShip: true, storeOnly: true);
         WriteFiles();
 
-        await using var runtime = await StartAsync();
+        await using var runtime = await StartAsync(changeJournal: new NamingJournal("docs"));
         await StoreCredentialAsync(runtime);
         var start = DateTimeOffset.Now;
         await BackUpAsync(runtime, start);
@@ -2284,20 +2293,39 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <summary>Starts the service over the harness.</summary>
     /// <param name="checkpointThreshold">How many deltas make a checkpoint due, when not the default.</param>
     /// <param name="replicaStoreDecorator">Wraps a local path's replica store, by the destination's name, when given.</param>
+    /// <param name="changeJournal">The change journal backups are told what changed by, when not the platform's own.</param>
     protected async Task<ServiceRuntime> StartAsync(
-        int? checkpointThreshold = null, Func<string, IObjectStore, IObjectStore>? replicaStoreDecorator = null)
+        int? checkpointThreshold = null,
+        Func<string, IObjectStore, IObjectStore>? replicaStoreDecorator = null,
+        IChangeJournal? changeJournal = null)
     {
         await Harness.SetupAsync();
 
+        var options = new ServiceOptions
+        {
+            ArchivesRoot = Harness.ArchivesRoot,
+            StateDirectory = Harness.StateDirectory,
+            VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+            CheckpointThresholdOverride = checkpointThreshold,
+            ReplicaStoreDecorator = replicaStoreDecorator,
+        };
+
         return await ServiceRuntime.StartAsync(
-            new ServiceOptions
-            {
-                ArchivesRoot = Harness.ArchivesRoot,
-                StateDirectory = Harness.StateDirectory,
-                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
-                CheckpointThresholdOverride = checkpointThreshold,
-                ReplicaStoreDecorator = replicaStoreDecorator,
-            },
-            Timeout);
+            changeJournal is null ? options : options with { ChangeJournal = changeJournal }, Timeout);
+    }
+
+    /// <summary>
+    /// A change journal that always answers, naming one folder below each
+    /// root as changed since any place it gave.
+    /// </summary>
+    /// <param name="folder">The folder named, below each root.</param>
+    private sealed class NamingJournal(string folder) : IChangeJournal
+    {
+        private long _next = 100;
+
+        public JournalPosition? PositionOf(string root) => new(@"\\?\Volume{test}\", 7, Interlocked.Increment(ref _next));
+
+        public IReadOnlyList<ChangedFolder>? ChangedSince(JournalPosition since, IReadOnlyCollection<string> roots) =>
+            [.. roots.Select(root => new ChangedFolder(root, folder))];
     }
 }
