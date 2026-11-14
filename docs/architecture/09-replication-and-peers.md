@@ -28,6 +28,11 @@ never a silent skip, until the peer write adapter lands.
 > and keeps no data on the machine. Beside a local path or a peer, a store is
 > still filled by the sync after the run.
 
+> **2026-11 ([ADR-0196 Amendment 6](../adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path)).** Beside a local
+> path the run also sends each blob it lands there on to the store as it goes,
+> never waiting on it: the store's write-behind. The snapshot is still the
+> sync's, so the store is behind until the sync after the run.
+
 Exchange sequence:
 
 1. repository identity and compatible format capabilities;

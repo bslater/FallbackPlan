@@ -3,6 +3,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
+using FallbackPlan.Filesystem;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.TestSupport;
 
@@ -18,10 +19,14 @@ namespace FallbackPlan.Hosts.Tests;
 /// local path's is, but with part of the sample drawn at random because a
 /// provider is on the far side (FR-VER-001); a direct-ship set's run leaves
 /// it to the sync that follows, unless the store is all the set has: then the
-/// run ships there as it goes (and beside a local path the run itself writes
-/// nothing there), keeps no data on this machine, puts only what
+/// run ships there as it goes, keeps no data on this machine, puts only what
 /// is new, restores from it, and fails saying where when it does not answer
-/// (FR-DEST-021, ADR-0196); a restore and a drill read from it, and the
+/// (FR-DEST-021, ADR-0196). Beside a local path the run sends its blobs on to
+/// the store as it goes and nothing else, never waiting on it: a store that
+/// takes no upload does not hold the run, one that refuses an upload is sent
+/// nothing more, one whose credential no longer reads does not fail it, and
+/// the store is behind until the sync after the run brings
+/// it current (FR-DEST-021, ADR-0196 Amendment 6); a restore and a drill read from it, and the
 /// schedule drills it only on a cadence somebody stated (FR-DRL-002); the
 /// deep sweep reads it back whole on a cadence somebody stated, or when a
 /// person asks, and replaces what the store altered from a sound copy
@@ -660,24 +665,127 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task DirectShip_BesideALocalPath_TheRunItselfWritesNothingToTheStore()
+    public async Task DirectShip_BesideALocalPath_TheRunSendsItsBlobsOnToTheStore_AsItGoes()
     {
-        // The run alone, with no pass after it: it lands on the local path and
-        // leaves the store behind for the sync, so a run that can land on a
-        // disk never waits on the network.
+        // The run alone, with no pass after it. It lands on the local path
+        // and sends each blob on to the store behind it: the local path's
+        // snapshot waits until a blob is at the store, which only an upload
+        // made during the run can have put there. The snapshot and the index
+        // are the sync's to send, so the store never holds a backup whose
+        // blobs it lacks, and the store stays behind until that sync.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        WriteFiles();
+        var aBlobWentUpFirst = false;
+
+        await using var runtime = await StartAsync(replicaStoreDecorator: (name, store) => name == "vault"
+            ? new DeferringObjectStore(store, IsSnapshotKey, async () =>
+                aBlobWentUpFirst = await EventuallyAsync(() => Store.KeysIn(Namespace).Any(IsDataBlob)))
+            : store);
+        await StoreCredentialAsync(runtime);
+        var outcome = await RunAloneAsync(runtime);
+
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.IsTrue(aBlobWentUpFirst, "a data blob reached the store while the run went on");
+        var others = Store.KeysIn(Namespace).Where(key => !key.Contains("/blobs/", StringComparison.Ordinal)).ToList();
+        Assert.IsEmpty(others, $"only blobs go up with the run: {string.Join(", ", others)}");
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
+        var cloud = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
+        Assert.Contains("went up as the run went", cloud.LastError!, StringComparison.Ordinal);
+        Assert.IsEmpty(MetadataBlobsHere(), "beside a local path the trees are read there, and none is kept here");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_AStoreThatTakesNoUpload_NeverHoldsTheRun()
+    {
+        // The store holds every upload unanswered, and the local path's
+        // snapshot waits until one is being held, so the run reaches its end
+        // with an upload in flight. It ends all the same, the store behind;
+        // the sync after it brings the store current once it answers.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        WriteFiles();
+        Store.HoldPuts();
+
+        await using var runtime = await StartAsync(replicaStoreDecorator: (name, store) => name == "vault"
+            ? new DeferringObjectStore(store, IsSnapshotKey, () => WithinAsync(Store.APutIsHeld))
+            : store);
+        await StoreCredentialAsync(runtime);
+        var outcome = await RunAloneAsync(runtime, TimeSpan.FromMinutes(1));
+
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.IsTrue(Store.APutIsHeld.IsCompleted, "the run sent the store a blob as it went");
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
+        Assert.AreEqual(DestinationSyncState.Behind, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
+
+        Store.ReleasePuts();
+        await SyncAsync(runtime);
+
+        var cloud = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("in-sync", cloud.State, cloud.Detail);
+        Assert.IsTrue(cloud.HoldsNewest, "the store holds the newest backup whole");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_AStoreThatRefusesAnUpload_IsSentNothingMore_AndTheRunGoesOn()
+    {
+        // The store refuses the first blob the run sends it, and the local
+        // path's snapshot waits until it has. The run sends the store nothing
+        // more, ends as it would have, and leaves the store behind saying
+        // why; once the store takes uploads again the sync brings it current.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        WriteFiles();
+        Store.FailFrom(servedFirst: 0, 403, RefusalCode, method: "PUT");
+
+        await using var runtime = await StartAsync(replicaStoreDecorator: (name, store) => name == "vault"
+            ? new DeferringObjectStore(store, IsSnapshotKey, () => EventuallyAsync(() =>
+                Store.Requests.Any(request => request.Method == "PUT" && request.Status == 403)))
+            : store);
+        await StoreCredentialAsync(runtime);
+        var outcome = await RunAloneAsync(runtime);
+
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
+        var behind = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, behind.State, behind.LastError);
+        Assert.Contains(RefusalCode, behind.LastError!, StringComparison.Ordinal);
+        var sent = Store.Requests.Where(request => request.Method == "PUT")
+            .Select(request => request.Target).Distinct(StringComparer.Ordinal).ToList();
+        Assert.ContainsSingle(sent, $"the run sent nothing more once the store refused a blob: {string.Join(", ", sent)}");
+        Assert.IsEmpty(Store.KeysIn(Namespace), "the store took nothing");
+
+        Store.Recover();
+        await SyncAsync(runtime);
+
+        var cloud = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("in-sync", cloud.State, cloud.Detail);
+        Assert.IsTrue(cloud.HoldsNewest, "the store holds the newest backup whole");
+    }
+
+    [TestMethod]
+    public async Task DirectShip_BesideALocalPath_AStoreWhoseCredentialIsDamaged_DoesNotFailTheRun()
+    {
+        // The run opens the store to send it blobs, and a credential that no
+        // longer reads is the store's fault, never the run's: the sync after
+        // the run is where it is met and said. Before the run sent the store
+        // anything it never opened it, and a run beside a local path must not
+        // have gained a way to fail that it did not have.
         Directory.CreateDirectory(Vault);
         WriteConfiguration(directShip: true);
         WriteFiles();
 
         await using var runtime = await StartAsync();
         await StoreCredentialAsync(runtime);
-        var set = runtime.Configuration.BackupSets.Single();
-        var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+        File.WriteAllText(
+            Path.Combine(Harness.StateDirectory, "destination-credentials", $"{CloudId}.json"), "{ not a credential");
+        var outcome = await RunAloneAsync(runtime);
 
         Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
-        Assert.IsFalse(Store.KeysIn(Namespace).Any(IsDataBlob), "the run wrote no data to the store");
+        Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
         Assert.AreEqual(DestinationSyncState.Behind, Pair(runtime, "cloud").State, Pair(runtime, "cloud").LastError);
-        Assert.IsEmpty(MetadataBlobsHere(), "beside a local path the trees are read there, and none is kept here");
+        Assert.IsEmpty(Store.Requests, "nothing is sent under a credential that does not read");
     }
 
     [TestMethod]
@@ -799,10 +907,18 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         // replica, has none of the trees it built on here. Each one a backup
         // reads from the store is kept once it verifies, so the backup after
         // reads none (ADR-0196 Amendment 5).
+        //
+        // A backup reads the trees it builds on where it takes the folders
+        // its change journal did not name as its last snapshot held them; one
+        // that walks in full reads none. The journal here always answers, as
+        // one that can say what changed does: a real one on a volume where
+        // other tests make and delete folders may doubt, and its backup walk
+        // in full (ADR-0187 Amendment 2), which leaves this test nothing to
+        // keep.
         WriteConfiguration(directShip: true, storeOnly: true);
         WriteFiles();
 
-        await using var runtime = await StartAsync();
+        await using var runtime = await StartAsync(changeJournal: new NamingJournal("docs"));
         await StoreCredentialAsync(runtime);
         var start = DateTimeOffset.Now;
         await BackUpAsync(runtime, start);
@@ -1947,6 +2063,59 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
     }
 
+    /// <summary>Runs the set's backup at a person's asking, with no pass after it, and returns how it ended.</summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="within">How long the run may take, when not the test's own deadline.</param>
+    private async Task<BackupOutcome> RunAloneAsync(ServiceRuntime runtime, TimeSpan? within = null)
+    {
+        var set = runtime.Configuration.BackupSets.Single();
+        var run = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true);
+        return within is { } bound ? await run.WaitAsync(bound, Timeout) : await run.WaitAsync(Timeout);
+    }
+
+    /// <summary>
+    /// Waits, as long as a run could reasonably take, for a condition another
+    /// actor brings about, and says whether it came about: false is the
+    /// answer a test then fails on, never a hang.
+    /// </summary>
+    /// <param name="condition">The condition.</param>
+    private async Task<bool> EventuallyAsync(Func<bool> condition)
+    {
+        var giveUp = DateTimeOffset.UtcNow + Patience;
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow > giveUp)
+            {
+                return false;
+            }
+
+            await Task.Delay(20, Timeout);
+        }
+
+        return true;
+    }
+
+    /// <summary>As <see cref="EventuallyAsync"/>, for a task another actor completes.</summary>
+    /// <param name="task">The task.</param>
+    private async Task WithinAsync(Task task)
+    {
+        try
+        {
+            await task.WaitAsync(Patience, Timeout);
+        }
+        catch (TimeoutException)
+        {
+            // The test asks the task itself whether it completed.
+        }
+    }
+
+    /// <summary>How long a test waits on another actor before it goes on without it.</summary>
+    private static TimeSpan Patience => TimeSpan.FromSeconds(20);
+
+    /// <summary>Whether a key a replica's store is asked to write is a snapshot's.</summary>
+    /// <param name="key">The key, from the replica's root.</param>
+    private static bool IsSnapshotKey(string key) => key.StartsWith("snapshots/", StringComparison.Ordinal);
+
     /// <summary>Whether an object key, or a request target naming one, is a data blob's.</summary>
     /// <param name="key">The key or target.</param>
     private static bool IsDataBlob(string key) => key.Contains("blobs/data/", StringComparison.Ordinal);
@@ -2123,18 +2292,40 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
 
     /// <summary>Starts the service over the harness.</summary>
     /// <param name="checkpointThreshold">How many deltas make a checkpoint due, when not the default.</param>
-    protected async Task<ServiceRuntime> StartAsync(int? checkpointThreshold = null)
+    /// <param name="replicaStoreDecorator">Wraps a local path's replica store, by the destination's name, when given.</param>
+    /// <param name="changeJournal">The change journal backups are told what changed by, when not the platform's own.</param>
+    protected async Task<ServiceRuntime> StartAsync(
+        int? checkpointThreshold = null,
+        Func<string, IObjectStore, IObjectStore>? replicaStoreDecorator = null,
+        IChangeJournal? changeJournal = null)
     {
         await Harness.SetupAsync();
 
+        var options = new ServiceOptions
+        {
+            ArchivesRoot = Harness.ArchivesRoot,
+            StateDirectory = Harness.StateDirectory,
+            VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+            CheckpointThresholdOverride = checkpointThreshold,
+            ReplicaStoreDecorator = replicaStoreDecorator,
+        };
+
         return await ServiceRuntime.StartAsync(
-            new ServiceOptions
-            {
-                ArchivesRoot = Harness.ArchivesRoot,
-                StateDirectory = Harness.StateDirectory,
-                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
-                CheckpointThresholdOverride = checkpointThreshold,
-            },
-            Timeout);
+            changeJournal is null ? options : options with { ChangeJournal = changeJournal }, Timeout);
+    }
+
+    /// <summary>
+    /// A change journal that always answers, naming one folder below each
+    /// root as changed since any place it gave.
+    /// </summary>
+    /// <param name="folder">The folder named, below each root.</param>
+    private sealed class NamingJournal(string folder) : IChangeJournal
+    {
+        private long _next = 100;
+
+        public JournalPosition? PositionOf(string root) => new(@"\\?\Volume{test}\", 7, Interlocked.Increment(ref _next));
+
+        public IReadOnlyList<ChangedFolder>? ChangedSince(JournalPosition since, IReadOnlyCollection<string> roots) =>
+            [.. roots.Select(root => new ChangedFolder(root, folder))];
     }
 }

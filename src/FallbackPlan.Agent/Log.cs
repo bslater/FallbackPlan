@@ -391,6 +391,14 @@ internal static partial class Log
         Message = "Destination {Destination} dropped from this backup run: {Reason}. Its replica lags until the next catch-up")]
     internal static partial void ShipDestinationDropped(ILogger logger, LogLabel destination, string reason);
 
+    // Information: the store is behind either way, and the sync that follows
+    // the run is what meets the fault in earnest; this says only why the
+    // run's own uploads to it stopped early.
+    [LoggerMessage(
+        EventId = 3701, Level = LogLevel.Information,
+        Message = "Destination {Destination} is no longer sent this run's blobs as it goes: {Reason}. The sync that follows the run sends them")]
+    internal static partial void WriteBehindStopped(ILogger logger, LogLabel destination, string reason);
+
     // Warning: a queued job with no tracked cancellation cannot be run and is
     // discarded — unreachable while identities stay fresh, and the silent
     // version of this is an awaiter that hangs forever.

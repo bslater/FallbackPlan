@@ -28,6 +28,8 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     private StandingFault? _standing;
     private Dictionary<string, HashSet<string>>? _listedAsOf;
     private string _lagUnder = string.Empty;
+    private TaskCompletionSource? _putsHeld;
+    private readonly TaskCompletionSource _aPutHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Starts listening on an ephemeral loopback port.</summary>
     protected ObjectStoreTestServer()
@@ -210,6 +212,36 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     }
 
     /// <summary>
+    /// Holds every PUT that arrives from now on, unanswered, until
+    /// <see cref="ReleasePuts"/> or the server stops: a store too slow to take
+    /// an upload in any time that matters, while it still answers every other
+    /// request.
+    /// </summary>
+    public void HoldPuts()
+    {
+        lock (_gate)
+        {
+            _putsHeld ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
+    /// <summary>Answers every PUT <see cref="HoldPuts"/> held, and holds no more.</summary>
+    public void ReleasePuts()
+    {
+        TaskCompletionSource? held;
+        lock (_gate)
+        {
+            held = _putsHeld;
+            _putsHeld = null;
+        }
+
+        held?.TrySetResult();
+    }
+
+    /// <summary>Completes once a PUT has arrived while <see cref="HoldPuts"/> was holding them.</summary>
+    public Task APutIsHeld => _aPutHeld.Task;
+
+    /// <summary>
     /// From now on, a listing leaves out every object written under
     /// <paramref name="under"/> after this call, as a store whose listings
     /// lag its writes does: the object reads, and a HEAD finds it, but no
@@ -367,6 +399,11 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
                         return;
                     }
 
+                    if (HoldFor(request) is { } held)
+                    {
+                        await held.WaitAsync(_stopping.Token).ConfigureAwait(false);
+                    }
+
                     var fault = NextFault(request);
                     if (fault is { Drop: true })
                     {
@@ -390,6 +427,20 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
                 // A client that hung up, or the server stopping: either way
                 // this connection has nothing more to say.
             }
+        }
+    }
+
+    private Task? HoldFor(Request request)
+    {
+        lock (_gate)
+        {
+            if (_putsHeld is not { } held || request.Method != "PUT")
+            {
+                return null;
+            }
+
+            _aPutHeld.TrySetResult();
+            return held.Task;
         }
     }
 
