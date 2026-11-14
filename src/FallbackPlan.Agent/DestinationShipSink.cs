@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
@@ -52,7 +53,11 @@ public sealed class DestinationShipSink : IObjectStore
 {
     // Direct: a local path or an object store, which this hub reads and
     // deletes at itself. A peer is reached only through its exchange.
-    private sealed record Shipment(string Name, IObjectStore Store, int Priority, bool Direct = true);
+    private sealed record Shipment(string Name, IObjectStore Store, int Priority, bool Direct = true)
+    {
+        /// <summary>The store before the run's pacing, for a read that is not the run's own write.</summary>
+        public IObjectStore Unpaced { get; init; } = Store;
+    }
 
     private readonly ServiceRuntime _runtime;
     private readonly LocalFileSystemObjectStore _metadata;
@@ -62,6 +67,11 @@ public sealed class DestinationShipSink : IObjectStore
     private readonly LocalFileSystemObjectStore? _stagingFallback;
     private readonly Lock _gate = new();
     private List<Shipment> _inScope = [];
+
+    // The stores beside a local path this run sends its blobs on to as it
+    // goes (ADR-0196 Amendment 6). Never in scope: the run does not wait on
+    // them, read from them, or fail with them.
+    private List<StoreWriteBehind> _writesBehind = [];
 
     /// <summary>This run's intersected capabilities; null outside a run.</summary>
     private StoreCapabilities? _capabilities;
@@ -236,6 +246,7 @@ public sealed class DestinationShipSink : IObjectStore
         var skipped = new List<(string, DestinationSyncState, string)>();
         var dropped = new Dictionary<string, (DestinationSyncState State, string Error)>(StringComparer.Ordinal);
         var throughStores = WritesThroughStores(configuration, set);
+        var besideStores = new List<(DestinationConfiguration Destination, SetDestinationReference Reference)>();
 
         foreach (var reference in set.Destinations)
         {
@@ -250,14 +261,14 @@ public sealed class DestinationShipSink : IObjectStore
             {
                 // Beside a local path or a peer, which keep up with a capture
                 // as it goes, an object store, a bucket or a container, is
-                // filled by the sync that follows the run, from what the run
-                // shipped (ADR-0091, ADR-0093). Behind, never failed: the
-                // destination did nothing wrong, and a behind row syncs at
-                // once. Where the stores are all the set has, the run writes
-                // through them (ADR-0196).
-                skipped.Add((destination.Name, DestinationSyncState.Behind,
-                    (destination.Kind == DestinationKind.AzureBlob ? "an azure-blob" : "an s3")
-                    + " destination is filled by the sync that follows the run, from what the run shipped"));
+                // brought current by the sync that follows the run, from what
+                // the run shipped (ADR-0091, ADR-0093), and is behind until
+                // then. Behind, never failed: the destination did nothing
+                // wrong, and a behind row syncs at once. Beside a local path
+                // the run also sends it each blob as it goes, never waiting
+                // on it (ADR-0196 Amendment 6); where the stores are all the
+                // set has, the run writes through them (ADR-0196).
+                besideStores.Add((destination, reference));
                 continue;
             }
 
@@ -344,14 +355,16 @@ public sealed class DestinationShipSink : IObjectStore
                 // Only the run's own writes are paced. The sink is also this
                 // set's archive store, and a read through it may be a
                 // person's restore running beside a background backup.
+                var opened = await StoreForAsync(destination, reclaimPublicKey, claimPublicKey, cancellationToken)
+                    .ConfigureAwait(false);
                 inScope.Add(new Shipment(
                     destination.Name,
-                    PacedObjectStore.Over(
-                        await StoreForAsync(destination, reclaimPublicKey, claimPublicKey, cancellationToken)
-                            .ConfigureAwait(false),
-                        userInitiated ? null : _runtime.Pacing.ForDestination(destination)),
+                    PacedObjectStore.Over(opened, userInitiated ? null : _runtime.Pacing.ForDestination(destination)),
                     SetDestinationReference.EffectivePriority(reference, destination),
-                    Direct: destination.Kind != DestinationKind.Peer));
+                    Direct: destination.Kind != DestinationKind.Peer)
+                {
+                    Unpaced = opened,
+                });
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -380,6 +393,8 @@ public sealed class DestinationShipSink : IObjectStore
 
         if (seeded.Count == 0)
         {
+            skipped.AddRange(besideStores.Select(beside =>
+                (beside.Destination.Name, DestinationSyncState.Behind, FilledBySync(beside.Destination))));
             foreach (var (name, (state, error)) in dropped)
             {
                 _runtime.DestinationSync.RecordFailure(set.Id, name, state, error, nowUnixMilliseconds);
@@ -402,9 +417,12 @@ public sealed class DestinationShipSink : IObjectStore
                 + (tried.Count > 0 ? " " + string.Join("; ", tried) + "." : string.Empty));
         }
 
+        var writesBehind = StartWritesBehind(besideStores, seeded, userInitiated, skipped);
+
         lock (_gate)
         {
             _inScope = seeded;
+            _writesBehind = writesBehind;
             _capabilities = StoreCapabilities.Intersect(
                 [_metadata.Capabilities, .. seeded.Select(shipment => shipment.Store.Capabilities)]);
             _runActive = true;
@@ -421,6 +439,72 @@ public sealed class DestinationShipSink : IObjectStore
             _publishedThisRun = 0;
         }
     }
+
+    /// <summary>
+    /// Starts sending this run's blobs on to each store beside a local path
+    /// as they land (ADR-0196 Amendment 6), read back from the run's local
+    /// paths. A store with no local path in the run to read from, or that
+    /// cannot be written to as it stands, is left to the sync that follows
+    /// the run, as every store beside a local path or a peer was before.
+    /// </summary>
+    /// <param name="besideStores">The set's stores beside a local path or a peer.</param>
+    /// <param name="seeded">The run's destinations, seeded.</param>
+    /// <param name="userInitiated">Whether a person is waiting for the run; a background run's uploads are paced.</param>
+    /// <param name="skipped">Where a store left to the sync alone is recorded behind.</param>
+    private List<StoreWriteBehind> StartWritesBehind(
+        List<(DestinationConfiguration Destination, SetDestinationReference Reference)> besideStores,
+        List<Shipment> seeded,
+        bool userInitiated,
+        List<(string, DestinationSyncState, string)> skipped)
+    {
+        // A local path, never a peer: a peer is reached only through its
+        // exchange, and reading a blob back from it would be a retrieval
+        // session opened beside the run's own.
+        List<IObjectStore> sources = [.. seeded.Where(shipment => shipment.Direct).Select(shipment => shipment.Unpaced)];
+        var started = new List<StoreWriteBehind>();
+        foreach (var (destination, _) in besideStores)
+        {
+            if (sources.Count == 0 || OpenToWriteBehind(destination) is not { } store)
+            {
+                skipped.Add((destination.Name, DestinationSyncState.Behind, FilledBySync(destination)));
+                continue;
+            }
+
+            started.Add(StoreWriteBehind.Start(
+                destination.Name,
+                PacedObjectStore.Over(store, userInitiated ? null : _runtime.Pacing.ForDestination(destination)),
+                sources,
+                _log));
+        }
+
+        return started;
+    }
+
+    /// <summary>
+    /// A store beside a local path, opened for the run to send its blobs on
+    /// to, or null where it cannot be opened before any request: an address
+    /// defect, no credential stored, a lapsed signature, or a credential that
+    /// no longer reads. Each is the sync's to meet and say, as it was before
+    /// the run sent a store anything, and none is the run's to fail on.
+    /// </summary>
+    /// <param name="destination">The store's declaration.</param>
+    private IObjectStore? OpenToWriteBehind(DestinationConfiguration destination)
+    {
+        try
+        {
+            return StoreComposition.OpenObjectStore(_runtime, destination, _repositoryIdHex, out _);
+        }
+        catch (ClientStateException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A store's behind detail when the run sends it nothing: the sync that follows the run fills it.</summary>
+    /// <param name="destination">The store's declaration.</param>
+    private static string FilledBySync(DestinationConfiguration destination) =>
+        (destination.Kind == DestinationKind.AzureBlob ? "an azure-blob" : "an s3")
+        + " destination is filled by the sync that follows the run, from what the run shipped";
 
     /// <summary>
     /// Files the receipt a run's peer signed for what it committed, and
@@ -527,11 +611,14 @@ public sealed class DestinationShipSink : IObjectStore
         List<(string Name, DestinationSyncState State, string Error)> dropped;
         List<(string Name, DestinationSyncState State, string Error)> skipped;
         List<PeerShipStore> peers;
+        List<StoreWriteBehind> writesBehind;
         long shipped;
         ulong published;
         lock (_gate)
         {
             survivors = [.. _inScope];
+            writesBehind = _writesBehind;
+            _writesBehind = [];
             dropped = [.. _droppedThisRun.Select(pair => (pair.Key, pair.Value.State, pair.Value.Error))];
             skipped = [.. _skippedThisRun];
             peers = [.. _peersThisRun];
@@ -545,6 +632,18 @@ public sealed class DestinationShipSink : IObjectStore
             _peersThisRun.Clear();
             _shippedThisRun = 0;
             _publishedThisRun = 0;
+        }
+
+        // The run never waits on a store it sends its blobs on to: whatever
+        // is not there yet is the sync's to send, an upload in flight
+        // included, and the store is behind until that sync (ADR-0196
+        // Amendment 6), however the run ended.
+        var behindDetails = await Task.WhenAll(writesBehind.Select(writeBehind => writeBehind.FinishAsync()))
+            .ConfigureAwait(false);
+        for (var i = 0; i < writesBehind.Count; i++)
+        {
+            skipped.Add((writesBehind[i].DestinationName, DestinationSyncState.Behind, behindDetails[i]));
+            writesBehind[i].Dispose();
         }
 
         // A peer's exchange is not finished until it has been told so and has
@@ -646,10 +745,12 @@ public sealed class DestinationShipSink : IObjectStore
         }
 
         List<Shipment> targets;
+        List<StoreWriteBehind> writesBehind;
         bool runActive;
         lock (_gate)
         {
             targets = [.. _inScope];
+            writesBehind = _writesBehind;
             runActive = _runActive;
         }
 
@@ -693,6 +794,14 @@ public sealed class DestinationShipSink : IObjectStore
         if (isBlob && landed.Count > 0)
         {
             Interlocked.Increment(ref _shippedThisRun);
+
+            // Sent on once it has landed, read back from a local path. One
+            // that landed at none, only at a peer, ends the write-behind there
+            // and is the sync's, with every blob after it.
+            foreach (var writeBehind in writesBehind)
+            {
+                writeBehind.Offer(key);
+            }
         }
 
         if (landed.Count > 0 && IsMetadataBlobKey(key.Value) && KeepsMetadataBlobs())
