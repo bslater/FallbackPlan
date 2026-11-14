@@ -4,6 +4,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Protocol;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -38,6 +39,14 @@ public sealed class PeerRecoveryDrillTests : IDisposable
         Path.Combine(Path.GetTempPath(), "fbp-peer-drill", Guid.NewGuid().ToString("n"));
 
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(4));
+
+    /// <summary>
+    /// What the peer's listener logged. A drill that fails over the wire says
+    /// only what the dialling side saw; this is the other side, carried into
+    /// the failure so a run that cannot be repeated still says why the peer
+    /// ended the connection.
+    /// </summary>
+    private readonly RecordingLogger _listenerLog = new();
 
     private const ulong PairedAt = 1_722_600_000_000;
 
@@ -95,7 +104,7 @@ public sealed class PeerRecoveryDrillTests : IDisposable
         var answer = await handler.ExecuteAsync(new RunDrillCommand("docs", "friend"), Timeout);
 
         Assert.IsInstanceOfType<DrillResult>(answer, out var drilled, (answer as ServiceError)?.Message);
-        Assert.AreEqual(0, drilled.Failed, string.Join(" | ", drilled.Lines));
+        Assert.AreEqual(0, drilled.Failed, string.Join(" | ", drilled.Lines) + WhatThePeerSaid());
         var record = runtime.DestinationSync.Find(_harness.DocsSetId, "friend");
         Assert.IsNotNull(record?.DrilledAt, "the person's drill is recorded on the pair's row");
         Assert.IsGreaterThan(0, record.DrillFiles, "a drill that reached no file over the wire has proved nothing");
@@ -119,8 +128,8 @@ public sealed class PeerRecoveryDrillTests : IDisposable
 
         var record = runtime.DestinationSync.Find(_harness.DocsSetId, "friend");
         Assert.IsNotNull(record);
-        Assert.IsNotNull(record.DrilledAt, $"a peer with a stated cadence is due its first drill: error={record.DrillFailure}");
-        Assert.IsNull(record.DrillFailure, record.DrillFailure);
+        Assert.IsNotNull(record.DrilledAt, $"a peer with a stated cadence is due its first drill: error={record.DrillFailure}{WhatThePeerSaid()}");
+        Assert.IsNull(record.DrillFailure, record.DrillFailure + WhatThePeerSaid());
         Assert.IsGreaterThan(0, record.DrillFiles, "a drill that reached no file over the wire has proved nothing");
         Assert.IsNotNull(record.DrillLimit);
         Assert.Contains("sealed", record.DrillLimit, StringComparison.OrdinalIgnoreCase);
@@ -148,7 +157,7 @@ public sealed class PeerRecoveryDrillTests : IDisposable
         await first.Drills.WaitAsync(Timeout);
         Assert.IsNull(
             runtime.DestinationSync.Find(_harness.DocsSetId, "friend")?.DrillFailure,
-            "the clean drill must pass, or the damaged one below proves nothing");
+            "the clean drill must pass, or the damaged one below proves nothing" + WhatThePeerSaid());
 
         // The challenge samples a range; the drill walks the whole road back.
         // Length-preserving rot in every data blob the peer holds breaks the
@@ -188,7 +197,7 @@ public sealed class PeerRecoveryDrillTests : IDisposable
             (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds(),
             new RecoveryDrillJob.SampleBudget(FileCap: 1024, TotalCap: 1024 * 1024), Timeout);
 
-        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.IsNull(outcome.Failure, outcome.Failure + WhatThePeerSaid());
         Assert.AreEqual(0, outcome.Files);
         Assert.IsNotNull(outcome.Limit, "a drill that skipped every file must say so");
         Assert.Contains("cap", outcome.Limit, StringComparison.OrdinalIgnoreCase);
@@ -219,7 +228,7 @@ public sealed class PeerRecoveryDrillTests : IDisposable
             (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds(),
             new RecoveryDrillJob.SampleBudget(FileCap: 1024 * 1024, TotalCap: 50_000), Timeout);
 
-        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.IsNull(outcome.Failure, outcome.Failure + WhatThePeerSaid());
         Assert.AreEqual(1, outcome.Files, "one file fits the total; the second would exceed it");
         Assert.IsNotNull(outcome.Limit);
         Assert.Contains("cap", outcome.Limit, StringComparison.OrdinalIgnoreCase);
@@ -246,7 +255,7 @@ public sealed class PeerRecoveryDrillTests : IDisposable
             runtime, runtime.Configuration.BackupSets[0], "friend",
             (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds(), budget: null, new FirstEntry(), Timeout);
 
-        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.IsNull(outcome.Failure, outcome.Failure + WhatThePeerSaid());
         Assert.AreEqual(2, outcome.Files, "a file the drill already had was drawn again in place of the other");
     }
 
@@ -272,7 +281,7 @@ public sealed class PeerRecoveryDrillTests : IDisposable
             runtime, runtime.Configuration.BackupSets[0], "vault",
             (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds(), Timeout);
 
-        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.IsNull(outcome.Failure, outcome.Failure + WhatThePeerSaid());
         Assert.AreEqual(1, outcome.Files);
         Assert.DoesNotContain("cap", outcome.Limit ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
@@ -321,6 +330,15 @@ public sealed class PeerRecoveryDrillTests : IDisposable
             Assert.IsTrue(DateTimeOffset.UtcNow < deadline, "the peer never took a whole replica");
             await Task.Delay(100, Timeout);
         }
+    }
+
+    /// <summary>What the peer's listener logged, for a failure's message.</summary>
+    private string WhatThePeerSaid()
+    {
+        var said = _listenerLog.Records.Select(static record => record.Message).ToList();
+        return said.Count == 0
+            ? " | the peer's listener logged nothing"
+            : $" | the peer's listener: {string.Join(" / ", said)}";
     }
 
     private string Vault => Path.Combine(_harness.WorkPath, "vault");
@@ -401,7 +419,7 @@ public sealed class PeerRecoveryDrillTests : IDisposable
         _listenerKeypair = PeerKeypairStore.Open(_destinationState);
         _listener = RemoteServiceListener.Start(
             _listenerKeypair, _destinationGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
-            log: null, replicationStateDirectory: _destinationState);
+            log: _listenerLog, replicationStateDirectory: _destinationState);
         _listener.Bind(new UnusedService());
         _endpoint = _listener.Endpoint;
         return destinationKeypair.Identity.Fingerprint;
