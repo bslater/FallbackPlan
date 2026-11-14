@@ -4406,9 +4406,10 @@ function setSectionHtml(key) {
         <label class="field">Storage shape</label>
         <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into its
         reachable destinations as it runs, and this machine keeps only the catalogue. A local path or a paired
-        peer is written as the backup runs. An S3-compatible store or an Azure Blob container beside one is
-        filled by the sync after each run, from what the run shipped. A set whose only destinations are stores
-        writes through them as each backup runs, each write a request. A backup waits when nothing it can write
+        peer is written as the backup runs. An S3-compatible store or an Azure Blob container beside a local path
+        is sent each backup's data as it runs, without the backup waiting on it, and the sync after each run sends
+        the rest. Beside a peer alone, a store is filled by the sync after each run, from what the run shipped.
+        A set whose only destinations are stores writes through them as each backup runs, each write a request. A backup waits when nothing it can write
         to is reachable. With only a peer to ship to, there is no second copy here to check its content against,
         so it is never reported as verified. Unticked, backups stage into a local archive first and copy outward
         after — a local buffer at the cost of a second copy on this machine. A new set ships straight to its
