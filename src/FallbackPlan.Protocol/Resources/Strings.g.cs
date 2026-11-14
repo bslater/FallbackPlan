@@ -127,6 +127,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, PeerKeypairStore_DeviceKeyCouldNotRead, arg0);
 
     /// <summary>
+    /// The TLS handshake did not complete: {0}
+    /// </summary>
+    private static string PeerTlsConnection_HandshakeDidNotComplete => Get(nameof(PeerTlsConnection_HandshakeDidNotComplete));
+
+    /// <summary>
+    /// The TLS handshake did not complete: {0}
+    /// </summary>
+    internal static string FormatPeerTlsConnection_HandshakeDidNotComplete(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, PeerTlsConnection_HandshakeDidNotComplete, arg0);
+
+    /// <summary>
     /// A binding nonce is {0} bytes; got {1}.
     /// </summary>
     private static string SessionBinding_BindingNonceBytesGot => Get(nameof(SessionBinding_BindingNonceBytesGot));

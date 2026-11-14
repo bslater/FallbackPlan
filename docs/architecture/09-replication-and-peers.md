@@ -111,6 +111,8 @@ Fairness matters more than it sounds: without it, one large backup set starves e
 
 A consequence worth stating where an architect will look for it: **a completed handshake is not an authenticated peer**, and the session's states are named so that no code can quietly assume otherwise ([02 §2](../../specifications/peer-protocol/02-session.md#2-session-states)).
 
+The converse holds as well: **a handshake that does not complete is a transport failure and nothing more.** Since no trust decision rides on the handshake, its failure cannot mean the peer was refused. Each end raises it as an I/O failure that says the handshake did not complete, naming the platform's own reason, whatever that platform's TLS stack called it. So a dialler names the peer unreachable, and a listener ends that one connection, logs why, and stops cleanly later.
+
 ### 2.1 Version skew
 
 Paired peers may run different agent versions. The protocol negotiates a common feature set at connection time; a peer that cannot satisfy the other's **required** features refuses the connection with a clear reason rather than proceeding into an undefined state mid-transfer (NFR-COMP-006).
