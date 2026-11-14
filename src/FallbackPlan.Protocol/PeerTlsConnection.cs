@@ -3,6 +3,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using FallbackPlan.Protocol.Resources;
 
 namespace FallbackPlan.Protocol;
 
@@ -67,6 +68,10 @@ public sealed class PeerTlsConnection : IAsyncDisposable
     /// <param name="now">The clock, for the throwaway certificate's window.</param>
     /// <param name="cancellationToken">Cancels the handshake.</param>
     /// <returns>The connection; dispose to close and destroy the ephemeral key.</returns>
+    /// <exception cref="IOException">
+    /// The TLS handshake did not complete, however the platform reported it; the
+    /// platform's own exception is the inner one.
+    /// </exception>
     public static async ValueTask<PeerTlsConnection> AcceptAsync(
         Socket socket, DateTimeOffset now, CancellationToken cancellationToken)
     {
@@ -83,6 +88,10 @@ public sealed class PeerTlsConnection : IAsyncDisposable
     /// <param name="now">The clock, for the throwaway certificate's window.</param>
     /// <param name="cancellationToken">Cancels the connect and handshake.</param>
     /// <returns>The connection; dispose to close and destroy the ephemeral key.</returns>
+    /// <exception cref="IOException">
+    /// The TLS handshake did not complete, however the platform reported it; the
+    /// platform's own exception is the inner one.
+    /// </exception>
     public static async ValueTask<PeerTlsConnection> DialAsync(
         string host, int port, DateTimeOffset now, CancellationToken cancellationToken)
     {
@@ -140,33 +149,45 @@ public sealed class PeerTlsConnection : IAsyncDisposable
             // the pinned-key proof of 02 §3, bound to these certificates.
             const SslProtocols AcceptedProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
-            if (role == PeerSessionRole.Responder)
+            try
             {
-                await stream.AuthenticateAsServerAsync(
-                    new SslServerAuthenticationOptions
-                    {
-                        ServerCertificate = certificate.Certificate,
-                        // The peer must present a certificate — the binding needs
-                        // one — but the platform validates none of it (02 §1).
-                        ClientCertificateRequired = true,
-                        RemoteCertificateValidationCallback = static (_, _, _, _) => true,
-                        EnabledSslProtocols = AcceptedProtocols,
-                    },
-                    cancellationToken).ConfigureAwait(false);
+                if (role == PeerSessionRole.Responder)
+                {
+                    await stream.AuthenticateAsServerAsync(
+                        new SslServerAuthenticationOptions
+                        {
+                            ServerCertificate = certificate.Certificate,
+                            // The peer must present a certificate — the binding needs
+                            // one — but the platform validates none of it (02 §1).
+                            ClientCertificateRequired = true,
+                            RemoteCertificateValidationCallback = static (_, _, _, _) => true,
+                            EnabledSslProtocols = AcceptedProtocols,
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await stream.AuthenticateAsClientAsync(
+                        new SslClientAuthenticationOptions
+                        {
+                            // A placeholder the server ignores; there is no name to
+                            // validate on either side.
+                            TargetHost = host ?? "fallbackplan-peer",
+                            ClientCertificates = [certificate.Certificate],
+                            RemoteCertificateValidationCallback = static (_, _, _, _) => true,
+                            EnabledSslProtocols = AcceptedProtocols,
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                }
             }
-            else
+            catch (Exception failure) when (failure is AuthenticationException or IOException)
             {
-                await stream.AuthenticateAsClientAsync(
-                    new SslClientAuthenticationOptions
-                    {
-                        // A placeholder the server ignores; there is no name to
-                        // validate on either side.
-                        TargetHost = host ?? "fallbackplan-peer",
-                        ClientCertificates = [certificate.Certificate],
-                        RemoteCertificateValidationCallback = static (_, _, _, _) => true,
-                        EnabledSslProtocols = AcceptedProtocols,
-                    },
-                    cancellationToken).ConfigureAwait(false);
+                // No trust decision occurs in the handshake (02 §1), so one
+                // that fails says only that the connection could not be had.
+                // The platform says so as an authentication error on one stack
+                // and an end of stream on another; a caller that names a peer
+                // unreachable must not have to know which.
+                throw new IOException(Strings.FormatPeerTlsConnection_HandshakeDidNotComplete(Describe(failure)), failure);
             }
 
             var remote = stream.RemoteCertificate
@@ -193,5 +214,21 @@ public sealed class PeerTlsConnection : IAsyncDisposable
             throw;
         }
 #pragma warning restore CA5359
+    }
+
+    /// <summary>
+    /// Every message from the failure down to its innermost cause, joined:
+    /// the outermost alone is often only "see inner exception", and the
+    /// innermost is the platform's own account of what went wrong.
+    /// </summary>
+    private static string Describe(Exception failure)
+    {
+        List<string> said = [];
+        for (Exception? cause = failure; cause is not null; cause = cause.InnerException)
+        {
+            said.Add(cause.Message);
+        }
+
+        return string.Join(" — ", said);
     }
 }
