@@ -75,6 +75,18 @@ public sealed class ListingMergeTests
         CollectionAssert.AreEquivalent(new[] { 0, 1 }, released);
     }
 
+    [TestMethod]
+    public async Task Merge_ReadToTheEnd_LetsGoOfEveryListingOnce()
+    {
+        // Listings that are not iterators: letting go of one is the merge's
+        // to do, not something its own end does.
+        var released = new List<int>();
+
+        Assert.HasCount(3, await KeysAsync(new Counted(0, released, "a", "c"), new Counted(1, released, "b")));
+
+        CollectionAssert.AreEquivalent(new[] { 0, 1 }, released);
+    }
+
     private static async Task<List<string>> KeysAsync(params IAsyncEnumerable<ObjectEntry>[] listings) =>
         [.. (await EntriesAsync(listings)).Select(entry => entry.Key.Value)];
 
@@ -95,6 +107,27 @@ public sealed class ListingMergeTests
         {
             await Task.Yield();
             yield return new ObjectEntry(ObjectKey.Parse(key), length, key);
+        }
+    }
+
+    private sealed class Counted(int id, List<int> released, params string[] keys) : IAsyncEnumerable<ObjectEntry>
+    {
+        public IAsyncEnumerator<ObjectEntry> GetAsyncEnumerator(CancellationToken cancellationToken = default) =>
+            new Cursor(id, released, keys);
+
+        private sealed class Cursor(int id, List<int> released, string[] keys) : IAsyncEnumerator<ObjectEntry>
+        {
+            private int _next = -1;
+
+            public ObjectEntry Current => new(ObjectKey.Parse(keys[_next]), 1, keys[_next]);
+
+            public ValueTask<bool> MoveNextAsync() => ValueTask.FromResult(++_next < keys.Length);
+
+            public ValueTask DisposeAsync()
+            {
+                released.Add(id);
+                return ValueTask.CompletedTask;
+            }
         }
     }
 

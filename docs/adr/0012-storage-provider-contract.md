@@ -414,12 +414,12 @@ Amendment 5 stated a limit: the direct-ship sink lists each of its parts in turn
   - listings interleaved in ordinal order, where a culture would order them otherwise;
   - a key two hold listed once, as the first lists it;
   - nothing from nothing;
-  - every part let go when the reader stops early.
+  - every part let go when the reader stops early, and each let go once when it reads to the end.
 - `Hosts.Tests/UnionListingOrderTests`:
   - the peer-filled store lists first a blob only the peer holds, and a listing resumed after its second key lists the rest;
   - a direct-ship set's archive, after a real backup, lists in ordinal order with no key twice, and resumed halfway lists exactly the rest.
 
-  Before the change, all three failed.
+  Before the change, those three failed. Four more hold what each part answers for, which the rewrite could have lost and no test had held: the archive answers for a blob both it and the peer hold; the peer gives blobs only; the sink takes blobs only from its destinations and nothing else from them, and never lists its own copy of a metadata blob; and a peer that stops answering part way through a listing is named in the failure.
 
 ## Status history
 
