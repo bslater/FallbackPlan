@@ -413,6 +413,14 @@ internal static partial class Log
         Message = "Set {Set}: destination {Destination} holds every blob the set's index locates, and is brought current from this machine's metadata")]
     internal static partial void SyncHoldsEveryBlob(ILogger logger, LogLabel set, LogLabel destination);
 
+    // Warning: the copy finished and the destination still lacks blobs the
+    // newest backup needs, so it is not called in sync (ADR-0198 Amendment 2).
+    [LoggerMessage(
+        EventId = 3704, Level = LogLevel.Warning,
+        Message = "Set {Set}: destination {Destination} lacks {Lacking} blob(s) of the newest backup after the sync, first {First}, and is not called in sync")]
+    internal static partial void SyncLeftShort(
+        ILogger logger, LogLabel set, LogLabel destination, int lacking, LogLabel first);
+
     // Warning: a queued job with no tracked cancellation cannot be run and is
     // discarded — unreachable while identities stay fresh, and the silent
     // version of this is an awaiter that hangs forever.

@@ -54,7 +54,7 @@ public sealed class InSyncClosureTests : IAsyncDisposable
 
         var vault = Row(runtime, "vault");
         Assert.AreEqual(DestinationSyncState.Failed, vault.State, vault.LastError);
-        Assert.Contains(taken.Key, vault.LastError!, StringComparison.Ordinal);
+        Assert.Contains(taken.Name, vault.LastError!, StringComparison.Ordinal);
         Assert.AreEqual(before.SyncedSequence, vault.SyncedSequence, "the watermark moved past a backup the path does not hold");
         Assert.AreEqual(before.LastSuccessAt, vault.LastSuccessAt, "a pass that left the path short was recorded a success");
     }
@@ -107,7 +107,7 @@ public sealed class InSyncClosureTests : IAsyncDisposable
 
         var second = Row(runtime, "vault-two");
         Assert.AreEqual(DestinationSyncState.Failed, second.State, second.LastError);
-        Assert.Contains(taken.Key, second.LastError!, StringComparison.Ordinal);
+        Assert.Contains(taken.Name, second.LastError!, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -129,8 +129,44 @@ public sealed class InSyncClosureTests : IAsyncDisposable
 
         var row = Row(runtime, "friend");
         Assert.AreEqual(DestinationSyncState.Failed, row.State, row.LastError);
-        Assert.Contains(taken.Key, row.LastError!, StringComparison.Ordinal);
+        Assert.Contains(taken.Name, row.LastError!, StringComparison.Ordinal);
         Assert.AreEqual(before.SyncedSequence, row.SyncedSequence, "the watermark moved past a backup the peer does not hold");
+    }
+
+    [TestMethod]
+    public async Task APathThatMissedTheNewestBackup_APersonDeleted_IsInSync_HoldingNoneOfIt()
+    {
+        // The path was away for the second backup, and a person asked for
+        // that backup to go before it came back. Its keep-set leaves the
+        // backup out, so the path is owed nothing of it.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false, LocalPath("vault", Vault));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+
+        var away = Vault + "-away";
+        Directory.Move(Vault, away);
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        var unique = StagingBlobs(runtime).Except(VaultBlobs(away), StringComparer.Ordinal).ToList();
+        Assert.IsNotEmpty(unique, "the premise: the second backup wrote a blob the path lacks");
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        var newest = listed.Snapshots.MaxBy(snapshot => snapshot.CapturedAt)!.SnapshotId;
+        var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
+        Assert.IsInstanceOfType<DeleteSnapshotsResult>(
+            await handler.ExecuteAsync(new DeleteSnapshotsCommand(_harness.DocsSetId, [newest], Apply: true, ReclaimGrant: grant), Timeout),
+            out var requested);
+        Assert.AreEqual("pending", Assert.ContainsSingle(requested.Snapshots).State, "the premise: the deletion waits for the path");
+
+        Directory.Move(away, Vault);
+        await SyncAsync(runtime, "vault");
+
+        var vault = Row(runtime, "vault");
+        Assert.AreEqual(DestinationSyncState.InSync, vault.State, vault.LastError);
+        Assert.IsEmpty(unique.Intersect(VaultBlobs(Vault), StringComparer.Ordinal), "the path was handed the deleted backup's blobs");
     }
 
     private static DestinationConfiguration Peer(LoopbackPeer peer) => new()
@@ -288,6 +324,9 @@ public sealed class InSyncClosureTests : IAsyncDisposable
     /// <summary>A blob moved aside from where the sync reads it.</summary>
     private sealed record TakenBlob(string Key, string From, string Aside)
     {
+        /// <summary>The blob's keyed store name: the last segment of its key.</summary>
+        public string Name => Key[(Key.LastIndexOf('/') + 1)..];
+
         public void Restore() => File.Move(Aside, From);
     }
 }

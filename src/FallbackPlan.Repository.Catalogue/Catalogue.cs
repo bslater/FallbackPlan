@@ -144,6 +144,11 @@ public sealed record FilesDelivered(long Total, long Held, bool Whole);
 /// <param name="Class">Which namespace the blob lives under.</param>
 public sealed record ContentBlob(BlobId BlobId, StoreBlobKey? StoreBlobKey, BlobClass Class);
 
+/// <summary>One blob a restore reads, by what names it at a store (ADR-0198 Amendment 2).</summary>
+/// <param name="BlobId">The blob.</param>
+/// <param name="StoreBlobKey">Its keyed store name, or null where the catalogue holds none and a reader derives it.</param>
+public sealed record ClosureBlob(BlobId BlobId, StoreBlobKey? StoreBlobKey);
+
 /// <summary>A snapshot's files as the blobs their content is read from (ADR-0088 Amendment 1).</summary>
 /// <param name="Files">The snapshot's files, those with no content included.</param>
 /// <param name="Blobs">Every blob any of its files' content is read from.</param>
@@ -1673,6 +1678,82 @@ public sealed class Catalogue : IDisposable
             Catalogue.Outranks(
                 (candidate.Generation, candidate.Writer, candidate.Sequence),
                 (standing.Generation, standing.Writer, standing.Sequence));
+    }
+
+    /// <summary>
+    /// Every blob a restore of one snapshot reads, once each (ADR-0198
+    /// Amendment 2): those its record, its structure, its folders and its
+    /// files' versions are located in, and those its files' content is. Each
+    /// object is taken from its winning live location, as a restore takes it
+    /// (07 §3).
+    /// </summary>
+    /// <remarks>
+    /// An object the catalogue locates nowhere names no blob, so the answer
+    /// is never more than the catalogue knows. No class is given: a catalogue
+    /// rebuilt from the index does not always know it, and the keyed store
+    /// name is the blob's own either way.
+    /// </remarks>
+    /// <param name="snapshotId">The snapshot, ordinarily the set's newest.</param>
+    public IReadOnlyList<ClosureBlob> ClosureOf(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"""
+            {SnapshotFolders},
+            needed(object_id) AS (
+                SELECT object_id FROM snapshots WHERE snapshot_id = $snapshot
+                UNION SELECT object_id FROM snapshot_structure WHERE snapshot_id = $snapshot
+                UNION SELECT tree_id FROM folders
+                UNION SELECT t.object_id FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
+                    WHERE t.entry_kind <> $directory
+                UNION SELECT c.object_id FROM folders d CROSS JOIN folder_entries t ON t.tree_id = d.tree_id
+                    JOIN version_contents c ON c.version_id = t.object_id
+                    WHERE t.entry_kind <> $directory
+            )
+            SELECT n.object_id, l.blob_id, b.store_blob_key, l.generation, l.writer_id, l.sequence
+            FROM needed n
+            JOIN located l ON l.object_id = n.object_id
+            LEFT JOIN blobs b ON b.blob_id = l.blob_id
+            WHERE COALESCE(b.state, 1) <> 3;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+
+        var winners = new Dictionary<ObjectId, (ClosureBlob Blob, ulong Generation, byte[] Writer, ulong Sequence)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var objectId = ObjectId.FromBytes((byte[])reader.GetValue(0));
+                var blobBytes = (byte[])reader.GetValue(1);
+                StoreBlobKey? storeKey = reader.IsDBNull(2) || ((byte[])reader.GetValue(2)).AsSpan().SequenceEqual(blobBytes)
+                    ? null
+                    : StoreBlobKey.FromBytes((byte[])reader.GetValue(2));
+                var candidate = (
+                    Blob: new ClosureBlob(BlobId.FromBytes(blobBytes), storeKey),
+                    Generation: (ulong)reader.GetInt64(3),
+                    Writer: (byte[])reader.GetValue(4),
+                    Sequence: (ulong)reader.GetInt64(5));
+                if (!winners.TryGetValue(objectId, out var standing)
+                    || Outranks(
+                        (candidate.Generation, candidate.Writer, candidate.Sequence),
+                        (standing.Generation, standing.Writer, standing.Sequence)))
+                {
+                    winners[objectId] = candidate;
+                }
+            }
+        }
+
+        var seen = new HashSet<BlobId>();
+        var blobs = new List<ClosureBlob>();
+        foreach (var (blob, _, _, _) in winners.Values)
+        {
+            if (seen.Add(blob.BlobId))
+            {
+                blobs.Add(blob);
+            }
+        }
+
+        return blobs;
     }
 
     /// <summary>
