@@ -12,7 +12,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// pass and acknowledged during it. A copy can only carry what its source
 /// lists, so a source short of a blob leaves the destination short of it too,
 /// and the pass records that rather than a watermark that would let staging
-/// let the backup go.
+/// let the backup go. Nor does it send the destination that backup's record
+/// (ADR-0198 Amendment 3): a record's presence is what says the backup is
+/// there, so a destination left short lists no backup it cannot restore.
 /// </summary>
 /// <remarks>
 /// Each case takes one blob of the newest backup away from what the sync
@@ -80,6 +82,70 @@ public sealed class InSyncClosureTests : IAsyncDisposable
         var vault = Row(runtime, "vault");
         Assert.AreEqual(DestinationSyncState.InSync, vault.State, vault.LastError);
         Assert.Contains(taken.Key, VaultBlobs(Vault));
+        Assert.AreEqual(2, VaultSnapshots(Vault), "the record did not follow its blobs");
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPath_TheCopyLeftShort_IsSentNoRecordOfThatBackup()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false, LocalPath("vault", Vault));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        Assert.AreEqual(1, VaultSnapshots(Vault), "the premise: the path holds the first backup's record");
+
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        TakeAway(StagingBlobs(runtime).Except(VaultBlobs(Vault), StringComparer.Ordinal), "data", Staging(runtime));
+        await SyncAsync(runtime, "vault");
+
+        Assert.AreEqual(1, VaultSnapshots(Vault), "the path was sent the record of a backup it cannot restore");
+        Assert.Contains("record was not sent", Row(runtime, "vault").LastError!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPathUnderARetentionPolicy_TheConvergeLeftShort_IsSentNoRecordOfThatBackup()
+    {
+        // A destination under a policy is converged to its keep-set rather
+        // than copied to, and the converge holds the record back the same way.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false, new RetentionConfiguration { MinGenerations = 10 }, LocalPath("vault", Vault));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        Assert.AreEqual(1, VaultSnapshots(Vault), "the premise: the path holds the first backup's record");
+
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        TakeAway(StagingBlobs(runtime).Except(VaultBlobs(Vault), StringComparer.Ordinal), "data", Staging(runtime));
+        await SyncAsync(runtime, "vault");
+
+        Assert.AreEqual(DestinationSyncState.Failed, Row(runtime, "vault").State, Row(runtime, "vault").LastError);
+        Assert.AreEqual(1, VaultSnapshots(Vault), "the path was sent the record of a backup it cannot restore");
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPeer_ThePushLeftShort_IsSentNoRecordOfThatBackup()
+    {
+        var friend = StartPeer("friend");
+        WriteConfiguration(directShip: false, Peer(friend));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        var recordsBefore = friend.Snapshots().Count;
+        Assert.AreEqual(1, recordsBefore, "the premise: the peer holds the first backup's record");
+
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        TakeAway(StagingBlobs(runtime).Except(friend.Blobs(), StringComparer.Ordinal), "data", Staging(runtime));
+        await SyncAsync(runtime, "friend");
+
+        Assert.HasCount(recordsBefore, friend.Snapshots(), "the peer was pushed the record of a backup it cannot restore");
+        Assert.Contains("record was not sent", Row(runtime, "friend").LastError!, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -205,6 +271,11 @@ public sealed class InSyncClosureTests : IAsyncDisposable
     }
 
     private void WriteConfiguration(bool directShip, params DestinationConfiguration[] destinations) =>
+        WriteConfiguration(directShip, retention: null, destinations);
+
+    /// <summary>Writes the set, each destination under <paramref name="retention"/> where one is given.</summary>
+    private void WriteConfiguration(
+        bool directShip, RetentionConfiguration? retention, params DestinationConfiguration[] destinations) =>
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
@@ -217,7 +288,11 @@ public sealed class InSyncClosureTests : IAsyncDisposable
                     Name = "docs",
                     Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
                     Schedule = "every 1h",
-                    Destinations = [.. destinations.Select(destination => new SetDestinationReference { Ref = destination.Name })],
+                    Destinations =
+                    [
+                        .. destinations.Select(destination =>
+                            new SetDestinationReference { Ref = destination.Name, Retention = retention }),
+                    ],
                     DirectShip = directShip,
                 },
             ],
@@ -285,6 +360,13 @@ public sealed class InSyncClosureTests : IAsyncDisposable
 
     /// <summary>The one replica directory a local path holds for the set.</summary>
     private static string Replica(string vault) => Assert.ContainsSingle(Directory.GetDirectories(vault));
+
+    /// <summary>How many snapshot records a local path holds for the set.</summary>
+    private static int VaultSnapshots(string vault) =>
+        Directory.GetDirectories(vault)
+            .Select(replica => Path.Combine(replica, "snapshots"))
+            .Where(Directory.Exists)
+            .Sum(snapshots => Directory.GetFiles(snapshots, "*", SearchOption.AllDirectories).Length);
 
     private static List<string> VaultBlobs(string vault) =>
         Directory.Exists(vault) ? [.. Directory.GetDirectories(vault).SelectMany(BlobsUnder)] : [];
