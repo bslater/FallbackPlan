@@ -145,7 +145,61 @@ public sealed class InSyncClosureTests : IAsyncDisposable
         await SyncAsync(runtime, "friend");
 
         Assert.HasCount(recordsBefore, friend.Snapshots(), "the peer was pushed the record of a backup it cannot restore");
-        Assert.Contains("record was not sent", Row(runtime, "friend").LastError!, StringComparison.Ordinal);
+        var row = Row(runtime, "friend");
+        Assert.Contains("record was not sent", row.LastError!, StringComparison.Ordinal);
+        Assert.IsLessThan(row.OwedBytes, row.HeldBytes, "the peer was counted as holding a record it was not sent");
+    }
+
+    [TestMethod]
+    public async Task APathThatMissedTwoBackups_TheNewestShort_IsSentTheOlderRecord_AndNotTheNewest()
+    {
+        // Only the newest backup's closure is known to the sync, so only its
+        // record is held back: the backup before it is whole, and its record
+        // goes.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false, LocalPath("vault", Vault));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        var afterSecond = StagingBlobs(runtime);
+        await BackUpAloneAsync(runtime, start.AddHours(2), "docs/d.txt", 'd');
+        var newestOnly = StagingBlobs(runtime).Except(afterSecond, StringComparer.Ordinal).Except(VaultBlobs(Vault), StringComparer.Ordinal);
+        TakeAway(newestOnly, "data", Staging(runtime));
+        await SyncAsync(runtime, "vault");
+
+        Assert.AreEqual(DestinationSyncState.Failed, Row(runtime, "vault").State, Row(runtime, "vault").LastError);
+        Assert.AreEqual(2, VaultSnapshots(Vault), "the path was not sent the whole backup's record, or was sent the short one's");
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPeer_HoldingTheRecordAlready_KeepsIt_AndIsNotToldItWasHeldBack()
+    {
+        // The peer took the second backup whole, then lost one of its blobs,
+        // which staging has lost too. The record is already there: nothing is
+        // held back, and the ledger does not say it was.
+        var friend = StartPeer("friend");
+        WriteConfiguration(directShip: false, Peer(friend));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        var firstBlobs = friend.Blobs();
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        await SyncAsync(runtime, "friend");
+        Assert.HasCount(2, friend.Snapshots(), "the premise: the peer took the second backup whole");
+
+        var taken = TakeAway(friend.Blobs().Except(firstBlobs, StringComparer.Ordinal), "data", Staging(runtime));
+        friend.Lose(taken.Key);
+        await SyncAsync(runtime, "friend");
+
+        var row = Row(runtime, "friend");
+        Assert.AreEqual(DestinationSyncState.Failed, row.State, row.LastError);
+        Assert.HasCount(2, friend.Snapshots(), "the peer lost a record it held");
+        Assert.DoesNotContain("record was not sent", row.LastError!, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -335,10 +389,10 @@ public sealed class InSyncClosureTests : IAsyncDisposable
         await pass.Drills.WaitAsync(Timeout);
     }
 
-    /// <summary>A second backup, of one more file, with no sync after it.</summary>
-    private async Task BackUpAloneAsync(ServiceRuntime runtime, DateTimeOffset at)
+    /// <summary>Another backup, of one more file, with no sync after it.</summary>
+    private async Task BackUpAloneAsync(ServiceRuntime runtime, DateTimeOffset at, string file = "docs/c.txt", char fill = 'c')
     {
-        _harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        _harness.WriteSourceFile(file, new string(fill, 30_000));
         var ran = await Scheduler.Enqueue(runtime, runtime.Configuration.BackupSets.Single(), at, userInitiated: true)
             .WaitAsync(Timeout);
         Assert.AreEqual("ran", ran.Outcome, ran.Detail);
