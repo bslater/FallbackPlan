@@ -89,6 +89,11 @@ internal static class ReplicationInitiator
     /// What a verified <paramref name="ReplicationReceipt"/> lets the ledger
     /// count the destination as holding in full.
     /// </param>
+    /// <param name="WithheldBytes">
+    /// Of <paramref name="OwedBytes"/>, the bytes of the records this push
+    /// held back (ADR-0198 Amendment 3): owed, and not sent, so a verified
+    /// receipt does not stand for them.
+    /// </param>
     /// <param name="ReplicationReceipt">
     /// The destination's statement of what this push created and what it
     /// holds now, when one arrived and passed every check
@@ -119,7 +124,8 @@ internal static class ReplicationInitiator
         long OwedBytes = 0,
         VerifiedReplicationReceipt? ReplicationReceipt = null,
         string? ReplicationReceiptProblem = null,
-        ClockObservation? ObservedClock = null);
+        ClockObservation? ObservedClock = null,
+        long WithheldBytes = 0);
 
     /// <summary>This machine's clock, for bracketing an exchange a peer stamps.</summary>
     internal static ulong UnixMillisecondsNow() => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -313,6 +319,8 @@ internal static class ReplicationInitiator
             var owedBytes = 0L;
             var bytesSent = 0L;
             var resumed = 0L;
+            var withheldBytes = 0L;
+
             // Records go last, as a copy sends them: a record's presence is what
             // says the backup is there (ADR-0011), and a source that is a union
             // of planes may list a record before the blobs it names.
@@ -342,6 +350,7 @@ internal static class ReplicationInitiator
                 if (!held.Contains(record.Key.Value) && withholds is not null && withholds(record.Key.Value))
                 {
                     owedBytes += record.Length;
+                    withheldBytes += record.Length;
                     continue;
                 }
 
@@ -428,6 +437,7 @@ internal static class ReplicationInitiator
                     (long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held, convergenceWithheld)
                 {
                     OwedBytes = owedBytes,
+                    WithheldBytes = withheldBytes,
                     ReplicationReceipt = replicationReceipt,
                     ObservedClock = observedClock,
                     ReplicationReceiptProblem = replicationReceiptProblem,
@@ -467,6 +477,7 @@ internal static class ReplicationInitiator
                 return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held)
                 {
                     OwedBytes = owedBytes,
+                    WithheldBytes = withheldBytes,
                     ReplicationReceipt = replicationReceipt,
                     ObservedClock = observedClock,
                     ReplicationReceiptProblem = replicationReceiptProblem,
@@ -513,6 +524,7 @@ internal static class ReplicationInitiator
                 Receipt = receipt,
                 ReceiptProblem = receiptProblem,
                 OwedBytes = owedBytes,
+                WithheldBytes = withheldBytes,
                 ReplicationReceipt = replicationReceipt,
                 ObservedClock = observedClock,
                 ReplicationReceiptProblem = replicationReceiptProblem,

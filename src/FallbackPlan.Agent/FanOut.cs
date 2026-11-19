@@ -2209,7 +2209,10 @@ public static class FanOut
         // Verified is what counts, filed or not: the attestation was made and
         // checked, and a copy this side could not keep changes nothing about
         // what the peer holds.
-        ledger.RecordCompleteness(set.Id, destination.Name, outcome.OwedBytes, outcome.OwedBytes, nowMs);
+        // Less what the push held back, which the receipt cannot stand for
+        // (ADR-0198 Amendment 3).
+        ledger.RecordCompleteness(
+            set.Id, destination.Name, outcome.OwedBytes - outcome.WithheldBytes, outcome.OwedBytes, nowMs);
 
         // The receipt's stamp against this clock either side of the exchange
         // (NFR-TIME-002): what the set's next capture records in its manifest.
