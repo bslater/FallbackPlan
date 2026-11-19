@@ -13,6 +13,7 @@
   - a local path that was away for the first backup is seeded from the peer;
   - a peer that refused the first backup is seeded from the one that took it;
   - with the one whole peer unreachable, the store is left behind naming it, and holds no snapshot;
+  - with the one whole peer away, a second peer is left behind naming it, and is pushed no snapshot;
   - with no peer at all, a local path whose sibling holds the only whole copy and is unplugged is left behind naming the sibling, and is handed no snapshot it lacks.
 
 ---

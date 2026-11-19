@@ -136,6 +136,28 @@ public sealed class SyncSourceTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task TwoPeers_TheWholeOneAway_LeaveTheOtherBehind_NamingIt_AndPushItNoSnapshot()
+    {
+        var friend = StartPeer("friend");
+        var neighbour = StartPeer("neighbour", admitsUs: false);
+        WriteConfiguration(Peer(friend), Peer(neighbour));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await PassAsync(runtime, DateTimeOffset.Now);
+        Assert.IsNotEmpty(friend.Blobs(), "the premise: the first peer took the backup");
+
+        await friend.StopAsync();
+        neighbour.Admit(_harness.StateDirectory);
+        await SyncAsync(runtime, "neighbour");
+
+        var row = Row(runtime, "neighbour");
+        Assert.AreEqual(DestinationSyncState.Behind, row.State, row.LastError);
+        Assert.Contains("'friend'", row.LastError!, StringComparison.Ordinal);
+        Assert.IsEmpty(neighbour.Snapshots(), "the second peer was pushed a snapshot whose blobs it lacks");
+    }
+
+    [TestMethod]
     public async Task TwoLocalPaths_TheOnlyWholeCopyUnplugged_LeaveTheOtherBehind_AndCopyItNoSnapshotItLacks()
     {
         // No peer at all: the second path took a backup the first missed,
@@ -352,6 +374,18 @@ public sealed class SyncSourceTests : IAsyncDisposable
             var replicas = Path.Combine(State, "replicas");
             return Directory.Exists(replicas)
                 ? [.. Directory.GetDirectories(replicas).SelectMany(BlobsUnder)]
+                : [];
+        }
+
+        /// <summary>Each snapshot object this peer holds for the installation.</summary>
+        public List<string> Snapshots()
+        {
+            var replicas = Path.Combine(State, "replicas");
+            return Directory.Exists(replicas)
+                ? [.. Directory.GetDirectories(replicas)
+                    .Select(replica => Path.Combine(replica, "snapshots"))
+                    .Where(Directory.Exists)
+                    .SelectMany(snapshots => Directory.GetFiles(snapshots, "*", SearchOption.AllDirectories))]
                 : [];
         }
 
