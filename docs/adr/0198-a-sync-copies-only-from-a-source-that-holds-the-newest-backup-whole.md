@@ -2,12 +2,13 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-DEST-014 (amended: catch-up seeds a direct-ship set's destination only from a source that holds the set's newest backup whole, a peer's replica read over the retrieval session where no destination this machine reads outside a run holds it; and a destination none can seed is left behind, naming where the backup is held, with nothing copied that it could not complete)
+**Requirements:** FR-DEST-014 (amended: catch-up seeds a direct-ship set's destination only from a source that holds the set's newest backup whole, a peer's replica read over the retrieval session where no destination this machine reads outside a run holds it; and a destination none can seed is left behind, naming where the backup is held, with nothing copied that it could not complete); FR-DEST-014 (amended by [Amendment 1](#amendment-1-2026-11--a-destination-that-holds-every-blob-is-brought-current-without-the-peer): a destination whose own listing shows every blob the set's index locates is brought current from this machine's metadata when no whole destination can be read, and no verification is claimed for that pass)
 **Related:** [ADR-0046](0046-direct-to-destination-publication.md) §2 (the union across destinations, and the invariant that made it sufficient), [ADR-0058](0058-peer-write-adapter.md) §5 (outside a run the sink does not read a peer), [ADR-0041](0041-guided-restore-and-peer-retrieval.md) (the retrieval session), [ADR-0047](0047-backup-pool-and-priorities.md) (the sync ledger), [ADR-0074](0074-background-byte-rate-limits.md) (a destination's transfer limit), [ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md) decision 2 (beside a peer, a store is filled after the run)
 
 **Built:**
 - The source: `Agent/SyncSource` decides, before a sync copies, what it reads: the set's archive where that holds the newest backup whole, the archive with a whole peer's replica behind it for blobs where only a peer does, or nothing, with the reason. `Agent/PeerFilledObjectStore` is the archive with the peer behind it. `Agent/DestinationShipSink` names the destinations a read through it can be answered by now (`ReadableHolders`).
 - The copy: `Agent/FanOut` reads that source for the copy to a local path or a store and for the push to a peer, samples and verifies from it, and records a destination it could not seed as behind. A sync that reads from a peer logs event 3702.
+- The destination's own blobs: where no whole destination can be read, `Agent/SyncSource` lists the destination's blobs and, if it holds every blob the set's index locates, serves the archive for the metadata it lacks, and `Agent/FanOut` samples nothing for that pass; the sync logs event 3703 (Amendment 1).
 - The tests: `Hosts.Tests/SyncSourceTests`:
   - beside a peer, a store is filled with every blob the peer holds, and is in sync;
   - a local path that was away for the first backup is seeded from the peer;
@@ -15,6 +16,7 @@
   - with the one whole peer unreachable, the store is left behind naming it, and holds no snapshot;
   - with the one whole peer away, a second peer is left behind naming it, and is pushed no snapshot;
   - with no peer at all, a local path whose sibling holds the only whole copy and is unplugged is left behind naming the sibling, and is handed no snapshot it lacks.
+  - `Hosts.Tests/StoreBesideAPeerTests` (Amendment 1): with the peer away, a store the run sent every blob is brought current, after the first backup and after a second, and claims no verification; a store missing a blob, or one that took nothing from the run before, is left behind naming the peer and holds no snapshot.
 
 ---
 
@@ -57,6 +59,8 @@ The peer read is never the destination being synced. So a verification that read
 
 The destination is recorded **behind**, with a reason that names each destination holding the newest backup whole and says why it could not be read. Behind, not failed, so the next pass tries again at once. A peer that answers then fills it; a path plugged back in serves through the archive.
 
+> **Amended 2026-11 ([Amendment 1](#amendment-1-2026-11--a-destination-that-holds-every-blob-is-brought-current-without-the-peer)).** Unless the destination holds every blob already: its own listing is asked, and one that holds every blob the set's index locates is brought current from the metadata here.
+
 Nothing is copied first. A partial copy would carry snapshots whose blobs are missing, which is the false claim this record removes.
 
 ## Consequences
@@ -85,9 +89,39 @@ Nothing is copied first. A partial copy would carry snapshots whose blobs are mi
 
 **Stage a direct-ship set beside a peer.** That is the copy of the backup on the machine that direct-ship exists to avoid ([ADR-0046](0046-direct-to-destination-publication.md)).
 
+## Amendment 1 (2026-11) — a destination that holds every blob is brought current without the peer
+
+**Requirements:** FR-DEST-014 (amended: where no whole destination can be read, a destination whose own listing shows every blob the set's index locates is brought current from this machine's metadata, and that pass claims no verification)
+
+### Context
+
+Beside a peer alone, a run now sends each blob it writes on to the set's store as it goes ([ADR-0196 Amendment 8](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-8-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-peer-from-a-copy-kept-here)). A store that took every blob lacks only the snapshot and the index, and both are on this machine. Decision 3 still left it behind while the peer did not answer, because the ledger named the peer as the only whole destination.
+
+The owner asked that a store the run sent every blob be brought current without the peer.
+
+### Decision
+
+1. **The destination's own listing is the evidence.** Where decision 3 would refuse, the sync lists the destination's blobs and asks whether it holds every blob the set's index locates. The catalogue names each blob some object is located in, and the repository's keys give the store key it is filed under.
+2. **If it holds them all, the archive serves.** The copy carries the snapshots and the index from the metadata here. Every blob they name is at the destination already, so nothing it copies lacks its closure.
+3. **That pass proves nothing.** Nothing the archive reads is a copy of the destination's blobs. So the pass draws no verification samples and records the destination in sync with no proof, rather than a proof drawn from the metadata plane (ADR-0058 §8's concern). The next pass that reads a whole peer samples again.
+4. **Only where nothing whole answers.** A readable whole destination, or a whole peer that answers, is still the source, as decisions 1 and 2 say. The listing is paid only when the sync would otherwise refuse.
+5. **A local path or a store only.** A peer's replica is listed over the session the push holds, which this does not reach.
+
+### Consequences
+
+- **A store beside a peer becomes current with the peer away,** once the run has sent it every blob. A peer that is often away no longer leaves the off-site copy behind between its visits.
+- **A store that missed a blob stays behind,** whatever the run sent it: the check reads what the store holds, not what was sent.
+- **The fallback costs a listing of the destination's blobs,** one request per page at a store.
+
+### What this does not do
+
+- **Count the store whole on the run's word.** That was the option first asked for: record in the ledger that the run sent the store every blob it wrote, when the store held the backup before whole. It is not enough. A run does not write a blob the index already locates, nor one a backup resumed after a crash shipped before the crash, and the store need not have been sent either. The listing asks the store what it holds, which covers both.
+- **Verify the destination's blobs.** They are proved by the next pass that reads a whole copy, or by the replica sweep.
+
 ## Status history
 
 | Date | Status | Note |
 |---|---|---|
 | 2026-11 | Accepted | Built in one slice, tests first. Before it, every sync of a store beside a peer recorded the store in sync holding snapshots and no blobs, and a local path that missed a backup beside a peer was seeded the same way. `Agent/SyncSource`; `Agent/PeerFilledObjectStore`; `Agent/DestinationShipSink`; `Agent/FanOut`; `Hosts.Tests/SyncSourceTests` |
 | 2026-11 | Amended (related) | [ADR-0196 Amendment 8](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-8-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-peer-from-a-copy-kept-here): the double crossing this record left is mostly gone. Beside a peer alone, the run sends each blob on to the store as it goes, from a copy kept in a bounded room on this machine; the sync reads from the peer only what found no room or went unsent. |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-destination-that-holds-every-blob-is-brought-current-without-the-peer): where no whole destination can be read, a destination whose own listing shows every blob the set's index locates is brought current from the metadata here, with no verification claimed for that pass; decision 3 noted. A ledger claim on the run's word was considered and set aside, since a run does not write a blob it reuses. `Agent/SyncSource`; `Agent/FanOut`; `Hosts.Tests/StoreBesideAPeerTests`; `Hosts.Tests/SyncSourceTests` |

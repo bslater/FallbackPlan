@@ -233,7 +233,9 @@ a sync reads it only while one of those holds the newest backup whole, by
 the ledger. Where only a peer does, it reads the peer's blobs over the
 retrieval session, behind the union; where no whole destination can be
 read, it copies nothing and leaves the destination behind, naming where the
-backup is held ([ADR-0198](../adr/0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md)).
+backup is held ([ADR-0198](../adr/0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md)),
+unless the destination's own listing shows every blob the index locates, when
+the metadata here brings it current ([Amendment 1](../adr/0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md#amendment-1-2026-11--a-destination-that-holds-every-blob-is-brought-current-without-the-peer)).
 
 **Run scope.** A run writes to the set's defect-free, reachable destinations
 that hold a **baseline** — or all reachable ones when the set

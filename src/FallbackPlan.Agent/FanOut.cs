@@ -1395,7 +1395,7 @@ public static class FanOut
         await using var source = scope == SyncScope.Skip
             ? null
             : await SyncSource.ComposeAsync(
-                runtime, set, destination, archive, syncedSequence, userInitiated, cancellationToken)
+                runtime, set, destination, archive, syncedSequence, userInitiated, cancellationToken, replica)
                 .ConfigureAwait(false);
         if (source?.Refusal is { } unreadable)
         {
@@ -1404,12 +1404,17 @@ public static class FanOut
         }
 
         var readFrom = source?.Store ?? archive.Store;
-        var plan = await VerificationSampler.SampleAsync(
-            readFrom, keeps, newestSnapshot, previous?.SampleCursor,
-            VerificationSampler.DefaultBudget,
-            destination.Kind == DestinationKind.LocalPath ? 0 : VerificationSampler.PeerReservoirShare,
-            Protocol.VerificationChallenge.MaximumLength, cancellationToken, copyScope)
-            .ConfigureAwait(false);
+
+        // A destination brought current from the metadata here holds blobs
+        // nothing here copies, so nothing here can stand as their proof.
+        var plan = source is { ProvesContent: false }
+            ? new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor)
+            : await VerificationSampler.SampleAsync(
+                readFrom, keeps, newestSnapshot, previous?.SampleCursor,
+                VerificationSampler.DefaultBudget,
+                destination.Kind == DestinationKind.LocalPath ? 0 : VerificationSampler.PeerReservoirShare,
+                Protocol.VerificationChallenge.MaximumLength, cancellationToken, copyScope)
+                .ConfigureAwait(false);
 
         // The converge spare (FR-GC-009's direct-ship shape): under
         // direct-ship the replicas are the only holders, so before this

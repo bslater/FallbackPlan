@@ -406,6 +406,13 @@ internal static partial class Log
         Message = "Set {Set}: destination {Destination} is filled from peer {Peer}, as no destination this machine reads outside a run holds the newest backup whole")]
     internal static partial void SyncReadsFromPeer(ILogger logger, LogLabel set, LogLabel destination, LogLabel peer);
 
+    // Information: the destination's own listing shows every blob the index
+    // locates, so the metadata here brings it current (ADR-0198 Amendment 1).
+    [LoggerMessage(
+        EventId = 3703, Level = LogLevel.Information,
+        Message = "Set {Set}: destination {Destination} holds every blob the set's index locates, and is brought current from this machine's metadata")]
+    internal static partial void SyncHoldsEveryBlob(ILogger logger, LogLabel set, LogLabel destination);
+
     // Warning: a queued job with no tracked cancellation cannot be run and is
     // discarded — unreachable while identities stay fresh, and the silent
     // version of this is an awaiter that hangs forever.
