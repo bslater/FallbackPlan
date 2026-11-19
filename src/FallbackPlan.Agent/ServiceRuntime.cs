@@ -100,6 +100,15 @@ public sealed record ServiceOptions
     internal int? CheckpointThresholdOverride { get; init; }
 
     /// <summary>
+    /// The bytes a direct-ship run beside a peer alone may keep on this
+    /// machine while it sends its blobs on to the set's stores (ADR-0196
+    /// Amendment 8). A test harness's knob, so a suite can fill the room with
+    /// one blob; null, the production value, is
+    /// <see cref="WriteBehindRoom.DefaultCapacityBytes"/>.
+    /// </summary>
+    internal long? WriteBehindRoomOverride { get; init; }
+
+    /// <summary>
     /// The installation's state directory, where a restore in direct mode
     /// that named none says it is under way (ADR-0172 Amendment 7). A test
     /// harness's knob, so a suite never looks at the machine's; null, the

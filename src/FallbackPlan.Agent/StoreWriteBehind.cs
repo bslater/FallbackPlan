@@ -11,7 +11,9 @@ namespace FallbackPlan.Agent;
 /// ([ADR-0196](../../docs/adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md)
 /// Amendment 6): each blob the run lands on a local path is sent on to the
 /// store, one at a time and in the order it landed, read back from that local
-/// path. The run never waits on it.
+/// path. The run never waits on it. Beside a peer alone it is read back from
+/// the copy the run keeps of it on this machine (Amendment 8), and a blob the
+/// run had no room to keep a copy of is left to the sync.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -37,18 +39,22 @@ internal sealed class StoreWriteBehind : IDisposable
     private readonly IObjectStore _store;
     private readonly IReadOnlyList<IObjectStore> _sources;
     private readonly ILogger _log;
+    private readonly Func<ObjectKey, ValueTask>? _onSent;
     private Task _sending = Task.CompletedTask;
     private int _offered;
     private int _sent;
+    private int _left;
     private string? _stoppedBecause;
 
     private StoreWriteBehind(
-        string destinationName, IObjectStore store, IReadOnlyList<IObjectStore> sources, ILogger log)
+        string destinationName, IObjectStore store, IReadOnlyList<IObjectStore> sources, ILogger log,
+        Func<ObjectKey, ValueTask>? onSent)
     {
         DestinationName = destinationName;
         _store = store;
         _sources = sources;
         _log = log;
+        _onSent = onSent;
     }
 
     /// <summary>The store's destination name.</summary>
@@ -60,12 +66,17 @@ internal sealed class StoreWriteBehind : IDisposable
     /// </summary>
     /// <param name="destinationName">The store's destination name, for the ledger and the log.</param>
     /// <param name="store">The store, as the run writes to it.</param>
-    /// <param name="sources">The local paths the run writes through, in the order to read a blob back from.</param>
+    /// <param name="sources">
+    /// The local paths the run writes through, in the order to read a blob back
+    /// from, or the room the run keeps its copies in.
+    /// </param>
     /// <param name="log">Where a stop is said.</param>
+    /// <param name="onSent">Told each blob the store has taken, so a copy kept for it can go.</param>
     public static StoreWriteBehind Start(
-        string destinationName, IObjectStore store, IReadOnlyList<IObjectStore> sources, ILogger log)
+        string destinationName, IObjectStore store, IReadOnlyList<IObjectStore> sources, ILogger log,
+        Func<ObjectKey, ValueTask>? onSent = null)
     {
-        var writeBehind = new StoreWriteBehind(destinationName, store, sources, log);
+        var writeBehind = new StoreWriteBehind(destinationName, store, sources, log, onSent);
         writeBehind._sending = Task.Run(writeBehind.SendAsync);
         return writeBehind;
     }
@@ -83,6 +94,16 @@ internal sealed class StoreWriteBehind : IDisposable
     }
 
     /// <summary>
+    /// Counts a blob the run wrote and had no room to keep a copy of: it is
+    /// the sync's, and the blobs after it are still sent.
+    /// </summary>
+    public void Leave()
+    {
+        Interlocked.Increment(ref _offered);
+        Interlocked.Increment(ref _left);
+    }
+
+    /// <summary>
     /// Ends the write-behind, an upload in flight with it, and says what it
     /// did: the store's behind detail until the sync that follows the run.
     /// </summary>
@@ -94,15 +115,21 @@ internal sealed class StoreWriteBehind : IDisposable
 
         var sent = Volatile.Read(ref _sent);
         var offered = Volatile.Read(ref _offered);
+        var left = Volatile.Read(ref _left);
+        var noRoom = left > 0
+            ? string.Format(
+                CultureInfo.InvariantCulture,
+                "; {0} found no room on this machine to wait in", left)
+            : string.Empty;
         return _stoppedBecause is { } reason
             ? string.Format(
                 CultureInfo.InvariantCulture,
-                "the run stopped sending its blobs on to it after {0} of {1}: {2}; the sync that follows sends the rest, and the snapshot",
-                sent, offered, reason)
+                "the run stopped sending its blobs on to it after {0} of {1}: {2}{3}; the sync that follows sends the rest, and the snapshot",
+                sent, offered, reason, noRoom)
             : string.Format(
                 CultureInfo.InvariantCulture,
-                "{0} of the {1} blob(s) the run wrote went up as the run went; the sync that follows sends the rest, and the snapshot",
-                sent, offered);
+                "{0} of the {1} blob(s) the run wrote went up as the run went{2}; the sync that follows sends the rest, and the snapshot",
+                sent, offered, noRoom);
     }
 
     /// <inheritdoc />
@@ -121,6 +148,10 @@ internal sealed class StoreWriteBehind : IDisposable
                 _ = await _store.PutAsync(key, token => ReadBackAsync(key, token), PutConditions.IfNotExists, ending)
                     .ConfigureAwait(false);
                 Interlocked.Increment(ref _sent);
+                if (_onSent is { } sent)
+                {
+                    await sent(key).ConfigureAwait(false);
+                }
             }
         }
         catch (Exception) when (ending.IsCancellationRequested)
@@ -151,6 +182,6 @@ internal sealed class StoreWriteBehind : IDisposable
             }
         }
 
-        throw new IOException($"Blob {key.Value} is at none of the run's local paths to be sent on from.");
+        throw new IOException($"Blob {key.Value} is at none of the run's local paths, nor kept here, to be sent on from.");
     }
 }

@@ -4408,7 +4408,8 @@ function setSectionHtml(key) {
         reachable destinations as it runs, and this machine keeps only the catalogue. A local path or a paired
         peer is written as the backup runs. An S3-compatible store or an Azure Blob container beside a local path
         is sent each backup's data as it runs, without the backup waiting on it, and the sync after each run sends
-        the rest. Beside a peer alone, a store is filled by the sync after each run, from what the run shipped.
+        the rest. Beside a peer alone, a store is sent each backup's data as it runs too, from a copy this machine
+        keeps until the store has it, in a bounded room; what finds no room, the sync after each run reads back from the peer.
         A set whose only destinations are stores writes through them as each backup runs, each write a request. A backup waits when nothing it can write
         to is reachable. With only a peer to ship to, there is no second copy here to check its content against,
         so it is never reported as verified. Unticked, backups stage into a local archive first and copy outward

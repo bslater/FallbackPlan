@@ -35,7 +35,7 @@ public sealed class SyncSourceTests : IAsyncDisposable
     private readonly string _peersRoot = Path.Combine(Path.GetTempPath(), "fbp-sync-source", Guid.NewGuid().ToString("n"));
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(3));
     private readonly S3CompatibleTestServer _store = new();
-    private readonly List<TestPeer> _peers = [];
+    private readonly List<LoopbackPeer> _peers = [];
 
     private CancellationToken Timeout => _timeout.Token;
 
@@ -192,7 +192,7 @@ public sealed class SyncSourceTests : IAsyncDisposable
         Assert.AreEqual(snapshotsBefore, VaultSnapshots(Vault), "the path was handed a snapshot whose blobs it lacks");
     }
 
-    private static DestinationConfiguration Peer(TestPeer peer) => new()
+    private static DestinationConfiguration Peer(LoopbackPeer peer) => new()
     {
         Id = peer.Name == "friend" ? new string('1', 32) : new string('4', 32),
         Name = peer.Name,
@@ -264,9 +264,9 @@ public sealed class SyncSourceTests : IAsyncDisposable
     /// Starts a peer listening that holds replicas for this installation, and
     /// pairs it here; it admits this installation now, or once told to.
     /// </summary>
-    private TestPeer StartPeer(string name, bool admitsUs = true)
+    private LoopbackPeer StartPeer(string name, bool admitsUs = true)
     {
-        var peer = new TestPeer(name, Path.Combine(_peersRoot, name));
+        var peer = LoopbackPeer.Start(name, Path.Combine(_peersRoot, name));
         _peers.Add(peer);
         PeerGrantStore.Open(_harness.StateDirectory).Pin(
             new PeerGrant(peer.Identity, name, PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
@@ -329,90 +329,6 @@ public sealed class SyncSourceTests : IAsyncDisposable
             ? Directory.GetFiles(blobs, "*", SearchOption.AllDirectories)
                 .Select(path => Path.GetRelativePath(replica, path).Replace('\\', '/'))
             : [];
-    }
-
-    /// <summary>A replication peer on loopback, with its own state directory.</summary>
-    private sealed class TestPeer : IAsyncDisposable
-    {
-        private readonly PeerKeypair _keypair;
-        private readonly PeerGrantStore _grants;
-        private RemoteServiceListener? _listener;
-
-        public TestPeer(string name, string state)
-        {
-            Name = name;
-            State = state;
-            _keypair = PeerKeypairStore.Open(state);
-            _grants = PeerGrantStore.Open(state);
-            _listener = RemoteServiceListener.Start(
-                _keypair, _grants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
-                log: null, replicationStateDirectory: state);
-            _listener.Bind(new UnusedService());
-            Endpoint = _listener.Endpoint;
-        }
-
-        public string Name { get; }
-
-        public string State { get; }
-
-        public IPEndPoint Endpoint { get; }
-
-        public Protocol.PeerIdentity Identity => _keypair.Identity;
-
-        public string Fingerprint => _keypair.Identity.Fingerprint;
-
-        /// <summary>Admits the installation whose state is at <paramref name="sourceState"/> to store here.</summary>
-        public void Admit(string sourceState)
-        {
-            using var source = PeerKeypairStore.Open(sourceState);
-            _grants.Pin(new PeerGrant(source.Identity, "source", PeerRole.StoresHere, PeerTerms.None, 1_722_600_000_000));
-        }
-
-        /// <summary>Each blob this peer holds for the installation, by its key from <c>blobs/</c> on.</summary>
-        public List<string> Blobs()
-        {
-            var replicas = Path.Combine(State, "replicas");
-            return Directory.Exists(replicas)
-                ? [.. Directory.GetDirectories(replicas).SelectMany(BlobsUnder)]
-                : [];
-        }
-
-        /// <summary>Each snapshot object this peer holds for the installation.</summary>
-        public List<string> Snapshots()
-        {
-            var replicas = Path.Combine(State, "replicas");
-            return Directory.Exists(replicas)
-                ? [.. Directory.GetDirectories(replicas)
-                    .Select(replica => Path.Combine(replica, "snapshots"))
-                    .Where(Directory.Exists)
-                    .SelectMany(snapshots => Directory.GetFiles(snapshots, "*", SearchOption.AllDirectories))]
-                : [];
-        }
-
-        public async Task StopAsync()
-        {
-            if (_listener is { } listener)
-            {
-                _listener = null;
-                await listener.DisposeAsync();
-            }
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await StopAsync();
-            _keypair.Dispose();
-        }
-    }
-
-    /// <summary>The Bind contract needs a service; a replication peer never reaches it.</summary>
-    private sealed class UnusedService : IFallbackPlanService
-    {
-        public ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("a replication peer must not reach the command surface");
-
-        public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("a replication peer must not reach the command surface");
     }
 
     /// <inheritdoc />

@@ -73,6 +73,11 @@ public sealed class DestinationShipSink : IObjectStore
     // them, read from them, or fail with them.
     private List<StoreWriteBehind> _writesBehind = [];
 
+    // Where a run beside a peer alone keeps its blobs until those stores have
+    // them (ADR-0196 Amendment 8); null where the run reads them back from a
+    // local path, or sends no store anything.
+    private WriteBehindRoom? _room;
+
     /// <summary>This run's intersected capabilities; null outside a run.</summary>
     private StoreCapabilities? _capabilities;
     private bool _runActive;
@@ -417,12 +422,13 @@ public sealed class DestinationShipSink : IObjectStore
                 + (tried.Count > 0 ? " " + string.Join("; ", tried) + "." : string.Empty));
         }
 
-        var writesBehind = StartWritesBehind(besideStores, seeded, userInitiated, skipped);
+        var (writesBehind, room) = StartWritesBehind(set, besideStores, seeded, userInitiated, skipped);
 
         lock (_gate)
         {
             _inScope = seeded;
             _writesBehind = writesBehind;
+            _room = room;
             _capabilities = StoreCapabilities.Intersect(
                 [_metadata.Capabilities, .. seeded.Select(shipment => shipment.Store.Capabilities)]);
             _runActive = true;
@@ -442,16 +448,20 @@ public sealed class DestinationShipSink : IObjectStore
 
     /// <summary>
     /// Starts sending this run's blobs on to each store beside a local path
-    /// as they land (ADR-0196 Amendment 6), read back from the run's local
-    /// paths. A store with no local path in the run to read from, or that
-    /// cannot be written to as it stands, is left to the sync that follows
-    /// the run, as every store beside a local path or a peer was before.
+    /// or a peer as they land (ADR-0196 Amendments 6 and 8): read back from
+    /// the run's local paths, or, beside a peer alone, from the room the run
+    /// keeps its copies in. A store that cannot be written to as it stands,
+    /// or a run with neither to read from, is left to the sync that follows
+    /// the run.
     /// </summary>
+    /// <param name="set">The set the run backs up, whose room it is.</param>
     /// <param name="besideStores">The set's stores beside a local path or a peer.</param>
     /// <param name="seeded">The run's destinations, seeded.</param>
     /// <param name="userInitiated">Whether a person is waiting for the run; a background run's uploads are paced.</param>
     /// <param name="skipped">Where a store left to the sync alone is recorded behind.</param>
-    private List<StoreWriteBehind> StartWritesBehind(
+    /// <returns>The write-behinds started, and the room they read from where the run keeps one.</returns>
+    private (List<StoreWriteBehind> Started, WriteBehindRoom? Room) StartWritesBehind(
+        BackupSetConfiguration set,
         List<(DestinationConfiguration Destination, SetDestinationReference Reference)> besideStores,
         List<Shipment> seeded,
         bool userInitiated,
@@ -459,8 +469,23 @@ public sealed class DestinationShipSink : IObjectStore
     {
         // A local path, never a peer: a peer is reached only through its
         // exchange, and reading a blob back from it would be a retrieval
-        // session opened beside the run's own.
+        // session opened beside the run's own, the blob crossing the peer's
+        // link twice. Beside a peer alone the run keeps a copy here instead.
         List<IObjectStore> sources = [.. seeded.Where(shipment => shipment.Direct).Select(shipment => shipment.Unpaced)];
+        WriteBehindRoom? room = null;
+        if (sources.Count == 0 && besideStores.Count > 0 && seeded.Exists(shipment => !shipment.Direct))
+        {
+            room = WriteBehindRoom.Open(
+                Path.Combine(_runtime.Options.StateDirectory, "write-behind", set.Id),
+                _runtime.Options.WriteBehindRoomOverride ?? WriteBehindRoom.DefaultCapacityBytes,
+                AvailableBytesOn,
+                _log);
+            if (room is not null)
+            {
+                sources = [room.Copies];
+            }
+        }
+
         var started = new List<StoreWriteBehind>();
         foreach (var (destination, _) in besideStores)
         {
@@ -474,10 +499,17 @@ public sealed class DestinationShipSink : IObjectStore
                 destination.Name,
                 PacedObjectStore.Over(store, userInitiated ? null : _runtime.Pacing.ForDestination(destination)),
                 sources,
-                _log));
+                _log,
+                room is null ? null : room.SentAsync));
         }
 
-        return started;
+        if (started.Count == 0)
+        {
+            room?.Dispose();
+            room = null;
+        }
+
+        return (started, room);
     }
 
     /// <summary>
@@ -612,6 +644,7 @@ public sealed class DestinationShipSink : IObjectStore
         List<(string Name, DestinationSyncState State, string Error)> skipped;
         List<PeerShipStore> peers;
         List<StoreWriteBehind> writesBehind;
+        WriteBehindRoom? room;
         long shipped;
         ulong published;
         lock (_gate)
@@ -619,6 +652,8 @@ public sealed class DestinationShipSink : IObjectStore
             survivors = [.. _inScope];
             writesBehind = _writesBehind;
             _writesBehind = [];
+            room = _room;
+            _room = null;
             dropped = [.. _droppedThisRun.Select(pair => (pair.Key, pair.Value.State, pair.Value.Error))];
             skipped = [.. _skippedThisRun];
             peers = [.. _peersThisRun];
@@ -645,6 +680,9 @@ public sealed class DestinationShipSink : IObjectStore
             skipped.Add((writesBehind[i].DestinationName, DestinationSyncState.Behind, behindDetails[i]));
             writesBehind[i].Dispose();
         }
+
+        // Every copy kept for them goes with the run: none is read again.
+        room?.Dispose();
 
         // A peer's exchange is not finished until it has been told so and has
         // said how much it committed, and that count is the only evidence this
@@ -746,11 +784,13 @@ public sealed class DestinationShipSink : IObjectStore
 
         List<Shipment> targets;
         List<StoreWriteBehind> writesBehind;
+        WriteBehindRoom? room;
         bool runActive;
         lock (_gate)
         {
             targets = [.. _inScope];
             writesBehind = _writesBehind;
+            room = _room;
             runActive = _runActive;
         }
 
@@ -797,10 +837,23 @@ public sealed class DestinationShipSink : IObjectStore
 
             // Sent on once it has landed, read back from a local path. One
             // that landed at none, only at a peer, ends the write-behind there
-            // and is the sync's, with every blob after it.
+            // and is the sync's, with every blob after it. Beside a peer alone
+            // it is read back from a copy kept here, where there is room for
+            // one; one there is no room for is the sync's alone.
+            var kept = room is null
+                || (writesBehind.Count > 0
+                    && await room.TryKeepAsync(key, openContent, writesBehind.Count, cancellationToken)
+                        .ConfigureAwait(false));
             foreach (var writeBehind in writesBehind)
             {
-                writeBehind.Offer(key);
+                if (kept)
+                {
+                    writeBehind.Offer(key);
+                }
+                else
+                {
+                    writeBehind.Leave();
+                }
             }
         }
 
