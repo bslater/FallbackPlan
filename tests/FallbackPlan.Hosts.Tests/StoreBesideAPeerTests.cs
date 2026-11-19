@@ -40,15 +40,25 @@ public sealed class StoreBesideAPeerTests : IAsyncDisposable
     [TestMethod]
     public async Task TheRun_SendsItsBlobsOnToTheStoreAsItGoes_AndKeepsNoCopyOfThemAfter()
     {
+        // Held after its commit, the run is still going: every blob reaches
+        // the store, and each copy goes once the store has it, before the
+        // run's end would empty the room anyway.
         var everyBlobWentUp = false;
+        var everyCopyWent = false;
         await using var runtime = await StartAsync(
             roomBytes: null,
-            committed: async () => everyBlobWentUp = await EventuallyAsync(() =>
-                Friend.Blobs().Count > 0 && !Friend.Blobs().Except(StoreBlobs(), StringComparer.Ordinal).Any()));
+            committed: async () =>
+            {
+                everyBlobWentUp = await EventuallyAsync(() =>
+                    Friend.Blobs().Count > 0 && !Friend.Blobs().Except(StoreBlobs(), StringComparer.Ordinal).Any());
+                everyCopyWent = await EventuallyAsync(() => CopiesKept().Count == 0);
+                return everyBlobWentUp;
+            });
 
         await RunAloneAsync(runtime);
 
         Assert.IsTrue(everyBlobWentUp, "every blob the peer took reached the store while the run went on");
+        Assert.IsTrue(everyCopyWent, "each copy went once the store had it, while the run went on");
         var others = _store.KeysIn(Bucket).Where(key => !key.Contains("/blobs/", StringComparison.Ordinal)).ToList();
         Assert.IsEmpty(others, $"only blobs go up with the run: {string.Join(", ", others)}");
         var cloud = Row(runtime, "cloud");
@@ -102,6 +112,30 @@ public sealed class StoreBesideAPeerTests : IAsyncDisposable
         var cloud = Row(runtime, "cloud");
         Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
         Assert.Contains("room", cloud.LastError!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AStoreThatTakesNoUpload_NeverHoldsTheRun_AndNoCopyOutlivesIt()
+    {
+        // The store holds every upload unanswered, and the run is held after
+        // its commit until one is being held: the run ends with copies still
+        // waiting for the store, and they go with it.
+        _store.HoldPuts();
+        try
+        {
+            await using var runtime = await StartAsync(roomBytes: null, committed: () => HeldAsync(_store.APutIsHeld));
+
+            await RunAloneAsync(runtime);
+
+            Assert.IsTrue(_store.APutIsHeld.IsCompleted, "the run sent the store a blob as it went");
+            Assert.IsEmpty(CopiesKept(), "no copy outlives the run that kept it");
+            var cloud = Row(runtime, "cloud");
+            Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
+        }
+        finally
+        {
+            _store.ReleasePuts();
+        }
     }
 
     private LoopbackPeer Friend => _friend ?? throw new InvalidOperationException("no peer started");
@@ -211,6 +245,19 @@ public sealed class StoreBesideAPeerTests : IAsyncDisposable
 
     private List<string> CopiesKept() =>
         Directory.Exists(Room) ? [.. Directory.GetFiles(Room, "*", SearchOption.AllDirectories)] : [];
+
+    private static async Task<bool> HeldAsync(Task held)
+    {
+        try
+        {
+            await held.WaitAsync(TimeSpan.FromSeconds(20));
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
 
     private async Task<bool> EventuallyAsync(Func<bool> condition)
     {
