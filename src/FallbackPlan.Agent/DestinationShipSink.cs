@@ -965,53 +965,54 @@ public sealed class DestinationShipSink : IObjectStore
         // — can match both planes, and the planning copy must answer even
         // with every destination away.
         var value = prefix.Value;
+        var listings = new List<IAsyncEnumerable<ObjectEntry>>();
         if (!IsBlobKey(value))
         {
-            await foreach (var entry in _metadata.ListAsync(prefix, options, cancellationToken).ConfigureAwait(false))
-            {
-                // A metadata blob's copy here is never listed: a listing says
-                // what the destinations hold, and a copy taken from it would
-                // put back at a store what the store had dropped.
-                if (!IsBlobKey(entry.Key.Value))
-                {
-                    yield return entry;
-                }
-            }
-
-            if (value.Length > 0 && !"blobs/".StartsWith(value, StringComparison.Ordinal))
-            {
-                yield break;
-            }
+            listings.Add(MetadataListAsync(prefix, options, cancellationToken));
         }
 
-        // The union across destinations: a behind sibling lacks what it
-        // missed, and whoever holds a key answers for it. Every committed
-        // snapshot's closure exists somewhere in this union by construction.
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var blobPrefix = value.Length == 0 ? ObjectPrefix.Parse("blobs/") : prefix;
-        foreach (var holder in ReadOrder(holdingOnly: true))
+        if (IsBlobKey(value) || "blobs/".StartsWith(value, StringComparison.Ordinal))
         {
-            await foreach (var entry in holder.Store.ListAsync(blobPrefix, options, cancellationToken)
-                .ConfigureAwait(false))
+            // The union across destinations: a behind sibling lacks what it
+            // missed, and whoever holds a key answers for it, the first in
+            // read order where several do. Every committed snapshot's closure
+            // exists somewhere in this union by construction.
+            var blobPrefix = value.Length == 0 ? ObjectPrefix.Parse("blobs/") : prefix;
+            foreach (var holder in ReadOrder(holdingOnly: true))
             {
-                if (seen.Add(entry.Key.Value))
-                {
-                    yield return entry;
-                }
+                listings.Add(holder.Store.ListAsync(blobPrefix, options, cancellationToken));
             }
-        }
 
-        if (_stagingFallback is not null)
-        {
             // History awaiting retirement is part of the union — this is
             // what makes the catch-up copy carry it to the destinations.
-            await foreach (var entry in _stagingFallback.ListAsync(blobPrefix, options, cancellationToken)
-                .ConfigureAwait(false))
+            if (_stagingFallback is not null)
             {
-                if (seen.Add(entry.Key.Value))
-                {
-                    yield return entry;
-                }
+                listings.Add(_stagingFallback.ListAsync(blobPrefix, options, cancellationToken));
+            }
+        }
+
+        // Merged, not read one after another: the whole lists in key order
+        // as each part does, so a listing resumed after a key misses none
+        // (ADR-0012 Amendment 8).
+        await foreach (var entry in ListingMerge.MergeAsync(listings, cancellationToken).ConfigureAwait(false))
+        {
+            yield return entry;
+        }
+    }
+
+    private async IAsyncEnumerable<ObjectEntry> MetadataListAsync(
+        ObjectPrefix prefix,
+        ListOptions options,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var entry in _metadata.ListAsync(prefix, options, cancellationToken).ConfigureAwait(false))
+        {
+            // A metadata blob's copy here is never listed: a listing says
+            // what the destinations hold, and a copy taken from it would put
+            // back at a store what the store had dropped.
+            if (!IsBlobKey(entry.Key.Value))
+            {
+                yield return entry;
             }
         }
     }

@@ -2,7 +2,7 @@
 
 **Status:** Accepted (amended) · Partly implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
-**Requirements:** NFR-PORT-004, NFR-REL-005, NFR-COMP-005, FR-REP-002, FR-QUOTA-001 (amended by [Amendment 7](#amendment-7-2026-11--a-local-destination-with-no-room-left-says-so): a local destination with no room left says so); FR-DEST-001 (amended by [Amendment 6](#amendment-6-2026-11--a-local-destination-on-a-drive-that-holds-no-links): a local destination on a FAT32 or exFAT drive is written and read as any other)
+**Requirements:** NFR-PORT-004 (amended by [Amendment 8](#amendment-8-2026-11--a-store-in-front-of-others-lists-in-key-order): a store in front of others lists in key order, as each of them does), NFR-REL-005, NFR-COMP-005, FR-REP-002, FR-QUOTA-001 (amended by [Amendment 7](#amendment-7-2026-11--a-local-destination-with-no-room-left-says-so): a local destination with no room left says so); FR-DEST-001 (amended by [Amendment 6](#amendment-6-2026-11--a-local-destination-on-a-drive-that-holds-no-links): a local destination on a FAT32 or exFAT drive is written and read as any other)
 **Review finding:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
 ---
@@ -345,6 +345,8 @@ namespace sorts `/` before every other character. The one listing the
 product resumes against a store is a sweep's listing of blobs, whose keys
 all have the same shape, so the two orders agree on them.
 
+> **2026-11: the first limit is gone ([Amendment 8](#amendment-8-2026-11--a-store-in-front-of-others-lists-in-key-order)).** The sink merges its parts, and so does the one store of the same shape that came since, so either may be resumed. The Azure limit stands.
+
 ## Amendment 6 (2026-11) — a local destination on a drive that holds no links
 
 The local provider refuses a key whose path runs through a linked folder inside its root (Amendment 1; [05 §4.1](../architecture/05-storage-providers.md#41-local-filesystem)). It asked each folder on the path that exists for the link it holds, through `Directory.ResolveLinkTarget`. A FAT32 or exFAT volume holds no links and cannot say so: Windows refuses the request as a function the volume lacks ("Incorrect function"), and .NET throws on that refusal where an NTFS folder answers that it holds none.
@@ -390,6 +392,35 @@ Amendment 5 told a store with no room apart for the two network providers: `Stor
   - a staging sync to a local destination that fills reads unavailable, in the store's words;
   - a direct-ship run drops such a destination as unavailable, whether it filled part way through or was full before its first byte.
 
+## Amendment 8 (2026-11) — a store in front of others lists in key order
+
+Amendment 5 stated a limit: the direct-ship sink lists each of its parts in turn, so its listing is not in key order, and nothing may resume one until it merges them. A second store of that shape came since. `Agent/PeerFilledObjectStore`, the archive with a whole peer behind it that a sync reads ([ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md)), listed the archive whole and then the peer's blobs.
+
+- **What that would cost.** A reader that resumes after a key is listed only what sorts after it. A key a later part lists, sorting before one an earlier part listed, is never seen. A blob only the peer held, resumed past at the archive's index, was lost.
+- **Who relied on it.** Nothing resumes either listing today. The deep sweep, the one reader that resumes against a store, lists a destination, not the sink. The two readers that list the whole of either, the copy back from a destination and the push to a peer, put what they list in buckets of their own, and the sampler keeps its own order.
+
+**Decision.** A store in front of others lists in key order, as each of them does.
+
+- **The merge.** `Storage.Abstractions/ListingMerge` merges listings that are each in key order into one that is, comparing keys ordinally.
+- **A key two parts hold** is listed once, as the earliest part lists it. So a store puts first the part that answers for a key. The sink puts its metadata first, then its destinations in read order, then the staging copy awaiting retirement. The peer-filled store puts its archive, then the peer.
+- **An early stop** lets go of every part, not only the one being read.
+- **What went with it.** Each store kept every key it had listed so far, so as to list a key once; the merge keeps none. Two comments that said a listing of either might come in any order now say why their readers bucket what they list.
+
+**Not done.** An Azure account with a hierarchical namespace still sorts `/` first (Amendment 5).
+
+**Built:** `Storage.Abstractions/ListingMerge`; `Agent/DestinationShipSink`; `Agent/PeerFilledObjectStore`:
+
+- `Storage.ContractTests/ListingMergeTests`:
+  - listings interleaved in ordinal order, where a culture would order them otherwise;
+  - a key two hold listed once, as the first lists it;
+  - nothing from nothing;
+  - every part let go when the reader stops early, and each let go once when it reads to the end.
+- `Hosts.Tests/UnionListingOrderTests`:
+  - the peer-filled store lists first a blob only the peer holds, and a listing resumed after its second key lists the rest;
+  - a direct-ship set's archive, after a real backup, lists in ordinal order with no key twice, and resumed halfway lists exactly the rest.
+
+  Before the change, those three failed. Four more hold what each part answers for, which the rewrite could have lost and no test had held: the archive answers for a blob both it and the peer hold; the peer gives blobs only; the sink takes blobs only from its destinations and nothing else from them, and never lists its own copy of a metadata blob; and a peer that stops answering part way through a listing is named in the failure.
+
 ## Status history
 
 | Date | Status | Note |
@@ -407,3 +438,4 @@ Amendment 5 told a store with no room apart for the two network providers: `Stor
 | 2026-11 | Accepted (amended) | Amendment 6: the local provider asks a folder for its link only where the folder carries the reparse-point attribute, so a FAT32 or exFAT drive, which refuses the request, is written and read as any other. `Storage.Local/LocalFileSystemObjectStore`; `Storage.ContractTests/Fat32LocalFileSystemObjectStoreContractTests` |
 | 2026-11 | Accepted (amended) | Amendment 6's exFAT is tested: the provider contract runs on an exFAT volume as on the FAT32 one, where an elevated Windows process runs it. `Storage.ContractTests/ExFatLocalFileSystemObjectStoreContractTests`; `Storage.ContractTests/MountedVolumeContractTests` |
 | 2026-11 | Accepted (amended) | Amendment 7: a local destination's volume with no room is `Storage.Abstractions/StoreFullException`, naming the object, with nothing spooled left; such a destination reads unavailable, at a staging sync and when a direct-ship run drops it, as the free-space floor's does. `Storage.Local/LocalFileSystemObjectStore`; `Agent/FanOut`; `Agent/DestinationShipSink`; `Storage.ContractTests/LocalStoreFullTests`; `Hosts.Tests/LocalDestinationFullTests` |
+| 2026-11 | Accepted (amended) | Amendment 8: a store in front of others lists in key order, as each of them does. `Storage.Abstractions/ListingMerge` merges its parts, and a key more than one holds is listed once, as the first lists it. `Agent/DestinationShipSink` and `Agent/PeerFilledObjectStore` list through it, so Amendment 5's first stated limit is gone. `Storage.ContractTests/ListingMergeTests`; `Hosts.Tests/UnionListingOrderTests` |

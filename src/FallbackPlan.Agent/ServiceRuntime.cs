@@ -959,8 +959,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
         Storage.Abstractions.IObjectStore from, Storage.Abstractions.IObjectStore to,
         Func<string, bool>? admitBlob, CancellationToken cancellationToken)
     {
-        // Listed once and bucketed, because a store lists in its own order
-        // and the order here is a correctness property, not a preference.
+        // Listed once and bucketed, because a store lists in key order, which
+        // is not this order, and the order here is a correctness property,
+        // not a preference.
         var phases = new List<Storage.Abstractions.ObjectEntry>[CopyBackPhases.Length + 1];
         for (var index = 0; index < phases.Length; index++)
         {

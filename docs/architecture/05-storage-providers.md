@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §9 · **Resolves:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
-**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). The S3-compatible provider (§4.4, [ADR-0091](../adr/0091-an-s3-compatible-destination.md)) and the Azure Blob provider (§4.3, [ADR-0093](../adr/0093-an-azure-blob-destination.md)) are built and pass the shared contract suite, every fault case §6 names answered for both, a resume token their entry's key and a store's refusals told apart where what a person can do differs ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5). Each tells an observer of every request it sends, and a cloud destination's status says what its store was asked (§5, [ADR-0111](../adr/0111-a-cloud-destination-says-what-its-store-was-asked.md)), and whether its store holds the replica's metadata archived, from which nothing restores (§3, [ADR-0112](../adr/0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md)) — see [implementation status](../implementation-status.md).
+**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). The S3-compatible provider (§4.4, [ADR-0091](../adr/0091-an-s3-compatible-destination.md)) and the Azure Blob provider (§4.3, [ADR-0093](../adr/0093-an-azure-blob-destination.md)) are built and pass the shared contract suite, every fault case §6 names answered for both, a resume token their entry's key and a store's refusals told apart where what a person can do differs ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5). A store standing in front of others lists in key order as a provider does (§2.3, Amendment 8). Each tells an observer of every request it sends, and a cloud destination's status says what its store was asked (§5, [ADR-0111](../adr/0111-a-cloud-destination-says-what-its-store-was-asked.md)), and whether its store holds the replica's metadata archived, from which nothing restores (§3, [ADR-0112](../adr/0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md)) — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -91,6 +91,8 @@ A `StoreQuotaExceededException` is a limit the store's owner set. It holds until
 `IAsyncEnumerable` already models resumable iteration. A continuation-token parameter alongside it forces every provider to decide which wins and leaves callers unable to tell whether re-enumerating resumes or restarts. Callers needing to persist a position across process restarts read a resume token from `ObjectEntry`.
 
 A resume token is its entry's key ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5). `ListOptions.ResumeAfter` takes any key and resumes strictly after it in ordinal order, whether or not an object still has the key. A provider asks its store to start there rather than reading the pages before it.
+
+A store standing in front of others lists in the same order ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 8). `Storage.Abstractions/ListingMerge` merges its parts' listings, each already in key order, rather than reading them one after another; a key more than one part holds is listed once, as the first of them lists it. The direct-ship sink (§4) and the archive a sync reads with a peer's blobs behind it are the two such stores.
 
 ## 3. Capabilities
 
@@ -217,7 +219,7 @@ objects go to the destinations and never to local disk; every other object
 goes to the metadata store *and* the destinations. Reads answer from whoever
 holds the bytes — metadata locally, a blob from the first destination
 holding the key in priority order, a listing as the union across
-destinations. §2.1's re-openable content factory is what makes the fan-write
+destinations, merged in key order (§2.3). §2.1's re-openable content factory is what makes the fan-write
 affordable: one sealed spool file re-opens per destination instead of
 buffering N copies. An object store is the one served kind the sink does not
 write through, by decision: a run records it behind, and the sync that follows
