@@ -322,8 +322,8 @@ internal static class ReplicationInitiator
             var withheldBytes = 0L;
 
             // Records go last, as a copy sends them: a record's presence is what
-            // says the backup is there (ADR-0011), and a source that is a union
-            // of planes may list a record before the blobs it names.
+            // says the backup is there (ADR-0011), and where a record sorts
+            // among the keys it names is not what puts it after them.
             var records = new List<ObjectEntry>();
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))

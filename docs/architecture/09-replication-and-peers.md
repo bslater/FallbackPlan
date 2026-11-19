@@ -223,7 +223,8 @@ the destinations. Each destination therefore holds a whole, independently
 restorable repository — ADR-0034 §2's invariant, kept without the staging
 archive. Reads route to whoever holds the bytes: metadata answers locally; a
 blob read is answered by the first destination holding the key in
-**priority order**; a blob listing is the **union** across destinations.
+**priority order**; a blob listing is the **union** across destinations,
+merged in key order ([05 §2.3](05-storage-providers.md#23-continuation-belongs-to-the-enumerator)).
 The union is sufficient because a capture refuses to run with no reachable
 destination, so every committed snapshot's closure exists at at least one
 destination — which is also what lets a sibling seed a destination that

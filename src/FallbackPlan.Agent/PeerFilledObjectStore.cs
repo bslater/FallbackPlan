@@ -78,34 +78,39 @@ internal sealed class PeerFilledObjectStore(IObjectStore archive, IObjectStore p
         ListOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        // A prefix shorter than "blobs/" that is one of its beginnings can
+        // match blobs too; one that is not cannot. The archive answers for a
+        // blob both hold, and the two are merged so that the whole lists in
+        // key order (ADR-0012 Amendment 8).
         var value = prefix.Value;
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var entry in archive.ListAsync(prefix, options, cancellationToken).ConfigureAwait(false))
+        var archived = archive.ListAsync(prefix, options, cancellationToken);
+        IReadOnlyList<IAsyncEnumerable<ObjectEntry>> listings =
+            IsBlob(value) ? [archived, PeerListAsync(prefix, options, cancellationToken)]
+            : "blobs/".StartsWith(value, StringComparison.Ordinal)
+                ? [archived, PeerListAsync(ObjectPrefix.Parse("blobs/"), options, cancellationToken)]
+                : [archived];
+        await foreach (var entry in ListingMerge.MergeAsync(listings, cancellationToken).ConfigureAwait(false))
         {
-            if (IsBlob(entry.Key.Value))
-            {
-                seen.Add(entry.Key.Value);
-            }
-
             yield return entry;
         }
+    }
 
-        // A prefix shorter than "blobs/" that is one of its beginnings can
-        // match blobs too; one that is not cannot.
-        ObjectPrefix blobs;
-        if (IsBlob(value))
-        {
-            blobs = prefix;
-        }
-        else if ("blobs/".StartsWith(value, StringComparison.Ordinal))
-        {
-            blobs = ObjectPrefix.Parse("blobs/");
-        }
-        else
-        {
-            yield break;
-        }
+    /// <inheritdoc />
+    public ValueTask<PutResult> PutAsync(
+        ObjectKey key,
+        Func<CancellationToken, ValueTask<Stream>> openContent,
+        PutConditions conditions,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("A sync's source is read, never written.");
 
+    /// <inheritdoc />
+    public ValueTask<DeleteResult> DeleteAsync(
+        ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("A sync's source is read, never written.");
+
+    private async IAsyncEnumerable<ObjectEntry> PeerListAsync(
+        ObjectPrefix blobs, ListOptions options, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         await using var listing = peer.ListAsync(blobs, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
         while (true)
         {
@@ -124,25 +129,9 @@ internal sealed class PeerFilledObjectStore(IObjectStore archive, IObjectStore p
                 throw Unanswered(exception);
             }
 
-            if (seen.Add(entry.Key.Value))
-            {
-                yield return entry;
-            }
+            yield return entry;
         }
     }
-
-    /// <inheritdoc />
-    public ValueTask<PutResult> PutAsync(
-        ObjectKey key,
-        Func<CancellationToken, ValueTask<Stream>> openContent,
-        PutConditions conditions,
-        CancellationToken cancellationToken) =>
-        throw new NotSupportedException("A sync's source is read, never written.");
-
-    /// <inheritdoc />
-    public ValueTask<DeleteResult> DeleteAsync(
-        ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("A sync's source is read, never written.");
 
     private static bool IsBlob(string key) => key.StartsWith("blobs/", StringComparison.Ordinal);
 

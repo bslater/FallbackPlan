@@ -8,8 +8,8 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// The stores made of other stores list in ordinal key order, as every store
-/// does (docs/architecture/05-storage-providers.md §2.3; FR-REP-002,
-/// NFR-PORT-002; ADR-0198 Amendment 4): the archive with a peer's blobs behind
+/// does (docs/architecture/05-storage-providers.md §2.3; NFR-PORT-004;
+/// ADR-0012 Amendment 8): the archive with a peer's blobs behind
 /// it, which a sync reads where only a peer holds the newest backup, and a
 /// direct-ship set's archive, whose metadata is on this machine and whose
 /// blobs are at its destinations. A reader that resumes a listing after the

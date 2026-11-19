@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using FallbackPlan.Storage.Abstractions;
 
@@ -6,9 +7,9 @@ namespace FallbackPlan.Storage.ContractTests;
 /// <summary>
 /// A store made of other stores lists them as one, in the ordinal key order
 /// every store's listing promises (docs/architecture/05-storage-providers.md
-/// §2.3; FR-REP-002, NFR-PORT-002). Each part lists in that order already, so
-/// the parts are merged rather than read one after another, and a key two
-/// parts hold is listed once, as the first of them lists it.
+/// §2.3; NFR-PORT-004; ADR-0012 Amendment 8). Each part lists in that order
+/// already, so the parts are merged rather than read one after another, and a
+/// key two parts hold is listed once, as the first of them lists it.
 /// </summary>
 [TestClass]
 public sealed class ListingMergeTests
@@ -40,13 +41,17 @@ public sealed class ListingMergeTests
     [TestMethod]
     public async Task Merge_ComparesKeysOrdinally_WhateverTheCulture()
     {
-        // Upper case sorts before lower case ordinally, and a dotless i is no
-        // kin of an i: a culture's collation would order these otherwise.
+        // A digit sorts before an underscore ordinally; a culture's collation
+        // puts punctuation before digits.
+        Assert.IsGreaterThan(
+            0,
+            CultureInfo.InvariantCulture.CompareInfo.Compare("blobs/0", "blobs/_", CompareOptions.None),
+            "the premise: a culture orders these otherwise");
         var merged = await KeysAsync(
-            Listing(("blobs/a", 1), ("blobs/i", 1)),
-            Listing(("blobs/I", 1), ("blobs/Z", 1)));
+            Listing(("blobs/0", 1), ("blobs/a", 1)),
+            Listing(("blobs/_", 1), ("blobs/z", 1)));
 
-        CollectionAssert.AreEqual(new[] { "blobs/I", "blobs/Z", "blobs/a", "blobs/i" }, merged);
+        CollectionAssert.AreEqual(new[] { "blobs/0", "blobs/_", "blobs/a", "blobs/z" }, merged);
     }
 
     [TestMethod]
