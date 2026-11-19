@@ -138,6 +138,101 @@ public sealed class StoreBesideAPeerTests : IAsyncDisposable
         }
     }
 
+    [TestMethod]
+    public async Task AStoreTheRunSentEveryBlob_IsBroughtCurrentByTheSync_WithThePeerAway()
+    {
+        // ADR-0198 Amendment 1: the store holds every blob the set's index
+        // locates, so the snapshot and the index are all it lacks, and those
+        // are on this machine. The peer is not needed to bring it current.
+        await using var runtime = await StartAsync(roomBytes: null, committed: EveryBlobAtTheStoreAsync);
+        await RunAloneAsync(runtime);
+
+        await Friend.StopAsync();
+        await SyncAsync(runtime);
+
+        var cloud = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, cloud.State, cloud.LastError);
+        Assert.IsNotEmpty(StoreSnapshots(), "the store holds the backup's snapshot");
+        var missing = Friend.Blobs().Except(StoreBlobs(), StringComparer.Ordinal).ToList();
+        Assert.IsEmpty(missing, $"the store lacks blobs the backup needs: {string.Join(", ", missing)}");
+        Assert.IsNull(cloud.VerifiedAt, "nothing read on this machine proves the store's blobs, and none is claimed");
+    }
+
+    [TestMethod]
+    public async Task ASecondRun_ThatSentEveryBlob_IsBroughtCurrentByTheSync_WithThePeerAway()
+    {
+        await using var runtime = await StartAsync(roomBytes: null, committed: EveryBlobAtTheStoreAsync);
+        await RunAloneAsync(runtime);
+        await SyncAsync(runtime);
+        Assert.AreEqual(DestinationSyncState.InSync, Row(runtime, "cloud").State, "the premise: the first backup is at the store");
+
+        _harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await RunAloneAsync(runtime);
+        await Friend.StopAsync();
+        await SyncAsync(runtime);
+
+        var cloud = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, cloud.State, cloud.LastError);
+        Assert.HasCount(2, StoreSnapshots(), "the store holds both backups' snapshots");
+        var missing = Friend.Blobs().Except(StoreBlobs(), StringComparer.Ordinal).ToList();
+        Assert.IsEmpty(missing, $"the store lacks blobs the backups need: {string.Join(", ", missing)}");
+    }
+
+    [TestMethod]
+    public async Task AStoreMissingABlob_IsLeftBehind_WithThePeerAway()
+    {
+        // One blob went up with the run and the rest found no room: the
+        // store lacks blobs the backup needs, and with the peer away nothing
+        // this machine reads can supply them.
+        _store.HoldPuts();
+        await using var runtime = await StartAsync(
+            roomBytes: 1,
+            committed: () =>
+            {
+                _store.ReleasePuts();
+                return EventuallyAsync(() => StoreBlobs().Count > 0);
+            });
+        await RunAloneAsync(runtime);
+
+        await Friend.StopAsync();
+        await SyncAsync(runtime);
+
+        var cloud = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
+        Assert.Contains("'friend'", cloud.LastError!, StringComparison.Ordinal);
+        Assert.IsEmpty(StoreSnapshots(), "a snapshot reached the store without its blobs");
+    }
+
+    [TestMethod]
+    public async Task AStoreTheRunBeforeSentNothing_IsLeftBehind_ThoughThisRunSentItEveryBlob()
+    {
+        // The store refuses every upload of the first run, which is not
+        // synced, and takes every blob the second run writes. It still lacks
+        // the first run's, which the second run did not write again.
+        _store.FailFrom(servedFirst: 0, 403, "AccessDenied", method: "PUT");
+        var firstRun = true;
+        await using var runtime = await StartAsync(
+            roomBytes: null,
+            committed: () => firstRun
+                ? EventuallyAsync(() => _store.Requests.Any(request => request.Method == "PUT" && request.Status == 403))
+                : EventuallyAsync(() => CopiesKept().Count == 0));
+        await RunAloneAsync(runtime);
+        Assert.IsEmpty(StoreBlobs(), "the premise: the store took nothing from the first run");
+
+        _store.Recover();
+        firstRun = false;
+        _harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await RunAloneAsync(runtime);
+        Assert.IsNotEmpty(StoreBlobs(), "the premise: the second run sent the store its blobs");
+        await Friend.StopAsync();
+        await SyncAsync(runtime);
+
+        var cloud = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
+        Assert.Contains("'friend'", cloud.LastError!, StringComparison.Ordinal);
+        Assert.IsEmpty(StoreSnapshots(), "a snapshot reached the store without the first run's blobs");
+    }
+
     private LoopbackPeer Friend => _friend ?? throw new InvalidOperationException("no peer started");
 
     private async Task<ServiceRuntime> StartAsync(long? roomBytes, Func<Task<bool>> committed)
@@ -242,6 +337,16 @@ public sealed class StoreBesideAPeerTests : IAsyncDisposable
         [.. _store.KeysIn(Bucket)
             .Where(key => key.Contains("/blobs/", StringComparison.Ordinal))
             .Select(key => key[(key.IndexOf("/blobs/", StringComparison.Ordinal) + 1)..])];
+
+    private List<string> StoreSnapshots() =>
+        [.. _store.KeysIn(Bucket).Where(key => key.Contains("/snapshots/", StringComparison.Ordinal))];
+
+    /// <summary>Holds a committed run until the store has every blob the peer took and no copy is left.</summary>
+    private Task<bool> EveryBlobAtTheStoreAsync() =>
+        EventuallyAsync(() =>
+            Friend.Blobs().Count > 0
+            && !Friend.Blobs().Except(StoreBlobs(), StringComparer.Ordinal).Any()
+            && CopiesKept().Count == 0);
 
     private List<string> CopiesKept() =>
         Directory.Exists(Room) ? [.. Directory.GetFiles(Room, "*", SearchOption.AllDirectories)] : [];
