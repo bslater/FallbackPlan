@@ -12,7 +12,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// pass and acknowledged during it. A copy can only carry what its source
 /// lists, so a source short of a blob leaves the destination short of it too,
 /// and the pass records that rather than a watermark that would let staging
-/// let the backup go.
+/// let the backup go. Nor does it send the destination that backup's record
+/// (ADR-0198 Amendment 3): a record's presence is what says the backup is
+/// there, so a destination left short lists no backup it cannot restore.
 /// </summary>
 /// <remarks>
 /// Each case takes one blob of the newest backup away from what the sync
@@ -80,6 +82,150 @@ public sealed class InSyncClosureTests : IAsyncDisposable
         var vault = Row(runtime, "vault");
         Assert.AreEqual(DestinationSyncState.InSync, vault.State, vault.LastError);
         Assert.Contains(taken.Key, VaultBlobs(Vault));
+        Assert.AreEqual(2, VaultSnapshots(Vault), "the record did not follow its blobs");
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPath_TheCopyLeftShort_IsSentNoRecordOfThatBackup()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false, LocalPath("vault", Vault));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        Assert.AreEqual(1, VaultSnapshots(Vault), "the premise: the path holds the first backup's record");
+
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        TakeAway(StagingBlobs(runtime).Except(VaultBlobs(Vault), StringComparer.Ordinal), "data", Staging(runtime));
+        await SyncAsync(runtime, "vault");
+
+        Assert.AreEqual(1, VaultSnapshots(Vault), "the path was sent the record of a backup it cannot restore");
+        Assert.Contains("record was not sent", Row(runtime, "vault").LastError!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPathUnderARetentionPolicy_TheConvergeLeftShort_IsSentNoRecordOfThatBackup()
+    {
+        // A destination under a policy is converged to its keep-set rather
+        // than copied to, and the converge holds the record back the same way.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false, new RetentionConfiguration { MinGenerations = 10 }, LocalPath("vault", Vault));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        Assert.AreEqual(1, VaultSnapshots(Vault), "the premise: the path holds the first backup's record");
+
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        TakeAway(StagingBlobs(runtime).Except(VaultBlobs(Vault), StringComparer.Ordinal), "data", Staging(runtime));
+        await SyncAsync(runtime, "vault");
+
+        Assert.AreEqual(DestinationSyncState.Failed, Row(runtime, "vault").State, Row(runtime, "vault").LastError);
+        Assert.AreEqual(1, VaultSnapshots(Vault), "the path was sent the record of a backup it cannot restore");
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPeer_ThePushLeftShort_IsSentNoRecordOfThatBackup()
+    {
+        var friend = StartPeer("friend");
+        WriteConfiguration(directShip: false, Peer(friend));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        var recordsBefore = friend.Snapshots().Count;
+        Assert.AreEqual(1, recordsBefore, "the premise: the peer holds the first backup's record");
+
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        TakeAway(StagingBlobs(runtime).Except(friend.Blobs(), StringComparer.Ordinal), "data", Staging(runtime));
+        await SyncAsync(runtime, "friend");
+
+        Assert.HasCount(recordsBefore, friend.Snapshots(), "the peer was pushed the record of a backup it cannot restore");
+        var row = Row(runtime, "friend");
+        Assert.Contains("record was not sent", row.LastError!, StringComparison.Ordinal);
+        Assert.IsLessThan(row.OwedBytes, row.HeldBytes, "the peer was counted as holding a record it was not sent");
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPeer_LeftShort_IsStillOwedTheRecordItWasNotSent()
+    {
+        // What the peer is owed does not shrink for the record held back: once
+        // the blob is back, it is owed exactly that blob more than before.
+        var friend = StartPeer("friend");
+        WriteConfiguration(directShip: false, Peer(friend));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        var taken = TakeAway(StagingBlobs(runtime).Except(friend.Blobs(), StringComparer.Ordinal), "data", Staging(runtime));
+        await SyncAsync(runtime, "friend");
+        var shortOwed = Row(runtime, "friend").OwedBytes;
+
+        taken.Restore();
+        await SyncAsync(runtime, "friend");
+
+        var whole = Row(runtime, "friend");
+        Assert.AreEqual(DestinationSyncState.InSync, whole.State, whole.LastError);
+        Assert.AreEqual(whole.OwedBytes, whole.HeldBytes, "the whole peer was not counted as holding all it is owed");
+        Assert.AreEqual(shortOwed + new FileInfo(taken.From).Length, whole.OwedBytes, "the held-back record was not counted as owed");
+    }
+
+    [TestMethod]
+    public async Task APathThatMissedTwoBackups_TheNewestShort_IsSentTheOlderRecord_AndNotTheNewest()
+    {
+        // Only the newest backup's closure is known to the sync, so only its
+        // record is held back: the backup before it is whole, and its record
+        // goes.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false, LocalPath("vault", Vault));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        var afterSecond = StagingBlobs(runtime);
+        await BackUpAloneAsync(runtime, start.AddHours(2), "docs/d.txt", 'd');
+        var newestOnly = StagingBlobs(runtime).Except(afterSecond, StringComparer.Ordinal).Except(VaultBlobs(Vault), StringComparer.Ordinal);
+        TakeAway(newestOnly, "data", Staging(runtime));
+        await SyncAsync(runtime, "vault");
+
+        Assert.AreEqual(DestinationSyncState.Failed, Row(runtime, "vault").State, Row(runtime, "vault").LastError);
+        Assert.AreEqual(2, VaultSnapshots(Vault), "the path was not sent the whole backup's record, or was sent the short one's");
+    }
+
+    [TestMethod]
+    public async Task AStagingSetsPeer_HoldingTheRecordAlready_KeepsIt_AndIsNotToldItWasHeldBack()
+    {
+        // The peer took the second backup whole, then lost one of its blobs,
+        // which staging has lost too. The record is already there: nothing is
+        // held back, and the ledger does not say it was.
+        var friend = StartPeer("friend");
+        WriteConfiguration(directShip: false, Peer(friend));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        var firstBlobs = friend.Blobs();
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        await SyncAsync(runtime, "friend");
+        Assert.HasCount(2, friend.Snapshots(), "the premise: the peer took the second backup whole");
+
+        var taken = TakeAway(friend.Blobs().Except(firstBlobs, StringComparer.Ordinal), "data", Staging(runtime));
+        friend.Lose(taken.Key);
+        await SyncAsync(runtime, "friend");
+
+        var row = Row(runtime, "friend");
+        Assert.AreEqual(DestinationSyncState.Failed, row.State, row.LastError);
+        Assert.HasCount(2, friend.Snapshots(), "the peer lost a record it held");
+        Assert.DoesNotContain("record was not sent", row.LastError!, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -205,6 +351,11 @@ public sealed class InSyncClosureTests : IAsyncDisposable
     }
 
     private void WriteConfiguration(bool directShip, params DestinationConfiguration[] destinations) =>
+        WriteConfiguration(directShip, retention: null, destinations);
+
+    /// <summary>Writes the set, each destination under <paramref name="retention"/> where one is given.</summary>
+    private void WriteConfiguration(
+        bool directShip, RetentionConfiguration? retention, params DestinationConfiguration[] destinations) =>
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
@@ -217,7 +368,11 @@ public sealed class InSyncClosureTests : IAsyncDisposable
                     Name = "docs",
                     Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
                     Schedule = "every 1h",
-                    Destinations = [.. destinations.Select(destination => new SetDestinationReference { Ref = destination.Name })],
+                    Destinations =
+                    [
+                        .. destinations.Select(destination =>
+                            new SetDestinationReference { Ref = destination.Name, Retention = retention }),
+                    ],
                     DirectShip = directShip,
                 },
             ],
@@ -260,10 +415,10 @@ public sealed class InSyncClosureTests : IAsyncDisposable
         await pass.Drills.WaitAsync(Timeout);
     }
 
-    /// <summary>A second backup, of one more file, with no sync after it.</summary>
-    private async Task BackUpAloneAsync(ServiceRuntime runtime, DateTimeOffset at)
+    /// <summary>Another backup, of one more file, with no sync after it.</summary>
+    private async Task BackUpAloneAsync(ServiceRuntime runtime, DateTimeOffset at, string file = "docs/c.txt", char fill = 'c')
     {
-        _harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        _harness.WriteSourceFile(file, new string(fill, 30_000));
         var ran = await Scheduler.Enqueue(runtime, runtime.Configuration.BackupSets.Single(), at, userInitiated: true)
             .WaitAsync(Timeout);
         Assert.AreEqual("ran", ran.Outcome, ran.Detail);
@@ -285,6 +440,13 @@ public sealed class InSyncClosureTests : IAsyncDisposable
 
     /// <summary>The one replica directory a local path holds for the set.</summary>
     private static string Replica(string vault) => Assert.ContainsSingle(Directory.GetDirectories(vault));
+
+    /// <summary>How many snapshot records a local path holds for the set.</summary>
+    private static int VaultSnapshots(string vault) =>
+        Directory.GetDirectories(vault)
+            .Select(replica => Path.Combine(replica, "snapshots"))
+            .Where(Directory.Exists)
+            .Sum(snapshots => Directory.GetFiles(snapshots, "*", SearchOption.AllDirectories).Length);
 
     private static List<string> VaultBlobs(string vault) =>
         Directory.Exists(vault) ? [.. Directory.GetDirectories(vault).SelectMany(BlobsUnder)] : [];

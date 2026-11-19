@@ -675,7 +675,8 @@ public static class FanOut
                     grant.Identity, session.Binding, keypair.Identity.PublicKey.ToArray()),
                 pushOnly,
                 count is null ? null : count.Holds,
-                session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature) ? retire : null)
+                session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature) ? retire : null,
+                count is null ? null : count.Withholds)
                 .ConfigureAwait(false);
 
             // The receipt is dealt with before anything else is judged: the
@@ -1539,7 +1540,8 @@ public static class FanOut
                     var converged = await StoreToStoreCopier.ConvergeAsync(
                         readFrom, replica, keeps, cancellationToken,
                         destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                        spares, counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
+                        spares, counting, copyScope, count is null ? null : count.Holds,
+                        count is null ? null : count.Withholds).ConfigureAwait(false);
                     copied = converged.Copied;
                     alreadyHeld = converged.AlreadyHeld;
                     ReportRefusedDeletes(runtime, set, destination.Name, converged.Refused, converged.RefusedBytes, nowMs);
@@ -1550,7 +1552,8 @@ public static class FanOut
                     var outcome = await StoreToStoreCopier.CopyAsync(
                         readFrom, replica, cancellationToken,
                         destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                        counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
+                        counting, copyScope, count is null ? null : count.Holds,
+                        count is null ? null : count.Withholds).ConfigureAwait(false);
                     copied = outcome.Copied;
                     alreadyHeld = outcome.AlreadyHeld;
                 }
@@ -2206,7 +2209,10 @@ public static class FanOut
         // Verified is what counts, filed or not: the attestation was made and
         // checked, and a copy this side could not keep changes nothing about
         // what the peer holds.
-        ledger.RecordCompleteness(set.Id, destination.Name, outcome.OwedBytes, outcome.OwedBytes, nowMs);
+        // Less what the push held back, which the receipt cannot stand for
+        // (ADR-0198 Amendment 3).
+        ledger.RecordCompleteness(
+            set.Id, destination.Name, outcome.OwedBytes - outcome.WithheldBytes, outcome.OwedBytes, nowMs);
 
         // The receipt's stamp against this clock either side of the exchange
         // (NFR-TIME-002): what the set's next capture records in its manifest.

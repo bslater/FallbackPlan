@@ -94,12 +94,15 @@ internal sealed class SyncCount : IDisposable
     private readonly FileHoldingCounter _counter;
     private readonly LiveHolding _live;
     private readonly SnapshotClosure? _closure;
+    private readonly string? _carried;
+    private bool _withheld;
 
-    private SyncCount(FileHoldingCounter counter, LiveHolding live, SnapshotClosure? closure)
+    private SyncCount(FileHoldingCounter counter, LiveHolding live, SnapshotClosure? closure, string? carried)
     {
         _counter = counter;
         _live = live;
         _closure = closure;
+        _carried = carried;
     }
 
     /// <summary>
@@ -165,7 +168,8 @@ internal sealed class SyncCount : IDisposable
             : new SnapshotClosure([.. catalogue.ClosureOf(owed.SnapshotId.Span)
                 .Select(blob => (blob.StoreBlobKey ?? derive.Derive(blob.BlobId)).ToBase32())]);
 
-        return new SyncCount(counter, runtime.Holdings.Track(set.Id, destination, counter.Total), closure);
+        return new SyncCount(
+            counter, runtime.Holdings.Track(set.Id, destination, counter.Total), closure, closure is null ? null : carried);
     }
 
     /// <summary>
@@ -238,8 +242,27 @@ internal sealed class SyncCount : IDisposable
     public string? Shortfall() =>
         _closure is { Lacking: > 0 } closure
             ? $"the newest backup needs {closure.Lacking} blob(s) this destination does not hold and the sync "
-                + $"could not copy from what it read, first blob {closure.FirstLacking}; it is not in sync until it holds them"
+                + $"could not copy from what it read, first blob {closure.FirstLacking}; "
+                + (_withheld ? "its record was not sent, so the destination does not list it, and " : string.Empty)
+                + "it is not in sync until it holds them"
             : null;
+
+    /// <summary>
+    /// Whether the sync holds back the record at <paramref name="key"/>: the
+    /// carried snapshot's, while the destination lacks any blob it needs
+    /// (ADR-0198 Amendment 3). Asked once every blob has been offered.
+    /// </summary>
+    /// <param name="key">A snapshot record the destination lacks.</param>
+    public bool Withholds(string key)
+    {
+        if (_closure is not { Lacking: > 0 } || !string.Equals(key, _carried, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _withheld = true;
+        return true;
+    }
 
     /// <summary>How many blobs of the carried snapshot the destination lacks, and the first.</summary>
     public (int Lacking, string? First) Lacking => (_closure?.Lacking ?? 0, _closure?.FirstLacking);

@@ -93,4 +93,12 @@ internal static partial class Log
         EventId = 3005, Level = LogLevel.Debug,
         Message = "Skipped {Key}: the source retired it after listing it, and its checkpoint is copied instead")]
     internal static partial void RetiredDeltaSkipped(ILogger logger, ObjectKey key);
+
+    // Warning: the backup the record names is not whole at the destination,
+    // and the sync that asked says why in the destination's own row
+    // (ADR-0198 Amendment 3).
+    [LoggerMessage(
+        EventId = 3009, Level = LogLevel.Warning,
+        Message = "Held back {Key} from {Destination}: it lacks blobs the backup needs, and the record would say it holds them")]
+    internal static partial void RecordWithheld(ILogger logger, ObjectKey key, LogLabel destination);
 }

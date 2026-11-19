@@ -119,7 +119,9 @@ public sealed record ConvergeOutcome(
 /// any byte leaves the destination a <i>lagging but valid</i> replica. A
 /// snapshot object's presence at the destination therefore means everything
 /// it references is already there, which is ADR-0011's per-replica commit
-/// rule enforced by copy order.
+/// rule enforced by copy order — where the source holds it all. A caller that
+/// finds the closure did not all arrive holds the record back
+/// (ADR-0198 Amendment 3).
 /// </para>
 /// <para>
 /// Interruption costs nothing but progress: every put is create-if-absent
@@ -159,8 +161,11 @@ public static class StoreToStoreCopier
         "hints/",
         "audit/",
         "",
-        "snapshots/",
+        SnapshotsPhase,
     ];
+
+    /// <summary>The phase of snapshot records, the last copied: a record's presence says the backup is there.</summary>
+    private const string SnapshotsPhase = "snapshots/";
 
     /// <summary>
     /// Prefixes that never leave the staging archive: lifecycle objects
@@ -203,6 +208,10 @@ public static class StoreToStoreCopier
     /// whether it was there already or has just been copied: what lets a
     /// caller count a backup's files as their content lands.
     /// </param>
+    /// <param name="withholds">
+    /// Asked of each snapshot record the destination lacks, once every other
+    /// phase is done; a record it names is not sent (ADR-0198 Amendment 3).
+    /// </param>
     /// <returns>What was copied and what was already there.</returns>
     public static async ValueTask<CopyOutcome> CopyAsync(
         IObjectStore source,
@@ -212,7 +221,8 @@ public static class StoreToStoreCopier
         ILogger? logger = null,
         IProgress<CopyProgress>? progress = null,
         CopyScope scope = CopyScope.Reconcile,
-        Action<string>? holds = null)
+        Action<string>? holds = null,
+        Func<string, bool>? withholds = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(destination);
@@ -263,6 +273,11 @@ public static class StoreToStoreCopier
                     heldBytes += entry.Length;
                     progress?.Report(new CopyProgress(heldBytes, owedBytes));
                     holds?.Invoke(entry.Key.Value);
+                    continue;
+                }
+
+                if (Withheld(phase, entry.Key, withholds, name, log))
+                {
                     continue;
                 }
 
@@ -331,6 +346,10 @@ public static class StoreToStoreCopier
     /// Told each key the destination holds once the pass has looked at it,
     /// as <see cref="CopyAsync"/> tells it.
     /// </param>
+    /// <param name="withholds">
+    /// Asked of each snapshot record the destination lacks, as
+    /// <see cref="CopyAsync"/> asks it; a record it names is not sent.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async ValueTask<ConvergeOutcome> ConvergeAsync(
         IObjectStore source,
@@ -342,7 +361,8 @@ public static class StoreToStoreCopier
         Func<string, bool>? spares = null,
         IProgress<CopyProgress>? progress = null,
         CopyScope scope = CopyScope.Reconcile,
-        Action<string>? holds = null)
+        Action<string>? holds = null,
+        Func<string, bool>? withholds = null)
     {
         var log = logger ?? NullLogger.Instance;
         var name = destinationName ?? "the destination";
@@ -389,6 +409,11 @@ public static class StoreToStoreCopier
                     heldBytes += entry.Length;
                     progress?.Report(new CopyProgress(heldBytes, owedBytes));
                     holds?.Invoke(entry.Key.Value);
+                    continue;
+                }
+
+                if (Withheld(phase, entry.Key, withholds, name, log))
+                {
                     continue;
                 }
 
@@ -608,6 +633,25 @@ public static class StoreToStoreCopier
     private sealed class RetiredDeltaException : Exception
     {
         public const string Prefix = "index/delta/";
+    }
+
+    /// <summary>
+    /// Whether the caller holds back a snapshot record the destination lacks:
+    /// one whose closure did not all arrive, which the record would otherwise
+    /// claim it holds (ADR-0198 Amendment 3). Asked of records alone, so the
+    /// blobs and the index a later pass completes the destination from are
+    /// never held back.
+    /// </summary>
+    private static bool Withheld(
+        string phase, ObjectKey key, Func<string, bool>? withholds, string destinationName, ILogger log)
+    {
+        if (withholds is null || phase != SnapshotsPhase || !withholds(key.Value))
+        {
+            return false;
+        }
+
+        Log.RecordWithheld(log, key, new LogLabel(destinationName));
+        return true;
     }
 
     /// <summary>The listing prefix a phase walks under.</summary>

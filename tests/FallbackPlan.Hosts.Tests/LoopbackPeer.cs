@@ -61,6 +61,19 @@ internal sealed class LoopbackPeer : IAsyncDisposable
     /// <summary>Each snapshot object this peer holds for the installation.</summary>
     public List<string> Snapshots() => [.. Replicas().SelectMany(replica => FilesUnder(replica, "snapshots"))];
 
+    /// <summary>Deletes the object at <paramref name="key"/> from every replica this peer holds, as a disk might lose it.</summary>
+    public void Lose(string key)
+    {
+        foreach (var replica in Replicas())
+        {
+            var path = Path.Combine(replica, key.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
     public async Task StopAsync()
     {
         if (_listener is { } listener)
