@@ -62,6 +62,8 @@ Nothing is copied first. A partial copy would carry snapshots whose blobs are mi
 ## Consequences
 
 - **A store beside a peer holds whole backups.** The sync after each run reads the run's blobs back from the peer and sends them on. Each blob crosses the peer's link twice, once to the peer in the run and once back to this machine in the sync.
+
+  > **2026-11 ([ADR-0196 Amendment 8](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-8-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-peer-from-a-copy-kept-here)).** The run now sends each blob on to the store as it goes, from a copy kept in a bounded room on this machine. The sync reads back from the peer only what found the room full, or went unsent when the run ended.
 - **A peer offline leaves the store behind until it answers.** The store's row names the peer. The run is not held, and the peer itself is still written as the run goes.
 - **Stores already filled without blobs heal.** The next backup makes the store incomplete by the ledger, and the sync then reads every blob it lacks from the peer, including those of earlier backups.
 - **A sync dials a peer only when nothing nearer holds the backup whole.** A set with a whole local path plugged in reads from it, as before.
@@ -70,6 +72,8 @@ Nothing is copied first. A partial copy would carry snapshots whose blobs are mi
 ## What this does not do
 
 - **It does not read a peer inside a run.** The write-behind of [ADR-0196 Amendment 6](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path) sends blobs on from a local path only. A store beside a peer alone is filled by the sync after each run, now from the peer.
+
+  > **2026-11 ([ADR-0196 Amendment 8](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-8-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-peer-from-a-copy-kept-here)).** It still does not read the peer. Beside a peer alone the run keeps its own copy of each blob and sends the store that.
 - **It does not check the closure itself.** The ledger's word that a destination holds the newest backup whole is what the replication gate already rests on (FR-GC-009). Walking every snapshot's closure before each copy would cost a full read of the metadata on every pass.
 - **It does not fill a destination from a peer for a staging set.** A staging set's archive holds everything, so it never needs to.
 
@@ -86,3 +90,4 @@ Nothing is copied first. A partial copy would carry snapshots whose blobs are mi
 | Date | Status | Note |
 |---|---|---|
 | 2026-11 | Accepted | Built in one slice, tests first. Before it, every sync of a store beside a peer recorded the store in sync holding snapshots and no blobs, and a local path that missed a backup beside a peer was seeded the same way. `Agent/SyncSource`; `Agent/PeerFilledObjectStore`; `Agent/DestinationShipSink`; `Agent/FanOut`; `Hosts.Tests/SyncSourceTests` |
+| 2026-11 | Amended (related) | [ADR-0196 Amendment 8](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-8-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-peer-from-a-copy-kept-here): the double crossing this record left is mostly gone. Beside a peer alone, the run sends each blob on to the store as it goes, from a copy kept in a bounded room on this machine; the sync reads from the peer only what found no room or went unsent. |

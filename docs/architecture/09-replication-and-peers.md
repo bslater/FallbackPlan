@@ -33,6 +33,11 @@ never a silent skip, until the peer write adapter lands.
 > never waiting on it: the store's write-behind. The snapshot is still the
 > sync's, so the store is behind until the sync after the run.
 
+> **2026-11 ([ADR-0196 Amendment 8](../adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-8-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-peer-from-a-copy-kept-here)).** Beside a peer
+> alone the run does the same, reading each blob back from a copy it keeps in
+> a bounded room under the state directory until the store has it. A blob
+> that finds the room full is the sync's, read from the peer.
+
 Exchange sequence:
 
 1. repository identity and compatible format capabilities;
