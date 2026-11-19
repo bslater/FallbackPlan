@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-DEST-014 (amended: catch-up seeds a direct-ship set's destination only from a source that holds the set's newest backup whole, a peer's replica read over the retrieval session where no destination this machine reads outside a run holds it; and a destination none can seed is left behind, naming where the backup is held, with nothing copied that it could not complete); FR-DEST-014 (amended by [Amendment 1](#amendment-1-2026-11--a-destination-that-holds-every-blob-is-brought-current-without-the-peer): a destination whose own listing shows every blob the set's index locates is brought current from this machine's metadata when no whole destination can be read, and no verification is claimed for that pass); FR-DEST-004 (amended by [Amendment 2](#amendment-2-2026-11--a-destination-is-in-sync-only-once-it-holds-the-newest-backup-whole): a pass records a destination in sync only once it holds every blob a restore of the newest backup the pass carried reads; one the pass leaves short is failed, naming the first blob it lacks, and keeps its watermark)
+**Requirements:** FR-DEST-014 (amended: catch-up seeds a direct-ship set's destination only from a source that holds the set's newest backup whole, a peer's replica read over the retrieval session where no destination this machine reads outside a run holds it; and a destination none can seed is left behind, naming where the backup is held, with nothing copied that it could not complete); FR-DEST-014 (amended by [Amendment 1](#amendment-1-2026-11--a-destination-that-holds-every-blob-is-brought-current-without-the-peer): a destination whose own listing shows every blob the set's index locates is brought current from this machine's metadata when no whole destination can be read, and no verification is claimed for that pass); FR-DEST-004 (amended by [Amendment 2](#amendment-2-2026-11--a-destination-is-in-sync-only-once-it-holds-the-newest-backup-whole): a pass records a destination in sync only once it holds every blob a restore of the newest backup the pass carried reads; one the pass leaves short is failed, naming the first blob it lacks, and keeps its watermark); FR-DEST-004 (amended by [Amendment 3](#amendment-3-2026-11--a-copy-that-leaves-a-destination-short-sends-it-no-record-of-that-backup): a pass that leaves a destination short of the newest backup does not send it that backup's record)
 **Related:** [ADR-0046](0046-direct-to-destination-publication.md) §2 (the union across destinations, and the invariant that made it sufficient), [ADR-0058](0058-peer-write-adapter.md) §5 (outside a run the sink does not read a peer), [ADR-0041](0041-guided-restore-and-peer-retrieval.md) (the retrieval session), [ADR-0047](0047-backup-pool-and-priorities.md) (the sync ledger), [ADR-0074](0074-background-byte-rate-limits.md) (a destination's transfer limit), [ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md) decision 2 (beside a peer, a store is filled after the run)
 
 **Built:**
@@ -19,6 +19,9 @@
   - `Hosts.Tests/StoreBesideAPeerTests` (Amendment 1): with the peer away, a store the run sent every blob is brought current, after the first backup and after a second, and claims no verification; a store missing a blob, or one that took nothing from the run before, is left behind naming the peer and holds no snapshot.
 - The closure before in sync (Amendment 2): `Repository.Catalogue/Catalogue` names every blob a restore of a snapshot reads (`ClosureOf`). `Agent/SnapshotClosure` crosses them off from the keys the sync's file count already sees, and `Agent/FanOut` records a destination still lacking any as failed, logging event 3704.
   - `Hosts.Tests/InSyncClosureTests`: a staging set's local path, short of a data blob and of a metadata blob, is failed naming it, its watermark and last success unmoved; it is in sync once the blob is back where the sync reads it; a direct-ship set's path copied from a whole copy short of a blob is failed naming it; a staging set's peer pushed from an archive short of a blob is failed naming it, its watermark unmoved; a path that missed the newest backup, which a person then deleted, is in sync holding none of it.
+- A short copy sends no record (Amendment 3): `Replication/StoreToStoreCopier` asks, before each snapshot record the destination lacks, whether to hold it back, as does the push in `Agent/ReplicationInitiator`, which now sends records after everything else; `Agent/FileHoldingCounter` holds back the carried snapshot's record while its closure is lacking, and the copier logs event 3009.
+  - `Replication.Tests/CopierWithheldRecordTests`: a copy and a converge send everything but the record they are told to hold back, never hold back anything but a record, and leave a record the destination holds where it is.
+  - `Hosts.Tests/InSyncClosureTests`: a staging set's path copied to, the same path under a retention policy, and a staging set's peer pushed to, each left short, hold no record of that backup and the ledger says so; the record follows once the blob is back.
   - `Repository.Tests/CatalogueTests`: the closure names the blob of a snapshot's record, its structure, its folders, a file's version and its content, each filed apart; and takes an object from its live winning location only, not one a later generation superseded nor one in a deleted blob.
 
 ---
@@ -155,8 +158,37 @@ The owner asked that a sync check the destination holds the closure before it re
 ### What this does not do
 
 - **Hold the copy back.** The destination still holds what the source does, the snapshot record included, which the copy sends last. A restore from it lists the backup and cannot read the blobs it lacks. Holding the record back would need the copier to check between its phases.
+
+  > **Amended 2026-11 ([Amendment 3](#amendment-3-2026-11--a-copy-that-leaves-a-destination-short-sends-it-no-record-of-that-backup)).** The copier and the push now ask before each record, and a destination left short is sent no record of that backup.
 - **Check older backups.** Each was checked by the pass that carried it as the newest. A pass that carries several new backups at once checks the newest of them only.
 - **Read the destination again after the copy.** A put the destination acknowledged is taken as held, as the file count takes it. Whether the bytes are still there is verification's question.
+
+## Amendment 3 (2026-11) — a copy that leaves a destination short sends it no record of that backup
+
+**Requirements:** FR-DEST-004 (amended: a pass that leaves a destination short of the newest backup does not send it that backup's record)
+
+### Context
+
+Amendment 2 stopped a short destination being recorded in sync, but left it holding the backup's snapshot record, which the copy sends last. A record's presence is what says a backup is at a destination. A restore from a destination left short listed a backup it could not read. The copier's own promise, that a record is there only once everything it references is ([ADR-0011](0011-commit-versus-replication-semantics.md)'s per-replica commit rule, kept by copy order), held only while the source was whole.
+
+The owner asked that the record be held back.
+
+### Decision
+
+1. **The copier asks before each record.** `StoreToStoreCopier.CopyAsync` and `ConvergeAsync` take a question to ask of each snapshot record the destination lacks, once every other phase is done. A record it names is not sent, and is logged (event 3009). Nothing but a record is ever held back: the blobs and the index are what a later pass completes the destination from. A record the destination already holds is left where it is.
+2. **The push asks the same, and sends records last.** The push to a peer listed its source in one pass and sent each key as it came. Its sources include unions of planes, the ship sink and the archive with a peer's blobs behind it, and those list a record before blobs they add from elsewhere. So the push could send a record before the blobs it names, and an interrupted push could leave a peer holding a record without its blobs. The push now holds every record until everything else has been offered, then asks of each the same question.
+3. **The sync holds back the carried record while its closure is lacking.** The question is answered by the sync's count (Amendment 2): the record of the snapshot the pass carries is held back while any blob it needs is lacking at the destination. The ledger's words for the failed pass then say the record was not sent.
+
+### Consequences
+
+- **A destination left short lists no backup it cannot restore** from this pass. Its earlier backups' records stay.
+- **The record follows its blobs.** The next pass that completes the destination sends it.
+- **A peer is never pushed a record ahead of the blobs it names,** whatever its source lists first.
+
+### What this does not do
+
+- **Hold back an older backup's record.** Only the newest's closure is known to the sync; a pass carrying several new backups holds back only the newest's record.
+- **Put the union listings in key order.** The ship sink and the peer-filled archive still list one plane after another, not in the ordinal order the store contract states. The copier walks one phase at a time and the push now sends records last, so neither depends on it here; a reader that does, such as a resumable listing, is not yet looked at.
 
 ## Status history
 
@@ -166,3 +198,4 @@ The owner asked that a sync check the destination holds the closure before it re
 | 2026-11 | Amended (related) | [ADR-0196 Amendment 8](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-8-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-peer-from-a-copy-kept-here): the double crossing this record left is mostly gone. Beside a peer alone, the run sends each blob on to the store as it goes, from a copy kept in a bounded room on this machine; the sync reads from the peer only what found no room or went unsent. |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-destination-that-holds-every-blob-is-brought-current-without-the-peer): where no whole destination can be read, a destination whose own listing shows every blob the set's index locates is brought current from the metadata here, with no verification claimed for that pass; decision 3 noted. A ledger claim on the run's word was considered and set aside, since a run does not write a blob it reuses. `Agent/SyncSource`; `Agent/FanOut`; `Hosts.Tests/StoreBesideAPeerTests`; `Hosts.Tests/SyncSourceTests` |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--a-destination-is-in-sync-only-once-it-holds-the-newest-backup-whole): a pass records a destination in sync only once it holds every blob a restore of the newest backup the pass carried reads, matched by store name; one left short is failed, naming the first blob, its watermark unmoved; "what this does not do" noted. `Repository.Catalogue/Catalogue`; `Agent/SnapshotClosure`; `Agent/FileHoldingCounter`; `Agent/FanOut`; `Hosts.Tests/InSyncClosureTests` |
+| 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-copy-that-leaves-a-destination-short-sends-it-no-record-of-that-backup): a pass that leaves a destination short sends it no record of the newest backup: the copier and the push ask before each record, and the push sends records after everything else, since a union source may list a record before the blobs it names. `Replication/StoreToStoreCopier`; `Agent/ReplicationInitiator`; `Agent/FileHoldingCounter`; `Agent/FanOut`; `Replication.Tests/CopierWithheldRecordTests`; `Hosts.Tests/InSyncClosureTests` |

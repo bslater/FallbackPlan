@@ -154,6 +154,9 @@ internal static class ReplicationInitiator
     public sealed record VerifiedReplicationReceipt(
         ReplicationReceipt Receipt, ReadOnlyMemory<byte> SignedBytes, ReadOnlyMemory<byte> Signature, PeerIdentity Signer);
 
+    /// <summary>The prefix of snapshot records, which a push sends after everything else.</summary>
+    private const string RecordPrefix = "snapshots/";
+
     /// <summary>
     /// Pushes the objects the destination lacks and the policy keeps, then —
     /// when a keep filter is given — instructs the spoke to drop what its
@@ -242,6 +245,12 @@ internal static class ReplicationInitiator
     /// answered false, whether or not a filter was given, and only those the
     /// destination declared holding.
     /// </param>
+    /// <param name="withholds">
+    /// Asked of each snapshot record the destination lacks; a record it names
+    /// is not sent (ADR-0198 Amendment 3). The source lists in ordinal key
+    /// order, so every blob has been offered before the first record is asked
+    /// about.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
@@ -256,7 +265,8 @@ internal static class ReplicationInitiator
         ReceiptExpectation? expectReceipt = null,
         bool pushOnly = false,
         Action<string>? delivered = null,
-        IReadOnlyCollection<string>? retire = null)
+        IReadOnlyCollection<string>? retire = null,
+        Func<string, bool>? withholds = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -303,6 +313,10 @@ internal static class ReplicationInitiator
             var owedBytes = 0L;
             var bytesSent = 0L;
             var resumed = 0L;
+            // Records go last, as a copy sends them: a record's presence is what
+            // says the backup is there (ADR-0011), and a source that is a union
+            // of planes may list a record before the blobs it names.
+            var records = new List<ObjectEntry>();
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))
             {
@@ -312,10 +326,35 @@ internal static class ReplicationInitiator
                     continue;
                 }
 
+                if (key.StartsWith(RecordPrefix, StringComparison.Ordinal))
+                {
+                    records.Add(entry);
+                    continue;
+                }
+
+                await OfferAsync(entry).ConfigureAwait(false);
+            }
+
+            foreach (var record in records)
+            {
+                // A record the destination would hold without the blobs it
+                // names says the backup is there when it is not.
+                if (!held.Contains(record.Key.Value) && withholds is not null && withholds(record.Key.Value))
+                {
+                    owedBytes += record.Length;
+                    continue;
+                }
+
+                await OfferAsync(record).ConfigureAwait(false);
+            }
+
+            async ValueTask OfferAsync(ObjectEntry entry)
+            {
+                var key = entry.Key.Value;
                 owedBytes += entry.Length;
                 if (held.Contains(key))
                 {
-                    continue;
+                    return;
                 }
 
                 var from = await SendObjectAsync(
