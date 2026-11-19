@@ -103,6 +103,10 @@ session rather than a directory, and dialling one per read would put a TLS
 handshake behind a presence probe; a peer's replica is read back on the
 restore-source path, which is what that path is for.
 
+> **2026-11 ([ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md)).** The sink still does not. A sync whose
+> only whole source is a peer dials it once, over the retrieval session, and
+> reads the blobs the sink lacks from it, never for the destination it seeds.
+
 ### 6 Every wire failure leaves the adapter as an `IOException`
 
 The sink's drop rule — one destination's failure is that destination's, never
@@ -261,6 +265,11 @@ pass, and carried out by the instruction that is entitled to carry it.
 - Outside a run the sink cannot read a peer, so a catch-up copy that would
   source bytes from a peer has nothing to read. For a mixed set the local
   sibling answers; for a peer-only set there is nothing to catch up to.
+
+  > **2026-11 ([ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md)).** The local sibling answers only where it
+  > holds the newest backup whole. A store beside a peer, a path that missed a
+  > run, and a second peer were each sent snapshots without their blobs and
+  > recorded in sync. A sync now reads such blobs from the whole peer.
 - Reads during a run cost a second dialled session. It is opened lazily and
   most runs never open one.
 
@@ -295,3 +304,4 @@ is that it has none.
 | 2026-09 | Amended (will not do) | The digest challenge named beside the digest tier is refused as a self-report the source cannot verify: a bare digest is precomputable by the examined party, and the source holds nothing it could key an answer to. The §8 read-back stays the proof and rotates through the peer's inventory on a cursor (`Replication/VerificationSampler`, `Agent/FanOut`) under `Replication/ReplicaVerifier`'s peer byte budget; a possession-proving digest challenge needs a Merkle-root commitment in the index, recorded as ADR-0052's open question 4 and built as [ADR-0065](0065-merkle-commitment-and-chunk-possession.md) — where the answer carries the leaf's **bytes** rather than a hash of them, which is what a destination cannot produce from a cache. Held by `Hosts.Tests/PeerReadBackVerificationTests` |
 | 2026-09 | Noted | The digest tier (`Replication/ReplicaVerifier`, fed by `Repository.Catalogue/Catalogue`'s signed digests) proves a write-only set's sealed data plane at a destination; over a peer it rides the §8 read-back as a whole-blob read |
 | 2026-09 | Amended (the proof arrives) | Amendment at §8: a set whose only destination is a peer is no longer unprovable. `Replication/ReplicaVerifier` gained `ProveSealedAsync`, the copy-free half of its own verification exposed on its own, and `Agent/FanOut` reaches it through the retrieval session when there is no ground truth to challenge against. The red that named the gap is the one worth remembering: every data blob at the peer rotted, a pass ran, and the destination was recorded in sync. `Hosts.Tests/PeerReadBackVerificationTests` holds it |
+| 2026-11 | Amended (related) | [ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md): a sync whose only whole source is a peer reads that peer's blobs over the retrieval session, and a destination none can seed is left behind with nothing copied; §5's consequence that the local sibling answers holds only where the sibling is whole. |
