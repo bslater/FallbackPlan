@@ -33,7 +33,9 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// ADR-0153). A location carries the key generation of a blob the writer
 /// recorded, and none for a blob the catalogue knows only by a placeholder
 /// row or not at all, which is what lets a format-3 metadata record be read
-/// without its blob's envelope (NFR-PERF-009, ADR-0167).
+/// without its blob's envelope (NFR-PERF-009, ADR-0167). A snapshot's
+/// closure names the blob of every part a restore of it reads, each at its
+/// live winning location (FR-DEST-004, ADR-0198 Amendment 2).
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -563,6 +565,72 @@ public sealed class CatalogueTests : IDisposable
         Assert.AreEqual(2L, delivered.Total);
         Assert.AreEqual(0L, delivered.Held);
     }
+
+    [TestMethod]
+    public void ClosureOf_NamesTheBlobOfEachPartARestoreReads()
+    {
+        // Each part is filed in a blob of its own, so a part the closure
+        // left out would leave its blob out with it.
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x38);
+        var (record, root, structure) = (Object(0x30), Object(0x31), Object(0x32));
+        var (folder, version, content) = (Object(0x33), Object(0x34), Object(0x35));
+        catalogue.RecordSnapshot(
+            snapshot, new byte[16], new byte[16], record, root, publicationGeneration: 0,
+            captureStatus: 1, signatureState: 1);
+        catalogue.RecordSnapshotStructure(snapshot, structure);
+        CatalogueTrees.Record(
+            catalogue, [("docs", EntryKind.DirectoryPlaceholder, folder), ("docs/a.txt", EntryKind.File, version)], root);
+        catalogue.RecordVersionContents(version, [content]);
+        Place(
+            catalogue, sequence: 1, generation: 0,
+            (record, Blob(0xB0)), (structure, Blob(0xB1)), (root, Blob(0xB2)),
+            (folder, Blob(0xB3)), (version, Blob(0xB4)), (content, Blob(0xB5)));
+
+        var closure = catalogue.ClosureOf(snapshot);
+
+        CollectionAssert.AreEquivalent(
+            new[] { Blob(0xB0), Blob(0xB1), Blob(0xB2), Blob(0xB3), Blob(0xB4), Blob(0xB5) },
+            closure.Select(blob => blob.BlobId).ToList());
+    }
+
+    [TestMethod]
+    public void ClosureOf_TakesAnObjectFromItsLiveWinningLocation_Only()
+    {
+        // The content is located three times: in a blob a later generation
+        // supersedes, in that later blob, and in a later one still that is
+        // known deleted. A restore reads the live winner, so only it is needed.
+        using var catalogue = Open();
+        var snapshot = Snapshot(0x39);
+        var (record, root, version, content) = (Object(0x30), Object(0x31), Object(0x34), Object(0x35));
+        catalogue.RecordSnapshot(
+            snapshot, new byte[16], new byte[16], record, root, publicationGeneration: 0,
+            captureStatus: 1, signatureState: 1);
+        CatalogueTrees.Record(catalogue, [("a.txt", EntryKind.File, version)], root);
+        catalogue.RecordVersionContents(version, [content]);
+        Place(catalogue, sequence: 1, generation: 0, (content, Blob(0xC1)));
+        Place(catalogue, sequence: 2, generation: 1, (content, Blob(0xC2)));
+        Place(catalogue, sequence: 3, generation: 2, (content, Blob(0xC3)));
+        catalogue.SetBlobState(Blob(0xC3), BlobState.Deleted);
+
+        var closure = catalogue.ClosureOf(snapshot).Select(blob => blob.BlobId).ToList();
+
+        Assert.Contains(Blob(0xC2), closure);
+        Assert.DoesNotContain(Blob(0xC1), closure);
+        Assert.DoesNotContain(Blob(0xC3), closure);
+    }
+
+    /// <summary>Publishes where each object is, as one writer's delta at <paramref name="sequence"/>.</summary>
+    private static void Place(Catalogue catalogue, ulong sequence, ulong generation, params (ObjectId Object, BlobId Blob)[] placed) =>
+        catalogue.ApplyDelta(
+            Delta((byte)(0x80 + sequence)),
+            new IndexDelta
+            {
+                WriterId = Writer(0x66),
+                Sequence = sequence,
+                Generation = generation,
+                Entries = [.. placed.Select(item => new IndexEntry(item.Object, item.Blob, 88, 100, 1, 1, IndexEntryType.Insertion))],
+            });
 
     /// <summary>
     /// A snapshot whose record one writer publishes at sequence 2, holding

@@ -19,6 +19,7 @@
   - `Hosts.Tests/StoreBesideAPeerTests` (Amendment 1): with the peer away, a store the run sent every blob is brought current, after the first backup and after a second, and claims no verification; a store missing a blob, or one that took nothing from the run before, is left behind naming the peer and holds no snapshot.
 - The closure before in sync (Amendment 2): `Repository.Catalogue/Catalogue` names every blob a restore of a snapshot reads (`ClosureOf`). `Agent/SnapshotClosure` crosses them off from the keys the sync's file count already sees, and `Agent/FanOut` records a destination still lacking any as failed, logging event 3704.
   - `Hosts.Tests/InSyncClosureTests`: a staging set's local path, short of a data blob and of a metadata blob, is failed naming it, its watermark and last success unmoved; it is in sync once the blob is back where the sync reads it; a direct-ship set's path copied from a whole copy short of a blob is failed naming it; a staging set's peer pushed from an archive short of a blob is failed naming it, its watermark unmoved; a path that missed the newest backup, which a person then deleted, is in sync holding none of it.
+  - `Repository.Tests/CatalogueTests`: the closure names the blob of a snapshot's record, its structure, its folders, a file's version and its content, each filed apart; and takes an object from its live winning location only, not one a later generation superseded nor one in a deleted blob.
 
 ---
 
