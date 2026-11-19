@@ -1028,6 +1028,15 @@ public sealed class DestinationShipSink : IObjectStore
     }
 
     /// <summary>
+    /// The destinations a read through this sink can be answered by now, by
+    /// name: those it would consult for a blob, and nothing it cannot reach.
+    /// A sync asks whether one of them holds the newest backup whole before
+    /// it takes this sink for its source (ADR-0198).
+    /// </summary>
+    internal HashSet<string> ReadableHolders() =>
+        [.. ReadOrder(holdingOnly: true).Select(holder => holder.Name)];
+
+    /// <summary>
     /// The destinations a read may consult: every configured, reachable local
     /// path, priority first, and the set's object stores where it writes
     /// through them.

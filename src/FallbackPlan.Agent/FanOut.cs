@@ -476,6 +476,19 @@ public static class FanOut
             var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
                 .ConfigureAwait(false);
 
+            // The push reads a source that holds the newest backup whole, as
+            // the copy to a path or a store does (ADR-0198).
+            await using var source = await SyncSource.ComposeAsync(
+                runtime, set, destination, archive, syncedSequence, userInitiated, cancellationToken)
+                .ConfigureAwait(false);
+            if (source.Refusal is { } unreadable)
+            {
+                ledger.RecordBehind(set.Id, destination.Name, unreadable, nowMs);
+                return;
+            }
+
+            var readFrom = source.Store!;
+
             // A peer under a retention policy converges like a local path
             // does (FR-GC-010): the hub computes the keep filter, pushes only
             // what it keeps, and instructs the spoke to drop the rest — when
@@ -582,13 +595,13 @@ public static class FanOut
             // it. A set with a local sibling is unaffected: the sink answers
             // blob reads from the sibling, which is a genuinely independent
             // copy.
-            var contentSampleable = await HoldsAnyAsync(archive.Store, "blobs/", cancellationToken)
+            var contentSampleable = await HoldsAnyAsync(readFrom, "blobs/", cancellationToken)
                 .ConfigureAwait(false);
 
             var plan = contentSampleable
                 && session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
                 ? await VerificationSampler.SampleAsync(
-                    archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
+                    readFrom, keeps, newestSnapshot, previous?.SampleCursor,
                     VerificationSampler.DefaultBudget, VerificationSampler.PeerReservoirShare,
                     Protocol.VerificationChallenge.MaximumLength, cancellationToken)
                     .ConfigureAwait(false)
@@ -650,7 +663,7 @@ public static class FanOut
                 ? null
                 : new Application.PacedStream(session.Stream, limiter, leaveOpen: true);
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
-                archive.Store, archive.Repository.RepositoryId.ToArray(), (Stream?)wire ?? session.Stream, keeps,
+                readFrom, archive.Repository.RepositoryId.ToArray(), (Stream?)wire ?? session.Stream, keeps,
                 cancellationToken,
                 reclaimPublicKey, reclaimSigner,
                 session.Supports(Protocol.PeerSessionNegotiation.PartialObjectResumeFeature),
@@ -750,7 +763,7 @@ public static class FanOut
                 // retention exchange (peer-protocol 04 §1): what this proves
                 // is what the session leaves behind, not what it deletes.
                 var verification = await ReplicationInitiator.ChallengeAsync(
-                    archive.Store, archive.Repository.RepositoryId.ToArray(), (Stream?)wire ?? session.Stream,
+                    readFrom, archive.Repository.RepositoryId.ToArray(), (Stream?)wire ?? session.Stream,
                     plan.Samples,
                     cancellationToken).ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
@@ -910,6 +923,14 @@ public static class FanOut
             : await Retention.SnapshotDeletion.PublicationSequenceAsync(archive.Store, archive.Repository, cancellationToken)
                 .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Whether <paramref name="set"/>'s staging archive is still on disk: a
+    /// direct-ship set keeps it as the read-only seed of its migration until
+    /// retirement (ADR-0046 §3).
+    /// </summary>
+    internal static bool StagingRemains(ServiceRuntime runtime, BackupSetConfiguration set) =>
+        File.Exists(Path.Combine(runtime.ArchivePath(set.Id), Repository.RepositoryLifecycle.DescriptorKey.Value));
 
     private static async ValueTask<(ulong Sequence, string? NewestSnapshotKey)> StagingPublicationSequenceAsync(
         ArchiveHandle archive, CancellationToken cancellationToken)
@@ -1337,9 +1358,7 @@ public static class FanOut
         // shipped (ADR-0046 §3). Until the archive is gone, every pass
         // reads through — which is what seeds the destination and what
         // lets retirement establish that nothing would be lost.
-        var stagingRemains = archive.ShipSink is not null
-            && File.Exists(Path.Combine(
-                runtime.ArchivePath(set.Id), Repository.RepositoryLifecycle.DescriptorKey.Value));
+        var stagingRemains = archive.ShipSink is not null && StagingRemains(runtime, set);
 
         // The gate's ledger rolled back with everything else, so its
         // "nothing to look at" would be the rollback's own opinion of
@@ -1368,8 +1387,25 @@ public static class FanOut
         // reconciliation may not have found a stray the catch-all phase holds:
         // neither may be asked about what only a reconciling pass carries.
         var copyScope = scope == SyncScope.Reconcile ? CopyScope.Reconcile : CopyScope.Incremental;
+
+        // A copy whose source lacks blobs would carry snapshots without them
+        // and claim them all (ADR-0198): it reads a source that holds the
+        // newest backup whole, a peer's over the retrieval session if that is
+        // the only one, or does not start.
+        await using var source = scope == SyncScope.Skip
+            ? null
+            : await SyncSource.ComposeAsync(
+                runtime, set, destination, archive, syncedSequence, userInitiated, cancellationToken)
+                .ConfigureAwait(false);
+        if (source?.Refusal is { } unreadable)
+        {
+            ledger.RecordBehind(set.Id, destination.Name, unreadable, nowMs);
+            return;
+        }
+
+        var readFrom = source?.Store ?? archive.Store;
         var plan = await VerificationSampler.SampleAsync(
-            archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
+            readFrom, keeps, newestSnapshot, previous?.SampleCursor,
             VerificationSampler.DefaultBudget,
             destination.Kind == DestinationKind.LocalPath ? 0 : VerificationSampler.PeerReservoirShare,
             Protocol.VerificationChallenge.MaximumLength, cancellationToken, copyScope)
@@ -1456,7 +1492,7 @@ public static class FanOut
                 if (keeps is not null)
                 {
                     var converged = await StoreToStoreCopier.ConvergeAsync(
-                        archive.Store, replica, keeps, cancellationToken,
+                        readFrom, replica, keeps, cancellationToken,
                         destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
                         spares, counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
                     copied = converged.Copied;
@@ -1467,7 +1503,7 @@ public static class FanOut
                 else
                 {
                     var outcome = await StoreToStoreCopier.CopyAsync(
-                        archive.Store, replica, cancellationToken,
+                        readFrom, replica, cancellationToken,
                         destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
                         counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
                     copied = outcome.Copied;
@@ -1544,7 +1580,7 @@ public static class FanOut
             using (var digests = archive.OpenReadCatalogue())
             {
                 verification = await Replication.ReplicaVerifier.VerifyAsync(
-                    archive.Store, replica, plan.Samples, cancellationToken, archive.Repository,
+                    readFrom, replica, plan.Samples, cancellationToken, archive.Repository,
                     digests.SignedDigestOf)
                     .ConfigureAwait(false);
             }

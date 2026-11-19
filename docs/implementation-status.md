@@ -222,6 +222,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0195](adr/0195-a-set-may-leave-its-online-only-files-to-their-cloud-provider.md) | A set may leave its online-only files to their cloud provider: the run asks no provider for a file new or changed in content, leaves it out of the snapshot without a failure, and counts it; one unchanged, only moved, or changed only in its metadata is taken as ever; the changes waiting count none the next backup will leave; the journal places kept say whether the set's last snapshot may lack a file left, and a set that no longer leaves them walks in full; contract 1.89 carries the choice on a set and in its status, the command line's status prints a token, and direct mode says how many it left; since Amendment 1 the console offers the choice among a set's other settings, and a set's card says it | **Built** | `Application/ClientConfiguration` · `Repository/SnapshotPublication` · `Repository/SourceComparer` · `Agent/ChangeHints` · `Agent/BackupRunner` · `Agent/PendingChangesBoard` · `Agent/ServiceCommandHandler` · `Api/Results` · `Cli/CliApplication` · `Cli/OperationGateway` · `Repository.Tests/OnlineOnlyCaptureTests` · `Repository.Tests/ChangedFilesCountTests` · `Application.Tests/ClientConfigurationTests` · `Hosts.Tests/LeaveOnlineOnlyTests` · `Hosts.Tests/ConfigurationCommandTests` · `Cli.Tests/BackupNotFetchedDirectTests` · `Cli.Tests/StatusLeavesOnlineOnlyTokenTests` · `Api.Tests/ContractAdditiveFieldsTests` · `Web.Tests/CommandRelayTests` · `Web.Tests/StatusRelayNamesTests` · `Web.DomTests/LeaveOnlineOnlyDomTests` · [notes](#0195--online-only-files-left-to-their-provider) |
 | [0196](adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md) | A set whose only destinations are object stores ships straight to them: where a set names no local path and no peer, a run writes its blobs through its stores and keeps only metadata on the machine, a read outside a run asks the stores, a store beside a local path or a peer is still filled after the run, the set check accepts a direct-ship set naming only stores, and a run with nowhere to write names each destination it tried; since Amendment 1 a new set naming only stores is born direct-ship, and the console's new set follows its destinations as the service does; since Amendment 2 a set adopted from a store is adopted direct-ship, with only its metadata copied to the machine; since Amendment 3 a set whose stores are all it has keeps its folder trees on the machine, so a backup reads none from the store; since Amendment 4 a staging set of stores alone is named in a notice saying it could ship straight, and keeps its staging archive's trees when it does; since Amendment 5 a tree such a set has no copy of is kept the first time it is read from the store, once it verifies; since Amendment 6 a run beside a local path sends its blobs on to the set's stores as it goes, never waiting on them, and leaves the snapshot to the sync after it; since Amendment 7 the console's storage shape note says so, and a test holds that those uploads are paced at the store's limit | **Built** | `Agent/DestinationShipSink` · `Agent/StoreWriteBehind` · `Agent/StoreComposition` · `Agent/StagingCouldShipWatch` · `Agent/ServiceCommandHandler` · `Agent/ServiceCommandHandler.Adoption.cs` · `Hosts.Tests/ObjectStoreDestinationTests` · `Hosts.Tests/DirectShipTests` · `Hosts.Tests/ObjectStoreAdoptionTests` · `Web.DomTests/NewSetWizardDomTests` · [notes](#0196--a-store-only-set-ships-straight-to-its-stores) |
 | [0197](adr/0197-format-7-a-failure-says-what-stands-in-its-place.md) | Format 7: a capture failure's key 4 says that what the snapshot's tree holds at the failure's path is what the snapshot before held there, a file's version or a folder's tree; it is absent where it would say nothing and refused with any value but 1; a repository is born at 7 and lists feature 0x0007; at first nothing wrote or read the key; since Amendment 1 the backup writes it from format 7 where a file kept its version or a folder its tree, and on no other failure, and a restore's plan and a run's read name such a file, and each file below such a folder, from it, with no earlier snapshot asked | **Built** | `Domain/FormatVersions`, `Domain/FormatLimits` · `Repository.Format/Manifests/PolicyManifest` (the error manifest's failure key 4) · `Repository.Format/Descriptor/RepositoryDescriptorCodec` (feature 0x0007) · `Repository/RepositoryLifecycle` · `Repository/SnapshotPublication` · `Restore/RestoreBlobSet` · `Repository.Tests/Format/ManifestCodecTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests`, `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Domain.Tests/FormatVersionsTests`, `Hosts.Tests/CreatedFormatTests`, `Repository.FuzzTests/FuzzCorpus`, `Repository.ConformanceTests/FixtureRepositoryV7Tests`, `Repository.Tests/EndToEnd/OnlineOnlyCaptureTests` · [notes](#0197--format-7) |
+| [0198](adr/0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) | A sync of a direct-ship set copies only from a source that holds the newest backup whole, by the ledger: the archive where the destination or one it can read now holds it, or where none is named; the archive with a whole peer's blobs behind it, read over the retrieval session and paced at that peer's limit for background work, where only a peer holds it; and nothing where no whole destination can be read, the destination left behind naming them. The same for the copy to a local path or a store and for the push to a peer | **Built** | `Agent/SyncSource` · `Agent/PeerFilledObjectStore` · `Agent/DestinationShipSink` (the holders a read can reach now) · `Agent/FanOut` · `Hosts.Tests/SyncSourceTests` · [notes](#0198--a-sync-reads-a-whole-source) |
 
 ---
 
@@ -6288,3 +6289,43 @@ stream alone failed. `Restore/RestoreBlobSet` names a file whose failure
 carries it, and each file the plan restores below a folder whose failure
 carries it, with no earlier snapshot asked, and judges a failure without
 it by the snapshots before, as ADR-0194 Amendment 3 does.
+
+### 0198 — a sync reads a whole source
+
+Built in one slice, tests first. Before it, a direct-ship set's sync read
+the ship sink, whose union outside a run reads the local paths plugged in
+and the stores where they are all the set has, and never a peer. Every
+sync of a store beside a peer copied the snapshots and the index from the
+machine's copy and none of the blobs, and recorded the store in sync. A
+local path that missed a backup beside a peer was seeded the same way,
+and a local path whose whole sibling was unplugged was handed a snapshot
+it lacked the blobs of.
+
+**The evidence is the ledger.** A run records each destination it shipped
+to as holding everything up to the backup it published, so
+`Agent/SyncSource` asks the ledger which destinations hold the newest
+backup whole. The archive serves where the destination being synced does,
+where a destination `Agent/DestinationShipSink` can read now does, where
+the ledger names none (a set adopted from a store), and while a migrating
+set's staging archive remains.
+
+**A whole peer is read for blobs.** Where only peers are whole, the sync
+dials them in priority order over the retrieval session and reads from the
+first that answers. `Agent/PeerFilledObjectStore` asks the archive first
+and the peer for a blob the archive lacks, lists the archive with the
+peer's blobs added, carries no snapshot or index from the peer, paces a
+background read at the peer's limit, and says a peer's failure part-way as
+the peer's, naming it. The peer read is never the destination being
+synced, so a verification that reads the source compares two copies.
+
+**Where none can be read, nothing is copied.** The destination is recorded
+behind, naming each whole destination and why it could not be read, and
+the next pass tries again at once.
+
+What remains is recorded rather than done:
+
+- each blob of a store beside a peer crosses the peer's link twice, once in
+  the run and once back in the sync; a run that sent its blobs on to the
+  store as it went, as it does beside a local path, would save the second;
+- the ledger's word is trusted: the sync does not walk the newest
+  snapshot's closure at the source before copying.

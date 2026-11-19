@@ -49,6 +49,15 @@ blob key), the rename-manifest optimisation, and collision read-backs.
    can therefore always seed a destination that missed a run. This is also
    what keeps **dedupe working** with no local content: the presence probe
    (the guard against a stale catalogue row) asks the destinations.
+
+   > **2026-11 ([ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md)).** The closure exists at a destination, but
+   > outside a run the sink reads only the local paths plugged in, and its
+   > stores where they are all it has, never a peer. A closure held whole
+   > only at a peer or an unplugged path was not readable, and the seeding
+   > copy carried the snapshots without their blobs. A sync now reads a
+   > source that holds the newest backup whole, a peer's replica over the
+   > retrieval session where only a peer does, and copies nothing where
+   > none can be read.
 3. **The run scope** (with ADR-0047's ledger): a run writes to the set's
    defect-free, reachable, local-path destinations that hold a baseline —
    or all reachable ones when the set has never captured, because that
@@ -291,3 +300,4 @@ A direct-ship set whose only destination was a FAT32 drive met this ([ADR-0012 A
 | 2026-11 | Amended (related) | [ADR-0196](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md): a set whose only destinations are object stores ships straight to them, and the refusal of a capture with nowhere to write names where it tried. |
 | 2026-11 | Amended (related) | [ADR-0196 Amendment 1](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-1-2026-11--a-new-sets-shape-follows-its-destinations): a new set that names no shape is also born direct-ship where every destination it names is an object store, and the console's new set follows the same rule instead of always shipping direct. |
 | 2026-11 | Amended (related) | [ADR-0196 Amendment 4](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-4-2026-11--a-staging-set-of-stores-alone-is-told-it-could-ship-straight): the migration at a set's first open after it is made direct-ship copies the staging archive's folder trees too, where the set writes through its stores; and a staging set whose destinations are all stores is named in a notice saying it could ship straight. |
+| 2026-11 | Amended (related) | [ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md): the union §2 describes is what a sync reads only while a destination it can read holds the newest backup whole. Where only a peer does, the sync reads the peer's blobs over the retrieval session; where no whole destination can be read, the destination is left behind and nothing is copied. |

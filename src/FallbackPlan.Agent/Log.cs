@@ -399,6 +399,13 @@ internal static partial class Log
         Message = "Destination {Destination} is no longer sent this run's blobs as it goes: {Reason}. The sync that follows the run sends them")]
     internal static partial void WriteBehindStopped(ILogger logger, LogLabel destination, string reason);
 
+    // Information: a whole copy read over the retrieval session is what brings
+    // the destination current (ADR-0198).
+    [LoggerMessage(
+        EventId = 3702, Level = LogLevel.Information,
+        Message = "Set {Set}: destination {Destination} is filled from peer {Peer}, as no destination this machine reads outside a run holds the newest backup whole")]
+    internal static partial void SyncReadsFromPeer(ILogger logger, LogLabel set, LogLabel destination, LogLabel peer);
+
     // Warning: a queued job with no tracked cancellation cannot be run and is
     // discarded — unreachable while identities stay fresh, and the silent
     // version of this is an awaiter that hangs forever.
