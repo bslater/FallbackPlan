@@ -61,10 +61,17 @@ public sealed class StoreBesideAPeerTests : IAsyncDisposable
     public async Task ARoomThatHoldsOneBlob_SendsTheFirst_AndLeavesTheRestToTheSync()
     {
         // The room is a single byte: the first blob is kept, since the room
-        // was empty, and every blob after it finds the room full.
+        // was empty, and every blob after it finds the room full. The store
+        // takes no upload until the run has committed, so the first copy
+        // still holds its room when the blobs after it come.
+        _store.HoldPuts();
         await using var runtime = await StartAsync(
             roomBytes: 1,
-            committed: () => EventuallyAsync(() => StoreBlobs().Count > 0));
+            committed: () =>
+            {
+                _store.ReleasePuts();
+                return EventuallyAsync(() => StoreBlobs().Count > 0);
+            });
 
         await RunAloneAsync(runtime);
 
