@@ -24,8 +24,9 @@ namespace FallbackPlan.Web.DomTests;
 /// path or every one is a store, staged where a peer is all a run could ship
 /// to; and the step that shows it says a set of stores alone is written
 /// through as it runs (ADR-0196 Amendment 1), and that a store beside a local
-/// path is sent each backup's data as it runs while one beside a peer alone
-/// is filled by the sync after it (ADR-0196 Amendment 7).
+/// path is sent each backup's data as it runs (ADR-0196 Amendment 7), and
+/// one beside a peer alone too, from a copy kept on the machine until the
+/// store has it (ADR-0196 Amendment 8).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -247,8 +248,7 @@ public sealed class NewSetWizardDomTests
     {
         // Beside a local path a store is sent what each backup lands there
         // as it runs, never waited on, and the sync after the run sends the
-        // rest; beside a peer alone it is filled by that sync, as before
-        // (ADR-0196 Amendments 6 and 7).
+        // rest (ADR-0196 Amendments 6 and 7).
         await using var harness = await DomHarness.StartAsync();
         harness.Clients.Client.Respond = Service(destinations: [Vault, Bucket, Friend]);
         await using var context = await BrowserSession.NewContextAsync();
@@ -268,8 +268,36 @@ public sealed class NewSetWizardDomTests
         await Expect(step).ToHaveAttributeAsync("data-section", "other");
         await Expect(step).ToContainTextAsync(
             "beside a local path is sent each backup's data as it runs, without the backup waiting on it");
-        await Expect(step).ToContainTextAsync("Beside a peer alone, a store is filled by the sync after each run");
         await Expect(step).Not.ToContainTextAsync("beside one is filled by the sync after each run");
+    }
+
+    [TestMethod]
+    public async Task TheOtherSettingsStep_SaysAStoreBesideAPeerAlone_IsSentEachBackupsDataAsItRuns_FromACopyKeptHere()
+    {
+        // Beside a peer alone the run keeps a copy of each blob here until
+        // the store has it, in a bounded room, and the sync after the run
+        // reads back from the peer what found no room (ADR-0196 Amendment 8).
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(destinations: [Vault, Bucket, Friend]);
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenWizardAsync(harness, context);
+
+        await page.FillAsync("#set-name", "docs");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.CheckAsync("input.mark[data-mark-path=\"/data\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.CheckAsync("[data-dest-check=\"friend\"]");
+        await page.CheckAsync("[data-dest-check=\"bucket\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+
+        var step = page.Locator("#set-editor");
+        await Expect(step).ToHaveAttributeAsync("data-section", "other");
+        await Expect(step).ToContainTextAsync(
+            "Beside a peer alone, a store is sent each backup's data as it runs too, from a copy this machine keeps until the store has it");
+        await Expect(step).ToContainTextAsync("the sync after each run reads back from the peer");
+        await Expect(step).Not.ToContainTextAsync("Beside a peer alone, a store is filled by the sync after each run");
     }
 
     private static DestinationDescriptor Bucket =>

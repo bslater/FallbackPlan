@@ -1,0 +1,247 @@
+using FallbackPlan.Agent;
+using FallbackPlan.Api;
+using FallbackPlan.Application;
+using FallbackPlan.Protocol;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.TestSupport;
+
+namespace FallbackPlan.Hosts.Tests;
+
+/// <summary>
+/// A direct-ship run beside a peer alone sends its blobs on to the set's store
+/// as it goes (FR-DEST-021), from a copy of each it keeps on this machine
+/// until the store has it. Beside a local path the run reads a blob back from
+/// there; beside a peer alone there is nothing on this machine to read, and
+/// reading the blob back from the peer would cross the peer's link twice.
+/// </summary>
+/// <remarks>
+/// The copies take a bounded room. A blob that finds it full is left to the
+/// sync after the run, which reads it from the peer (ADR-0198), and the run
+/// goes on either way. Each case holds the run after its commit until the
+/// store holds what it should, so that what reached the store is known to
+/// have gone up while the run went on, before its end could cut an upload
+/// short.
+/// </remarks>
+[TestClass]
+public sealed class StoreBesideAPeerTests : IAsyncDisposable
+{
+    private const string Bucket = "family-backups";
+
+    private readonly HostHarness _harness = new();
+    private readonly string _peersRoot = Path.Combine(Path.GetTempPath(), "fbp-beside-peer", Guid.NewGuid().ToString("n"));
+    private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(3));
+    private readonly S3CompatibleTestServer _store = new();
+    private LoopbackPeer? _friend;
+
+    private CancellationToken Timeout => _timeout.Token;
+
+    private string Room => Path.Combine(_harness.StateDirectory, "write-behind");
+
+    [TestMethod]
+    public async Task TheRun_SendsItsBlobsOnToTheStoreAsItGoes_AndKeepsNoCopyOfThemAfter()
+    {
+        var everyBlobWentUp = false;
+        await using var runtime = await StartAsync(
+            roomBytes: null,
+            committed: async () => everyBlobWentUp = await EventuallyAsync(() =>
+                Friend.Blobs().Count > 0 && !Friend.Blobs().Except(StoreBlobs(), StringComparer.Ordinal).Any()));
+
+        await RunAloneAsync(runtime);
+
+        Assert.IsTrue(everyBlobWentUp, "every blob the peer took reached the store while the run went on");
+        var others = _store.KeysIn(Bucket).Where(key => !key.Contains("/blobs/", StringComparison.Ordinal)).ToList();
+        Assert.IsEmpty(others, $"only blobs go up with the run: {string.Join(", ", others)}");
+        var cloud = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
+        Assert.Contains("went up as the run went", cloud.LastError!, StringComparison.Ordinal);
+        Assert.IsEmpty(CopiesKept(), "the copies kept for the store are gone once the run ends");
+    }
+
+    [TestMethod]
+    public async Task ARoomThatHoldsOneBlob_SendsTheFirst_AndLeavesTheRestToTheSync()
+    {
+        // The room is a single byte: the first blob is kept, since the room
+        // was empty, and every blob after it finds the room full.
+        await using var runtime = await StartAsync(
+            roomBytes: 1,
+            committed: () => EventuallyAsync(() => StoreBlobs().Count > 0));
+
+        await RunAloneAsync(runtime);
+
+        Assert.HasCount(1, StoreBlobs(), "one blob went up with the run");
+        Assert.IsGreaterThan(1, Friend.Blobs().Count, "the premise: the run wrote more than one blob");
+        var cloud = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
+        Assert.Contains("room", cloud.LastError!, StringComparison.Ordinal);
+        Assert.IsEmpty(CopiesKept(), "the copies kept for the store are gone once the run ends");
+
+        await SyncAsync(runtime);
+
+        var missing = Friend.Blobs().Except(StoreBlobs(), StringComparer.Ordinal).ToList();
+        Assert.IsEmpty(missing, $"the sync left the store without: {string.Join(", ", missing)}");
+        cloud = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, cloud.State, cloud.LastError);
+    }
+
+    [TestMethod]
+    public async Task NoRoom_SendsNothingWithTheRun_AndTheRunGoesOn()
+    {
+        await using var runtime = await StartAsync(roomBytes: 0, committed: () => Task.FromResult(true));
+
+        await RunAloneAsync(runtime);
+
+        Assert.IsEmpty(StoreBlobs(), "with no room, nothing went up with the run");
+        Assert.IsNotEmpty(Friend.Blobs(), "the premise: the run wrote to the peer");
+        var cloud = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Behind, cloud.State, cloud.LastError);
+        Assert.Contains("room", cloud.LastError!, StringComparison.Ordinal);
+    }
+
+    private LoopbackPeer Friend => _friend ?? throw new InvalidOperationException("no peer started");
+
+    private async Task<ServiceRuntime> StartAsync(long? roomBytes, Func<Task<bool>> committed)
+    {
+        _friend = LoopbackPeer.Start("friend", Path.Combine(_peersRoot, "friend"));
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/a.txt", "alpha");
+        _harness.WriteSourceFile("docs/b.txt", new string('b', 40_000));
+        await _harness.SetupAsync();
+        PeerGrantStore.Open(_harness.StateDirectory).Pin(
+            new PeerGrant(Friend.Identity, "friend", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
+        Friend.Admit(_harness.StateDirectory);
+        _store.CreateBucket(Bucket);
+
+        var runtime = await ServiceRuntime.StartAsync(
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+                WriteBehindRoomOverride = roomBytes,
+                EnteredCheckpointing = async (_, _) => await committed(),
+            },
+            Timeout);
+        await StoreCredentialAsync(runtime);
+        return runtime;
+    }
+
+    private void WriteConfiguration()
+    {
+        DestinationConfiguration[] destinations =
+        [
+            new()
+            {
+                Id = new string('1', 32),
+                Name = "friend",
+                Kind = DestinationKind.Peer,
+                Fingerprint = Friend.Fingerprint,
+                Endpoint = $"{Friend.Endpoint.Address}:{Friend.Endpoint.Port}",
+                Priority = 5,
+            },
+            new()
+            {
+                Id = "c10dc10dc10dc10dc10dc10dc10dc10d",
+                Name = "cloud",
+                Kind = DestinationKind.S3,
+                Endpoint = _store.Origin.ToString(),
+                Bucket = Bucket,
+                Region = S3CompatibleTestServer.DefaultRegion,
+                Prefix = "site-a",
+            },
+        ];
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [.. destinations],
+            BackupSets =
+            [
+                new BackupSetConfiguration
+                {
+                    Id = _harness.DocsSetId,
+                    Name = "docs",
+                    Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
+                    Schedule = "every 1h",
+                    Destinations = [.. destinations.Select(destination => new SetDestinationReference { Ref = destination.Name })],
+                    DirectShip = true,
+                },
+            ],
+        }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
+    }
+
+    private async Task StoreCredentialAsync(ServiceRuntime runtime)
+    {
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), Timeout), out var description);
+        var envelope = WriteOnlyProvisioning.SealAccessKeySecret(
+            Convert.FromHexString(description.RestoreGrantRecipient!), "cloud", _store.AccessKeyId, _store.SecretAccessKey);
+        var stored = await handler.ExecuteAsync(
+            new SetDestinationCredentialsCommand("cloud", _store.AccessKeyId, Convert.ToHexStringLower(envelope)), Timeout);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(stored, (stored as ServiceError)?.Message);
+    }
+
+    /// <summary>The run alone, with no sync after it.</summary>
+    private async Task RunAloneAsync(ServiceRuntime runtime)
+    {
+        var outcome = await Scheduler.Enqueue(runtime, runtime.Configuration.BackupSets.Single(), DateTimeOffset.Now, userInitiated: true)
+            .WaitAsync(Timeout);
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+    }
+
+    private async Task SyncAsync(ServiceRuntime runtime)
+    {
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var answer = await handler.ExecuteAsync(new SyncCommand("docs", "cloud"), Timeout);
+        Assert.IsInstanceOfType<SyncResult>(answer, (answer as ServiceError)?.Message);
+    }
+
+    private DestinationSyncRecord Row(ServiceRuntime runtime, string name) =>
+        runtime.DestinationSync.Find(_harness.DocsSetId, name) ?? throw new AssertFailedException($"no ledger row for '{name}'");
+
+    private List<string> StoreBlobs() =>
+        [.. _store.KeysIn(Bucket)
+            .Where(key => key.Contains("/blobs/", StringComparison.Ordinal))
+            .Select(key => key[(key.IndexOf("/blobs/", StringComparison.Ordinal) + 1)..])];
+
+    private List<string> CopiesKept() =>
+        Directory.Exists(Room) ? [.. Directory.GetFiles(Room, "*", SearchOption.AllDirectories)] : [];
+
+    private async Task<bool> EventuallyAsync(Func<bool> condition)
+    {
+        var until = DateTime.UtcNow.AddSeconds(20);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > until)
+            {
+                return false;
+            }
+
+            await Task.Delay(25, Timeout);
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask DisposeAsync()
+    {
+        if (_friend is { } friend)
+        {
+            await friend.DisposeAsync();
+        }
+
+        await _store.DisposeAsync();
+        _timeout.Dispose();
+        _harness.Dispose();
+        try
+        {
+            if (Directory.Exists(_peersRoot))
+            {
+                Directory.Delete(_peersRoot, recursive: true);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A test directory that will not delete is not a test failure.
+        }
+    }
+}
