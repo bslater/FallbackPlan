@@ -151,6 +151,32 @@ public sealed class InSyncClosureTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task AStagingSetsPeer_LeftShort_IsStillOwedTheRecordItWasNotSent()
+    {
+        // What the peer is owed does not shrink for the record held back: once
+        // the blob is back, it is owed exactly that blob more than before.
+        var friend = StartPeer("friend");
+        WriteConfiguration(directShip: false, Peer(friend));
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        await BackUpAloneAsync(runtime, start.AddHours(1));
+        var taken = TakeAway(StagingBlobs(runtime).Except(friend.Blobs(), StringComparer.Ordinal), "data", Staging(runtime));
+        await SyncAsync(runtime, "friend");
+        var shortOwed = Row(runtime, "friend").OwedBytes;
+
+        taken.Restore();
+        await SyncAsync(runtime, "friend");
+
+        var whole = Row(runtime, "friend");
+        Assert.AreEqual(DestinationSyncState.InSync, whole.State, whole.LastError);
+        Assert.AreEqual(whole.OwedBytes, whole.HeldBytes, "the whole peer was not counted as holding all it is owed");
+        Assert.AreEqual(shortOwed + new FileInfo(taken.From).Length, whole.OwedBytes, "the held-back record was not counted as owed");
+    }
+
+    [TestMethod]
     public async Task APathThatMissedTwoBackups_TheNewestShort_IsSentTheOlderRecord_AndNotTheNewest()
     {
         // Only the newest backup's closure is known to the sync, so only its

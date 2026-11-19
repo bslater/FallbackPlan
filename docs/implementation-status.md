@@ -6430,7 +6430,7 @@ a retention policy and a peer, each left short with no record of that
 backup, and the record arriving once the blob is back. A verified receipt
 counted a peer as holding everything the push owed it, the record held back
 included; the push now reports the bytes it held back and the receipt counts
-the peer as holding the rest. The tests also hold that a path missing two
+the peer as holding the rest, while the record stays owed. The tests also hold that a path missing two
 backups, the newest short, is sent the older one's record, and that a peer
 already holding the record keeps it and is not told it was held back.
 
