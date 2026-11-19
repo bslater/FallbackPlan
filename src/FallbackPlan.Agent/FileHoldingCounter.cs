@@ -84,15 +84,22 @@ internal sealed class FileHoldingCounter
 /// (ADR-0088 Amendment 1), published where the status reads it until the sync
 /// ends. The ledger's own figure moves only once a pass has succeeded.
 /// </summary>
+/// <remarks>
+/// It also crosses off, from what the same keys say, the blobs a restore of
+/// the backup the sync carries reads, so the sync can tell whether it leaves
+/// the destination whole (ADR-0198 Amendment 2).
+/// </remarks>
 internal sealed class SyncCount : IDisposable
 {
     private readonly FileHoldingCounter _counter;
     private readonly LiveHolding _live;
+    private readonly SnapshotClosure? _closure;
 
-    private SyncCount(FileHoldingCounter counter, LiveHolding live)
+    private SyncCount(FileHoldingCounter counter, LiveHolding live, SnapshotClosure? closure)
     {
         _counter = counter;
         _live = live;
+        _closure = closure;
     }
 
     /// <summary>
@@ -105,12 +112,17 @@ internal sealed class SyncCount : IDisposable
     /// <param name="set">The set being synced.</param>
     /// <param name="destination">The destination being filled.</param>
     /// <param name="archive">The set's archive, whose catalogue says what each file needs.</param>
+    /// <param name="carried">
+    /// The store key of the snapshot the sync carries and the destination is
+    /// owed, whose blobs are crossed off as they are found there; null for none.
+    /// </param>
     public static SyncCount? Start(
-        ServiceRuntime runtime, BackupSetConfiguration set, string destination, ArchiveHandle archive)
+        ServiceRuntime runtime, BackupSetConfiguration set, string destination, ArchiveHandle archive,
+        string? carried = null)
     {
         try
         {
-            return Build(runtime, set, destination, archive);
+            return Build(runtime, set, destination, archive, carried);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -121,23 +133,39 @@ internal sealed class SyncCount : IDisposable
     }
 
     private static SyncCount? Build(
-        ServiceRuntime runtime, BackupSetConfiguration set, string destination, ArchiveHandle archive)
+        ServiceRuntime runtime, BackupSetConfiguration set, string destination, ArchiveHandle archive,
+        string? carried)
     {
         using var catalogue = archive.OpenReadCatalogue();
         var setId = Convert.FromHexString(set.Id);
-        var newest = catalogue.EnumerateSnapshots()
-            .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(setId));
-        if (newest is null)
+        var snapshots = catalogue.EnumerateSnapshots()
+            .Where(row => row.BackupSetId.Span.SequenceEqual(setId))
+            .ToList();
+        if (snapshots.Count == 0)
         {
             return null;
         }
 
-        var content = catalogue.ContentOf(newest.SnapshotId.Span);
         using var derive = new Repository.Crypto.StoreBlobKeyDeriver(archive.Repository.Keys.KeyIdKey);
-        var counter = new FileHoldingCounter(
-            content,
-            blob => Repository.Packing.BlobStoreKeys.ForBlob(blob.Class, blob.StoreBlobKey ?? derive.Derive(blob.BlobId)).Value);
-        return new SyncCount(counter, runtime.Holdings.Track(set.Id, destination, counter.Total));
+        string KeyOf(ContentBlob blob) =>
+            Repository.Packing.BlobStoreKeys.ForBlob(blob.Class, blob.StoreBlobKey ?? derive.Derive(blob.BlobId)).Value;
+
+        var counter = new FileHoldingCounter(catalogue.ContentOf(snapshots[0].SnapshotId.Span), KeyOf);
+
+        // The catalogue may not hold the snapshot the sync carries yet; then
+        // it cannot say what that snapshot needs, and nothing is crossed off.
+        var owed = carried is null
+            ? null
+            : snapshots.FirstOrDefault(row => string.Equals(
+                Repository.Packing.MetadataStoreKeys.Snapshot(row.DeviceId.Span, row.BackupSetId.Span, row.SnapshotId.Span).Value,
+                carried,
+                StringComparison.Ordinal));
+        var closure = owed is null
+            ? null
+            : new SnapshotClosure([.. catalogue.ClosureOf(owed.SnapshotId.Span)
+                .Select(blob => (blob.StoreBlobKey ?? derive.Derive(blob.BlobId)).ToBase32())]);
+
+        return new SyncCount(counter, runtime.Holdings.Track(set.Id, destination, counter.Total), closure);
     }
 
     /// <summary>
@@ -149,12 +177,13 @@ internal sealed class SyncCount : IDisposable
     /// <param name="destination">The destination being filled.</param>
     /// <param name="archive">The set's archive.</param>
     /// <param name="replica">The destination's store, listed once for what it holds.</param>
+    /// <param name="carried">As <see cref="Start"/> takes it.</param>
     /// <param name="cancellationToken">Cancels the listing.</param>
     public static async ValueTask<SyncCount?> StartAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, string destination, ArchiveHandle archive,
-        Storage.Abstractions.IObjectStore replica, CancellationToken cancellationToken)
+        Storage.Abstractions.IObjectStore replica, string? carried, CancellationToken cancellationToken)
     {
-        var count = Start(runtime, set, destination, archive);
+        var count = Start(runtime, set, destination, archive, carried);
         if (count is null)
         {
             return null;
@@ -166,7 +195,7 @@ internal sealed class SyncCount : IDisposable
                 Storage.Abstractions.ObjectPrefix.Parse("blobs/"), Storage.Abstractions.ListOptions.Default,
                 cancellationToken).ConfigureAwait(false))
             {
-                count._counter.Landed(held.Key.Value);
+                count.Landed(held.Key.Value);
             }
         }
         catch
@@ -185,7 +214,7 @@ internal sealed class SyncCount : IDisposable
     {
         foreach (var key in keys)
         {
-            _counter.Landed(key);
+            Landed(key);
         }
 
         _live.Report(_counter.Held);
@@ -195,10 +224,30 @@ internal sealed class SyncCount : IDisposable
     /// <param name="key">A key the sync found held or delivered.</param>
     public void Holds(string key)
     {
-        if (_counter.Landed(key))
+        if (Landed(key))
         {
             _live.Report(_counter.Held);
         }
+    }
+
+    /// <summary>
+    /// What the destination still lacks of the snapshot the sync carries, in
+    /// the ledger's words, or null where it lacks nothing or the catalogue
+    /// could not say what the snapshot needs.
+    /// </summary>
+    public string? Shortfall() =>
+        _closure is { Lacking: > 0 } closure
+            ? $"the newest backup needs {closure.Lacking} blob(s) this destination does not hold and the sync "
+                + $"could not copy from what it read, first blob {closure.FirstLacking}; it is not in sync until it holds them"
+            : null;
+
+    /// <summary>How many blobs of the carried snapshot the destination lacks, and the first.</summary>
+    public (int Lacking, string? First) Lacking => (_closure?.Lacking ?? 0, _closure?.FirstLacking);
+
+    private bool Landed(string key)
+    {
+        _closure?.Landed(key);
+        return _counter.Landed(key);
     }
 
     /// <inheritdoc />

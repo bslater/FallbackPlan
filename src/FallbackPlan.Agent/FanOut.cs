@@ -647,7 +647,7 @@ public static class FanOut
             // The newest backup's files at this peer (ADR-0088 Amendment 1),
             // counted from the inventory it declares and then as the push
             // sends their content.
-            using var count = SyncCount.Start(runtime, set, destination.Name, archive);
+            using var count = SyncCount.Start(runtime, set, destination.Name, archive, Owed(newestSnapshot, keeps));
             bool OnInventory(IReadOnlyCollection<string> held)
             {
                 count?.Seed(held);
@@ -755,6 +755,11 @@ public static class FanOut
                 {
                     ledger.RecordDamage(set.Id, destination.Name, unrepaired: [], resolved, nowMs);
                 }
+            }
+
+            if (LeftShort(runtime, set, destination.Name, count, nowMs))
+            {
+                return;
             }
 
             if (plan.Samples.Count > 0)
@@ -983,6 +988,38 @@ public static class FanOut
         }
 
         return (highest, newestKey, objects);
+    }
+
+    /// <summary>
+    /// The snapshot a pass carries, where the destination is owed it: a keep
+    /// filter that drops the newest backup, as a person's deletion of it
+    /// does, leaves the destination nothing of it to hold.
+    /// </summary>
+    private static string? Owed(string? newestSnapshot, Func<string, bool>? keeps) =>
+        newestSnapshot is not null && (keeps is null || keeps(newestSnapshot)) ? newestSnapshot : null;
+
+    /// <summary>
+    /// Records a pass that leaves its destination short of the backup it
+    /// carried as failed, its watermark where the last whole pass left it
+    /// (ADR-0198 Amendment 2). A copy carries only what its source lists, so
+    /// a source short of a blob leaves the destination short of it, and the
+    /// watermark would otherwise let staging drop a backup the destination
+    /// cannot restore (FR-GC-009).
+    /// </summary>
+    /// <returns>Whether the pass was recorded failed for it.</returns>
+    private static bool LeftShort(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destination, SyncCount? count, ulong nowMs)
+    {
+        if (count?.Shortfall() is not { } shortfall)
+        {
+            return false;
+        }
+
+        var (lacking, first) = count.Lacking;
+        var log = runtime.LoggerFor(typeof(FanOut));
+        Log.SyncLeftShort(log, new LogLabel(set.Name), new LogLabel(destination), lacking, new LogLabel(first ?? string.Empty));
+        runtime.DestinationSync.RecordFailure(set.Id, destination, DestinationSyncState.Failed, shortfall, nowMs);
+        return true;
     }
 
     private static async ValueTask CopyToLocalPathAsync(
@@ -1472,10 +1509,13 @@ public static class FanOut
         // The newest backup's files at this destination, counted as the
         // copy lands their content and read by the status while it runs
         // (ADR-0088 Amendment 1). The ledger's figure moves only once the
-        // pass has succeeded, so the count stands until then.
+        // pass has succeeded, so the count stands until then. The same keys
+        // cross off the blobs a restore of the backup this pass carries
+        // reads, where the destination is owed it (ADR-0198 Amendment 2).
         using var count = scope == SyncScope.Skip
             ? null
-            : await SyncCount.StartAsync(runtime, set, destination.Name, archive, replica, cancellationToken)
+            : await SyncCount.StartAsync(
+                runtime, set, destination.Name, archive, replica, Owed(newestSnapshot, keeps), cancellationToken)
                 .ConfigureAwait(false);
 
         if (scope == SyncScope.Skip)
@@ -1555,6 +1595,11 @@ public static class FanOut
                     nowMs);
                 return;
             }
+        }
+
+        if (LeftShort(runtime, set, destination.Name, count, nowMs))
+        {
+            return;
         }
 
         // Only a pass that read both inventories through may say so: the
