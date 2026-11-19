@@ -90,11 +90,14 @@ public sealed class SyncSourceTests : IAsyncDisposable
     [TestMethod]
     public async Task APeerThatCannotBeRead_LeavesTheStoreBehind_SayingWhereTheBackupIs_AndCopiesNoSnapshotThere()
     {
+        // The run keeps no copy to send the store as it goes (ADR-0196
+        // Amendment 8), so the store holds none of the backup's blobs, and
+        // the peer is the only place they are.
         var friend = StartPeer("friend");
         WriteConfiguration(Peer(friend), Store());
         WriteFiles();
 
-        await using var runtime = await StartAsync();
+        await using var runtime = await StartAsync(writeBehindRoom: 0);
         await StoreCredentialAsync(runtime);
         var ran = await Scheduler.Enqueue(runtime, runtime.Configuration.BackupSets.Single(), DateTimeOffset.Now, userInitiated: true)
             .WaitAsync(Timeout);
@@ -246,7 +249,7 @@ public sealed class SyncSourceTests : IAsyncDisposable
         _harness.WriteSourceFile("docs/b.txt", new string('b', 40_000));
     }
 
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(long? writeBehindRoom = null)
     {
         await _harness.SetupAsync();
         _store.CreateBucket(Bucket);
@@ -256,6 +259,7 @@ public sealed class SyncSourceTests : IAsyncDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+                WriteBehindRoomOverride = writeBehindRoom,
             },
             Timeout);
     }
