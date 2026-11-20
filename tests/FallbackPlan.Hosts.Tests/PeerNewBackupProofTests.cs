@@ -51,6 +51,7 @@ public sealed class PeerNewBackupProofTests : IAsyncDisposable
         FanOut.NewBackupProofBudget = 1;
         await using var runtime = await StartAsync(directShip: false);
         await PassAsync(runtime);
+        Assert.AreEqual(2, Row(runtime).VerifiedObjects, "the premise: the pass challenged the record and one blob of the backup");
 
         var rotted = Rot(NextAfter(Row(runtime).ProvingCursor));
         await SyncAsync(runtime);
