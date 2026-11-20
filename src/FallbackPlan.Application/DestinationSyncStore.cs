@@ -156,6 +156,38 @@ public sealed record DestinationSyncRecord
     public string? SampleCursor { get; init; }
 
     /// <summary>
+    /// The newest backup, by its record's store key, every blob of which has
+    /// been proven at this destination, its own and those of the backups
+    /// proven before it; null when none has been (schema 14,
+    /// [ADR-0199](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md)).
+    /// </summary>
+    /// <remarks>
+    /// What the next backup's proof is measured from: only the blobs a newer
+    /// backup needs that this one did not are asked about.
+    /// </remarks>
+    [JsonPropertyName("proven_snapshot")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProvenSnapshot { get; init; }
+
+    /// <summary>
+    /// The backup whose proof is under way, when one larger than a pass's
+    /// share is being proven over several; null when none is.
+    /// </summary>
+    /// <remarks>A pair with a proof under way is due a pass, so the proof is carried to its end.</remarks>
+    [JsonPropertyName("proving_snapshot")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProvingSnapshot { get; init; }
+
+    /// <summary>
+    /// The last of <see cref="ProvingSnapshot"/>'s blobs proven with none
+    /// before it left unproven, which the next pass resumes after; null to
+    /// start at the first.
+    /// </summary>
+    [JsonPropertyName("proving_cursor")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProvingCursor { get; init; }
+
+    /// <summary>
     /// Where the deep sweep resumes — the last blob key it read, or null to
     /// start from the beginning of the key space.
     /// </summary>
@@ -578,7 +610,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 13;
+    private const int CurrentSchemaVersion = 14;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -722,7 +754,10 @@ public sealed class DestinationSyncStore
         // none on an older row, which counted none apart: the next circuit to
         // close says how many. Schema 13 added the replica object a reader
         // found held only archived, none on an older row, which told none
-        // apart: the next sync looks. Only 1 → 2 changes a row, below.
+        // apart: the next sync looks. Schema 14 added the backup a destination
+        // was last proven through and a proof under way, none on an older row,
+        // which proved no backup whole: the next pass proves the newest.
+        // Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -1238,6 +1273,27 @@ public sealed class DestinationSyncStore
         Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             ArchivedSince = previous?.ArchivedSince ?? nowUnixMilliseconds,
+        });
+
+    /// <summary>
+    /// Records where a destination's proof of the newest backup stands after
+    /// a pass that proved what it asked about
+    /// ([ADR-0199](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md)).
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="proven">The newest backup proven there whole.</param>
+    /// <param name="proving">The backup whose proof is under way, or null.</param>
+    /// <param name="cursor">Where that proof resumes, or null to start at its first blob.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <returns>The row.</returns>
+    public DestinationSyncRecord RecordNewBackupProof(
+        string setId, string destination, string? proven, string? proving, string? cursor, ulong nowUnixMilliseconds) =>
+        Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            ProvenSnapshot = proven,
+            ProvingSnapshot = proving,
+            ProvingCursor = cursor,
         });
 
     /// <summary>

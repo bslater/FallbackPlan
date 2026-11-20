@@ -5,8 +5,9 @@ using FallbackPlan.Replication;
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
-/// The two test hooks the product keeps, <see cref="ServiceRuntime.ArchiveFormatVersion"/>
-/// and <see cref="FanOut.ReadBackBudget"/>, belong to the flow that sets them and to
+/// The test hooks the product keeps, <see cref="ServiceRuntime.ArchiveFormatVersion"/>,
+/// <see cref="FanOut.ReadBackBudget"/> and <see cref="FanOut.NewBackupProofBudget"/>,
+/// belong to the flow that sets them and to
 /// the work that flow starts afterwards. That is what lets a test that sets one run
 /// beside every other class (ADR-0032, 2026-09 amendments): an archive created, or a
 /// read-back run, anywhere else still takes the default. Establishes no product
@@ -35,6 +36,17 @@ public sealed class TestHookScopeTests
 
         Assert.AreEqual(VerificationSampler.PeerReservoirShare + 1, inside);
         Assert.AreEqual(VerificationSampler.DefaultBudget, outside);
+    }
+
+    [TestMethod]
+    public async Task NewBackupProofBudget_SetInOneFlow_ReachesItsOwnWorkAndNoOtherFlow()
+    {
+        var (inside, outside) = await ObserveAsync(
+            () => FanOut.NewBackupProofBudget = 1,
+            () => FanOut.NewBackupProofBudget);
+
+        Assert.AreEqual(1, inside);
+        Assert.AreEqual(VerificationSampler.NewBackupBudget, outside);
     }
 
     // One flow sets the hook and holds it. While it does, this flow reads the

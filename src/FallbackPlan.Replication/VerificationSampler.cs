@@ -49,6 +49,14 @@ public static class VerificationSampler
     /// </remarks>
     public const int PeerReservoirShare = 4;
 
+    /// <summary>
+    /// The most of a new backup's blobs one pass proves (ADR-0199). A daily
+    /// backup adds a handful and is proven by the pass that sends it; a first
+    /// backup of many thousands is proven over the passes after it, each
+    /// asking a few ranged reads of each blob.
+    /// </summary>
+    public const int NewBackupBudget = 256;
+
     /// <summary>The range length aimed for; shorter objects are challenged whole.</summary>
     private const uint PreferredLength = 4096;
 
@@ -62,7 +70,29 @@ public static class VerificationSampler
     /// The highest key the rotation reached, or null when the rotation covered
     /// everything eligible and the next pass should start over.
     /// </param>
-    public sealed record SamplePlan(IReadOnlyList<VerificationSample> Samples, int Population, string? NextCursor);
+    public sealed record SamplePlan(IReadOnlyList<VerificationSample> Samples, int Population, string? NextCursor)
+    {
+        /// <summary>
+        /// The new backup's blobs this pass asks about, in key order, beside
+        /// the rotation and never in its place; empty when none was asked for.
+        /// </summary>
+        public IReadOnlyList<VerificationSample> NewBackup { get; init; } = [];
+
+        /// <summary>How many of the new backup's blobs are left for a later pass.</summary>
+        public int NewBackupRemaining { get; init; }
+    }
+
+    /// <summary>
+    /// The blobs a new backup needs that no backup proven at the destination
+    /// before needed, and how far a proof of them has got (ADR-0199).
+    /// </summary>
+    /// <param name="Names">
+    /// Their keyed store names, the last segment of a blob's key: the
+    /// catalogue does not always know a blob's class, and the listing does.
+    /// </param>
+    /// <param name="After">The last of them already proven, or null to start at the first.</param>
+    /// <param name="Budget">The most of them to ask about.</param>
+    public sealed record NewBackupRequest(IReadOnlySet<string> Names, string? After, int Budget);
 
     /// <summary>
     /// Draws up to <paramref name="budget"/> samples from the source listing,
@@ -100,6 +130,10 @@ public static class VerificationSampler
     /// a pass that skipped or copied incrementally carries nothing under the
     /// catch-all phase.
     /// </param>
+    /// <param name="newBackup">
+    /// A new backup's blobs to ask about beside the rotation, found by name in
+    /// the same listing; null asks about none.
+    /// </param>
     /// <returns>The samples — at most <paramref name="budget"/> — the eligible population, and the next cursor.</returns>
     public static async Task<SamplePlan> SampleAsync(
         IObjectStore source,
@@ -110,16 +144,22 @@ public static class VerificationSampler
         int reservoirShare,
         uint maximumRangeLength,
         CancellationToken cancellationToken,
-        CopyScope scope = CopyScope.Reconcile)
+        CopyScope scope = CopyScope.Reconcile,
+        NewBackupRequest? newBackup = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfLessThan(budget, 1);
         ThrowHelper.ThrowIfLessThan(reservoirShare, 0);
         ThrowHelper.ThrowIfLessThan(maximumRangeLength, 1u);
+        if (newBackup is not null)
+        {
+            ThrowHelper.ThrowIfLessThan(newBackup.Budget, 1);
+        }
 
         var forced = newestSnapshotKey is null ? 0 : 1;
         var rotation = new Rotation(cursor, budget - forced, reservoirShare);
         VerificationSample? newest = null;
+        var owed = new List<VerificationSample>();
 
         await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
@@ -134,6 +174,11 @@ public static class VerificationSampler
                 continue;
             }
 
+            if (newBackup is not null && IsOwed(key, newBackup))
+            {
+                owed.Add(RangeFor(key, entry.Length, maximumRangeLength));
+            }
+
             if (string.Equals(key, newestSnapshotKey, StringComparison.Ordinal))
             {
                 newest = RangeFor(key, entry.Length, maximumRangeLength);
@@ -143,8 +188,22 @@ public static class VerificationSampler
             rotation.Offer(RangeFor(key, entry.Length, maximumRangeLength));
         }
 
-        return rotation.Close(newest, budget);
+        // Asked in key order whatever order they were listed in, so the
+        // cursor a later pass resumes after has passed only what was asked.
+        owed.Sort((left, right) => string.CompareOrdinal(left.Key, right.Key));
+        var asked = owed.Take(newBackup?.Budget ?? 0).ToList();
+        return rotation.Close(newest, budget) with
+        {
+            NewBackup = asked,
+            NewBackupRemaining = owed.Count - asked.Count,
+        };
     }
+
+    /// <summary>Whether <paramref name="key"/> is one of the new backup's blobs not yet proven.</summary>
+    private static bool IsOwed(string key, NewBackupRequest newBackup) =>
+        key.StartsWith("blobs/", StringComparison.Ordinal)
+        && (newBackup.After is null || string.CompareOrdinal(key, newBackup.After) > 0)
+        && newBackup.Names.Contains(key[(key.LastIndexOf('/') + 1)..]);
 
     /// <summary>
     /// Draws up to <paramref name="budget"/> keys from a set already in

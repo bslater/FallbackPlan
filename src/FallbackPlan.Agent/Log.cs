@@ -421,6 +421,24 @@ internal static partial class Log
     internal static partial void SyncLeftShort(
         ILogger logger, LogLabel set, LogLabel destination, int lacking, LogLabel first);
 
+    // Information: a pass proved blobs of the newest backup at the
+    // destination, beside the sample's rotation (ADR-0199).
+    [LoggerMessage(
+        EventId = 3705, Level = LogLevel.Information,
+        Message = "Set {Set}: destination {Destination} proved {Proved} blob(s) of the newest backup, {Remaining} left for the passes after")]
+    internal static partial void NewBackupProved(
+        ILogger logger, LogLabel set, LogLabel destination, int proved, int remaining);
+
+    // Warning: the catalogue could not say which blobs the newest backup
+    // needs, so the pass proves none of them and the next pass asks again
+    // (ADR-0199).
+    [LoggerMessage(
+        EventId = 3706, Level = LogLevel.Warning,
+        Message = "Set {Set}: the blobs the newest backup needs could not be named for destination {Destination}: {Reason}. "
+            + "This pass proves none of them, and the next asks again")]
+    internal static partial void NewBackupProofUnavailable(
+        ILogger logger, LogLabel set, LogLabel destination, string reason);
+
     // Warning: a queued job with no tracked cancellation cannot be run and is
     // discarded — unreachable while identities stay fresh, and the silent
     // version of this is an awaiter that hangs forever.

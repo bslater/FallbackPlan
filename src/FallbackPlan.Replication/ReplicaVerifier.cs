@@ -54,6 +54,13 @@ public sealed record VerificationOutcome(
     /// because nothing here was read and nothing says their bytes changed.
     /// </summary>
     public IReadOnlyList<string> Archived { get; init; } = [];
+
+    /// <summary>
+    /// The keys behind <see cref="Passed"/>, for a caller that must know
+    /// which were proven rather than how many: a new backup's proof moves on
+    /// only past blobs that were (ADR-0199).
+    /// </summary>
+    public IReadOnlyList<string> Proved { get; init; } = [];
 }
 
 /// <summary>
@@ -249,6 +256,7 @@ public static class ReplicaVerifier
                 .ConfigureAwait(false);
         var sealedKeys = sealedProof.Proved;
         passed += sealedKeys.Count;
+        var compared = new List<string>();
 
         foreach (var sample in samples)
         {
@@ -276,6 +284,7 @@ public static class ReplicaVerifier
             if (actual is not null && expected.AsSpan().SequenceEqual(actual))
             {
                 passed++;
+                compared.Add(sample.Key);
             }
             else
             {
@@ -287,6 +296,7 @@ public static class ReplicaVerifier
             passed, failed, sealedProof.ByTag, sealedProof.ByDigest, sealedProof.ByChunk)
         {
             Archived = archived,
+            Proved = [.. sealedKeys, .. compared],
         };
     }
 
@@ -354,6 +364,7 @@ public static class ReplicaVerifier
         return new VerificationOutcome(proof.Proved.Count, failed, proof.ByTag, proof.ByDigest, proof.ByChunk)
         {
             Archived = archived,
+            Proved = [.. proof.Proved],
         };
     }
 

@@ -655,7 +655,10 @@ public static class Scheduler
             // local-path set was never. The pass is cheap when there is
             // nothing to carry — an inventory diff — so being due a challenge
             // is reason enough to run it.
-            DestinationSyncState.InSync => behind || ShouldChallenge(record, now),
+            // A backup larger than a pass's share of its proof is proven
+            // over the passes after it (ADR-0199): a proof under way keeps the
+            // pair due until it is carried to its end.
+            DestinationSyncState.InSync => behind || ShouldChallenge(record, now) || record.ProvingSnapshot is not null,
 
             // A run held the pair out for missing history (ADR-0046 §3's
             // scope rule): the catch-up IS the heal, so it runs at once —
