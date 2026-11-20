@@ -188,15 +188,7 @@ public static class VerificationSampler
             rotation.Offer(RangeFor(key, entry.Length, maximumRangeLength));
         }
 
-        // Asked in key order whatever order they were listed in, so the
-        // cursor a later pass resumes after has passed only what was asked.
-        owed.Sort((left, right) => string.CompareOrdinal(left.Key, right.Key));
-        var asked = owed.Take(newBackup?.Budget ?? 0).ToList();
-        return rotation.Close(newest, budget) with
-        {
-            NewBackup = asked,
-            NewBackupRemaining = owed.Count - asked.Count,
-        };
+        return WithNewBackup(rotation.Close(newest, budget), owed, newBackup);
     }
 
     /// <summary>Whether <paramref name="key"/> is one of the new backup's blobs not yet proven.</summary>
@@ -225,20 +217,53 @@ public static class VerificationSampler
     /// <param name="cursor">The highest key the previous pass asked about, or null to start over.</param>
     /// <param name="budget">The most keys to draw.</param>
     /// <param name="reservoirShare">How many of those are drawn at random from the whole set.</param>
+    /// <param name="newBackup">
+    /// A new backup's blobs to ask about beside the rotation, found by name
+    /// among the same keys (ADR-0199 Amendment 1); null asks about none.
+    /// </param>
     /// <returns>The keys — as samples with no range — the population, and the next cursor.</returns>
-    public static SamplePlan Rotate(IReadOnlyCollection<string> keys, string? cursor, int budget, int reservoirShare)
+    public static SamplePlan Rotate(
+        IReadOnlyCollection<string> keys, string? cursor, int budget, int reservoirShare,
+        NewBackupRequest? newBackup = null)
     {
         ThrowHelper.ThrowIfNull(keys);
         ThrowHelper.ThrowIfLessThan(budget, 1);
         ThrowHelper.ThrowIfLessThan(reservoirShare, 0);
-
-        var rotation = new Rotation(cursor, budget, reservoirShare);
-        foreach (var key in keys)
+        if (newBackup is not null)
         {
-            rotation.Offer(new VerificationSample(key, 0, 0));
+            ThrowHelper.ThrowIfLessThan(newBackup.Budget, 1);
         }
 
-        return rotation.Close(newest: null, budget);
+        var rotation = new Rotation(cursor, budget, reservoirShare);
+        var owed = new List<VerificationSample>();
+        foreach (var key in keys)
+        {
+            var sample = new VerificationSample(key, 0, 0);
+            if (newBackup is not null && IsOwed(key, newBackup))
+            {
+                owed.Add(sample);
+            }
+
+            rotation.Offer(sample);
+        }
+
+        return WithNewBackup(rotation.Close(newest: null, budget), owed, newBackup);
+    }
+
+    /// <summary>
+    /// The new backup's blobs a pass asks about, in key order whatever order
+    /// they were met in, so the cursor a later pass resumes after has passed
+    /// only what was asked.
+    /// </summary>
+    private static SamplePlan WithNewBackup(SamplePlan plan, List<VerificationSample> owed, NewBackupRequest? newBackup)
+    {
+        owed.Sort((left, right) => string.CompareOrdinal(left.Key, right.Key));
+        var asked = owed.Take(newBackup?.Budget ?? 0).ToList();
+        return plan with
+        {
+            NewBackup = asked,
+            NewBackupRemaining = owed.Count - asked.Count,
+        };
     }
 
     /// <summary>

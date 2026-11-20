@@ -720,7 +720,7 @@ internal static class ReplicationInitiator
 
         try
         {
-            var passed = 0;
+            var passed = new List<string>();
             var failed = new List<string>();
             foreach (var sample in samples)
             {
@@ -754,7 +754,7 @@ internal static class ReplicationInitiator
                 if (proof.Held
                     && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(proof.Proof.Span, want))
                 {
-                    passed++;
+                    passed.Add(sample.Key);
                 }
                 else
                 {
@@ -762,7 +762,7 @@ internal static class ReplicationInitiator
                 }
             }
 
-            return new VerificationOutcome(passed, failed);
+            return new VerificationOutcome(passed.Count, failed) { Proved = passed };
         }
         catch (PeerProtocolException exception)
         {

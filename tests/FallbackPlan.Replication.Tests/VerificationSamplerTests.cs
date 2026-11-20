@@ -400,6 +400,40 @@ public sealed class VerificationSamplerTests
         Assert.AreEqual(0, plan.NewBackupRemaining);
     }
 
+    [TestMethod]
+    public void Rotate_TheNewBackupsBlobs_AreAskedFromTheKeysInHand_InKeyOrder_AfterTheCursor()
+    {
+        // ADR-0199 Amendment 1: a peer's read-back draws from the keys the
+        // peer declared rather than a listing, and asks about a new backup's
+        // blobs the same way.
+        string[] keys =
+        [
+            "blobs/data/k15", "blobs/meta/k03", "blobs/data/k11", "blobs/data/k07", "snapshots/k07",
+            .. Enumerable.Range(0, 20).Select(index => $"blobs/other/f{index:D2}"),
+        ];
+        var without = VerificationSampler.Rotate(keys, cursor: null, budget: 4, reservoirShare: 0);
+
+        var plan = VerificationSampler.Rotate(
+            keys, cursor: null, budget: 4, reservoirShare: 0,
+            new VerificationSampler.NewBackupRequest(Names("k03", "k07", "k11", "k15"), After: "blobs/data/k07", Budget: 1));
+
+        CollectionAssert.AreEqual(new[] { "blobs/data/k11" }, plan.NewBackup.Select(sample => sample.Key).ToArray());
+        Assert.AreEqual(2, plan.NewBackupRemaining, "blobs/data/k15 and blobs/meta/k03 sort after the cursor too");
+        CollectionAssert.AreEqual(
+            without.Samples.Select(sample => sample.Key).ToArray(),
+            plan.Samples.Select(sample => sample.Key).ToArray(),
+            "the new backup's blobs took the rotation's place");
+    }
+
+    [TestMethod]
+    public void Rotate_WithNoNewBackup_AsksNothingBesideTheRotation()
+    {
+        var plan = VerificationSampler.Rotate(Keys(20), cursor: null, budget: 4, reservoirShare: 0);
+
+        Assert.IsEmpty(plan.NewBackup);
+        Assert.AreEqual(0, plan.NewBackupRemaining);
+    }
+
     private static Task<VerificationSampler.SamplePlan> SampleAsync(
         IObjectStore store,
         string? cursor,
