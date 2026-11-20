@@ -156,6 +156,7 @@ public sealed class StoreBesideAPeerTests : IAsyncDisposable
         var missing = Friend.Blobs().Except(StoreBlobs(), StringComparer.Ordinal).ToList();
         Assert.IsEmpty(missing, $"the store lacks blobs the backup needs: {string.Join(", ", missing)}");
         Assert.IsNull(cloud.VerifiedAt, "nothing read on this machine proves the store's blobs, and none is claimed");
+        Assert.IsNull(cloud.ProvenSnapshot, "a pass that proved nothing called the store proven through the backup (ADR-0199)");
     }
 
     [TestMethod]

@@ -67,6 +67,8 @@ public sealed class NewBackupProofTests : IAsyncDisposable
         WriteFiles();
         await using var runtime = await StartAsync();
         await PassAsync(runtime, _start);
+        await SyncAsync(runtime);
+        Assert.AreEqual(1, Row(runtime).VerifiedObjects, "the premise: with nothing new to prove, the sample asks only about the record");
         var proven = Row(runtime).ProvenSnapshot;
         var before = StagingBlobs(runtime);
 
