@@ -36,7 +36,8 @@ public static class FanOut
         [Protocol.PeerSessionNegotiation.DestinationVerificationFeature];
 
     /// <summary>
-    /// Blobs one read-back opens at a peer. A property rather than a
+    /// Keys one read-back's rotation asks about: blobs opened at a peer, and
+    /// samples challenged at a local path or a store. A property rather than a
     /// constant so the test that watches the rotation's cursor move can
     /// narrow it below the handful of blobs a fixture ships; the service
     /// never sets it. A value set belongs to the flow that set it and to the
@@ -51,6 +52,20 @@ public static class FanOut
     }
 
     private static readonly AsyncLocal<int?> ReadBackBudgetInFlow = new();
+
+    /// <summary>
+    /// The most of the newest backup's blobs one pass proves at a local path
+    /// or a store (ADR-0199). A property for the same reason as
+    /// <see cref="ReadBackBudget"/>, and scoped the same way: a test narrows
+    /// it to watch a proof carried over passes.
+    /// </summary>
+    internal static int NewBackupProofBudget
+    {
+        get => NewBackupProofBudgetInFlow.Value ?? VerificationSampler.NewBackupBudget;
+        set => NewBackupProofBudgetInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<int?> NewBackupProofBudgetInFlow = new();
 
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
     /// <param name="setId">The set's 32-hex identity.</param>
@@ -1445,13 +1460,20 @@ public static class FanOut
 
         // A destination brought current from the metadata here holds blobs
         // nothing here copies, so nothing here can stand as their proof.
+        // Otherwise the newest backup's own blobs are asked about beside the
+        // rotation, those it needs that the backup last proven there did not
+        // (ADR-0199), found by name in the listing the rotation reads.
+        var newBackup = source is { ProvesContent: false }
+            ? null
+            : NewBackupProof.Request(
+                runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofBudget);
         var plan = source is { ProvesContent: false }
             ? new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor)
             : await VerificationSampler.SampleAsync(
                 readFrom, keeps, newestSnapshot, previous?.SampleCursor,
-                VerificationSampler.DefaultBudget,
+                ReadBackBudget,
                 destination.Kind == DestinationKind.LocalPath ? 0 : VerificationSampler.PeerReservoirShare,
-                Protocol.VerificationChallenge.MaximumLength, cancellationToken, copyScope)
+                Protocol.VerificationChallenge.MaximumLength, cancellationToken, copyScope, newBackup)
                 .ConfigureAwait(false);
 
         // The converge spare (FR-GC-009's direct-ship shape): under
@@ -1610,7 +1632,13 @@ public static class FanOut
         // not looked at the parts it did not walk.
         var reconciled = scope == SyncScope.Reconcile;
 
-        if (plan.Samples.Count > 0)
+        // The newest backup's blobs ride with the rotation's samples, each
+        // asked once.
+        var rotated = plan.Samples.Select(sample => sample.Key).ToHashSet(StringComparer.Ordinal);
+        IReadOnlyList<Replication.VerificationSample> samples =
+            [.. plan.Samples, .. plan.NewBackup.Where(sample => !rotated.Contains(sample.Key))];
+
+        if (samples.Count > 0)
         {
             // The hub-read twin of the peer challenge (peer-protocol 04):
             // every destination kind earns "verified" from bytes read back
@@ -1633,7 +1661,7 @@ public static class FanOut
             using (var digests = archive.OpenReadCatalogue())
             {
                 verification = await Replication.ReplicaVerifier.VerifyAsync(
-                    readFrom, replica, plan.Samples, cancellationToken, archive.Repository,
+                    readFrom, replica, samples, cancellationToken, archive.Repository,
                     digests.SignedDigestOf)
                     .ConfigureAwait(false);
             }
@@ -1649,9 +1677,13 @@ public static class FanOut
 
             if (verification.Failed.Count > 0)
             {
-                RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);
+                RecordVerificationFailure(runtime, set, destination.Name, verification, samples.Count, nowMs);
                 return;
             }
+
+            RecordNewBackupProof(
+                runtime, set, destination.Name, newestSnapshot, previous, newBackup, plan,
+                [.. verification.Proved, .. verification.Archived], nowMs);
 
             if (!rolledBack && scope != SyncScope.Skip)
             {
@@ -1667,6 +1699,8 @@ public static class FanOut
             return;
         }
 
+        RecordNewBackupProof(runtime, set, destination.Name, newestSnapshot, previous, newBackup, plan, [], nowMs);
+
         if (!rolledBack && scope != SyncScope.Skip)
         {
             await RetireAtReplicaAsync(runtime, set, destination.Name, archive, replica, cancellationToken)
@@ -1676,6 +1710,33 @@ public static class FanOut
         ledger.RecordSuccess(
             set.Id, destination.Name, copied, nowMs, syncedSequence,
             keepFingerprint, reconciled, newestSnapshot, convergedSequence: convergedAt);
+    }
+
+    /// <summary>
+    /// Records where the destination's proof of the newest backup stands after
+    /// a pass that proved what it asked about (ADR-0199), when the pass asked.
+    /// </summary>
+    private static void RecordNewBackupProof(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, string? newestSnapshot,
+        DestinationSyncRecord? previous, VerificationSampler.NewBackupRequest? newBackup,
+        VerificationSampler.SamplePlan plan, IReadOnlyCollection<string> answered, ulong nowMs)
+    {
+        if (newBackup is null || newestSnapshot is null)
+        {
+            return;
+        }
+
+        var asked = plan.NewBackup.Select(sample => sample.Key).ToList();
+        var step = NewBackupProof.Advance(
+            newestSnapshot, previous?.ProvenSnapshot, previous?.ProvingSnapshot, previous?.ProvingCursor,
+            asked, answered.ToHashSet(StringComparer.Ordinal), plan.NewBackupRemaining);
+        runtime.DestinationSync.RecordNewBackupProof(
+            set.Id, destinationName, step.Proven, step.Proving, step.Cursor, nowMs);
+        var log = runtime.LoggerFor(typeof(FanOut));
+        if (asked.Count > 0)
+        {
+            Log.NewBackupProved(log, new LogLabel(set.Name), new LogLabel(destinationName), asked.Count, plan.NewBackupRemaining);
+        }
     }
 
     /// <summary>

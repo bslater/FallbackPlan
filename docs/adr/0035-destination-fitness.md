@@ -196,6 +196,11 @@ the last *passed* challenge's cursor, which lives in the sync ledger. The cursor
 advances only on a pass that proved something, so a failed or empty pass re-asks
 rather than walking past objects nobody answered for.
 
+> **2026-11 ([ADR-0199](0199-a-backup-is-proven-at-each-destination-it-lands-at.md)).** "The newest
+> snapshot always" proved its record, not the blobs it needs. At a local path and a store, the pass
+> that finds the newest backup whole there now proves every blob it needs that the backup last proven
+> there did not, beside the rotation and never in its place.
+
 Three properties of the rotation are load-bearing:
 
 - **It sorts its candidates.** Listing order carries no meaning in this system's
@@ -635,3 +640,4 @@ read back in full last night from one never read back at all (FR-VER-003).
 | 2026-10 | Amended (related) | [ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md) discharges Amendment 1's and Amendment 2's "does not do": damage the sweep finds at a peer whose build takes a repair is replaced from a copy here proven sound, which the peer takes only where its own keyless check of its copy finds the copy damaged and the replacement states that copy's locator, and is proven again over the retrieval session where it landed; each sync offers what remains held, and what the peer will not take stays under decision 4. `Agent/ReplicaSweepJob`, `Agent/FanOut`, `Agent/RepairResponder`; `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/PeerRepairTests` |
 | 2026-10 | Amended (related) | [ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md): a blob the store holds only in an archival tier is no stall. The deep sweep passes over it and closes its circuit, a sync's read-back counts it neither proven nor failed, and one notice for the pair says so until a circuit meets none (ledger schema 11). |
 | 2026-10 | Amended | [ADR-0106](0106-a-closed-circuit-says-what-it-did-not-read.md): Amendment 3's `circuit_closed_at` supports every stored object read back only where contract 1.66's `circuit_archived` is zero, since a circuit closes past archived blobs; a blockquote at decision 1. |
+| 2026-11 | Amended (related) | [ADR-0199](0199-a-backup-is-proven-at-each-destination-it-lands-at.md): §5's newest snapshot covered its record and left its blobs to the rotation. The pass that finds a local path or a store holding the newest backup whole now proves there every blob it needs that the backup last proven did not, a share a pass, beside the rotation. |

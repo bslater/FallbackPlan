@@ -223,6 +223,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0196](adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md) | A set whose only destinations are object stores ships straight to them: where a set names no local path and no peer, a run writes its blobs through its stores and keeps only metadata on the machine, a read outside a run asks the stores, a store beside a local path or a peer is still filled after the run, the set check accepts a direct-ship set naming only stores, and a run with nowhere to write names each destination it tried; since Amendment 1 a new set naming only stores is born direct-ship, and the console's new set follows its destinations as the service does; since Amendment 2 a set adopted from a store is adopted direct-ship, with only its metadata copied to the machine; since Amendment 3 a set whose stores are all it has keeps its folder trees on the machine, so a backup reads none from the store; since Amendment 4 a staging set of stores alone is named in a notice saying it could ship straight, and keeps its staging archive's trees when it does; since Amendment 5 a tree such a set has no copy of is kept the first time it is read from the store, once it verifies; since Amendment 6 a run beside a local path sends its blobs on to the set's stores as it goes, never waiting on them, and leaves the snapshot to the sync after it; since Amendment 7 the console's storage shape note says so, and a test holds that those uploads are paced at the store's limit; since Amendment 8 a run beside a peer alone sends them too, from a copy of each it keeps in a bounded room on the machine until the stores have it, leaving to the sync what finds the room full | **Built** | `Agent/DestinationShipSink` · `Agent/StoreWriteBehind` · `Agent/WriteBehindRoom` · `Agent/StoreComposition` · `Agent/StagingCouldShipWatch` · `Agent/ServiceCommandHandler` · `Agent/ServiceCommandHandler.Adoption.cs` · `Hosts.Tests/ObjectStoreDestinationTests` · `Hosts.Tests/DirectShipTests` · `Hosts.Tests/ObjectStoreAdoptionTests` · `Hosts.Tests/StoreBesideAPeerTests` · `Hosts.Tests/WriteBehindRoomTests` · `Web.DomTests/NewSetWizardDomTests` · [notes](#0196--a-store-only-set-ships-straight-to-its-stores) |
 | [0197](adr/0197-format-7-a-failure-says-what-stands-in-its-place.md) | Format 7: a capture failure's key 4 says that what the snapshot's tree holds at the failure's path is what the snapshot before held there, a file's version or a folder's tree; it is absent where it would say nothing and refused with any value but 1; a repository is born at 7 and lists feature 0x0007; at first nothing wrote or read the key; since Amendment 1 the backup writes it from format 7 where a file kept its version or a folder its tree, and on no other failure, and a restore's plan and a run's read name such a file, and each file below such a folder, from it, with no earlier snapshot asked | **Built** | `Domain/FormatVersions`, `Domain/FormatLimits` · `Repository.Format/Manifests/PolicyManifest` (the error manifest's failure key 4) · `Repository.Format/Descriptor/RepositoryDescriptorCodec` (feature 0x0007) · `Repository/RepositoryLifecycle` · `Repository/SnapshotPublication` · `Restore/RestoreBlobSet` · `Repository.Tests/Format/ManifestCodecTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests`, `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Domain.Tests/FormatVersionsTests`, `Hosts.Tests/CreatedFormatTests`, `Repository.FuzzTests/FuzzCorpus`, `Repository.ConformanceTests/FixtureRepositoryV7Tests`, `Repository.Tests/EndToEnd/OnlineOnlyCaptureTests` · [notes](#0197--format-7) |
 | [0198](adr/0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) | A sync of a direct-ship set copies only from a source that holds the newest backup whole, by the ledger: the archive where the destination or one it can read now holds it, or where none is named; the archive with a whole peer's blobs behind it, read over the retrieval session and paced at that peer's limit for background work, where only a peer holds it; and nothing where no whole destination can be read, the destination left behind naming them. The same for the copy to a local path or a store and for the push to a peer; since Amendment 1, where nothing whole answers, a destination whose own listing shows every blob the set's index locates is brought current from the metadata here, the pass claiming no verification; and since Amendment 2, any destination is recorded in sync only once it holds every blob a restore of the newest backup the pass carried reads, one left short failed naming the first blob with its watermark unmoved; and since Amendment 3, sent no record of that backup, the push to a peer sending records after everything else | **Built** | `Agent/SyncSource` · `Agent/PeerFilledObjectStore` · `Agent/DestinationShipSink` (the holders a read can reach now) · `Agent/FanOut` · `Agent/SnapshotClosure` · `Repository.Catalogue/Catalogue` (the closure) · `Replication/StoreToStoreCopier` and `Agent/ReplicationInitiator` (a record held back) · `Hosts.Tests/SyncSourceTests` · `Hosts.Tests/InSyncClosureTests` · `Replication.Tests/CopierWithheldRecordTests` · [notes](#0198--a-sync-reads-a-whole-source) |
+| [0199](adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md) | A backup is proven at each destination it lands at: the pass that finds a local path or a store holding the newest backup whole proves there the blobs it needs that the backup last proven did not, beside the rotation, a share a pass, the pair due while a proof is under way | **Built** | `Agent/NewBackupProof`, `Replication/VerificationSampler`, `Replication/ReplicaVerifier`, `Agent/FanOut`, `Agent/Scheduler`, `Application/DestinationSyncStore` · `Hosts.Tests/NewBackupProofTests`, `Hosts.Tests/NewBackupProofStepTests`, `Replication.Tests/VerificationSamplerTests`, `Application.Tests/DestinationSyncStoreTests` · [notes](#0199--a-backup-is-proven-where-it-lands) |
 
 ---
 
@@ -6438,7 +6439,46 @@ already holding the record keeps it and is not told it was held back.
 
 What remains is recorded rather than done:
 
-- the union listings still list one plane after another rather than in the
-  ordinal order the store contract states; nothing here depends on it now,
-  and a reader that does is not yet looked at;
+- ~~the union listings still list one plane after another rather than in the
+  ordinal order the store contract states~~ — they list in key order now,
+  and no reader depended on the old order
+  ([ADR-0012](adr/0012-storage-provider-contract.md) Amendment 8);
 - only the newest backup's record is held back.
+
+### 0199 — a backup is proven where it lands
+
+Built in one slice, tests first. Before it, a sync's sample proved the
+newest backup's record and then rotated through the rest of the key space,
+sixteen keys a pass, so the blobs a new backup sent were proven only when
+the rotation reached them. The full re-read reaches every blob, but a store
+or a peer is swept only on a cadence its operator states, and on none by
+default; there a blob a backup sent damaged could go unfound for weeks while
+the backup read as verified.
+
+**Every blob a backup adds is asked about.** The pass that finds a local
+path or a store holding the newest backup whole names the blobs it needs
+that the backup last proven there did not (`Agent/NewBackupProof`, from
+the catalogue's closure of each), and `Replication/VerificationSampler`
+finds them by name in the listing it already reads. They are proven as the
+sample's are, beside the rotation and never in its place, and a blob that
+does not prove fails the pass, naming it.
+
+**A share a pass, carried to its end.** A pass proves at most 256 of them,
+in key order. A backup with more is proven over the passes after it, each
+resuming after the last blob proven with none unproven before it, and
+`Agent/Scheduler` finds the pair due while a proof is under way. The
+ledger keeps the backup last proven and the proof under way
+(`Application/DestinationSyncStore`, schema 14).
+
+`Hosts.Tests/NewBackupProofTests` holds it against a local path: a first
+backup leaves it proven, staging and direct-ship alike; a damaged blob of a
+second backup is found though the sample asks only about the record; a
+backup larger than a pass's share is proven over the passes after it, the
+pair due meanwhile; and a second backup proves only the blobs it added.
+
+What remains is recorded rather than done:
+
+- a peer's read-back does not yet prove a new backup's blobs;
+- a pass brought current from the metadata here proves nothing, and the
+  next pass from a whole source proves the backup;
+- the status does not say how far a proof under way has got.
