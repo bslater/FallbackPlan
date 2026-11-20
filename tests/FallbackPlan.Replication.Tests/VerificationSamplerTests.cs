@@ -316,16 +316,103 @@ public sealed class VerificationSamplerTests
         }
     }
 
+    [TestMethod]
+    public async Task Sample_TheNewBackupsBlobs_AreAskedInKeyOrder_UpToTheirBudget_SayingHowManyRemain()
+    {
+        // ADR-0199: the blobs a new backup sent are asked about whether or
+        // not the rotation reaches them, and beside it rather than in its
+        // place.
+        var store = ListingStore.Of([.. Keys(20), "snapshots/newest"]);
+        var without = await SampleAsync(store, cursor: null, budget: 5, newestSnapshotKey: "snapshots/newest");
+
+        var plan = await SampleAsync(
+            store, cursor: null, budget: 5, newestSnapshotKey: "snapshots/newest",
+            newBackup: new VerificationSampler.NewBackupRequest(Names("k15", "k03", "k11", "k07"), After: null, Budget: 2));
+
+        CollectionAssert.AreEqual(new[] { "blobs/k03", "blobs/k07" }, plan.NewBackup.Select(sample => sample.Key).ToArray());
+        Assert.AreEqual(2, plan.NewBackupRemaining);
+        CollectionAssert.AreEqual(
+            without.Samples.Select(sample => sample.Key).ToArray(),
+            plan.Samples.Select(sample => sample.Key).ToArray(),
+            "the new backup's blobs took the rotation's place");
+        Assert.AreEqual(without.NextCursor, plan.NextCursor);
+    }
+
+    [TestMethod]
+    public async Task Sample_TheNewBackupsBlobs_ResumeAfterTheirCursor()
+    {
+        var store = ListingStore.Of(Keys(20));
+
+        var plan = await SampleAsync(
+            store, cursor: null, budget: 5,
+            newBackup: new VerificationSampler.NewBackupRequest(Names("k03", "k07", "k11", "k15"), After: "blobs/k07", Budget: 2));
+
+        CollectionAssert.AreEqual(new[] { "blobs/k11", "blobs/k15" }, plan.NewBackup.Select(sample => sample.Key).ToArray());
+        Assert.AreEqual(0, plan.NewBackupRemaining);
+    }
+
+    [TestMethod]
+    public async Task Sample_TheNewBackupsBlobs_AreAskedInKeyOrder_WhateverOrderTheyAreListedIn()
+    {
+        var store = ListingStore.Of(Keys(20).Reverse());
+
+        var plan = await SampleAsync(
+            store, cursor: null, budget: 5,
+            newBackup: new VerificationSampler.NewBackupRequest(Names("k03", "k07", "k11"), After: null, Budget: 2));
+
+        CollectionAssert.AreEqual(new[] { "blobs/k03", "blobs/k07" }, plan.NewBackup.Select(sample => sample.Key).ToArray());
+        Assert.AreEqual(1, plan.NewBackupRemaining);
+    }
+
+    [TestMethod]
+    public async Task Sample_ANewBackupsBlob_IsFoundByItsNameWhateverItsClass_AndNothingButABlobIs()
+    {
+        var store = ListingStore.Of(["blobs/data/aa/n1", "blobs/meta/bb/n2", "index/delta/0/n1", "snapshots/n2"]);
+
+        var plan = await SampleAsync(
+            store, cursor: null, budget: 5,
+            newBackup: new VerificationSampler.NewBackupRequest(Names("n1", "n2"), After: null, Budget: 10));
+
+        CollectionAssert.AreEqual(
+            new[] { "blobs/data/aa/n1", "blobs/meta/bb/n2" }, plan.NewBackup.Select(sample => sample.Key).ToArray());
+        Assert.IsTrue(plan.NewBackup.All(sample => sample.Length > 0), "a sample with no range proves nothing");
+    }
+
+    [TestMethod]
+    public async Task Sample_ANewBackupsBlob_TheDestinationDropsOrTheSourceLacks_IsNotAsked()
+    {
+        var store = ListingStore.Of(Keys(20));
+
+        var plan = await SampleAsync(
+            store, cursor: null, budget: 5, keeps: key => key != "blobs/k07",
+            newBackup: new VerificationSampler.NewBackupRequest(Names("k03", "k07", "k11", "k99"), After: null, Budget: 10));
+
+        CollectionAssert.AreEqual(new[] { "blobs/k03", "blobs/k11" }, plan.NewBackup.Select(sample => sample.Key).ToArray());
+        Assert.AreEqual(0, plan.NewBackupRemaining);
+    }
+
+    [TestMethod]
+    public async Task Sample_WithNoNewBackup_AsksNothingBesideTheRotation()
+    {
+        var plan = await SampleAsync(ListingStore.Of(Keys(20)), cursor: null, budget: 5);
+
+        Assert.IsEmpty(plan.NewBackup);
+        Assert.AreEqual(0, plan.NewBackupRemaining);
+    }
+
     private static Task<VerificationSampler.SamplePlan> SampleAsync(
         IObjectStore store,
         string? cursor,
         int budget,
         string? newestSnapshotKey = null,
         Func<string, bool>? keeps = null,
-        CopyScope scope = CopyScope.Reconcile) =>
+        CopyScope scope = CopyScope.Reconcile,
+        VerificationSampler.NewBackupRequest? newBackup = null) =>
         VerificationSampler.SampleAsync(
             store, keeps, newestSnapshotKey, cursor, budget, reservoirShare: 0, MaximumRangeLength,
-            CancellationToken.None, scope);
+            CancellationToken.None, scope, newBackup);
+
+    private static HashSet<string> Names(params string[] names) => new(names, StringComparer.Ordinal);
 
     private static string[] Keys(int count) =>
         [.. Enumerable.Range(0, count).Select(index => $"blobs/k{index:D2}")];
