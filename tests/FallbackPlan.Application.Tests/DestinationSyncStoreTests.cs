@@ -708,6 +708,54 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void Open_ASchemaThirteenLedger_Migrates_WithNoBackupProven()
+    {
+        // Schema 14 (ADR-0199) added the backup a destination was last proven
+        // through and a proof under way. An older row proved no backup whole,
+        // and the next pass proves the newest.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 13, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "synced_sequence": 42, "sample_cursor": "blobs/x" } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-13 ledger must migrate, not quarantine");
+        Assert.AreEqual("blobs/x", record.SampleCursor);
+        Assert.IsNull(record.ProvenSnapshot);
+        Assert.IsNull(record.ProvingSnapshot);
+        Assert.IsNull(record.ProvingCursor);
+    }
+
+    [TestMethod]
+    public void RecordNewBackupProof_IsKept_AndLeavesTheRestOfTheRowAsItWas()
+    {
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 7);
+
+        store.RecordNewBackupProof(SetId, "vault", "snapshots/d/s/older", "snapshots/d/s/newest", "blobs/data/a/x1", 2_000);
+
+        var row = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual("snapshots/d/s/older", row.ProvenSnapshot);
+        Assert.AreEqual("snapshots/d/s/newest", row.ProvingSnapshot);
+        Assert.AreEqual("blobs/data/a/x1", row.ProvingCursor);
+        Assert.AreEqual(DestinationSyncState.InSync, row.State);
+        Assert.AreEqual(7UL, row.SyncedSequence);
+        Assert.AreEqual(1_000UL, row.LastSuccessAt);
+
+        store.RecordNewBackupProof(SetId, "vault", "snapshots/d/s/newest", null, null, 3_000);
+        var proven = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual("snapshots/d/s/newest", proven.ProvenSnapshot);
+        Assert.IsNull(proven.ProvingSnapshot);
+        Assert.IsNull(proven.ProvingCursor);
+        var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
+        Assert.Contains("\"proven_snapshot\": \"snapshots/d/s/newest\"", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("proving_snapshot", text, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void RecordMetadataArchived_KeepsTheFirstObjectAndWhen_UntilThatObjectIsServed()
     {
         // The object is what a person rehydrates, and what the next sync asks
@@ -810,7 +858,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 14, "destinations": [
+            { "schema_version": 15, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -863,7 +911,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 13", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 14", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);
