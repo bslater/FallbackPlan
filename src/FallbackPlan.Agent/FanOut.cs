@@ -197,6 +197,7 @@ public static class FanOut
     /// <param name="destination">The peer destination.</param>
     /// <param name="archive">The set's archive, for the repository keys.</param>
     /// <param name="outcome">The push that just finished, for what the spoke declared holding.</param>
+    /// <param name="newestSnapshot">The newest backup's record key the push carried, whose blobs are proven beside the rotation.</param>
     /// <param name="nowMs">The clock.</param>
     /// <param name="limiter">The destination's transfer limit for a background sync, or null.</param>
     /// <param name="cancellationToken">Cancels the read-back.</param>
@@ -208,6 +209,7 @@ public static class FanOut
         DestinationConfiguration destination,
         ArchiveHandle archive,
         ReplicationInitiator.PushOutcome outcome,
+        string? newestSnapshot,
         ulong nowMs,
         Application.ByteRateLimiter? limiter,
         CancellationToken cancellationToken,
@@ -230,11 +232,15 @@ public static class FanOut
         // declared: a cursor carried on the ledger so successive passes reach
         // every blob and a blob the byte budget left comes round again, with
         // a peer's reservoir share so the peer cannot predict every question.
+        // And the newest backup's own blobs beside it, found among the keys
+        // the peer declared (ADR-0199 Amendment 1).
         var ledger = runtime.DestinationSync;
+        var previous = ledger.Find(set.Id, destination.Name);
+        var newBackup = NewBackupProof.Request(
+            runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofBudget);
         var plan = VerificationSampler.Rotate(
-            blobs, ledger.Find(set.Id, destination.Name)?.SampleCursor, ReadBackBudget,
-            VerificationSampler.PeerReservoirShare);
-        var sample = plan.Samples.Select(chosen => chosen.Key).ToList();
+            blobs, previous?.SampleCursor, ReadBackBudget, VerificationSampler.PeerReservoirShare, newBackup);
+        var sample = WithNewBackup(plan).Select(chosen => chosen.Key).ToList();
 
         var log = runtime.LoggerFor(typeof(FanOut));
         Replication.VerificationOutcome verification;
@@ -296,6 +302,9 @@ public static class FanOut
             return false;
         }
 
+        RecordNewBackupProof(
+            runtime, set, destination.Name, newestSnapshot, previous, newBackup, plan,
+            [.. verification.Proved, .. verification.Archived], nowMs);
         var (syncedSequence, _) = await StagingPublicationSequenceAsync(archive, cancellationToken)
             .ConfigureAwait(false);
         ledger.RecordSuccess(
@@ -303,6 +312,16 @@ public static class FanOut
             verified: ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor),
             convergedSequence: Converged(outcome, convergedAt));
         return true;
+    }
+
+    /// <summary>
+    /// The rotation's samples and the newest backup's blobs beside them, each
+    /// key asked once (ADR-0199).
+    /// </summary>
+    private static List<Replication.VerificationSample> WithNewBackup(VerificationSampler.SamplePlan plan)
+    {
+        var rotated = plan.Samples.Select(sample => sample.Key).ToHashSet(StringComparer.Ordinal);
+        return [.. plan.Samples, .. plan.NewBackup.Where(sample => !rotated.Contains(sample.Key))];
     }
 
     /// <summary>
@@ -613,12 +632,20 @@ public static class FanOut
             var contentSampleable = await HoldsAnyAsync(readFrom, "blobs/", cancellationToken)
                 .ConfigureAwait(false);
 
-            var plan = contentSampleable
-                && session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
+            // The newest backup's own blobs ride with the challenge, asked
+            // beside the rotation (ADR-0199 Amendment 1), where the pass can
+            // challenge at all.
+            var challenged = contentSampleable
+                && session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature);
+            var newBackup = challenged
+                ? NewBackupProof.Request(
+                    runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofBudget)
+                : null;
+            var plan = challenged
                 ? await VerificationSampler.SampleAsync(
                     readFrom, keeps, newestSnapshot, previous?.SampleCursor,
-                    VerificationSampler.DefaultBudget, VerificationSampler.PeerReservoirShare,
-                    Protocol.VerificationChallenge.MaximumLength, cancellationToken)
+                    ReadBackBudget, VerificationSampler.PeerReservoirShare,
+                    Protocol.VerificationChallenge.MaximumLength, cancellationToken, newBackup: newBackup)
                     .ConfigureAwait(false)
                 : new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor);
 
@@ -778,20 +805,24 @@ public static class FanOut
                 return;
             }
 
-            if (plan.Samples.Count > 0)
+            var samples = WithNewBackup(plan);
+            if (samples.Count > 0)
             {
                 // Challenges ride after the acknowledgement and after any
                 // retention exchange (peer-protocol 04 §1): what this proves
                 // is what the session leaves behind, not what it deletes.
                 var verification = await ReplicationInitiator.ChallengeAsync(
                     readFrom, archive.Repository.RepositoryId.ToArray(), (Stream?)wire ?? session.Stream,
-                    plan.Samples,
+                    samples,
                     cancellationToken).ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
                 {
-                    RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);
+                    RecordVerificationFailure(runtime, set, destination.Name, verification, samples.Count, nowMs);
                     return;
                 }
+
+                RecordNewBackupProof(
+                    runtime, set, destination.Name, newestSnapshot, previous, newBackup, plan, verification.Proved, nowMs);
 
                 // A pass that proved nothing — every sample skipped because
                 // staging could not read its own ground truth — is not a
@@ -815,7 +846,8 @@ public static class FanOut
             {
                 if (session.Supports(Protocol.PeerSessionNegotiation.RetrievalFeature)
                     && await ReadBackAsync(
-                            runtime, set, destination, archive, outcome, nowMs, limiter, cancellationToken, convergedAt)
+                            runtime, set, destination, archive, outcome, newestSnapshot, nowMs, limiter, cancellationToken,
+                            convergedAt)
                         .ConfigureAwait(false))
                 {
                     return;
@@ -1634,9 +1666,7 @@ public static class FanOut
 
         // The newest backup's blobs ride with the rotation's samples, each
         // asked once.
-        var rotated = plan.Samples.Select(sample => sample.Key).ToHashSet(StringComparer.Ordinal);
-        IReadOnlyList<Replication.VerificationSample> samples =
-            [.. plan.Samples, .. plan.NewBackup.Where(sample => !rotated.Contains(sample.Key))];
+        var samples = WithNewBackup(plan);
 
         if (samples.Count > 0)
         {

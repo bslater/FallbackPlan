@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end)
+**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session)
 **Related:** [ADR-0035](0035-destination-fitness.md) §5 (the sample's rotation, which this sits beside), [ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 2 (a destination is in sync only once it holds the newest backup whole, which is where this proof starts), [ADR-0012](0012-storage-provider-contract.md) Amendment 8 (listings in key order, which the proof's cursor resumes through)
 
 **Built:**
@@ -35,6 +35,8 @@ So at a store swept on no cadence, a blob a new backup sent and the store holds 
 4. **Kept.** The ledger keeps, per destination, the backup it was last proven through, and the backup being proven with its cursor. A proven backup the catalogue no longer holds, its retention having let it go, subtracts nothing from the next.
 5. **Where.** A local path's sync and an object store's.
 
+   > **Amended 2026-11 ([Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at)).** And a peer's: by the challenge its push already makes, or by the read-back where the set's content is only at the peer.
+
 ## Consequences
 
 - A blob a backup sent damaged is found by the pass that sent it, or by the passes after it for a backup larger than a pass's share, rather than when the rotation reaches it.
@@ -45,11 +47,37 @@ So at a store swept on no cadence, a blob a new backup sent and the store holds 
 ## Not done
 
 - **A peer.** Its read-back proves a rotation over the keys it declared, opened whole ([ADR-0058](0058-peer-write-adapter.md) §8). Proving a new backup's blobs there, over the retrieval session and under the peer's transfer limit, is the next step.
+
+  > **2026-11: done ([Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at)).**
 - **A pass brought current from the metadata here** ([ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 1) samples nothing, so proves nothing. The next pass from a whole source proves the backup.
 - **The status** does not say how far a proof under way has got, nor which backup a destination was last proven through.
+
+## Amendment 1 (2026-11) — a backup is proven at each peer it lands at
+
+The record left a peer as its first "not done": a peer's pass proved the rotation's sample and nothing more of a new backup. A peer is checked one of two ways, and both stood where a local path's sample did.
+
+- **By the challenge.** A staging set's peer, and a direct-ship set's where a copy of the content is here, answer the keyed range challenge the push makes once it is acknowledged (peer-protocol 04). The challenge is judged against the bytes here.
+- **By the read-back.** A set whose content is only at the peer cannot be judged against anything here. Its proof is a rotation over the keys the peer declared, opened over the retrieval session ([ADR-0058](0058-peer-write-adapter.md) §8).
+
+**Decision.** A peer is proven as a local path and a store are. The pass that finds it holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, the same share a pass, carried over the passes after it.
+
+- **The challenge** asks a range of each such blob beside the rotation's keys, each key once. A blob whose answer does not hold fails the pass, naming it.
+- **The read-back** finds them among the keys the peer declared holding, and opens them as it opens the rotation's: a footer and one record each, or a leaf where the peer offers chunk possession, or the whole blob under the digest tier's byte budget where the records are sealed. A background pass is paced at the peer's transfer limit.
+- **A pass that challenges nothing**, because the peer is excused proving or nothing here can judge its answer, and a read-back that proves nothing, record nothing of the proof.
+
+**What it costs the peer.** A challenge is one round trip, carrying a keyed digest of a range and never the range. The read-back reads each new blob's footer and one record over the peer's link.
+
+**Built:** `Replication/VerificationSampler`'s rotation over keys in hand takes the same request as its sampling of a listing; `Agent/ReplicationInitiator`'s challenge names the keys it proved; `Agent/FanOut`'s push asks about the new backup's blobs on both routes:
+
+- `Hosts.Tests/PeerNewBackupProofTests`:
+  - a staging set's peer is proven through the backup its push sent, and a set whose content is only at its peer through the backup its run sent;
+  - on either route, a blob of the backup the proof has not reached yet, rotted at the peer in place, fails the next pass naming it, and the backup is not called proven;
+  - a backup larger than a pass's share is proven at the peer over the passes after it.
+- `Replication.Tests/VerificationSamplerTests`: the rotation over keys in hand asks about a new backup's blobs in key order after the cursor, up to the share, and leaves the rotation as it was.
 
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built: the pass that finds a local path or a store holding the newest backup whole proves there the blobs it needs that the backup last proven did not, a share of 256 a pass beside the rotation, the pair due while a proof is under way. `Agent/NewBackupProof`; `Replication/VerificationSampler`; `Agent/FanOut`; `Agent/Scheduler`; `Application/DestinationSyncStore`; `Hosts.Tests/NewBackupProofTests` |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): a peer is proven as a local path and a store are, by the challenge its push makes or by the read-back where the set's content is only at the peer; decision 5 and the first "not done" noted. `Replication/VerificationSampler`; `Agent/ReplicationInitiator`; `Agent/FanOut`; `Hosts.Tests/PeerNewBackupProofTests` |

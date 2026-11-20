@@ -406,7 +406,11 @@ public sealed class VerificationSamplerTests
         // ADR-0199 Amendment 1: a peer's read-back draws from the keys the
         // peer declared rather than a listing, and asks about a new backup's
         // blobs the same way.
-        string[] keys = ["blobs/data/k15", "blobs/meta/k03", "blobs/data/k11", "blobs/data/k07", "snapshots/k07", .. Keys(20)];
+        string[] keys =
+        [
+            "blobs/data/k15", "blobs/meta/k03", "blobs/data/k11", "blobs/data/k07", "snapshots/k07",
+            .. Enumerable.Range(0, 20).Select(index => $"blobs/other/f{index:D2}"),
+        ];
         var without = VerificationSampler.Rotate(keys, cursor: null, budget: 4, reservoirShare: 0);
 
         var plan = VerificationSampler.Rotate(
