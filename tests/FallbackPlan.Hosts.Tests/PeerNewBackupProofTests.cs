@@ -78,6 +78,9 @@ public sealed class PeerNewBackupProofTests : IAsyncDisposable
     [TestMethod]
     public async Task APeerOnlySetsPeer_ABlobOfTheBackupRottedThere_IsFoundByTheProofCarriedOverPasses()
     {
+        // The rotation asks about one key a pass, drawn at random: the proof
+        // reaches the rotted blob whatever it draws.
+        FanOut.ReadBackBudget = 1;
         FanOut.NewBackupProofBudget = 1;
         await using var runtime = await StartAsync(directShip: true);
         await PassAsync(runtime);
@@ -95,18 +98,29 @@ public sealed class PeerNewBackupProofTests : IAsyncDisposable
     [TestMethod]
     public async Task APeerOnlySetsPeer_ProvesALargerBackupOverThePassesAfterIt()
     {
+        // The rotation asks about one key a pass, drawn at random, and the
+        // proof about one blob: every pass moves the proof on by its own ask.
+        FanOut.ReadBackBudget = 1;
         FanOut.NewBackupProofBudget = 1;
         await using var runtime = await StartAsync(directShip: true);
         await PassAsync(runtime);
         var newest = Assert.ContainsSingle(Friend.Snapshots());
         var first = Row(runtime);
         Assert.AreEqual(newest, first.ProvingSnapshot);
+        Assert.IsNotNull(first.ProvingCursor, "the pass that sent the backup proved none of its blobs");
 
+        var cursor = first.ProvingCursor;
         var passes = 0;
         while (Row(runtime).ProvenSnapshot is null)
         {
             Assert.IsLessThan(20, ++passes, "the proof never finished");
             await SyncAsync(runtime);
+            var row = Row(runtime);
+            if (row.ProvenSnapshot is null)
+            {
+                Assert.IsGreaterThan(0, string.CompareOrdinal(row.ProvingCursor, cursor), "a pass did not move the proof on");
+                cursor = row.ProvingCursor;
+            }
         }
 
         Assert.AreEqual(newest, Row(runtime).ProvenSnapshot);
