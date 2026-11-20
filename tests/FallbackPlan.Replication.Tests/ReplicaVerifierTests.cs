@@ -65,6 +65,9 @@ public sealed class ReplicaVerifierTests
         Assert.AreEqual(samples.Count, outcome.Passed);
         Assert.IsEmpty(outcome.Failed);
         Assert.IsTrue(outcome.ProvedSomething);
+        CollectionAssert.AreEquivalent(
+            samples.Select(sample => sample.Key).ToList(), outcome.Proved.ToList(),
+            "a key proven by comparison went unnamed (ADR-0199)");
     }
 
     [TestMethod]
@@ -84,6 +87,7 @@ public sealed class ReplicaVerifierTests
         Assert.AreEqual(0, outcome.Passed);
         Assert.IsEmpty(outcome.Failed);
         Assert.IsFalse(outcome.ProvedSomething, "a run that read no ground truth has proven nothing");
+        Assert.IsEmpty(outcome.Proved);
     }
 
     [TestMethod]
@@ -150,6 +154,7 @@ public sealed class ReplicaVerifierTests
 
         Assert.AreEqual(1, outcome.Passed);
         Assert.AreEqual(corrupted, outcome.Failed.Single());
+        Assert.AreEqual(samples[0].Key, Assert.ContainsSingle(outcome.Proved), "the rotted key was named proven");
     }
 
     [TestMethod]

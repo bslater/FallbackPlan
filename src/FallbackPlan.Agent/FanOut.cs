@@ -1699,8 +1699,6 @@ public static class FanOut
             return;
         }
 
-        RecordNewBackupProof(runtime, set, destination.Name, newestSnapshot, previous, newBackup, plan, [], nowMs);
-
         if (!rolledBack && scope != SyncScope.Skip)
         {
             await RetireAtReplicaAsync(runtime, set, destination.Name, archive, replica, cancellationToken)
