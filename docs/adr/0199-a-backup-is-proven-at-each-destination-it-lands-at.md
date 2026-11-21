@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session); FR-VER-003 (amended by [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row names the backup it was last proven through, and a proof under way with how many of the backup's blobs are proven and how many are left)
+**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session); FR-VER-003 (amended by [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row names the backup it was last proven through, and a proof under way with how many of the backup's blobs are proven and how many are left); FR-VER-002 (amended by [Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass): a pass that brings a destination current from the metadata here leaves the newest backup's proof owed, so the pair is due at once and the next pass proves it)
 **Related:** [ADR-0035](0035-destination-fitness.md) §5 (the sample's rotation, which this sits beside), [ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 2 (a destination is in sync only once it holds the newest backup whole, which is where this proof starts), [ADR-0012](0012-storage-provider-contract.md) Amendment 8 (listings in key order, which the proof's cursor resumes through)
 
 **Built:**
@@ -50,6 +50,8 @@ So at a store swept on no cadence, a blob a new backup sent and the store holds 
 
   > **2026-11: done ([Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at)).**
 - **A pass brought current from the metadata here** ([ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 1) samples nothing, so proves nothing. The next pass from a whole source proves the backup.
+
+  > **2026-11: done ([Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass)).** The pass leaves the backup's proof owed, so the next pass comes at once.
 - **The status** does not say how far a proof under way has got, nor which backup a destination was last proven through.
 
   > **2026-11: done ([Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got)).**
@@ -105,6 +107,24 @@ A proof under way is progress, and every surface says it as progress. The CLI pr
 - `Cli.Tests/StatusNewBackupProofLineTests`: the CLI's line.
 - `Web.DomTests/NewBackupProofDomTests`: the console's row.
 
+## Amendment 3 (2026-11) — a backup brought current from the metadata here is proven by the next pass
+
+The record's last "not done". Beside a peer that is away, a store that holds every blob the set's index locates is brought current from the metadata on this machine ([ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 1). That pass reads nothing that is a copy of the store's blobs, so it samples nothing and proves nothing. The next pass proves the backup: by then the ledger names the store whole, so the pass reads the store as its own source and opens the blobs where they sit.
+
+But nothing made that pass come. A store already proven through an earlier backup is challenged again only when its proof's age comes due. Until then the new backup sat at the store unproven, though the store read as in sync.
+
+**Decision.** A pass that brings a destination current from the metadata here leaves the newest backup's proof owed. It records the backup as being proven from its first blob, counted as none of its blobs proven. Only the blobs it needs beyond the backup last proven there are counted. A pair with a proof under way is due a pass (decision 3), so the next pass comes at once and proves the backup as any pass does.
+
+- **A proof of the same backup already under way** keeps its place and its count.
+- **A destination already proven through the backup** owes nothing.
+- **The pass itself still proves nothing,** and records no verification.
+
+**Built:** `Agent/FanOut`'s sync to a local path or a store leaves the proof owed when its source proves nothing:
+
+- `Hosts.Tests/StoreBesideAPeerTests`:
+  - a store brought current with the peer away owes its first backup's proof, counted from none;
+  - a store proven through a first backup is brought a second from the metadata here with the peer away. The second's proof is owed, counting only the blobs it added, and a scheduler pass a minute later, with no challenge due, proves the second backup there.
+
 ## Status history
 
 | Date | Status | Note |
@@ -112,3 +132,4 @@ A proof under way is progress, and every surface says it as progress. The CLI pr
 | 2026-11 | Accepted | Built: the pass that finds a local path or a store holding the newest backup whole proves there the blobs it needs that the backup last proven did not, a share of 256 a pass beside the rotation, the pair due while a proof is under way. `Agent/NewBackupProof`; `Replication/VerificationSampler`; `Agent/FanOut`; `Agent/Scheduler`; `Application/DestinationSyncStore`; `Hosts.Tests/NewBackupProofTests` |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): a peer is proven as a local path and a store are, by the challenge its push makes or by the read-back where the set's content is only at the peer; decision 5 and the first "not done" noted. `Replication/VerificationSampler`; `Agent/ReplicationInitiator`; `Agent/FanOut`; `Hosts.Tests/PeerNewBackupProofTests` |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row says the backup it was last proven through and how far a proof under way has got, in the backup's blobs (contract 1.91, ledger schema 15); the status "not done" noted. `Agent/NewBackupProof`; `Application/DestinationSyncStore`; `Agent/ServiceCommandHandler`; `Cli/CliApplication`; `Hosts.Tests/NewBackupProofStatusTests` |
+| 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass): a pass that brings a destination current from the metadata here leaves the newest backup's proof owed, so the pair is due at once and the next pass proves it; the last "not done" noted. `Agent/FanOut`; `Hosts.Tests/StoreBesideAPeerTests` |
