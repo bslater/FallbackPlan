@@ -143,7 +143,7 @@ A blob of the backup under proof that did not prove failed the pass, naming the 
   - a damaged blob of a second backup at a local path names that backup and the first as the newest proven, in the failure, the notice, the ledger and the status;
   - one of a first backup says no backup is proven there yet;
   - a blob repaired at the destination is proven by the next pass, which forgets the failure;
-  - a damaged blob of a backup already proven, found by the rotation, names none.
+  - a damaged blob of a backup already proven, found by the rotation, names none, nor does one only an older backup needed, met while a newer is being proven.
 - `Hosts.Tests/PeerNewBackupProofTests`: on both peer routes, the rotted blob is the one that failed the proof, and the failure names its backup.
 - `Application.Tests/DestinationSyncStoreTests`: the blob kept and cleared; a schema-15 ledger migrating with none.
 - `Api.Tests/ContractAdditiveFieldsTests`: contract 1.92's `failed_blob`.

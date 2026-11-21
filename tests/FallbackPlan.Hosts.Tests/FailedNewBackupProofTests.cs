@@ -125,6 +125,30 @@ public sealed class FailedNewBackupProofTests : IAsyncDisposable
         Assert.IsNull(row.ProvingFailedKey);
     }
 
+    [TestMethod]
+    public async Task ADamagedBlobOfAnOlderBackup_MetWhileANewerIsBeingProven_NamesNoBackup()
+    {
+        // The second backup's own blobs prove; the rotation meets a blob only
+        // the first needed, damaged at the vault. It is no blob of the
+        // backup under proof, so the failure names none.
+        await using var runtime = await StartAsync();
+        await PassAsync(runtime);
+        var before = StagingBlobs(runtime);
+        var older = before.First(key => key.StartsWith("blobs/data/", StringComparison.Ordinal));
+        Damage(Path.Combine(VaultReplica(), older));
+        _harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await BackUpAloneAsync(runtime, _start.AddHours(1));
+        Assert.IsNotEmpty(StagingBlobs(runtime).Except(before, StringComparer.Ordinal), "the premise: the second backup wrote blobs");
+
+        await SyncAsync(runtime);
+
+        var row = Row(runtime);
+        Assert.AreEqual(DestinationSyncState.Failed, row.State, row.LastError);
+        Assert.Contains(older, row.LastError!, StringComparison.Ordinal);
+        Assert.DoesNotContain("belongs to", row.LastError!, StringComparison.Ordinal);
+        Assert.IsNull(row.ProvingFailedKey);
+    }
+
     /// <summary>Another backup, of one more file, its first new data blob damaged in staging before any sync.</summary>
     private async Task<string> SecondBackupWithADamagedBlobAsync(ServiceRuntime runtime)
     {
