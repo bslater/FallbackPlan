@@ -1186,8 +1186,10 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
                     ProvingSnapshotId: "0b", ProvingCapturedAt: 2_000, BlobsProven: 3, BlobsLeft: 7)),
             FrameCodec.SerializerOptions);
 
+        // 1.92 added failed_blob, null here (see the 1.92 test below).
         const string Wire = ",\"new_backup_proof\":{\"proven_snapshot_id\":\"0a\",\"proven_captured_at\":1000,"
-            + "\"proving_snapshot_id\":\"0b\",\"proving_captured_at\":2000,\"blobs_proven\":3,\"blobs_left\":7}";
+            + "\"proving_snapshot_id\":\"0b\",\"proving_captured_at\":2000,\"blobs_proven\":3,\"blobs_left\":7,"
+            + "\"failed_blob\":null}";
         Assert.Contains(Wire, modern, StringComparison.Ordinal);
 
         // A pre-1.91 service says nothing of it, and a client draws nothing,

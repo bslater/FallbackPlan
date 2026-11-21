@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session); FR-VER-003 (amended by [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row names the backup it was last proven through, and a proof under way with how many of the backup's blobs are proven and how many are left); FR-VER-002 (amended by [Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass): a pass that brings a destination current from the metadata here leaves the newest backup's proof owed, so the pair is due at once and the next pass proves it)
+**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session); FR-VER-003 (amended by [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row names the backup it was last proven through, and a proof under way with how many of the backup's blobs are proven and how many are left); FR-VER-002 (amended by [Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass): a pass that brings a destination current from the metadata here leaves the newest backup's proof owed, so the pair is due at once and the next pass proves it); FR-VER-005 (amended by [Amendment 4](#amendment-4-2026-11--a-failed-proof-names-the-backup): a blob of the backup under proof that does not prove fails the pass naming that backup as not proven there and the newest backup that is, in the failure, its notice and the status)
 **Related:** [ADR-0035](0035-destination-fitness.md) §5 (the sample's rotation, which this sits beside), [ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 2 (a destination is in sync only once it holds the newest backup whole, which is where this proof starts), [ADR-0012](0012-storage-provider-contract.md) Amendment 8 (listings in key order, which the proof's cursor resumes through)
 
 **Built:**
@@ -125,6 +125,30 @@ But nothing made that pass come. A store already proven through an earlier backu
   - a store brought current with the peer away owes its first backup's proof, counted from none;
   - a store proven through a first backup is brought a second from the metadata here with the peer away. The second's proof is owed, counting only the blobs it added, and a scheduler pass a minute later, with no challenge due, proves the second backup there.
 
+## Amendment 4 (2026-11) — a failed proof names the backup
+
+A blob of the backup under proof that did not prove failed the pass, naming the blob and nothing more. A blob's key says nothing to a person about which recovery point to distrust, nor which still stands at that destination. And a pass that failed recorded no step of the proof. A first pass that failed left the ledger and the status naming no backup under proof at all.
+
+**Decision.** When a blob that does not prove is one the proof asked about, the failure names the backup:
+
+- **The failure and its notice** say which backup the blob belongs to, by when it was taken and the start of its identity, and that it is not proven at the destination. They also name the newest backup proven there, or say that none is. A backup the catalogue no longer holds is named by its identity alone.
+- **The ledger** moves the proof past what the pass did prove, up to the first blob it did not, and keeps that blob (schema 16). The next pass asks about it again; one that proves it clears it.
+- **The status** carries that blob on the row's proof (contract 1.92). The CLI says which backup failed its proof and at which blob, and what is proven through. The console draws the failure as one, never as a check under way.
+
+**What it does not do.** A blob that does not prove which the proof did not ask about, found by the rotation, may belong to any backup kept. Its failure names no backup, as before.
+
+**Built:** `Agent/FanOut` names the backup on each route; `Agent/NewBackupProof` names a backup as a person reads it; `Application/DestinationSyncStore` keeps the blob; `Agent/ServiceCommandHandler` carries it on the status row; `Cli/CliApplication` and the console say it:
+
+- `Hosts.Tests/FailedNewBackupProofTests`:
+  - a damaged blob of a second backup at a local path names that backup and the first as the newest proven, in the failure, the notice, the ledger and the status;
+  - one of a first backup says no backup is proven there yet;
+  - a blob repaired at the destination is proven by the next pass, which forgets the failure;
+  - a damaged blob of a backup already proven, found by the rotation, names none.
+- `Hosts.Tests/PeerNewBackupProofTests`: on both peer routes, the rotted blob is the one that failed the proof, and the failure names its backup.
+- `Application.Tests/DestinationSyncStoreTests`: the blob kept and cleared; a schema-15 ledger migrating with none.
+- `Api.Tests/ContractAdditiveFieldsTests`: contract 1.92's `failed_blob`.
+- `Cli.Tests/StatusNewBackupProofLineTests` and `Web.DomTests/NewBackupProofDomTests`: the CLI's line and the console's row for a failed proof.
+
 ## Status history
 
 | Date | Status | Note |
@@ -133,3 +157,4 @@ But nothing made that pass come. A store already proven through an earlier backu
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): a peer is proven as a local path and a store are, by the challenge its push makes or by the read-back where the set's content is only at the peer; decision 5 and the first "not done" noted. `Replication/VerificationSampler`; `Agent/ReplicationInitiator`; `Agent/FanOut`; `Hosts.Tests/PeerNewBackupProofTests` |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row says the backup it was last proven through and how far a proof under way has got, in the backup's blobs (contract 1.91, ledger schema 15); the status "not done" noted. `Agent/NewBackupProof`; `Application/DestinationSyncStore`; `Agent/ServiceCommandHandler`; `Cli/CliApplication`; `Hosts.Tests/NewBackupProofStatusTests` |
 | 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass): a pass that brings a destination current from the metadata here leaves the newest backup's proof owed, so the pair is due at once and the next pass proves it; the last "not done" noted. `Agent/FanOut`; `Hosts.Tests/StoreBesideAPeerTests` |
+| 2026-11 | Amended | [Amendment 4](#amendment-4-2026-11--a-failed-proof-names-the-backup): a blob of the backup under proof that does not prove fails the pass naming that backup and the newest proven, in the failure, its notice and the status (contract 1.92, ledger schema 16). `Agent/FanOut`; `Agent/NewBackupProof`; `Application/DestinationSyncStore`; `Hosts.Tests/FailedNewBackupProofTests` |

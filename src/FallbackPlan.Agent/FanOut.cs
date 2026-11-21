@@ -288,7 +288,11 @@ public static class FanOut
 
         if (verification.Failed.Count > 0)
         {
-            RecordVerificationFailure(runtime, set, destination.Name, verification, sample.Count, nowMs);
+            RecordVerificationFailure(
+                runtime, set, destination.Name, verification, sample.Count, nowMs,
+                RecordFailedProof(
+                    runtime, set, destination.Name, archive, newestSnapshot, previous, newBackup, plan, verification,
+                    [.. verification.Proved, .. verification.Archived], nowMs));
             return true;
         }
 
@@ -817,7 +821,11 @@ public static class FanOut
                     cancellationToken).ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
                 {
-                    RecordVerificationFailure(runtime, set, destination.Name, verification, samples.Count, nowMs);
+                    RecordVerificationFailure(
+                        runtime, set, destination.Name, verification, samples.Count, nowMs,
+                        RecordFailedProof(
+                            runtime, set, destination.Name, archive, newestSnapshot, previous, newBackup, plan, verification,
+                            verification.Proved, nowMs));
                     return;
                 }
 
@@ -1707,7 +1715,11 @@ public static class FanOut
 
             if (verification.Failed.Count > 0)
             {
-                RecordVerificationFailure(runtime, set, destination.Name, verification, samples.Count, nowMs);
+                RecordVerificationFailure(
+                    runtime, set, destination.Name, verification, samples.Count, nowMs,
+                    RecordFailedProof(
+                        runtime, set, destination.Name, archive, newestSnapshot, previous, newBackup, plan, verification,
+                        [.. verification.Proved, .. verification.Archived], nowMs));
                 return;
             }
 
@@ -2637,17 +2649,62 @@ public static class FanOut
     /// </summary>
     private static void RecordVerificationFailure(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
-        Replication.VerificationOutcome verification, int sampled, ulong nowMs)
+        Replication.VerificationOutcome verification, int sampled, ulong nowMs, string? failedProof = null)
     {
         var summary = $"verification failed: {verification.Failed.Count} of {sampled} sampled range(s) "
-            + $"could not be proven, first '{verification.Failed[0]}'";
+            + $"could not be proven, first '{verification.Failed[0]}'"
+            + (failedProof is null ? string.Empty : $"; {failedProof}");
         runtime.DestinationSync.RecordFailure(
             set.Id, destinationName, DestinationSyncState.Failed, summary, nowMs);
         runtime.Notices.Raise(
             $"verification-failed:{set.Id}:{destinationName}",
             $"Destination '{destinationName}' failed verification for set '{set.Name}': "
             + $"{verification.Failed.Count} of {sampled} sampled range(s) unproven (first: '{verification.Failed[0]}'). "
+            + (failedProof is null ? string.Empty : $"Of the backup under proof there, {failedProof}. ")
             + "Its copy may be damaged or withheld; it does not count toward protection until a sync verifies clean.",
             nowMs);
+    }
+
+    /// <summary>
+    /// Where a failed pass leaves the proof of the newest backup, when a blob
+    /// of that backup is one that did not prove
+    /// ([ADR-0199](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md)
+    /// Amendment 4): the proof moves past what the pass did prove up to the
+    /// first blob it did not, the ledger names that blob, and the words name
+    /// the backup it belongs to and the newest proven at the destination.
+    /// </summary>
+    /// <remarks>
+    /// A failed blob the proof did not ask about, found by the rotation, may
+    /// belong to any backup kept, so it names none.
+    /// </remarks>
+    /// <returns>The words for the failure and its notice; null where no blob of the backup under proof failed.</returns>
+    private static string? RecordFailedProof(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, ArchiveHandle archive,
+        string? newestSnapshot, DestinationSyncRecord? previous, VerificationSampler.NewBackupRequest? newBackup,
+        VerificationSampler.SamplePlan plan, Replication.VerificationOutcome verification,
+        IReadOnlyCollection<string> answered, ulong nowMs)
+    {
+        if (newBackup is null || newestSnapshot is null)
+        {
+            return null;
+        }
+
+        var asked = plan.NewBackup.Select(sample => sample.Key).ToList();
+        var ofTheBackup = new HashSet<string>(asked, StringComparer.Ordinal);
+        if (verification.Failed.FirstOrDefault(ofTheBackup.Contains) is not { } failed)
+        {
+            return null;
+        }
+
+        var step = NewBackupProof.Advance(
+            newestSnapshot, previous?.ProvenSnapshot, previous?.ProvingSnapshot, previous?.ProvingCursor,
+            asked, answered.ToHashSet(StringComparer.Ordinal), plan.NewBackupRemaining,
+            previous?.ProvingBlobsProven);
+        runtime.DestinationSync.RecordNewBackupProof(
+            set.Id, destinationName, step.Proven, step.Proving, step.Cursor, nowMs, step.BlobsProven, step.BlobsLeft, failed);
+        var standing = step.Proven is { } proven
+            ? $"the newest backup proven here is {NewBackupProof.NameOf(archive, set, proven)}"
+            : "no backup is proven here yet";
+        return $"'{failed}' belongs to {NewBackupProof.NameOf(archive, set, newestSnapshot)}, which is not proven here; {standing}";
     }
 }

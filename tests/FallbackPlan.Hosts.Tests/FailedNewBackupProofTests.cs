@@ -48,7 +48,10 @@ public sealed class FailedNewBackupProofTests : IAsyncDisposable
         Assert.AreEqual(second.Key, row.ProvingSnapshot, "the ledger does not say which backup's proof failed");
         Assert.AreEqual(damaged, row.ProvingFailedKey);
 
-        var notice = Assert.ContainsSingle(runtime.Notices.Unacknowledged);
+        // The staging sweep may meet the damaged blob too, and say so in a
+        // notice of its own.
+        var notice = Assert.ContainsSingle(runtime.Notices.Unacknowledged
+            .Where(raised => raised.Key.StartsWith("verification-failed:", StringComparison.Ordinal)));
         Assert.Contains(words, notice.Message, StringComparison.Ordinal);
 
         var proof = (await StatusRowAsync(runtime)).NewBackupProof!;

@@ -3661,7 +3661,8 @@ public sealed partial class ServiceCommandHandler(
         return new NewBackupProofDescriptor(
             proven?.Id, proven?.CapturedAt, proving?.Id, proving?.CapturedAt,
             ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsProven,
-            ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsLeft);
+            ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsLeft,
+            ledger.ProvingSnapshot is null ? null : ledger.ProvingFailedKey);
 
         (string Id, ulong? CapturedAt)? Name(string? key)
         {
@@ -3675,11 +3676,7 @@ public sealed partial class ServiceCommandHandler(
                 return (known.Id, known.CapturedAt);
             }
 
-            var segment = key[(key.LastIndexOf('/') + 1)..];
-            Span<byte> id = stackalloc byte[16];
-            return Base32.TryDecode(segment, id, out var written) && written == id.Length
-                ? (Convert.ToHexStringLower(id), null)
-                : (segment, null);
+            return (NewBackupProof.IdentityOf(key), null);
         }
     }
 

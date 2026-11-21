@@ -4176,6 +4176,17 @@ public static class CliApplication
             return through;
         }
 
+        // A failed proof is said as a failure, never as a proof under way
+        // (contract 1.92): which backup, at which blob, and what still stands.
+        if (proof.FailedBlob is { } failed)
+        {
+            var counted = proof is { BlobsProven: { } provenSoFar, BlobsLeft: { } remaining }
+                ? string.Create(CultureInfo.InvariantCulture, $": {provenSoFar} of {provenSoFar + remaining} blobs proven")
+                : string.Empty;
+            return $"{BackupName(proving, proof.ProvingCapturedAt)} failed its proof at {failed}{counted}; "
+                + (through ?? "no backup proven here yet");
+        }
+
         var progress = proof is { BlobsProven: { } done, BlobsLeft: { } left }
             ? string.Create(CultureInfo.InvariantCulture, $"{done} of {done + left} blobs")
             : "under way";

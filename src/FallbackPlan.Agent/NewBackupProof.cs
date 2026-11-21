@@ -1,5 +1,8 @@
+using System.Globalization;
+using Bodu;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Replication;
 
@@ -122,6 +125,63 @@ internal static class NewBackupProof
         return remaining == 0
             ? new Step(newest, null, null)
             : new Step(proven, newest, resumed, counted, counted is null ? null : remaining);
+    }
+
+    /// <summary>
+    /// A backup as a failure names it to a person (ADR-0199 Amendment 4): when
+    /// it was taken, in UTC, and the start of its identity, which tells apart
+    /// two backups of the same minute. A backup the catalogue no longer holds,
+    /// or cannot be read for, is named by the identity its record key carries.
+    /// </summary>
+    /// <param name="archive">The set's archive.</param>
+    /// <param name="set">The set.</param>
+    /// <param name="key">The backup's record key, as the ledger names it.</param>
+    /// <returns>The backup's name.</returns>
+    public static string NameOf(ArchiveHandle archive, BackupSetConfiguration set, string key)
+    {
+        try
+        {
+            using var catalogue = archive.OpenReadCatalogue();
+            var setId = Convert.FromHexString(set.Id);
+            foreach (var row in catalogue.EnumerateSnapshots())
+            {
+                if (row.BackupSetId.Span.SequenceEqual(setId)
+                    && string.Equals(
+                        Repository.Packing.MetadataStoreKeys.Snapshot(
+                            row.DeviceId.Span, row.BackupSetId.Span, row.SnapshotId.Span).Value,
+                        key, StringComparison.Ordinal))
+                {
+                    var id = Convert.ToHexStringLower(row.SnapshotId.Span);
+                    return string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"the backup of {DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(row.CapturedAt, long.MaxValue)):yyyy-MM-dd HH:mm} UTC ({id[..8]})");
+                }
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // A failure is being reported: a catalogue that cannot be read
+            // names the backup by its key rather than hiding the failure.
+        }
+
+        return $"backup {IdentityOf(key)}";
+    }
+
+    /// <summary>
+    /// The identity a backup's record key carries, hex as the snapshot listing
+    /// prints it: its last segment decoded, or the segment itself where it
+    /// does not decode.
+    /// </summary>
+    /// <param name="key">The backup's record key.</param>
+    /// <returns>The identity.</returns>
+    public static string IdentityOf(string key)
+    {
+        ThrowHelper.ThrowIfNull(key);
+        var segment = key[(key.LastIndexOf('/') + 1)..];
+        Span<byte> id = stackalloc byte[16];
+        return Base32.TryDecode(segment, id, out var written) && written == id.Length
+            ? Convert.ToHexStringLower(id)
+            : segment;
     }
 
     /// <summary>

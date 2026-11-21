@@ -1435,13 +1435,21 @@ public sealed record DestinationStatusDescriptor(
 /// is under way, and when the pass that last asked did not count them.
 /// </param>
 /// <param name="BlobsLeft">Of them, how many are left to prove; null with <paramref name="BlobsProven"/>.</param>
+/// <param name="FailedBlob">
+/// The store key of the blob of the backup under proof that did not prove at
+/// the last pass that asked about it (contract 1.92, ADR-0199 Amendment 4):
+/// that backup is not proven at the destination, and the one named by
+/// <paramref name="ProvenSnapshotId"/> is the newest that is. Null while none
+/// has failed, and from services before 1.92.
+/// </param>
 public sealed record NewBackupProofDescriptor(
     string? ProvenSnapshotId,
     ulong? ProvenCapturedAt,
     string? ProvingSnapshotId = null,
     ulong? ProvingCapturedAt = null,
     int? BlobsProven = null,
-    int? BlobsLeft = null);
+    int? BlobsLeft = null,
+    string? FailedBlob = null);
 
 /// <summary>
 /// What a cloud destination's store was asked, as its status row reports it
