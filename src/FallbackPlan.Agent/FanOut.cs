@@ -1735,9 +1735,42 @@ public static class FanOut
                 .ConfigureAwait(false);
         }
 
+        if (source is { ProvesContent: false })
+        {
+            OweNewBackupProof(runtime, set, destination.Name, archive, newestSnapshot, previous, nowMs);
+        }
+
         ledger.RecordSuccess(
             set.Id, destination.Name, copied, nowMs, syncedSequence,
             keepFingerprint, reconciled, newestSnapshot, convergedSequence: convergedAt);
+    }
+
+    /// <summary>
+    /// Leaves the newest backup's proof owed at a destination a pass brought
+    /// current from the metadata here
+    /// ([ADR-0199](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md)
+    /// Amendment 3). That pass proved nothing, so the backup is recorded as
+    /// being proven from its first blob, counted as none proven: the pair is
+    /// due until a pass proves it there.
+    /// </summary>
+    /// <remarks>
+    /// A proof of the same backup already under way keeps its place and its
+    /// count, and a destination already proven through it owes nothing.
+    /// </remarks>
+    private static void OweNewBackupProof(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, ArchiveHandle archive,
+        string? newestSnapshot, DestinationSyncRecord? previous, ulong nowMs)
+    {
+        if (string.Equals(previous?.ProvingSnapshot, newestSnapshot, StringComparison.Ordinal)
+            || NewBackupProof.Request(
+                runtime, set, destinationName, archive, newestSnapshot, previous, NewBackupProofBudget) is not { } owed)
+        {
+            return;
+        }
+
+        runtime.DestinationSync.RecordNewBackupProof(
+            set.Id, destinationName, previous?.ProvenSnapshot, newestSnapshot, cursor: null, nowMs,
+            blobsProven: 0, blobsLeft: owed.Names.Count);
     }
 
     /// <summary>

@@ -15,12 +15,19 @@ namespace FallbackPlan.Hosts.Tests;
 /// reading the blob back from the peer would cross the peer's link twice.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The copies take a bounded room. A blob that finds it full is left to the
 /// sync after the run, which reads it from the peer (ADR-0198), and the run
 /// goes on either way. Each case holds the run after its commit until the
 /// store holds what it should, so that what reached the store is known to
 /// have gone up while the run went on, before its end could cut an upload
 /// short.
+/// </para>
+/// <para>
+/// A store brought current from the metadata here, with the peer away, is
+/// proven by no pass that did so: the backup's proof is left owed, and the
+/// next pass proves it (FR-VER-002, ADR-0199 Amendment 3).
+/// </para>
 /// </remarks>
 [TestClass]
 public sealed class StoreBesideAPeerTests : IAsyncDisposable
@@ -157,6 +164,55 @@ public sealed class StoreBesideAPeerTests : IAsyncDisposable
         Assert.IsEmpty(missing, $"the store lacks blobs the backup needs: {string.Join(", ", missing)}");
         Assert.IsNull(cloud.VerifiedAt, "nothing read on this machine proves the store's blobs, and none is claimed");
         Assert.IsNull(cloud.ProvenSnapshot, "a pass that proved nothing called the store proven through the backup (ADR-0199)");
+
+        // ADR-0199 Amendment 3: the backup's proof is left owed, counted
+        // from none, so the pair is due until a pass proves it.
+        Assert.AreEqual(Assert.ContainsSingle(Friend.Snapshots()), cloud.ProvingSnapshot, "the backup's proof was not left owed");
+        Assert.IsNull(cloud.ProvingCursor);
+        Assert.AreEqual(0, cloud.ProvingBlobsProven);
+        Assert.IsGreaterThan(0, cloud.ProvingBlobsLeft ?? 0, "the proof owed counted no blobs");
+    }
+
+    [TestMethod]
+    public async Task ABackupBroughtToTheStoreWithThePeerAway_IsProvenThereByTheNextPass_ThoughNoChallengeIsDue()
+    {
+        // The store was proven through the first backup by a pass that read
+        // the peer, so no challenge is due for a while. The second reaches
+        // it from the metadata here, with the peer away, and that pass
+        // proves nothing: only the proof it leaves owed makes the pair due,
+        // and the next pass, reading the store whole by the ledger, proves
+        // the backup there.
+        await using var runtime = await StartAsync(roomBytes: null, committed: EveryBlobAtTheStoreAsync);
+        await RunAloneAsync(runtime);
+        await SyncAsync(runtime);
+        var first = Assert.ContainsSingle(Friend.Snapshots());
+        Assert.AreEqual(first, Row(runtime, "cloud").ProvenSnapshot, "the premise: the store is proven through the first backup");
+        var blobsBefore = Friend.Blobs();
+
+        _harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await RunAloneAsync(runtime);
+        var second = Assert.ContainsSingle(Friend.Snapshots().Except([first], StringComparer.Ordinal));
+        var added = Friend.Blobs().Except(blobsBefore, StringComparer.Ordinal).Count();
+        await Friend.StopAsync();
+        await SyncAsync(runtime);
+
+        var owed = Row(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, owed.State, owed.LastError);
+        Assert.AreEqual(first, owed.ProvenSnapshot, "a pass that proved nothing moved the store's proven backup");
+        Assert.AreEqual(second, owed.ProvingSnapshot, "the second backup's proof was not left owed");
+        Assert.AreEqual(0, owed.ProvingBlobsProven);
+        Assert.AreEqual(added, owed.ProvingBlobsLeft, "the proof owed counted blobs the first backup had needed too");
+
+        // Not a backup's hour, and long before a challenge is due.
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddMinutes(1), Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+
+        var proven = Row(runtime, "cloud");
+        Assert.IsGreaterThan(owed.LastAttemptAt, proven.LastAttemptAt, "a pair owed its backup's proof was not due");
+        Assert.AreEqual(DestinationSyncState.InSync, proven.State, proven.LastError);
+        Assert.AreEqual(second, proven.ProvenSnapshot, "the next pass did not prove the second backup");
+        Assert.IsNull(proven.ProvingSnapshot);
+        Assert.IsGreaterThanOrEqualTo(added, proven.VerifiedObjects, "the pass called the backup proven without asking about its blobs");
     }
 
     [TestMethod]
