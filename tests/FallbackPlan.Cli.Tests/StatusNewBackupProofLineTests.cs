@@ -45,6 +45,15 @@ public sealed class StatusNewBackupProofLineTests
                 null, null, ProvingSnapshotId: Newest, ProvingCapturedAt: NewestAt, BlobsProven: 0, BlobsLeft: 12))));
 
     [TestMethod]
+    public void AFailedProof_SaysWhichBackupFailedAndAtWhichBlob_AndWhatStillStands() =>
+        Assert.AreEqual(
+            "the backup of 2026-11-21 09:00 failed its proof at blobs/data/ab/cd: 3 of 10 blobs proven; "
+            + "proven through the backup of 2026-11-20 14:03",
+            CliApplication.DescribeNewBackupProof(Row(new NewBackupProofDescriptor(
+                Earlier, EarlierAt, ProvingSnapshotId: Newest, ProvingCapturedAt: NewestAt, BlobsProven: 3, BlobsLeft: 7,
+                FailedBlob: "blobs/data/ab/cd"))));
+
+    [TestMethod]
     public void AProofUnderWayNotYetCounted_SaysItIsUnderWay_NeverNoneProven() =>
         Assert.AreEqual(
             "proving the backup of 2026-11-21 09:00: under way; proven through the backup of 2026-11-20 14:03",

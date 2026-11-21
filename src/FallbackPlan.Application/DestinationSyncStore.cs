@@ -204,6 +204,17 @@ public sealed record DestinationSyncRecord
     public int? ProvingBlobsLeft { get; init; }
 
     /// <summary>
+    /// The store key of the blob of <see cref="ProvingSnapshot"/> that did not
+    /// prove at the last pass that asked about it; null while none has
+    /// failed (schema 16,
+    /// [ADR-0199](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md)
+    /// Amendment 4).
+    /// </summary>
+    [JsonPropertyName("proving_failed_key")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProvingFailedKey { get; init; }
+
+    /// <summary>
     /// Where the deep sweep resumes — the last blob key it read, or null to
     /// start from the beginning of the key space.
     /// </summary>
@@ -626,7 +637,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 15;
+    private const int CurrentSchemaVersion = 16;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -775,6 +786,8 @@ public sealed class DestinationSyncStore
         // which proved no backup whole: the next pass proves the newest.
         // Schema 15 added how far a proof under way has got, none on an older
         // row, which counted nothing: the next pass that asks counts it.
+        // Schema 16 added the blob that failed a proof under way, none on an
+        // older row: the next pass that asks about it again finds it.
         // Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
@@ -1306,10 +1319,14 @@ public sealed class DestinationSyncStore
     /// <param name="nowUnixMilliseconds">The clock.</param>
     /// <param name="blobsProven">Of the blobs <paramref name="proving"/> needs, how many are proven; kept only with it.</param>
     /// <param name="blobsLeft">Of them, how many are left; kept only with it.</param>
+    /// <param name="failedKey">
+    /// The blob of <paramref name="proving"/> that did not prove at this pass;
+    /// kept only with it, and cleared by a pass that names none.
+    /// </param>
     /// <returns>The row.</returns>
     public DestinationSyncRecord RecordNewBackupProof(
         string setId, string destination, string? proven, string? proving, string? cursor, ulong nowUnixMilliseconds,
-        int? blobsProven = null, int? blobsLeft = null) =>
+        int? blobsProven = null, int? blobsLeft = null, string? failedKey = null) =>
         Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             ProvenSnapshot = proven,
@@ -1317,6 +1334,7 @@ public sealed class DestinationSyncStore
             ProvingCursor = cursor,
             ProvingBlobsProven = proving is null ? null : blobsProven,
             ProvingBlobsLeft = proving is null ? null : blobsLeft,
+            ProvingFailedKey = proving is null ? null : failedKey,
         });
 
     /// <summary>

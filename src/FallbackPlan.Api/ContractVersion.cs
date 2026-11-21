@@ -891,8 +891,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// backup's blobs. Null where there is neither. Additive: a pre-1.91
     /// service says nothing of it.
     /// </para>
+    /// <para>
+    /// 1.92 has a failed proof of a new backup name the blob that failed it
+    /// (FR-VER-005, ADR-0199 Amendment 4). `new_backup_proof` gains
+    /// `failed_blob`, the store key of the blob of the backup under proof
+    /// that did not prove at the last pass that asked about it. Additive: a
+    /// pre-1.92 service names none, and its proof reads as under way.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 91);
+    public static ContractVersion Current { get; } = new(1, 92);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

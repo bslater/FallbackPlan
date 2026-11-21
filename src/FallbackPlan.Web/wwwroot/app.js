@@ -888,11 +888,20 @@ function newBackupProofLabel(d) {
   const through = p.provenSnapshotId == null ? null : name(p.provenSnapshotId, p.provenCapturedAt);
   if (p.provingSnapshotId == null) return esc(through);
 
-  const progress = p.blobsProven == null || p.blobsLeft == null
-    ? "under way"
+  const counted = p.blobsProven == null || p.blobsLeft == null
+    ? null
     : `${fmtCount(p.blobsProven)} of ${fmtCount(p.blobsProven + p.blobsLeft)} blobs proven`;
   const before = through == null ? "no backup proven here yet" : `${through} proven before it`;
-  return `checking ${esc(name(p.provingSnapshotId, p.provingCapturedAt))} <span class="detail">${esc(progress)} · ${esc(before)}</span>`;
+
+  // A failed proof (contract 1.92) is drawn as a failure, never as a check
+  // under way: the backup it was proving, the blob that did not prove, and
+  // what still stands at the destination.
+  if (p.failedBlob != null) {
+    const detail = [`${p.failedBlob} did not prove`, counted, before].filter(Boolean).join(" · ");
+    return `<b class="bad">${esc(name(p.provingSnapshotId, p.provingCapturedAt))} failed its check</b> <span class="detail">${esc(detail)}</span>`;
+  }
+
+  return `checking ${esc(name(p.provingSnapshotId, p.provingCapturedAt))} <span class="detail">${esc(counted ?? "under way")} · ${esc(before)}</span>`;
 }
 
 // A store that holds an object of the replica's own only in an archival

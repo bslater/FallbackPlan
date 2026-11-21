@@ -774,6 +774,50 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void Open_ASchemaFifteenLedger_Migrates_WithNoBlobFailingAProof()
+    {
+        // Schema 16 (ADR-0199 Amendment 4) added the blob of the backup under
+        // proof that did not prove. An older row named none, and the next
+        // pass that asks about it again finds it.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 15, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "Failed",
+                  "last_attempt_at": 1000, "proving_snapshot": "snapshots/d/s/newest",
+                  "proving_blobs_proven": 1, "proving_blobs_left": 2 } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-15 ledger must migrate, not quarantine");
+        Assert.AreEqual(1, record.ProvingBlobsProven);
+        Assert.IsNull(record.ProvingFailedKey);
+    }
+
+    [TestMethod]
+    public void RecordNewBackupProof_KeepsTheBlobThatFailedTheProof_UntilThePassAfterIt()
+    {
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordNewBackupProof(
+            SetId, "vault", null, "snapshots/d/s/newest", "blobs/data/a/x1", 1_000, blobsProven: 1, blobsLeft: 2,
+            failedKey: "blobs/data/a/x2");
+
+        var failed = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual("blobs/data/a/x2", failed.ProvingFailedKey);
+        Assert.Contains(
+            "\"proving_failed_key\": \"blobs/data/a/x2\"",
+            File.ReadAllText(Path.Combine(_state, "destinations.json")), StringComparison.Ordinal);
+
+        // A pass that moves the proof on clears it, and so does one that
+        // proves the backup, whatever it is handed.
+        store.RecordNewBackupProof(
+            SetId, "vault", null, "snapshots/d/s/newest", "blobs/data/a/x2", 2_000, blobsProven: 2, blobsLeft: 1);
+        Assert.IsNull(DestinationSyncStore.Open(_state).Find(SetId, "vault")!.ProvingFailedKey);
+        store.RecordNewBackupProof(SetId, "vault", "snapshots/d/s/newest", null, null, 3_000, failedKey: "blobs/data/a/x3");
+        Assert.IsNull(DestinationSyncStore.Open(_state).Find(SetId, "vault")!.ProvingFailedKey);
+    }
+
+    [TestMethod]
     public void RecordNewBackupProof_IsKept_AndLeavesTheRestOfTheRowAsItWas()
     {
         var store = DestinationSyncStore.Open(_state);
@@ -902,7 +946,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 16, "destinations": [
+            { "schema_version": 17, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -955,7 +999,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 15", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 16", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);
