@@ -1172,6 +1172,32 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void WhereANewBackupsProofStands_WireNamesAndPre191Default()
+    {
+        // Contract 1.91 (FR-VER-003, ADR-0199 Amendment 2): a destination's
+        // row names the backup it was last proven through, and the backup
+        // whose proof is under way with how many of its blobs are proven and
+        // how many are left.
+        var modern = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "vault", "local-path", "in-sync", null, null, "independent", "proven",
+                NewBackupProof: new NewBackupProofDescriptor(
+                    ProvenSnapshotId: "0a", ProvenCapturedAt: 1_000,
+                    ProvingSnapshotId: "0b", ProvingCapturedAt: 2_000, BlobsProven: 3, BlobsLeft: 7)),
+            FrameCodec.SerializerOptions);
+
+        const string Wire = ",\"new_backup_proof\":{\"proven_snapshot_id\":\"0a\",\"proven_captured_at\":1000,"
+            + "\"proving_snapshot_id\":\"0b\",\"proving_captured_at\":2000,\"blobs_proven\":3,\"blobs_left\":7}";
+        Assert.Contains(Wire, modern, StringComparison.Ordinal);
+
+        // A pre-1.91 service says nothing of it, and a client draws nothing,
+        // never a destination proven through no backup.
+        var old = modern.Replace(Wire, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!.NewBackupProof);
+    }
+
+    [TestMethod]
     public void WhatAStoreWasAsked_WireNamesAndPre169Default()
     {
         // Contract 1.69 (FR-DEST-019, ADR-0111): a cloud destination's row
