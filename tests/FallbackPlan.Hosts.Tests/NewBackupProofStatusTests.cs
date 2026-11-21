@@ -96,6 +96,32 @@ public sealed class NewBackupProofStatusTests : IAsyncDisposable
         Assert.AreEqual(added - 1, proof.BlobsLeft, "the proof counted blobs the earlier backup had needed too");
     }
 
+    [TestMethod]
+    public void ABackupTheCatalogueNoLongerHolds_IsNamedByTheIdentityItsKeyCarries_Undated()
+    {
+        // Its retention let it go: the ledger still names it, and nothing
+        // here can say when it was taken.
+        var id = Enumerable.Range(1, 16).Select(value => (byte)value).ToArray();
+        var gone = Repository.Packing.MetadataStoreKeys.Snapshot(new byte[16], new byte[16], id).Value;
+
+        var proof = ServiceCommandHandler.DescribeNewBackupProof(
+            Ledger() with { ProvenSnapshot = gone }, new Dictionary<string, ServiceCommandHandler.KnownBackup>());
+
+        Assert.IsNotNull(proof);
+        Assert.AreEqual(Convert.ToHexStringLower(id), proof.ProvenSnapshotId);
+        Assert.IsNull(proof.ProvenCapturedAt);
+    }
+
+    [TestMethod]
+    public void ADestinationProvenThroughNoBackup_WithNoneUnderWay_ReportsNothing() =>
+        Assert.IsNull(ServiceCommandHandler.DescribeNewBackupProof(
+            Ledger(), new Dictionary<string, ServiceCommandHandler.KnownBackup>()));
+
+    private DestinationSyncRecord Ledger() => new()
+    {
+        SetId = _harness.DocsSetId, Destination = "vault", State = DestinationSyncState.InSync, LastAttemptAt = 1_000,
+    };
+
     private async Task<ServiceRuntime> StartAsync()
     {
         Directory.CreateDirectory(Vault);

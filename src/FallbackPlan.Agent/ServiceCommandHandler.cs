@@ -3648,7 +3648,7 @@ public sealed partial class ServiceCommandHandler(
     /// A backup the catalogue no longer holds, its retention having let it
     /// go, is named by the identity its record key carries, undated.
     /// </remarks>
-    private static NewBackupProofDescriptor? DescribeNewBackupProof(
+    internal static NewBackupProofDescriptor? DescribeNewBackupProof(
         DestinationSyncRecord? ledger, IReadOnlyDictionary<string, KnownBackup>? backups)
     {
         if (ledger is null || (ledger.ProvenSnapshot is null && ledger.ProvingSnapshot is null))
@@ -3684,7 +3684,7 @@ public sealed partial class ServiceCommandHandler(
     }
 
     /// <summary>A backup the catalogue holds, as the snapshot listing names and dates it.</summary>
-    private readonly record struct KnownBackup(string Id, ulong CapturedAt);
+    internal readonly record struct KnownBackup(string Id, ulong CapturedAt);
 
     /// <summary>
     /// What a destination's store was asked over the window (contract 1.69,
