@@ -56,6 +56,24 @@ public sealed class NewBackupProofStepTests
     }
 
     [TestMethod]
+    public void ABlobLeftUnproven_CountsTheBlobsLeftAfterIt_AndThoseNotYetAsked()
+    {
+        var step = NewBackupProof.Advance(
+            Newest, Older, proving: null, cursor: null, Asked, Answered("blobs/data/a/x1"), remaining: 4);
+
+        Assert.AreEqual(new NewBackupProof.Step(Older, Newest, "blobs/data/a/x1", BlobsProven: 1, BlobsLeft: 6), step);
+    }
+
+    [TestMethod]
+    public void AnUncountedProof_WithABlobLeftUnproven_StaysUncounted()
+    {
+        var step = NewBackupProof.Advance(
+            Newest, Older, proving: Newest, cursor: null, Asked, Answered("blobs/data/a/x1"), remaining: 4, blobsProven: null);
+
+        Assert.AreEqual(new NewBackupProof.Step(Older, Newest, "blobs/data/a/x1", BlobsProven: null, BlobsLeft: null), step);
+    }
+
+    [TestMethod]
     public void NothingProvenThisPass_KeepsTheCursorOfTheSameBackup()
     {
         var step = NewBackupProof.Advance(

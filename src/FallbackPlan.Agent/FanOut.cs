@@ -1758,7 +1758,7 @@ public static class FanOut
         var step = NewBackupProof.Advance(
             newestSnapshot, previous?.ProvenSnapshot, previous?.ProvingSnapshot, previous?.ProvingCursor,
             asked, answered.ToHashSet(StringComparer.Ordinal), plan.NewBackupRemaining,
-            previous?.ProvingSnapshot is null ? 0 : previous.ProvingBlobsProven);
+            previous?.ProvingBlobsProven);
         runtime.DestinationSync.RecordNewBackupProof(
             set.Id, destinationName, step.Proven, step.Proving, step.Cursor, nowMs, step.BlobsProven, step.BlobsLeft);
         var log = runtime.LoggerFor(typeof(FanOut));

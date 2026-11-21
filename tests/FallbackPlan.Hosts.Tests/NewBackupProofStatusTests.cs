@@ -97,6 +97,28 @@ public sealed class NewBackupProofStatusTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task AProofUnderWayBeforeTheLedgerCounted_StaysUncounted_RatherThanReadingShort()
+    {
+        // A ledger from before the counts: the proof is under way from its
+        // first blob and nothing counted it. Counted from none, its whole
+        // would read short for the rest of it.
+        FanOut.NewBackupProofBudget = 1;
+        await using var runtime = await StartAsync();
+        await PassAsync(runtime);
+        var row = runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!;
+        Assert.IsNotNull(row.ProvingSnapshot, "the premise: the backup needs more than one blob");
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", row.ProvenSnapshot, row.ProvingSnapshot, cursor: null, 2_000);
+
+        await SyncAsync(runtime);
+
+        var proof = (await RowAsync(runtime)).NewBackupProof!;
+        Assert.IsNotNull(proof.ProvingSnapshotId, "the premise: the proof restarted from its first blob is still under way");
+        Assert.IsNull(proof.BlobsProven, "an uncounted proof was counted from none");
+        Assert.IsNull(proof.BlobsLeft, "an uncounted proof was counted from none");
+    }
+
+    [TestMethod]
     public void ABackupTheCatalogueNoLongerHolds_IsNamedByTheIdentityItsKeyCarries_Undated()
     {
         // Its retention let it go: the ledger still names it, and nothing

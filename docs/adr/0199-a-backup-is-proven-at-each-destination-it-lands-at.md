@@ -96,7 +96,9 @@ A proof under way is progress, and every surface says it as progress. The CLI pr
 - `Hosts.Tests/NewBackupProofStatusTests`:
   - a proof under way is counted in the backup's blobs, one more each pass, the whole the same pass to pass, over as many passes as the count said;
   - once proven, the row names the backup by the listing's identity and capture time;
-  - a newer backup's proof names both backups and counts only the blobs it added.
+  - a newer backup's proof names both backups and counts only the blobs it added;
+  - a proof under way before the ledger counted stays uncounted through the passes after it;
+  - a backup the catalogue no longer holds is named by its identity, undated, and a destination proven through no backup with none under way reports nothing.
 - `Hosts.Tests/NewBackupProofStepTests`: a resumed proof counts on, a newer one counts from none, and one under way before the ledger counted stays uncounted.
 - `Application.Tests/DestinationSyncStoreTests`: the counts kept and forgotten, and a schema-14 ledger migrating uncounted.
 - `Api.Tests/ContractAdditiveFieldsTests`: contract 1.91's wire names and the pre-1.91 default.

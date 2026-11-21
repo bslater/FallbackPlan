@@ -765,7 +765,8 @@ public sealed class DestinationSyncStoreTests
         Assert.Contains("\"proving_blobs_proven\": 3", text, StringComparison.Ordinal);
         Assert.Contains("\"proving_blobs_left\": 9", text, StringComparison.Ordinal);
 
-        store.RecordNewBackupProof(SetId, "vault", "snapshots/d/s/newest", null, null, 2_000);
+        // Counts are kept only beside a proof under way.
+        store.RecordNewBackupProof(SetId, "vault", "snapshots/d/s/newest", null, null, 2_000, blobsProven: 12, blobsLeft: 0);
         var proven = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.IsNull(proven.ProvingBlobsProven);
         Assert.IsNull(proven.ProvingBlobsLeft);
