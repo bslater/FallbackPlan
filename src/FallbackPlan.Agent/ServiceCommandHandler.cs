@@ -3438,6 +3438,7 @@ public sealed partial class ServiceCommandHandler(
             Repository.Catalogue.CatalogueSnapshot? latest = null;
             var findings = 0;
             var files = new Dictionary<string, FilesFigure>(StringComparer.Ordinal);
+            var backups = new Dictionary<string, KnownBackup>(StringComparer.Ordinal);
             if (await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false) is { } archive)
             {
                 using var catalogue = archive.OpenReadCatalogue();
@@ -3454,9 +3455,11 @@ public sealed partial class ServiceCommandHandler(
                 {
                     files[reference.Ref] = FilesFigureOf(set, reference.Ref, catalogue, latest, writing);
                 }
+
+                FindProofBackups(set, catalogue, setId, backups);
             }
 
-            var (inputs, rows, lastCompleted) = DescribeDestinations(configuration, set, latest is not null, files);
+            var (inputs, rows, lastCompleted) = DescribeDestinations(configuration, set, latest is not null, files, backups);
             var status = StatusDeriver.Derive(new StatusInputs
             {
                 LatestSnapshotAt = latest?.CapturedAt,
@@ -3536,7 +3539,8 @@ public sealed partial class ServiceCommandHandler(
     private (IReadOnlyList<DestinationStatusInput> Inputs, IReadOnlyList<DestinationStatusDescriptor> Rows, ulong LastCompleted)
         DescribeDestinations(
             ClientConfiguration configuration, BackupSetConfiguration set, bool hasSnapshot,
-            IReadOnlyDictionary<string, FilesFigure>? files = null)
+            IReadOnlyDictionary<string, FilesFigure>? files = null,
+            IReadOnlyDictionary<string, KnownBackup>? backups = null)
     {
         var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
         var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -3578,11 +3582,109 @@ public sealed partial class ServiceCommandHandler(
                 Syncing: figure.Syncing,
                 Requests: DescribeRequests(destination),
                 ArchivedMetadata: ledger?.MetadataArchivedKey,
-                ArchivedMetadataSince: ledger?.MetadataArchivedSince));
+                ArchivedMetadataSince: ledger?.MetadataArchivedSince,
+                NewBackupProof: DescribeNewBackupProof(ledger, backups)));
         }
 
         return (inputs, rows, lastCompleted);
     }
+
+    /// <summary>
+    /// The backups the set's destinations were proven through or are being
+    /// proven through, as the snapshot listing names them, read from the
+    /// catalogue only as far as it takes to find them: the newest first, so
+    /// it is usually one row.
+    /// </summary>
+    private void FindProofBackups(
+        BackupSetConfiguration set, Repository.Catalogue.Catalogue catalogue, byte[] setId,
+        Dictionary<string, KnownBackup> backups)
+    {
+        var wanted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reference in set.Destinations)
+        {
+            if (runtime.DestinationSync.Find(set.Id, reference.Ref) is { } ledger)
+            {
+                foreach (var key in new[] { ledger.ProvenSnapshot, ledger.ProvingSnapshot })
+                {
+                    if (key is not null)
+                    {
+                        wanted.Add(key);
+                    }
+                }
+            }
+        }
+
+        if (wanted.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var row in catalogue.EnumerateSnapshots())
+        {
+            if (!row.BackupSetId.Span.SequenceEqual(setId))
+            {
+                continue;
+            }
+
+            var key = Repository.Packing.MetadataStoreKeys.Snapshot(
+                row.DeviceId.Span, row.BackupSetId.Span, row.SnapshotId.Span).Value;
+            if (wanted.Remove(key))
+            {
+                backups[key] = new KnownBackup(Convert.ToHexStringLower(row.SnapshotId.Span), row.CapturedAt);
+                if (wanted.Count == 0)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Where a destination's proof of new backups stands (contract 1.91,
+    /// ADR-0199 Amendment 2), or null where it was proven through no backup
+    /// and none is being proven.
+    /// </summary>
+    /// <remarks>
+    /// A backup the catalogue no longer holds, its retention having let it
+    /// go, is named by the identity its record key carries, undated.
+    /// </remarks>
+    internal static NewBackupProofDescriptor? DescribeNewBackupProof(
+        DestinationSyncRecord? ledger, IReadOnlyDictionary<string, KnownBackup>? backups)
+    {
+        if (ledger is null || (ledger.ProvenSnapshot is null && ledger.ProvingSnapshot is null))
+        {
+            return null;
+        }
+
+        var proven = Name(ledger.ProvenSnapshot);
+        var proving = Name(ledger.ProvingSnapshot);
+        return new NewBackupProofDescriptor(
+            proven?.Id, proven?.CapturedAt, proving?.Id, proving?.CapturedAt,
+            ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsProven,
+            ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsLeft);
+
+        (string Id, ulong? CapturedAt)? Name(string? key)
+        {
+            if (key is null)
+            {
+                return null;
+            }
+
+            if (backups is not null && backups.TryGetValue(key, out var known))
+            {
+                return (known.Id, known.CapturedAt);
+            }
+
+            var segment = key[(key.LastIndexOf('/') + 1)..];
+            Span<byte> id = stackalloc byte[16];
+            return Base32.TryDecode(segment, id, out var written) && written == id.Length
+                ? (Convert.ToHexStringLower(id), null)
+                : (segment, null);
+        }
+    }
+
+    /// <summary>A backup the catalogue holds, as the snapshot listing names and dates it.</summary>
+    internal readonly record struct KnownBackup(string Id, ulong CapturedAt);
 
     /// <summary>
     /// What a destination's store was asked over the window (contract 1.69,

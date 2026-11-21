@@ -874,6 +874,27 @@ function requestsLabel(d) {
   return `${esc(asked)} <span class="detail">in the last ${fmtCount(r.days)} days${esc(since)} · ${esc(fmtBytes(r.bytesSent))} sent, ${esc(fmtBytes(r.bytesReceived))} received</span>`;
 }
 
+// Where a destination's proof of new backups stands (contract 1.91): the
+// backup it was last proven through, and a proof under way said as progress
+// — how many of the backup's blobs are proven of how many it needs — never
+// as the backup proven. A backup is named by when it was taken, or by its
+// identity where the service no longer holds it to say when. No row where the
+// service reports neither, or is older than 1.91: drawn empty, it would say
+// the destination was proven through nothing.
+function newBackupProofLabel(d) {
+  const p = d.newBackupProof;
+  if (p == null) return null;
+  const name = (id, at) => at == null ? `backup ${id}` : `the backup of ${fmtWhen(at)}`;
+  const through = p.provenSnapshotId == null ? null : name(p.provenSnapshotId, p.provenCapturedAt);
+  if (p.provingSnapshotId == null) return esc(through);
+
+  const progress = p.blobsProven == null || p.blobsLeft == null
+    ? "under way"
+    : `${fmtCount(p.blobsProven)} of ${fmtCount(p.blobsProven + p.blobsLeft)} blobs proven`;
+  const before = through == null ? "no backup proven here yet" : `${through} proven before it`;
+  return `checking ${esc(name(p.provingSnapshotId, p.provingCapturedAt))} <span class="detail">${esc(progress)} · ${esc(before)}</span>`;
+}
+
 // A store that holds an object of the replica's own only in an archival
 // tier (contract 1.70): nothing restores from there until it is rehydrated,
 // whatever the row's state says of the copy, so the card's summary carries a
@@ -1084,6 +1105,7 @@ function renderSetCard(set) {
     const sweep = sweepLabel(d);
     const requests = requestsLabel(d);
     const archivedMetadata = archivedMetadataNote(d);
+    const proof = newBackupProofLabel(d);
 
     // The card's one caption line: the circle in words, then, while
     // something is moving files here, what — never the job's own counts,
@@ -1124,6 +1146,7 @@ function renderSetCard(set) {
         <div><span class="detail">Restore drill</span><span>${drillLabel(d)}
           <button type="button" class="btn small" data-action="drill" data-set="${esc(set.setName)}" data-destination="${esc(d.name)}"
             title="Restore a sample of files from this destination's own copy now, and record the answer here">Run restore drill</button></span></div>
+        ${proof ? `<div><span class="detail">Proven backup</span><span>${proof}</span></div>` : ""}
         ${sweep ? `<div><span class="detail">Deep verify</span><span>${sweep}</span></div>` : ""}
         ${requests ? `<div><span class="detail">Requests</span><span>${requests}</span></div>` : ""}
         <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>

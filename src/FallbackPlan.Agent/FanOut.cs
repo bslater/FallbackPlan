@@ -1757,9 +1757,10 @@ public static class FanOut
         var asked = plan.NewBackup.Select(sample => sample.Key).ToList();
         var step = NewBackupProof.Advance(
             newestSnapshot, previous?.ProvenSnapshot, previous?.ProvingSnapshot, previous?.ProvingCursor,
-            asked, answered.ToHashSet(StringComparer.Ordinal), plan.NewBackupRemaining);
+            asked, answered.ToHashSet(StringComparer.Ordinal), plan.NewBackupRemaining,
+            previous?.ProvingBlobsProven);
         runtime.DestinationSync.RecordNewBackupProof(
-            set.Id, destinationName, step.Proven, step.Proving, step.Cursor, nowMs);
+            set.Id, destinationName, step.Proven, step.Proving, step.Cursor, nowMs, step.BlobsProven, step.BlobsLeft);
         var log = runtime.LoggerFor(typeof(FanOut));
         if (asked.Count > 0)
         {

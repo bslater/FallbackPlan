@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session)
+**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session); FR-VER-003 (amended by [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row names the backup it was last proven through, and a proof under way with how many of the backup's blobs are proven and how many are left)
 **Related:** [ADR-0035](0035-destination-fitness.md) §5 (the sample's rotation, which this sits beside), [ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 2 (a destination is in sync only once it holds the newest backup whole, which is where this proof starts), [ADR-0012](0012-storage-provider-contract.md) Amendment 8 (listings in key order, which the proof's cursor resumes through)
 
 **Built:**
@@ -52,6 +52,8 @@ So at a store swept on no cadence, a blob a new backup sent and the store holds 
 - **A pass brought current from the metadata here** ([ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 1) samples nothing, so proves nothing. The next pass from a whole source proves the backup.
 - **The status** does not say how far a proof under way has got, nor which backup a destination was last proven through.
 
+  > **2026-11: done ([Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got)).**
+
 ## Amendment 1 (2026-11) — a backup is proven at each peer it lands at
 
 The record left a peer as its first "not done": a peer's pass proved the rotation's sample and nothing more of a new backup. A peer is checked one of two ways, and both stood where a local path's sample did.
@@ -75,9 +77,38 @@ The record left a peer as its first "not done": a peer's pass proved the rotatio
   - a backup larger than a pass's share is proven at the peer over the passes after it.
 - `Replication.Tests/VerificationSamplerTests`: the rotation over keys in hand asks about a new backup's blobs in key order after the cursor, up to the share, and leaves the rotation as it was.
 
+## Amendment 2 (2026-11) — the status says how far a backup's proof has got
+
+The record's last "not done" but one: the ledger kept the backup a destination was last proven through and a proof under way, and no surface said either. A first backup of a terabyte is proven over some sixty passes. For all that time nothing a person could read said so, nor when it had ended.
+
+**Decision.** A destination's status row says where its proof of new backups stands (contract 1.91):
+
+- **The backup it was last proven through.** It is named as the snapshot listing names it and dated by when it was taken. A backup the catalogue no longer holds, its retention having let it go, is named by the identity its record key carries, undated.
+- **The backup whose proof is under way.** It is named the same way, with how many of the blobs it needs beyond the backup proven before it are proven and how many are left. Each pass that asks about them counts them, and a newer backup's proof counts from none. A proof begun before the ledger counted is reported as under way, uncounted, until it ends: counted from none, its whole would read short.
+- **Neither.** Where no backup was proven there and none is being proven, the row carries nothing, never a destination proven through nothing.
+
+A proof under way is progress, and every surface says it as progress. The CLI prints a line under the row: "proving the backup of 2026-11-21 09:00: 3 of 10 blobs; proven through the backup of 2026-11-20 14:03". The console draws a "Proven backup" row on the destination's card: "checking the backup of …", with the count and the backup proven before it.
+
+**Kept.** The ledger keeps the two counts beside the proof under way (schema 15), and forgets them once the backup is proven.
+
+**Built:** `Agent/NewBackupProof` counts as it moves the proof on; `Application/DestinationSyncStore` keeps the counts; `Agent/ServiceCommandHandler` names the backups from the catalogue; `Cli/CliApplication` prints the line; the console draws the row:
+
+- `Hosts.Tests/NewBackupProofStatusTests`:
+  - a proof under way is counted in the backup's blobs, one more each pass, the whole the same pass to pass, over as many passes as the count said;
+  - once proven, the row names the backup by the listing's identity and capture time;
+  - a newer backup's proof names both backups and counts only the blobs it added;
+  - a proof under way before the ledger counted stays uncounted through the passes after it;
+  - a backup the catalogue no longer holds is named by its identity, undated, and a destination proven through no backup with none under way reports nothing.
+- `Hosts.Tests/NewBackupProofStepTests`: a resumed proof counts on, a newer one counts from none, and one under way before the ledger counted stays uncounted.
+- `Application.Tests/DestinationSyncStoreTests`: the counts kept and forgotten, and a schema-14 ledger migrating uncounted.
+- `Api.Tests/ContractAdditiveFieldsTests`: contract 1.91's wire names and the pre-1.91 default.
+- `Cli.Tests/StatusNewBackupProofLineTests`: the CLI's line.
+- `Web.DomTests/NewBackupProofDomTests`: the console's row.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built: the pass that finds a local path or a store holding the newest backup whole proves there the blobs it needs that the backup last proven did not, a share of 256 a pass beside the rotation, the pair due while a proof is under way. `Agent/NewBackupProof`; `Replication/VerificationSampler`; `Agent/FanOut`; `Agent/Scheduler`; `Application/DestinationSyncStore`; `Hosts.Tests/NewBackupProofTests` |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): a peer is proven as a local path and a store are, by the challenge its push makes or by the read-back where the set's content is only at the peer; decision 5 and the first "not done" noted. `Replication/VerificationSampler`; `Agent/ReplicationInitiator`; `Agent/FanOut`; `Hosts.Tests/PeerNewBackupProofTests` |
+| 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row says the backup it was last proven through and how far a proof under way has got, in the backup's blobs (contract 1.91, ledger schema 15); the status "not done" noted. `Agent/NewBackupProof`; `Application/DestinationSyncStore`; `Agent/ServiceCommandHandler`; `Cli/CliApplication`; `Hosts.Tests/NewBackupProofStatusTests` |

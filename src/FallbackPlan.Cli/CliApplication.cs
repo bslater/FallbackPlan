@@ -3753,6 +3753,11 @@ public static class CliApplication
                             {
                                 output.WriteLine($"     {archived}");
                             }
+
+                            if (DescribeNewBackupProof(row) is { } proof)
+                            {
+                                output.WriteLine($"     {proof}");
+                            }
                         }
                     }
                 }
@@ -4141,6 +4146,46 @@ public static class CliApplication
             : $"the store holds {key}";
         return $"nothing restores from here: {held} only in an archival tier; rehydrate it there, and keep "
             + "everything but blobs/data/ out of the store's lifecycle rule";
+    }
+
+    /// <summary>
+    /// Where a destination's proof of new backups stands (contract 1.91,
+    /// FR-VER-003, ADR-0199 Amendment 2): the backup it was last proven
+    /// through, and the backup whose proof is under way with how many of its
+    /// blobs are proven of how many it needs. Null where the row reports
+    /// neither, and from a service before 1.91.
+    /// </summary>
+    /// <remarks>
+    /// A line of its own under the row, because the proof answers whether
+    /// each new backup was found whole where it landed, which the row's
+    /// sampled verification does not. A proof under way is said as progress.
+    /// </remarks>
+    internal static string? DescribeNewBackupProof(DestinationStatusDescriptor row)
+    {
+        ThrowHelper.ThrowIfNull(row);
+        if (row.NewBackupProof is not { } proof)
+        {
+            return null;
+        }
+
+        var through = proof.ProvenSnapshotId is { } proven
+            ? $"proven through {BackupName(proven, proof.ProvenCapturedAt)}"
+            : null;
+        if (proof.ProvingSnapshotId is not { } proving)
+        {
+            return through;
+        }
+
+        var progress = proof is { BlobsProven: { } done, BlobsLeft: { } left }
+            ? string.Create(CultureInfo.InvariantCulture, $"{done} of {done + left} blobs")
+            : "under way";
+        return $"proving {BackupName(proving, proof.ProvingCapturedAt)}: {progress}; {through ?? "no backup proven here yet"}";
+
+        static string BackupName(string id, ulong? capturedAt) => capturedAt is { } at
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"the backup of {DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(at, long.MaxValue)):yyyy-MM-dd HH:mm}")
+            : $"backup {id}";
     }
 
     /// <summary>

@@ -881,8 +881,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// A record of files alone carries none of them. Additive: a pre-1.90
     /// service names files alone.
     /// </para>
+    /// <para>
+    /// 1.91 has a destination's status row say where its proof of new
+    /// backups stands (FR-VER-003, ADR-0199 Amendment 2). The row gains
+    /// `new_backup_proof`: `proven_snapshot_id` and `proven_captured_at`, the
+    /// backup it was last proven through; `proving_snapshot_id` and
+    /// `proving_captured_at`, the backup whose proof is under way; and
+    /// `blobs_proven` and `blobs_left`, how far that proof has got in the
+    /// backup's blobs. Null where there is neither. Additive: a pre-1.91
+    /// service says nothing of it.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 90);
+    public static ContractVersion Current { get; } = new(1, 91);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

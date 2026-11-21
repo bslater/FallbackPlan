@@ -730,6 +730,50 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void Open_ASchemaFourteenLedger_Migrates_WithAProofUnderWayCountingNothing()
+    {
+        // Schema 15 (ADR-0199 Amendment 2) added how many of a backup under
+        // proof have been proven and how many are left. An older row with a
+        // proof under way never counted them: the next pass that asks does.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 14, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "proving_snapshot": "snapshots/d/s/newest",
+                  "proving_cursor": "blobs/data/a/x1" } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-14 ledger must migrate, not quarantine");
+        Assert.AreEqual("snapshots/d/s/newest", record.ProvingSnapshot);
+        Assert.IsNull(record.ProvingBlobsProven);
+        Assert.IsNull(record.ProvingBlobsLeft);
+    }
+
+    [TestMethod]
+    public void RecordNewBackupProof_KeepsHowFarAProofUnderWayHasGot_AndForgetsItOnceTheBackupIsProven()
+    {
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordNewBackupProof(
+            SetId, "vault", null, "snapshots/d/s/newest", "blobs/data/a/x1", 1_000, blobsProven: 3, blobsLeft: 9);
+
+        var row = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual(3, row.ProvingBlobsProven);
+        Assert.AreEqual(9, row.ProvingBlobsLeft);
+        var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
+        Assert.Contains("\"proving_blobs_proven\": 3", text, StringComparison.Ordinal);
+        Assert.Contains("\"proving_blobs_left\": 9", text, StringComparison.Ordinal);
+
+        // Counts are kept only beside a proof under way.
+        store.RecordNewBackupProof(SetId, "vault", "snapshots/d/s/newest", null, null, 2_000, blobsProven: 12, blobsLeft: 0);
+        var proven = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.IsNull(proven.ProvingBlobsProven);
+        Assert.IsNull(proven.ProvingBlobsLeft);
+        Assert.DoesNotContain("proving_blobs", File.ReadAllText(Path.Combine(_state, "destinations.json")), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void RecordNewBackupProof_IsKept_AndLeavesTheRestOfTheRowAsItWas()
     {
         var store = DestinationSyncStore.Open(_state);
@@ -858,7 +902,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 15, "destinations": [
+            { "schema_version": 16, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -911,7 +955,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 14", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 15", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);
