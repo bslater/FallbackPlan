@@ -60,6 +60,8 @@ public sealed class PeerNewBackupProofTests : IAsyncDisposable
         Assert.AreEqual(DestinationSyncState.Failed, row.State, row.LastError);
         Assert.Contains(rotted, row.LastError!, StringComparison.Ordinal);
         Assert.IsNull(row.ProvenSnapshot, "a backup with a blob that would not prove was called proven");
+        Assert.AreEqual(rotted, row.ProvingFailedKey, "the challenge's failure did not name the blob of the backup under proof");
+        Assert.Contains($"'{rotted}' belongs to the backup of", row.LastError!, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -93,6 +95,8 @@ public sealed class PeerNewBackupProofTests : IAsyncDisposable
         Assert.AreNotEqual(DestinationSyncState.InSync, row.State, "a pass that met a rotted blob of the backup called the peer in sync");
         Assert.Contains(rotted, row.LastError!, StringComparison.Ordinal);
         Assert.IsNull(row.ProvenSnapshot, "a backup with a blob that would not prove was called proven");
+        Assert.AreEqual(rotted, row.ProvingFailedKey, "the read-back's failure did not name the blob of the backup under proof");
+        Assert.Contains($"'{rotted}' belongs to the backup of", row.LastError!, StringComparison.Ordinal);
     }
 
     [TestMethod]

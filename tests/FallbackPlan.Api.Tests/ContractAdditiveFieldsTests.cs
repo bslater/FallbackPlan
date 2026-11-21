@@ -1198,6 +1198,26 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheBlobThatFailedABackupsProof_WireNameAndPre192Default()
+    {
+        // Contract 1.92 (FR-VER-005, ADR-0199 Amendment 4): the blob of the
+        // backup under proof that did not prove at the last pass that asked.
+        var modern = JsonSerializer.Serialize(
+            new NewBackupProofDescriptor(
+                ProvenSnapshotId: "0a", ProvenCapturedAt: 1_000, ProvingSnapshotId: "0b", ProvingCapturedAt: 2_000,
+                BlobsProven: 3, BlobsLeft: 7, FailedBlob: "blobs/data/a/x"),
+            FrameCodec.SerializerOptions);
+
+        const string Wire = ",\"failed_blob\":\"blobs/data/a/x\"";
+        Assert.Contains(Wire, modern, StringComparison.Ordinal);
+
+        // A pre-1.92 service names none, and the proof reads as under way.
+        var old = modern.Replace(Wire, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<NewBackupProofDescriptor>(old, FrameCodec.SerializerOptions)!.FailedBlob);
+    }
+
+    [TestMethod]
     public void WhatAStoreWasAsked_WireNamesAndPre169Default()
     {
         // Contract 1.69 (FR-DEST-019, ADR-0111): a cloud destination's row

@@ -59,6 +59,23 @@ public sealed class NewBackupProofDomTests
     }
 
     [TestMethod]
+    public async Task AFailedProof_IsDrawnAsAFailure_NamingTheBlob_BesideWhatStillStands()
+    {
+        await using var harness = await StartAsync(new NewBackupProofDescriptor(
+            Earlier, NowMs - 86_400_000, ProvingSnapshotId: Newest, ProvingCapturedAt: NowMs - 3_600_000,
+            BlobsProven: 3, BlobsLeft: 7, FailedBlob: "blobs/data/ab/cd"));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenAsync(context, harness);
+
+        var vault = page.Locator("details.dest[data-dest=\"docs|vault\"]");
+        await vault.Locator("> summary").ClickAsync();
+        await Expect(vault.Locator("b.bad", new() { HasText = "failed its check" })).ToBeVisibleAsync();
+        await Expect(vault.GetByText("blobs/data/ab/cd did not prove", new() { Exact = false })).ToBeVisibleAsync();
+        await Expect(vault.GetByText("proven before it", new() { Exact = false })).ToBeVisibleAsync();
+        await Expect(vault.GetByText("checking the backup of", new() { Exact = false })).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
     public async Task AFirstProofUnderWay_SaysNoBackupIsProvenThereYet()
     {
         await using var harness = await StartAsync(new NewBackupProofDescriptor(
