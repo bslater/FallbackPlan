@@ -23,7 +23,13 @@ internal static class NewBackupProof
     /// <param name="Proven">The newest backup proven there whole.</param>
     /// <param name="Proving">The backup whose proof is under way, or null.</param>
     /// <param name="Cursor">The last of its blobs proven with none before it unproven, or null.</param>
-    internal sealed record Step(string? Proven, string? Proving, string? Cursor);
+    /// <param name="BlobsProven">
+    /// Of the blobs <paramref name="Proving"/> needs, how many are proven;
+    /// null with no proof under way, and for one under way before the ledger
+    /// counted, until it ends.
+    /// </param>
+    /// <param name="BlobsLeft">Of them, how many are left to prove; null with <paramref name="BlobsProven"/>.</param>
+    internal sealed record Step(string? Proven, string? Proving, string? Cursor, int? BlobsProven = null, int? BlobsLeft = null);
 
     /// <summary>
     /// What the pass asks about: the blobs <paramref name="newest"/> needs
@@ -86,25 +92,36 @@ internal static class NewBackupProof
     /// <param name="asked">The blobs the pass asked about, in key order.</param>
     /// <param name="answered">Those proven, or held only archived.</param>
     /// <param name="remaining">The backup's blobs left after those asked.</param>
+    /// <param name="blobsProven">
+    /// Of the blobs <paramref name="proving"/> needs, how many were proven
+    /// before the pass; null where that proof was never counted.
+    /// </param>
     /// <returns>The proof's new standing.</returns>
     public static Step Advance(
         string newest, string? proven, string? proving, string? cursor,
-        IReadOnlyList<string> asked, IReadOnlySet<string> answered, int remaining)
+        IReadOnlyList<string> asked, IReadOnlySet<string> answered, int remaining, int? blobsProven = 0)
     {
         // A cursor is a place among one backup's blobs: a newer backup's may
-        // sort before it, so its proof starts at its own first blob.
-        var resumed = string.Equals(proving, newest, StringComparison.Ordinal) ? cursor : null;
-        foreach (var key in asked)
+        // sort before it, so its proof starts at its own first blob, and
+        // counts from none. A proof begun before the ledger counted stays
+        // uncounted: counted from none, its whole would read short.
+        var same = string.Equals(proving, newest, StringComparison.Ordinal);
+        var resumed = same ? cursor : null;
+        var counted = same ? blobsProven : 0;
+        for (var index = 0; index < asked.Count; index++)
         {
-            if (!answered.Contains(key))
+            if (!answered.Contains(asked[index]))
             {
-                return new Step(proven, newest, resumed);
+                return new Step(proven, newest, resumed, counted, counted is null ? null : asked.Count - index + remaining);
             }
 
-            resumed = key;
+            resumed = asked[index];
+            counted++;
         }
 
-        return remaining == 0 ? new Step(newest, null, null) : new Step(proven, newest, resumed);
+        return remaining == 0
+            ? new Step(newest, null, null)
+            : new Step(proven, newest, resumed, counted, counted is null ? null : remaining);
     }
 
     /// <summary>

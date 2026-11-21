@@ -188,6 +188,22 @@ public sealed record DestinationSyncRecord
     public string? ProvingCursor { get; init; }
 
     /// <summary>
+    /// Of the blobs <see cref="ProvingSnapshot"/> needs beyond the backup
+    /// proven before it, how many are proven; null when no proof is under
+    /// way, and on a row a pass has not counted (schema 15,
+    /// [ADR-0199](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md)
+    /// Amendment 2).
+    /// </summary>
+    [JsonPropertyName("proving_blobs_proven")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ProvingBlobsProven { get; init; }
+
+    /// <summary>Of those blobs, how many are left to prove; null with <see cref="ProvingBlobsProven"/>.</summary>
+    [JsonPropertyName("proving_blobs_left")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ProvingBlobsLeft { get; init; }
+
+    /// <summary>
     /// Where the deep sweep resumes — the last blob key it read, or null to
     /// start from the beginning of the key space.
     /// </summary>
@@ -610,7 +626,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 14;
+    private const int CurrentSchemaVersion = 15;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -757,6 +773,8 @@ public sealed class DestinationSyncStore
         // apart: the next sync looks. Schema 14 added the backup a destination
         // was last proven through and a proof under way, none on an older row,
         // which proved no backup whole: the next pass proves the newest.
+        // Schema 15 added how far a proof under way has got, none on an older
+        // row, which counted nothing: the next pass that asks counts it.
         // Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
@@ -1286,14 +1304,19 @@ public sealed class DestinationSyncStore
     /// <param name="proving">The backup whose proof is under way, or null.</param>
     /// <param name="cursor">Where that proof resumes, or null to start at its first blob.</param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <param name="blobsProven">Of the blobs <paramref name="proving"/> needs, how many are proven; kept only with it.</param>
+    /// <param name="blobsLeft">Of them, how many are left; kept only with it.</param>
     /// <returns>The row.</returns>
     public DestinationSyncRecord RecordNewBackupProof(
-        string setId, string destination, string? proven, string? proving, string? cursor, ulong nowUnixMilliseconds) =>
+        string setId, string destination, string? proven, string? proving, string? cursor, ulong nowUnixMilliseconds,
+        int? blobsProven = null, int? blobsLeft = null) =>
         Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             ProvenSnapshot = proven,
             ProvingSnapshot = proving,
             ProvingCursor = cursor,
+            ProvingBlobsProven = proving is null ? null : blobsProven,
+            ProvingBlobsLeft = proving is null ? null : blobsLeft,
         });
 
     /// <summary>

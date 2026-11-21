@@ -1368,6 +1368,13 @@ public sealed record DrillResult(IReadOnlyList<string> Lines, int Failed, int No
 /// When <paramref name="ArchivedMetadata"/> was first found so, Unix
 /// milliseconds; null with it.
 /// </param>
+/// <param name="NewBackupProof">
+/// Where the destination's proof of new backups stands (contract 1.91,
+/// ADR-0199 Amendment 2): the backup it was last proven through, and the
+/// backup whose proof is under way with how far it has got. Null where it
+/// has neither, and from services before 1.91. Null is not "proven through
+/// nothing": a client draws nothing for it.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -1397,7 +1404,44 @@ public sealed record DestinationStatusDescriptor(
     bool Syncing = false,
     StoreRequestsDescriptor? Requests = null,
     string? ArchivedMetadata = null,
-    ulong? ArchivedMetadataSince = null);
+    ulong? ArchivedMetadataSince = null,
+    NewBackupProofDescriptor? NewBackupProof = null);
+
+/// <summary>
+/// Where a destination's proof of new backups stands, as its status row
+/// reports it (contract 1.91, FR-VER-003, ADR-0199 Amendment 2): every blob a
+/// backup needs that the backup proven there before it did not, proven where
+/// it sits, a share a pass.
+/// </summary>
+/// <remarks>
+/// A backup is named as the snapshot listing names it, and dated by when it
+/// was taken. The counts are of the blobs the backup under proof needs beyond
+/// the backup proven before it, as the last pass that asked about them
+/// counted them: progress, which a client never renders as proof of the
+/// backup.
+/// </remarks>
+/// <param name="ProvenSnapshotId">
+/// The newest backup proven whole at the destination, hex; null when none
+/// has been.
+/// </param>
+/// <param name="ProvenCapturedAt">
+/// When that backup was taken, Unix milliseconds; null with it, and when the
+/// service no longer holds it, its retention having let it go.
+/// </param>
+/// <param name="ProvingSnapshotId">The backup whose proof is under way, hex; null when none is.</param>
+/// <param name="ProvingCapturedAt">When that backup was taken, Unix milliseconds; null with it.</param>
+/// <param name="BlobsProven">
+/// Of the blobs that backup needs, how many are proven; null when no proof
+/// is under way, and when the pass that last asked did not count them.
+/// </param>
+/// <param name="BlobsLeft">Of them, how many are left to prove; null with <paramref name="BlobsProven"/>.</param>
+public sealed record NewBackupProofDescriptor(
+    string? ProvenSnapshotId,
+    ulong? ProvenCapturedAt,
+    string? ProvingSnapshotId = null,
+    ulong? ProvingCapturedAt = null,
+    int? BlobsProven = null,
+    int? BlobsLeft = null);
 
 /// <summary>
 /// What a cloud destination's store was asked, as its status row reports it

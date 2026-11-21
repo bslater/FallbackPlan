@@ -65,6 +65,17 @@ public sealed class NewBackupProofStepTests
     }
 
     [TestMethod]
+    public void AProofUnderWayBeforeItWasCounted_StaysUncounted_RatherThanCountingFromNone()
+    {
+        // A ledger from before the counts kept a proof under way with none:
+        // counted from nothing, its whole would read short until it ended.
+        var step = NewBackupProof.Advance(
+            Newest, Older, proving: Newest, cursor: "blobs/data/a/x0", Asked, Answered(Asked), remaining: 2, blobsProven: null);
+
+        Assert.AreEqual(new NewBackupProof.Step(Older, Newest, "blobs/meta/b/x3", BlobsProven: null, BlobsLeft: null), step);
+    }
+
+    [TestMethod]
     public void ANewerBackup_StartsItsOwnProofFromTheBeginning()
     {
         // The cursor was a place in another backup's blobs; this one's may
