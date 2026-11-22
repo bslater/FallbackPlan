@@ -351,6 +351,108 @@ public sealed class RestoreWizardDomTests
     }
 
     [TestMethod]
+    public async Task Wizard_APlanWarningItsBackupIsNotProven_OffersTheNewestProvenThere_WithTheSameFilesTicked()
+    {
+        // ADR-0199 Amendment 7: the plan names the newest backup proven at
+        // the destination; one action chooses it, back at the files with
+        // what was ticked still ticked, and the plan made next is of it.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var earlier = now - 86_400_000;
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            OpenRestoreSourceCommand => new RestoreSourceOpenedResult(
+                "src-1", "docs", "vault", [Wire.Snapshot(earlier, id: "snap-0"), Wire.Snapshot(now)], []),
+            PlanRestoreCommand { SnapshotId: "snap-1" } => new RestorePlanResult(1, 42, [], WriteBytes: 42,
+                NotProvenAt: new NotProvenAtDescriptor(
+                    "vault",
+                    new NewBackupProofDescriptor(
+                        "snap-0", earlier, ProvingSnapshotId: "snap-1", ProvingCapturedAt: now, BlobsProven: 3, BlobsLeft: 7))),
+            PlanRestoreCommand => new RestorePlanResult(1, 42, [], WriteBytes: 42),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        var offer = page.Locator("#rst-not-proven [data-action=\"rst-use-proven\"]");
+        await Expect(offer).ToContainTextAsync("Choose the backup of");
+        await offer.ClickAsync();
+
+        await Expect(page.Locator("#rst-proven-chosen")).ToContainTextAsync("the newest backup proven at vault");
+        await Expect(page.Locator("input[data-rst-mark=\"notes.txt\"]")).ToBeCheckedAsync();
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+
+        var planned = await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.SnapshotId == "snap-0");
+        CollectionAssert.AreEqual(new[] { "notes.txt" }, planned.Paths?.ToArray(), "the files chosen were not the files planned");
+        await Expect(page.Locator(".plan-figures")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-not-proven")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task Wizard_APlanWarningItsBackupIsNotProven_OffersNothing_WhereTheSourceDoesNotHoldTheProvenOne()
+    {
+        // A proven backup the source no longer holds cannot be chosen from
+        // it, so the warning stands alone.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(1, 42, [], WriteBytes: 42,
+                NotProvenAt: new NotProvenAtDescriptor(
+                    "vault",
+                    new NewBackupProofDescriptor(
+                        "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a", null,
+                        ProvingSnapshotId: "snap-1", ProvingCapturedAt: now, BlobsProven: 3, BlobsLeft: 7)))
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        await Expect(page.Locator("#rst-not-proven")).ToContainTextAsync("This backup is not proven at vault");
+        await Expect(page.Locator("[data-action=\"rst-use-proven\"]")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task Wizard_AResumesPlanWarningItsBackupIsNotProven_OffersNoOtherBackup()
+    {
+        // A resume restores what its run began, from the backup it began
+        // with: the warning is said, and no other backup is offered.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var earlier = now - 86_400_000;
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        var notProven = new NotProvenAtDescriptor(
+            "vault",
+            new NewBackupProofDescriptor(
+                "snap-0", earlier, ProvingSnapshotId: "snap-1", ProvingCapturedAt: now, BlobsProven: 3, BlobsLeft: 7));
+        harness.Clients.Client.Respond = command => command switch
+        {
+            OpenRestoreSourceCommand => new RestoreSourceOpenedResult(
+                "src-1", "docs", "vault", [Wire.Snapshot(earlier, id: "snap-0"), Wire.Snapshot(now)], []),
+            RunRestoreCommand { Resume: null } => new ApiRestoreResult(
+                0, 1, "/restore/out", "failed", ReceiptPath: "/state/receipts/0123456789abcdef.json", Run: "0123456789abcdef"),
+            PlanResumeRestoreCommand => new RestorePlanResult(1, 5, [], WriteBytes: 5, Landed: 0, NotProvenAt: notProven),
+            PlanRestoreCommand => new RestorePlanResult(1, 42, [], WriteBytes: 42),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+        await page.Locator("#rst-resume").ClickAsync();
+
+        await Expect(page.Locator("#rst-not-proven")).ToContainTextAsync("This backup is not proven at vault");
+        await Expect(page.Locator("[data-action=\"rst-use-proven\"]")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
     public async Task Wizard_ARunThatRestoredTheVersionBackedUpBefore_SaysHowManyAndWhich()
     {
         // FR-RST-004, ADR-0194 Amendment 1: what the plan said before the run,
