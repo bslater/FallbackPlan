@@ -218,6 +218,11 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, DirectGateway_CatalogueKnowsNothingUnderSnapshot, arg0);
 
     /// <summary>
+    /// --from reads a destination's copy through the service, which opens it under the grant the passphrase derives; in direct mode nothing opens it. Run the restore through the service, or point --repo at that copy itself.
+    /// </summary>
+    internal static string DirectGateway_FromNeedsTheService => Get(nameof(DirectGateway_FromNeedsTheService));
+
+    /// <summary>
     /// {0} Nothing was written. Free some space or choose another folder, or pass --ignore-free-space to restore anyway: a volume that compresses what it stores can hold more than this estimate.
     /// </summary>
     private static string DirectGateway_RestoreWouldNotFit => Get(nameof(DirectGateway_RestoreWouldNotFit));

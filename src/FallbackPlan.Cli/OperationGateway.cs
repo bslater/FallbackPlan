@@ -296,6 +296,12 @@ public interface IOperationGateway : IAsyncDisposable
 /// than it was (FR-RST-003, ADR-0178 Amendment 1). Such a restore is
 /// otherwise refused before anything is written.
 /// </param>
+/// <param name="From">
+/// The destination whose copy the run and its plan read through the service,
+/// as the console's source step opens it (FR-RST-001, ADR-0199 Amendment 9);
+/// null reads the set's own archive. Refused in direct mode, which opens no
+/// source.
+/// </param>
 public sealed record RestoreRequest(
     string SnapshotId,
     string? Path,
@@ -309,7 +315,8 @@ public sealed record RestoreRequest(
     string? Target = null,
     string? Existing = null,
     bool InPlace = false,
-    bool AcknowledgeWiderAccess = false)
+    bool AcknowledgeWiderAccess = false,
+    string? From = null)
 {
     /// <summary>Whether the run lands each file where it was captured.</summary>
     public bool ToOriginal => string.Equals(Target, "original", StringComparison.Ordinal);
@@ -716,7 +723,7 @@ internal sealed class ServiceGateway(
         // restore names the backup's files (FR-WOR-007): it reads through a
         // source opened under a grant derived here, where the passphrase is.
         var source = (await GrantedSources.OpenHoldingAsync(
-            client, passphraseEnvironmentVariable, "A restore", request.SnapshotId, cancellationToken)
+            client, passphraseEnvironmentVariable, "A restore", request.SnapshotId, request.From, cancellationToken)
             .ConfigureAwait(false)).SourceId;
         try
         {
@@ -764,7 +771,7 @@ internal sealed class ServiceGateway(
             ?? throw new CliFailureException(Strings.FormatServiceGateway_NoSuchRestoreRun(run));
 
         var source = (await GrantedSources.OpenHoldingAsync(
-            client, passphraseEnvironmentVariable, "A restore", named.SnapshotId, cancellationToken)
+            client, passphraseEnvironmentVariable, "A restore", named.SnapshotId, destination: null, cancellationToken)
             .ConfigureAwait(false)).SourceId;
         try
         {
@@ -792,7 +799,7 @@ internal sealed class ServiceGateway(
             ?? throw new CliFailureException(Strings.FormatServiceGateway_NoSuchRestoreRun(run));
 
         var source = (await GrantedSources.OpenHoldingAsync(
-            client, passphraseEnvironmentVariable, "A restore's plan", named.SnapshotId, cancellationToken)
+            client, passphraseEnvironmentVariable, "A restore's plan", named.SnapshotId, destination: null, cancellationToken)
             .ConfigureAwait(false)).SourceId;
         try
         {
@@ -938,7 +945,7 @@ internal sealed class ServiceGateway(
         // through a source the passphrase unlocked (FR-WOR-007), and asks for
         // the shape the restore above runs: where it writes, under quarantine.
         var source = (await GrantedSources.OpenHoldingAsync(
-            client, passphraseEnvironmentVariable, "A restore's plan", request.SnapshotId, cancellationToken)
+            client, passphraseEnvironmentVariable, "A restore's plan", request.SnapshotId, request.From, cancellationToken)
             .ConfigureAwait(false)).SourceId;
         try
         {
@@ -1687,6 +1694,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
     public async ValueTask<OperationReport> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(request);
+        RefuseFrom(request);
 
         // In direct mode a run lands in place, so there is no run to name.
         if (request.ResumedRun is not null)
@@ -1913,10 +1921,24 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
         return new OperationReport(receipt.Outcome is RestoreOutcome.Complete, lines);
     }
 
+    /// <summary>
+    /// Refuses <c>--from</c> before anything is read: a destination's copy is
+    /// opened only through the service, under the grant the passphrase derives
+    /// (ADR-0199 Amendment 9), and direct mode opens no source.
+    /// </summary>
+    private static void RefuseFrom(RestoreRequest request)
+    {
+        if (request.From is not null)
+        {
+            throw new CliFailureException(Strings.DirectGateway_FromNeedsTheService);
+        }
+    }
+
     /// <inheritdoc/>
     public async ValueTask<OperationReport> PlanRestoreAsync(RestoreRequest request, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(request);
+        RefuseFrom(request);
 
         // The plan the service makes, made here for the run above: its
         // manifests read and every blob it names asked for, measured where

@@ -49,22 +49,32 @@ internal static class GrantedSources
     /// <param name="passphraseEnvironmentVariable">The variable naming the passphrase; null when none was named.</param>
     /// <param name="what">What was asked, as a sentence's subject, for the refusals.</param>
     /// <param name="snapshotId">The snapshot, hex.</param>
+    /// <param name="destination">
+    /// The destination whose copy to open, as the console's source step opens
+    /// it (ADR-0199 Amendment 9); null opens each set's own archive.
+    /// </param>
     /// <param name="cancellationToken">Cancels the open.</param>
     /// <returns>The opened source.</returns>
-    /// <exception cref="CliFailureException">No passphrase named, it opens no set, or no set holds the snapshot.</exception>
+    /// <exception cref="CliFailureException">
+    /// No passphrase named, it opens no set, the service refuses the
+    /// destination, or no copy holds the snapshot.
+    /// </exception>
     public static async ValueTask<RestoreSourceOpenedResult> OpenHoldingAsync(
         IFallbackPlanClient client,
         string? passphraseEnvironmentVariable,
         string what,
         string snapshotId,
+        string? destination,
         CancellationToken cancellationToken)
     {
         var opened = await OpenFirstAsync(
             client, passphraseEnvironmentVariable, what, _ => true,
             source => source.Snapshots.Any(
                 candidate => string.Equals(candidate.SnapshotId, snapshotId, StringComparison.OrdinalIgnoreCase)),
-            cancellationToken).ConfigureAwait(false);
-        return opened ?? throw new CliFailureException($"no configured set's archive holds snapshot '{snapshotId}'.");
+            cancellationToken, destination).ConfigureAwait(false);
+        return opened ?? throw new CliFailureException(destination is null
+            ? $"no configured set's archive holds snapshot '{snapshotId}'."
+            : $"destination '{destination}' holds no snapshot '{snapshotId}' of a set the passphrase opens.");
     }
 
     /// <summary>Closes a source, best effort: the service's idle sweep reclaims one this never reaches.</summary>
@@ -88,7 +98,8 @@ internal static class GrantedSources
         string what,
         Func<BackupSetDescriptor, bool> wanted,
         Func<RestoreSourceOpenedResult, bool> fits,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? destination = null)
     {
         if (passphraseEnvironmentVariable is null)
         {
@@ -144,9 +155,18 @@ internal static class GrantedSources
             }
 
             openedAny = true;
-            if (await client.ExecuteAsync(
-                    new OpenRestoreSourceCommand(set.Name, Envelope: derived.Grant), cancellationToken).ConfigureAwait(false)
-                is not RestoreSourceOpenedResult opened)
+            var answer = await client.ExecuteAsync(
+                new OpenRestoreSourceCommand(set.Name, destination, Envelope: derived.Grant), cancellationToken)
+                .ConfigureAwait(false);
+
+            // A destination named and refused is the person's to hear in the
+            // service's words, not a set passed over in silence.
+            if (destination is not null && answer is ServiceError refused)
+            {
+                throw new CliFailureException($"{what} from '{destination}': {refused.Message}");
+            }
+
+            if (answer is not RestoreSourceOpenedResult opened)
             {
                 continue;
             }

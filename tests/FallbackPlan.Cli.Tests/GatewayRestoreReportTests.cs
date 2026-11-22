@@ -217,11 +217,11 @@ public sealed class GatewayRestoreReportTests
 
         Assert.AreEqual("vault", Assert.ContainsSingle(client.Received.OfType<OpenRestoreSourceCommand>()).DestinationName);
         Assert.IsTrue(report.Ok, "a backup not yet proven where it is read holds nothing back: " + string.Join(" | ", report.Lines));
-        var line = Assert.ContainsSingle(report.Lines, line => line.StartsWith("not proven:", StringComparison.Ordinal));
+        var line = Assert.ContainsSingle(report.Lines.Where(line => line.StartsWith("not proven:", StringComparison.Ordinal)));
         Assert.Contains("this backup is not proven at vault", line, StringComparison.Ordinal);
         Assert.Contains("its check there has proven 3 of 10 blobs", line, StringComparison.Ordinal);
         Assert.Contains("the newest backup proven there is the backup of 2025-11-20", line, StringComparison.Ordinal);
-        var hint = Assert.ContainsSingle(report.Lines, line => line.StartsWith("proven there:", StringComparison.Ordinal));
+        var hint = Assert.ContainsSingle(report.Lines.Where(line => line.StartsWith("proven there:", StringComparison.Ordinal)));
         Assert.Contains($"restore {ProvenId}", hint, StringComparison.Ordinal);
         Assert.Contains("--from vault", hint, StringComparison.Ordinal);
     }
@@ -243,7 +243,7 @@ public sealed class GatewayRestoreReportTests
             (gateway, token) => gateway.PlanRestoreAsync(new RestoreRequest(SnapshotId, null, "/out", From: "vault"), token),
             timeout.Token);
 
-        var line = Assert.ContainsSingle(report.Lines, line => line.StartsWith("not proven:", StringComparison.Ordinal));
+        var line = Assert.ContainsSingle(report.Lines.Where(line => line.StartsWith("not proven:", StringComparison.Ordinal)));
         Assert.Contains("no check of it there has finished", line, StringComparison.Ordinal);
         Assert.Contains("no backup is proven there yet", line, StringComparison.Ordinal);
         Assert.DoesNotContain("3 of 10", line, StringComparison.Ordinal);

@@ -97,6 +97,21 @@ internal static class RestorePlanReport
             lines.AddRange(earlier.Select(version => $"  {version.Path} — {version.Detail}"));
         }
 
+        // Read through a destination where the backup is not proven
+        // (ADR-0199 Amendments 6 and 9): said, and the backup proven there
+        // named for a run of it, holding nothing back.
+        if (plan.NotProvenAt is { } notProven)
+        {
+            lines.Add(NotProven(notProven, request.SnapshotId));
+            if (notProven.Proof?.ProvenSnapshotId is { } provenId
+                && !string.Equals(provenId, request.SnapshotId, StringComparison.OrdinalIgnoreCase))
+            {
+                lines.Add(
+                    $"proven there: to restore the newest backup proven at {notProven.Destination} instead, run "
+                    + $"restore {provenId} with the same paths and --from {notProven.Destination}");
+            }
+        }
+
         if (plan.Conflicts > 0)
         {
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"conflicts: {plan.Conflicts}"));
@@ -182,4 +197,33 @@ internal static class RestorePlanReport
                 "nothing was restored: the plan has changed since it was kept; plan the restore again",
             ]);
     }
+
+    /// <summary>
+    /// The plan's line for a backup not proven where it is read (contract
+    /// 1.93): its own check counted only when the check under way is this
+    /// backup's, and the newest backup proven there.
+    /// </summary>
+    /// <param name="notProven">What the service said.</param>
+    /// <param name="planned">The snapshot the plan restores, hex.</param>
+    internal static string NotProven(NotProvenAtDescriptor notProven, string planned)
+    {
+        ArgumentNullException.ThrowIfNull(notProven);
+        var proof = notProven.Proof;
+        var own = proof?.ProvingSnapshotId is { } proving && string.Equals(proving, planned, StringComparison.OrdinalIgnoreCase);
+        var check = !own
+            ? "no check of it there has finished"
+            : proof switch
+            {
+                { FailedBlob: { } failed } => $"its check there failed at {failed}",
+                { BlobsProven: { } done, BlobsLeft: { } left } => string.Create(
+                    CultureInfo.InvariantCulture, $"its check there has proven {done} of {done + left} blobs"),
+                _ => "its check there is under way",
+            };
+        var standing = proof?.ProvenSnapshotId is { } proven
+            ? $"the newest backup proven there is {CliApplication.BackupName(proven, proof.ProvenCapturedAt)}"
+            : "no backup is proven there yet";
+        return $"not proven: this backup is not proven at {notProven.Destination}: {check}; {standing} — "
+            + "the restore still checks each file as it writes it";
+    }
+
 }

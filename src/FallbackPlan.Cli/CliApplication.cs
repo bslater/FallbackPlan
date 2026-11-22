@@ -1534,7 +1534,8 @@ public static class CliApplication
                     var result = await WithServiceAsync(parse, async client =>
                     {
                         var source = await GrantedSources.OpenHoldingAsync(
-                            client, parse.GetValue(passphraseEnvOption), "Listing a snapshot", snapshot, cancellationToken)
+                            client, parse.GetValue(passphraseEnvOption), "Listing a snapshot", snapshot, destination: null,
+                            cancellationToken)
                             .ConfigureAwait(false);
                         try
                         {
@@ -1677,6 +1678,12 @@ public static class CliApplication
                 Description = "Restore only as the plan kept in this file says: the run it was kept for, and only while "
                     + "planning it again says what the kept plan said. Otherwise nothing is restored, and what changed is said.",
             };
+            var fromOption = new Option<string>("--from")
+            {
+                Description = "Read the backup from this destination's copy rather than the set's own archive, as the "
+                    + "console's source step does; through the service only. The plan says when the backup is not yet "
+                    + "proven there.",
+            };
             var command = WithRemoteCapableSession(new Command(
                 "restore", "Restore a snapshot (or a path within it), each file verified per segment and by whole-file hash."));
             command.Arguments.Add(snapshotArgument);
@@ -1691,6 +1698,7 @@ public static class CliApplication
             command.Options.Add(exportOption);
             command.Options.Add(resumeOption);
             command.Options.Add(asPlannedOption);
+            command.Options.Add(fromOption);
             command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() =>
@@ -1741,7 +1749,8 @@ public static class CliApplication
                     Target: target,
                     Existing: parse.GetValue(existingOption),
                     InPlace: parse.GetValue(inPlaceOption),
-                    AcknowledgeWiderAccess: parse.GetValue(acknowledgeWiderAccessOption));
+                    AcknowledgeWiderAccess: parse.GetValue(acknowledgeWiderAccessOption),
+                    From: parse.GetValue(fromOption));
 
                 // A kept plan is read and held to the run asked before
                 // anything is asked of the repository or the service.
@@ -4192,12 +4201,19 @@ public static class CliApplication
             : "under way";
         return $"proving {BackupName(proving, proof.ProvingCapturedAt)}: {progress}; {through ?? "no backup proven here yet"}";
 
-        static string BackupName(string id, ulong? capturedAt) => capturedAt is { } at
-            ? string.Create(
-                CultureInfo.InvariantCulture,
-                $"the backup of {DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(at, long.MaxValue)):yyyy-MM-dd HH:mm}")
-            : $"backup {id}";
     }
+
+    /// <summary>
+    /// A backup as the proof's lines name it: by when it was taken, to the
+    /// minute, or by its identity where the service could not date it.
+    /// </summary>
+    /// <param name="id">The backup's identity, hex.</param>
+    /// <param name="capturedAt">When it was taken, Unix milliseconds, where known.</param>
+    internal static string BackupName(string id, ulong? capturedAt) => capturedAt is { } at
+        ? string.Create(
+            CultureInfo.InvariantCulture,
+            $"the backup of {DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(at, long.MaxValue)):yyyy-MM-dd HH:mm}")
+        : $"backup {id}";
 
     /// <summary>
     /// A staging set's sweep of its own staging archive (contract 1.63,
