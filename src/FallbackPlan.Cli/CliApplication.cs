@@ -1862,8 +1862,9 @@ public static class CliApplication
                 var from = parse.GetValue(resumeFromOption);
 
                 // A list of runs and a letting go read no backup, so there is
-                // nowhere for them to read it from.
-                if (from is not null && (run is null || forget || forgetAll))
+                // nowhere for them to read it from. Letting every run go names
+                // none, so no run named covers it.
+                if (from is not null && (run is null || forget))
                 {
                     throw new CliFailureException(Strings.CliApplication_FromReadsAResume);
                 }
