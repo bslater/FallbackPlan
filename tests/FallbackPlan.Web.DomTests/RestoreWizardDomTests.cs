@@ -37,7 +37,9 @@ namespace FallbackPlan.Web.DomTests;
 /// folders the run would make is asked of alike (ADR-0178 Amendment 5).
 /// The result says how many files were restored as the version backed up
 /// before, and which and why, as the plan said they would be (FR-RST-004,
-/// ADR-0194 Amendment 1).
+/// ADR-0194 Amendment 1). A plan read where its backup is not proven says so
+/// (FR-RST-003, ADR-0199 Amendment 6), and offers the newest backup proven
+/// there in its place, never on a resume (ADR-0199 Amendment 7).
 /// </summary>
 [TestClass]
 [BrowserCondition]

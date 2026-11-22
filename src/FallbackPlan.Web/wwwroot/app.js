@@ -6292,6 +6292,7 @@ function openRestoreWizard(prefill) {
     source: null,             // RestoreSourceOpenedResult
     date: new Date().toISOString().slice(0, 10),
     snapshot: null,           // the resolved SnapshotDescriptor
+    provenAt: null,           // the destination the snapshot was chosen as proven at (ADR-0199 Amendment 7)
     tree: new Map(),          // snapshot path ("" = root) -> DirectoryResult|null, plus open flags
     open: new Set([""]),
     marks: new Map(),         // snapshot path -> "on"|"off"; unmarked inherit, default off
@@ -6430,6 +6431,8 @@ function rstStep4() {
   return `
     <p class="dlg-sub">Tick the files and folders to restore from the backup of
     <b>${esc(fmtWhen(W.snapshot.capturedAt))}</b>.</p>
+    ${W.provenAt ? `<p class="subtle" id="rst-proven-chosen">This is the newest backup proven at
+      ${esc(W.provenAt)}; what was ticked is ticked here where this backup holds it.</p>` : ""}
     <div id="rst-tree" class="tree">${rstRenderDir("", 0)}</div>
     <div id="rst-summary" class="subtle">${rstSummary()}</div>
     ${rstNav()}`;
@@ -6688,7 +6691,7 @@ function rstStep6() {
   // until there is one (FR-RST-003) — and the plan's arrival re-renders this
   // step, which would throw away a word typed while it was on its way.
   const plan = W.plan;
-  const figures = plan ? rstPlanDetails(plan, 'data-arms="confirm-word"', W.snapshot?.snapshotId)
+  const figures = plan ? rstPlanDetails(plan, 'data-arms="confirm-word"', W.snapshot?.snapshotId, true)
     : W.planFailed
       ? `<p class="subtle">No plan could be made, so there is nothing to confirm. Go back and continue to plan again.</p>`
       : `<p class="subtle">Planning…</p>`;
@@ -6778,9 +6781,12 @@ function rstAcknowledged() {
  * needs, and what will not come back. A volume short of room arms the run only
  * when the person chooses to go on; `arming` is how its checkbox says so. A
  * resume's plan says how many files its run already landed (ADR-0120).
- * `planned` is the snapshot the plan restores, where the wizard knows it.
+ * `planned` is the snapshot the plan restores, where the wizard knows it;
+ * `offerProven` lets a plan not proven where it reads offer the backup that
+ * is (ADR-0199 Amendment 7), which only a fresh plan may: a resume restores
+ * what its run began, from the backup it began with.
  */
-function rstPlanDetails(plan, arming, planned) {
+function rstPlanDetails(plan, arming, planned, offerProven = false) {
   const space = plan.space ?? [];
   return `
     <div class="plan-figures">
@@ -6811,7 +6817,7 @@ function rstPlanDetails(plan, arming, planned) {
       will be restored as the version backed up before: when the backup ran, their cloud provider did not deliver
       the one on the device. They restore; what they restore is older.</li></ul>
       <pre class="report">${esc(plan.earlierVersions.slice(0, 20).map(version => `${version.path} — ${version.detail}`).join("\n"))}</pre></div>` : ""}
-    ${plan.notProvenAt ? rstNotProven(plan.notProvenAt, planned) : ""}
+    ${plan.notProvenAt ? rstNotProven(plan.notProvenAt, planned, offerProven) : ""}
     ${plan.conflictSample?.length ? `<pre class="report">${esc(plan.conflictSample.join("\n"))}</pre>` : ""}
     ${plan.degradations?.length ? `<p class="subtle">${plan.degradations.map(esc).join("<br>")}</p>` : ""}`;
 }
@@ -6823,7 +6829,7 @@ function rstPlanDetails(plan, arming, planned) {
  * backup's only when it is; where the wizard does not know which backup it
  * planned, the backup under check is named instead, never counted as this one.
  */
-function rstNotProven(notProven, planned) {
+function rstNotProven(notProven, planned, offerProven) {
   const p = notProven.proof ?? {};
   const name = (id, at) => at == null ? `backup ${id}` : `the backup of ${fmtWhen(at)}`;
   const counted = p.blobsProven == null || p.blobsLeft == null
@@ -6842,8 +6848,14 @@ function rstNotProven(notProven, planned) {
   const standing = p.provenSnapshotId == null
     ? "no backup is proven there yet"
     : `the newest backup proven there is ${name(p.provenSnapshotId, p.provenCapturedAt)}`;
+  // The newest backup proven there, offered where the source holds it: one
+  // the source does not hold cannot be chosen from it.
+  const offer = offerProven && p.provenSnapshotId != null && p.provenSnapshotId !== planned
+    && W.source?.snapshots?.some(row => row.snapshotId === p.provenSnapshotId);
   return `<div id="rst-not-proven"><ul class="warnings"><li>This backup is not proven at ${esc(notProven.destination)}:
-    ${esc(check)}; ${esc(standing)}. It restores as any backup does, each file checked as it is written.</li></ul></div>`;
+    ${esc(check)}; ${esc(standing)}. It restores as any backup does, each file checked as it is written.</li></ul>
+    ${offer ? `<button type="button" class="btn" data-action="rst-use-proven" data-snapshot="${esc(p.provenSnapshotId)}"
+      data-destination="${esc(notProven.destination)}">Choose ${esc(name(p.provenSnapshotId, p.provenCapturedAt))} instead</button>` : ""}</div>`;
 }
 
 async function rstGateCheck() {
@@ -6993,6 +7005,7 @@ const rstActions = {
     if (!resolved) { rstRender(); return; }
     if (W.snapshot?.snapshotId !== resolved.snapshotId) {
       W.snapshot = resolved;
+      W.provenAt = null;
       W.tree = new Map();
       W.open = new Set([""]);
       W.marks = new Map();
@@ -7041,6 +7054,26 @@ const rstActions = {
 };
 
 Object.assign(actions, {
+  // The newest backup proven where the plan reads, chosen in place of one
+  // that is not (ADR-0199 Amendment 7): back at the files, with what was
+  // ticked kept, so the person sees what this backup holds of it before it
+  // is planned. Its date is the day it was taken, here.
+  "rst-use-proven"(el) {
+    const proven = W.source.snapshots.find(row => row.snapshotId === el.dataset.snapshot);
+    if (!proven) return;
+    const taken = new Date(Number(proven.capturedAt));
+    W.date = `${taken.getFullYear()}-${String(taken.getMonth() + 1).padStart(2, "0")}-${String(taken.getDate()).padStart(2, "0")}`;
+    W.snapshot = proven;
+    W.provenAt = el.dataset.destination;
+    W.tree = new Map();
+    W.open = new Set([""]);
+    W.plan = null;
+    W.planFailed = false;
+    W.result = null;
+    W.step = 4;
+    rstRender();
+  },
+
   "rst-back"() {
     // A resume chooses no date, files or target, so it goes back to its source.
     W.step = (W.resume || W.kept) && W.step === 6 ? 2 : Math.max(1, W.step - 1);
