@@ -38,7 +38,7 @@ public sealed class ConfigurationContractTests : IDisposable
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.92", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.93", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
