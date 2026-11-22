@@ -60,7 +60,10 @@ internal static class NewBackupProof
         IReadOnlySet<string>? owed;
         try
         {
-            owed = Owed(archive, set, newest, previous?.ProvenSnapshot);
+            var proven = previous?.ProvenSnapshot;
+            owed = Owed(
+                archive, set, newest, proven,
+                proven is null ? null : new ProvenBlobsStore(runtime.Options.StateDirectory).Read(set.Id, destination, proven));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -185,12 +188,31 @@ internal static class NewBackupProof
     }
 
     /// <summary>
+    /// The keyed store names of the blobs <paramref name="backup"/> needs, or
+    /// null when the catalogue does not hold it: what a proof that ends keeps
+    /// (Amendment 5).
+    /// </summary>
+    /// <param name="archive">The set's archive.</param>
+    /// <param name="set">The set.</param>
+    /// <param name="backup">The backup's record key.</param>
+    /// <returns>The names, or null.</returns>
+    public static IReadOnlySet<string>? NamesNeededBy(ArchiveHandle archive, BackupSetConfiguration set, string backup)
+    {
+        ThrowHelper.ThrowIfNull(archive);
+        ThrowHelper.ThrowIfNull(set);
+        return Owed(archive, set, backup, proven: null, kept: null);
+    }
+
+    /// <summary>
     /// The keyed store names of the blobs <paramref name="newest"/> needs and
     /// <paramref name="proven"/> did not, or null when the catalogue does not
     /// hold <paramref name="newest"/>. A proven backup the catalogue no longer
-    /// holds, its retention having let it go, subtracts nothing.
+    /// holds, a person having deleted it, subtracts the names
+    /// <paramref name="kept"/> when its proof ended (Amendment 5), and
+    /// nothing where none were kept.
     /// </summary>
-    private static HashSet<string>? Owed(ArchiveHandle archive, BackupSetConfiguration set, string newest, string? proven)
+    private static HashSet<string>? Owed(
+        ArchiveHandle archive, BackupSetConfiguration set, string newest, string? proven, IReadOnlySet<string>? kept)
     {
         using var catalogue = archive.OpenReadCatalogue();
         var setId = Convert.FromHexString(set.Id);
@@ -214,6 +236,10 @@ internal static class NewBackupProof
         if (proven is not null && snapshots.TryGetValue(proven, out var before))
         {
             owed.ExceptWith(NamesOf(before));
+        }
+        else if (kept is not null)
+        {
+            owed.ExceptWith(kept);
         }
 
         return owed;

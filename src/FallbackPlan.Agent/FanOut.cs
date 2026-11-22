@@ -307,7 +307,7 @@ public static class FanOut
         }
 
         RecordNewBackupProof(
-            runtime, set, destination.Name, newestSnapshot, previous, newBackup, plan,
+            runtime, set, destination.Name, archive, newestSnapshot, previous, newBackup, plan,
             [.. verification.Proved, .. verification.Archived], nowMs);
         var (syncedSequence, _) = await StagingPublicationSequenceAsync(archive, cancellationToken)
             .ConfigureAwait(false);
@@ -830,7 +830,7 @@ public static class FanOut
                 }
 
                 RecordNewBackupProof(
-                    runtime, set, destination.Name, newestSnapshot, previous, newBackup, plan, verification.Proved, nowMs);
+                    runtime, set, destination.Name, archive, newestSnapshot, previous, newBackup, plan, verification.Proved, nowMs);
 
                 // A pass that proved nothing — every sample skipped because
                 // staging could not read its own ground truth — is not a
@@ -1724,7 +1724,7 @@ public static class FanOut
             }
 
             RecordNewBackupProof(
-                runtime, set, destination.Name, newestSnapshot, previous, newBackup, plan,
+                runtime, set, destination.Name, archive, newestSnapshot, previous, newBackup, plan,
                 [.. verification.Proved, .. verification.Archived], nowMs);
 
             if (!rolledBack && scope != SyncScope.Skip)
@@ -1790,8 +1790,8 @@ public static class FanOut
     /// a pass that proved what it asked about (ADR-0199), when the pass asked.
     /// </summary>
     private static void RecordNewBackupProof(
-        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, string? newestSnapshot,
-        DestinationSyncRecord? previous, VerificationSampler.NewBackupRequest? newBackup,
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, ArchiveHandle archive,
+        string? newestSnapshot, DestinationSyncRecord? previous, VerificationSampler.NewBackupRequest? newBackup,
         VerificationSampler.SamplePlan plan, IReadOnlyCollection<string> answered, ulong nowMs)
     {
         if (newBackup is null || newestSnapshot is null)
@@ -1806,10 +1806,43 @@ public static class FanOut
             previous?.ProvingBlobsProven);
         runtime.DestinationSync.RecordNewBackupProof(
             set.Id, destinationName, step.Proven, step.Proving, step.Cursor, nowMs, step.BlobsProven, step.BlobsLeft);
+        if (step.Proving is null && !string.Equals(previous?.ProvenSnapshot, step.Proven, StringComparison.Ordinal))
+        {
+            KeepProvenBlobs(runtime, set, destinationName, archive, newestSnapshot);
+        }
+
         var log = runtime.LoggerFor(typeof(FanOut));
         if (asked.Count > 0)
         {
             Log.NewBackupProved(log, new LogLabel(set.Name), new LogLabel(destinationName), asked.Count, plan.NewBackupRemaining);
+        }
+    }
+
+    /// <summary>
+    /// Keeps the names of the blobs a backup needed at a destination whose
+    /// proof of it has just ended
+    /// ([ADR-0199](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md)
+    /// Amendment 5), so the next backup's proof can subtract them though the
+    /// catalogue lets this backup go first.
+    /// </summary>
+    /// <remarks>
+    /// Best effort: names that cannot be kept cost only a fuller proof later,
+    /// never this pass.
+    /// </remarks>
+    private static void KeepProvenBlobs(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, ArchiveHandle archive, string backup)
+    {
+        try
+        {
+            if (NewBackupProof.NamesNeededBy(archive, set, backup) is { } names)
+            {
+                new ProvenBlobsStore(runtime.Options.StateDirectory).Keep(set.Id, destinationName, backup, names);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            Log.NewBackupProofUnavailable(
+                runtime.LoggerFor(typeof(FanOut)), new LogLabel(set.Name), new LogLabel(destinationName), exception.Message);
         }
     }
 
