@@ -5,19 +5,22 @@ using FallbackPlan.Application;
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
-/// A backup's proof outlives retention letting the proven backup go
+/// A backup's proof outlives the catalogue letting the proven backup go
 /// (FR-VER-002, ADR-0199 Amendment 5): a proof that ends keeps the names of
 /// the blobs its backup needed at that destination, and the next backup's
 /// proof asks only about the blobs none of them was, though the catalogue no
 /// longer holds the backup they were proven through.
 /// </summary>
 /// <remarks>
-/// Without them, a destination away while retention let its proven backup
-/// go would be asked about every blob of the next backup again: a whole
-/// archive over a peer's link, for blobs proven there already.
+/// Retention's expiry keeps a backup's row in the catalogue, so the case is a
+/// person's deletion of the backup a destination was proven through, or a
+/// catalogue rebuilt without it. Without the names kept, the next backup's
+/// proof would ask again about every blob it shares with that backup: at a
+/// peer, an archive's worth over the peer's link, for blobs proven there
+/// already.
 /// </remarks>
 [TestClass]
-public sealed class ProvenBlobsAfterRetentionTests : IAsyncDisposable
+public sealed class ProvenBlobsAfterDeletionTests : IAsyncDisposable
 {
     private readonly HostHarness _harness = new();
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(3));
@@ -47,38 +50,60 @@ public sealed class ProvenBlobsAfterRetentionTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task ABackupProvenBeforeRetentionLetItGo_StillSparesItsBlobs_FromTheNextBackupsProof()
+    public async Task ABackupAPersonDeleted_StillSparesTheBlobsItWasProvenThrough_FromTheNextBackupsProof()
     {
+        // One blob a pass, so the pass the deletion converges the vault with
+        // leaves the second backup's proof under way, the first still named
+        // as the backup proven there when the catalogue lets it go.
+        FanOut.NewBackupProofBudget = 1;
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
         await PassAsync(runtime);
-        var first = Row(runtime).ProvenSnapshot;
-        Assert.IsNotNull(first, "the premise: the vault is proven through the first backup");
+        for (var passes = 0; Row(runtime).ProvenSnapshot is null; passes++)
+        {
+            Assert.IsLessThan(10, passes, "the first backup's proof never finished");
+            await SyncAsync(runtime);
+        }
 
-        var before = StagingBlobs(runtime);
+        var first = Row(runtime).ProvenSnapshot;
+        var firstBlobs = StagingBlobs(runtime).Select(NameOf).ToHashSet(StringComparer.Ordinal);
+        var firstId = Assert.ContainsSingle(await SnapshotsAsync(handler)).SnapshotId;
+        var records = StagingRecords(runtime);
+
         _harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
         await BackUpAloneAsync(runtime, _start.AddHours(1));
-        var added = StagingBlobs(runtime).Except(before, StringComparer.Ordinal).Count();
-        Assert.IsGreaterThan(0, added, "the premise: the second backup wrote blobs");
+        var second = Assert.ContainsSingle(StagingRecords(runtime).Except(records, StringComparer.Ordinal));
 
-        Assert.IsInstanceOfType<RetentionResult>(
-            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
-            out var retention);
-        Assert.IsFalse(
-            StagingRecords(runtime).Contains(first, StringComparer.Ordinal),
-            $"the premise: retention let the first backup go:{Environment.NewLine}{string.Join(Environment.NewLine, retention.Lines)}");
-
-        // One blob a pass, so the passes count the blobs asked about.
-        FanOut.NewBackupProofBudget = 1;
-        await SyncAsync(runtime);
-
+        Assert.IsInstanceOfType<DeleteSnapshotsResult>(
+            await handler.ExecuteAsync(
+                new DeleteSnapshotsCommand(_harness.DocsSetId, [firstId], Apply: true, ReclaimGrant: grant), Timeout),
+            out var deleted);
+        Assert.AreEqual("deleted", Assert.ContainsSingle(deleted.Snapshots).State, string.Join(" | ", deleted.Lines));
+        Assert.HasCount(1, await SnapshotsAsync(handler), "the premise: the catalogue let the first backup go");
         var row = Row(runtime);
-        Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
-        Assert.AreEqual(
-            added, row.ProvingSnapshot is null ? 1 : row.ProvingBlobsProven + row.ProvingBlobsLeft,
-            "the proof asked about blobs proven there through the backup retention let go");
+        Assert.AreEqual(first, row.ProvenSnapshot, "the premise: the vault is still proven through the first backup");
+        Assert.AreEqual(second, row.ProvingSnapshot, "the premise: the second backup's proof is under way");
+
+        // What the second backup's proof owes, from its first blob.
+        var set = runtime.Configuration.BackupSets.Single();
+        var request = NewBackupProof.Request(
+            runtime, set, "vault", await runtime.ArchiveForAsync(set, Timeout), second,
+            row with { ProvingSnapshot = null, ProvingCursor = null }, budget: 256);
+
+        Assert.IsNotNull(request);
+        Assert.IsNotEmpty(request.Names, "the premise: the second backup added blobs");
+        var asked = request.Names.Where(firstBlobs.Contains).ToList();
+        Assert.IsEmpty(asked, $"the proof asks again about blobs proven there through the deleted backup: {string.Join(", ", asked)}");
     }
+
+    private async Task<IReadOnlyList<SnapshotDescriptor>> SnapshotsAsync(ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listing);
+        return listing.Snapshots;
+    }
+
+    private static string NameOf(string key) => key[(key.LastIndexOf('/') + 1)..];
 
     private async Task<ServiceRuntime> StartAsync()
     {
@@ -101,7 +126,6 @@ public sealed class ProvenBlobsAfterRetentionTests : IAsyncDisposable
                     Name = "docs",
                     Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
                     Schedule = "every 1h",
-                    Retention = new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
                     Destinations = [new SetDestinationReference { Ref = "vault" }],
                 },
             ],
