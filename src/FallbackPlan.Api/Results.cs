@@ -869,6 +869,17 @@ public sealed record DirectoryResult(
 /// restore; what they restore is older than the file was when that backup
 /// ran. Null where there are none, and from a service before 1.85.
 /// </param>
+/// <param name="NotProvenAt">
+/// For a plan read through a destination, that destination where the backup
+/// the plan restores is not proven there (contract 1.93, FR-RST-003,
+/// ADR-0199 Amendment 6): the backup whose proof is under way there, and any
+/// backup taken after the newest proven there. It restores as any backup
+/// does, each file checked as it is written; the person learns before the
+/// restore that no check has yet found all of it whole there. Null for a
+/// plan read from the set's own archive, for a backup proven there or taken
+/// before it, where the service recorded no proof there, and from a service
+/// before 1.93.
+/// </param>
 public sealed record RestorePlanResult(
     long Files,
     long Bytes,
@@ -883,7 +894,20 @@ public sealed record RestorePlanResult(
     long? Landed = null,
     long? OpenedWider = null,
     long? OpenedWiderFolders = null,
-    IReadOnlyList<EarlierVersionDescriptor>? EarlierVersions = null) : ServiceResult;
+    IReadOnlyList<EarlierVersionDescriptor>? EarlierVersions = null,
+    NotProvenAtDescriptor? NotProvenAt = null) : ServiceResult;
+
+/// <summary>
+/// The destination a restore's plan reads through, where the backup it
+/// restores is not proven (contract 1.93, ADR-0199 Amendment 6).
+/// </summary>
+/// <param name="Destination">The destination's declared name.</param>
+/// <param name="Proof">
+/// Where that destination's proof of new backups stands, as its status row
+/// reports it: the newest backup proven there, and the backup whose proof is
+/// under way, which need not be the one the plan restores.
+/// </param>
+public sealed record NotProvenAtDescriptor(string Destination, NewBackupProofDescriptor? Proof);
 
 /// <summary>
 /// A file a restore gives back as a version backed up before, standing in
@@ -1426,7 +1450,7 @@ public sealed record DestinationStatusDescriptor(
 /// </param>
 /// <param name="ProvenCapturedAt">
 /// When that backup was taken, Unix milliseconds; null with it, and when the
-/// service no longer holds it, its retention having let it go.
+/// service no longer holds it, a person having deleted it.
 /// </param>
 /// <param name="ProvingSnapshotId">The backup whose proof is under way, hex; null when none is.</param>
 /// <param name="ProvingCapturedAt">When that backup was taken, Unix milliseconds; null with it.</param>

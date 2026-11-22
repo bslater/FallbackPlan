@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11
-**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session); FR-VER-003 (amended by [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row names the backup it was last proven through, and a proof under way with how many of the backup's blobs are proven and how many are left); FR-VER-002 (amended by [Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass): a pass that brings a destination current from the metadata here leaves the newest backup's proof owed, so the pair is due at once and the next pass proves it); FR-VER-005 (amended by [Amendment 4](#amendment-4-2026-11--a-failed-proof-names-the-backup): a blob of the backup under proof that does not prove fails the pass naming that backup as not proven there and the newest backup that is, in the failure, its notice and the status); FR-VER-002 (amended by [Amendment 5](#amendment-5-2026-11--the-blobs-a-backup-was-proven-through-outlive-its-deletion): a proof that ends keeps the names of the blobs its backup needed there, which the next backup's proof subtracts once the catalogue no longer holds that backup)
+**Requirements:** FR-VER-002 (amended: the pass that finds a destination holding the newest backup whole proves there every blob that backup needs which the backup last proven there did not, beside the sample and never in its place, a bounded share a pass, the pair due until the proof is carried to its end); FR-VER-002 (amended by [Amendment 1](#amendment-1-2026-11--a-backup-is-proven-at-each-peer-it-lands-at): at a peer too, by the challenge the push makes or the read-back over the retrieval session); FR-VER-003 (amended by [Amendment 2](#amendment-2-2026-11--the-status-says-how-far-a-backups-proof-has-got): a destination's status row names the backup it was last proven through, and a proof under way with how many of the backup's blobs are proven and how many are left); FR-VER-002 (amended by [Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass): a pass that brings a destination current from the metadata here leaves the newest backup's proof owed, so the pair is due at once and the next pass proves it); FR-VER-005 (amended by [Amendment 4](#amendment-4-2026-11--a-failed-proof-names-the-backup): a blob of the backup under proof that does not prove fails the pass naming that backup as not proven there and the newest backup that is, in the failure, its notice and the status); FR-VER-002 (amended by [Amendment 5](#amendment-5-2026-11--the-blobs-a-backup-was-proven-through-outlive-its-deletion): a proof that ends keeps the names of the blobs its backup needed there, which the next backup's proof subtracts once the catalogue no longer holds that backup); FR-RST-003 (amended by [Amendment 6](#amendment-6-2026-11--a-restores-plan-says-when-its-backup-is-not-proven-where-it-is-read): a restore's plan read through a destination names it where the backup the plan restores is not proven there, with where that destination's proof stands)
 **Related:** [ADR-0035](0035-destination-fitness.md) §5 (the sample's rotation, which this sits beside), [ADR-0198](0198-a-sync-copies-only-from-a-source-that-holds-the-newest-backup-whole.md) Amendment 2 (a destination is in sync only once it holds the newest backup whole, which is where this proof starts), [ADR-0012](0012-storage-provider-contract.md) Amendment 8 (listings in key order, which the proof's cursor resumes through)
 
 **Built:**
@@ -173,6 +173,39 @@ The consequence was right. A deletion converges a local path and a peer before i
   - a proof that ends keeps the names of the blobs its backup needed, and gives none for another backup;
   - a vault is proven through a first backup and a second is taken. The first is deleted while the second's proof is under way. The second's proof then asks about none of the blobs the first was proven through.
 
+## Amendment 6 (2026-11) — a restore's plan says when its backup is not proven where it is read
+
+A destination's status row says how far its proof of new backups has got (Amendment 2). A restore planned through that destination said nothing of it. A person picks a destination as the wizard's source and plans the newest backup. The backup may have landed an hour ago, with its check a few blobs in. It read exactly like one proven there a week ago.
+
+**Decision.** A plan read through a destination says when the backup it restores is not proven there (contract 1.93). It names the destination, and where that destination's proof stands, in the same terms as the status row. The ledger knows a backup is not proven there when:
+
+- **it is the backup under proof there;**
+- **no backup is proven there;**
+- **it was taken after the newest backup proven there,** whose proof a newer backup's took over.
+
+It holds nothing back. The backup restores as any backup does, each file checked as it is written; the person learns before the restore that no check has yet found all of it whole there. The console says it on the plan: how far the backup's own check has got, or that no check of it there has finished, and the newest backup proven there.
+
+**What it says nothing of.**
+
+- **A plan read from the set's own archive.** That is where every copy came from.
+- **A backup proven there, or taken before the newest proven there.** The ledger keeps only the newest proven. An older backup's own proof may have ended, or have been taken over, and nothing records which.
+- **A destination with no proof recorded.** On a machine set up again to restore, the ledger is new and knew nothing of that destination, so nothing is said.
+- **A proven backup the destination no longer holds.** It cannot be dated, and nothing is dated against it.
+
+The service's own words for a backup the catalogue no longer holds are corrected as Amendment 5 corrected this record's: a person's deletion lets it go, not retention.
+
+**Built:** `Agent/NewBackupProof` holds the rule; `Agent/ServiceCommandHandler` applies it to a plan read through a destination; the console draws it:
+
+- `Hosts.Tests/RestorePlanProofTests`:
+  - a vault proven one blob a pass. A second backup under proof there is said not proven, beside the backup proven there and the count;
+  - so is a second backup whose proof a third's took over;
+  - the backup proven there, one taken before it, and a plan read from the set's own archive are said nothing of;
+  - the rule itself, including nothing said where no proof is recorded or the proven backup cannot be dated.
+- `Api.Tests/ContractAdditiveFieldsTests`: contract 1.93's `not_proven_at` and the pre-1.93 default.
+- `Web.DomTests/RestoreWizardDomTests`:
+  - the wizard counts a check as this backup's only when it is, and says the newest backup proven there;
+  - it names none where none is, and the warning holds nothing back.
+
 ## Status history
 
 | Date | Status | Note |
@@ -183,3 +216,4 @@ The consequence was right. A deletion converges a local path and a peer before i
 | 2026-11 | Amended | [Amendment 3](#amendment-3-2026-11--a-backup-brought-current-from-the-metadata-here-is-proven-by-the-next-pass): a pass that brings a destination current from the metadata here leaves the newest backup's proof owed, so the pair is due at once and the next pass proves it; the last "not done" noted. `Agent/FanOut`; `Hosts.Tests/StoreBesideAPeerTests` |
 | 2026-11 | Amended | [Amendment 4](#amendment-4-2026-11--a-failed-proof-names-the-backup): a blob of the backup under proof that does not prove fails the pass naming that backup and the newest proven, in the failure, its notice and the status (contract 1.92, ledger schema 16). `Agent/FanOut`; `Agent/NewBackupProof`; `Application/DestinationSyncStore`; `Hosts.Tests/FailedNewBackupProofTests` |
 | 2026-11 | Amended | [Amendment 5](#amendment-5-2026-11--the-blobs-a-backup-was-proven-through-outlive-its-deletion): a proof that ends keeps the names of the blobs its backup needed at that destination, and the next backup's proof subtracts them where the catalogue no longer holds that backup, a person having deleted it; decision 4's cause corrected, retention's expiry keeping the backup's row. `Agent/ProvenBlobsStore`; `Agent/FanOut`; `Agent/NewBackupProof`; `Hosts.Tests/ProvenBlobsAfterDeletionTests` |
+| 2026-11 | Amended | [Amendment 6](#amendment-6-2026-11--a-restores-plan-says-when-its-backup-is-not-proven-where-it-is-read): a restore's plan read through a destination names it where the backup it restores is not proven there, with where that destination's proof stands (contract 1.93), and the console says so before the restore, holding nothing back. `Agent/NewBackupProof`; `Agent/ServiceCommandHandler`; `Hosts.Tests/RestorePlanProofTests`; `Web.DomTests/RestoreWizardDomTests` |

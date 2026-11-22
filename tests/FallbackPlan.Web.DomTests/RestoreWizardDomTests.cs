@@ -290,6 +290,67 @@ public sealed class RestoreWizardDomTests
     }
 
     [TestMethod]
+    public async Task Wizard_APlanOfABackupUnderProofWhereItIsRead_SaysHowFarItsCheckHasGot_AndHoldsNothingBack()
+    {
+        // FR-RST-003, contract 1.93, ADR-0199 Amendment 6: the backup the
+        // plan restores is being proven at the destination it is read
+        // through, which the person learns before the restore, beside the
+        // newest backup proven there.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(1, 42, [], WriteBytes: 42,
+                NotProvenAt: new NotProvenAtDescriptor(
+                    "vault",
+                    new NewBackupProofDescriptor(
+                        "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a", now - 86_400_000,
+                        ProvingSnapshotId: "snap-1", ProvingCapturedAt: now, BlobsProven: 3, BlobsLeft: 7)))
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        var warning = page.Locator("#rst-not-proven");
+        await Expect(warning).ToContainTextAsync("This backup is not proven at vault");
+        await Expect(warning).ToContainTextAsync("its check there has proven 3 of 10 blobs");
+        await Expect(warning).ToContainTextAsync("the newest backup proven there is the backup of");
+
+        // It holds nothing back: the typed word alone arms the restore.
+        await page.FillAsync("#confirm-word", "restore");
+        await Expect(page.Locator("#rst-run-go")).ToBeEnabledAsync();
+    }
+
+    [TestMethod]
+    public async Task Wizard_APlanOfABackupANewerOnesCheckPassedOver_SaysNoCheckOfItFinished()
+    {
+        // The proof under way is a newer backup's, and none is proven there:
+        // nothing the wizard says may count the newer backup's check as this
+        // one's, nor name a backup proven there.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(1, 42, [], WriteBytes: 42,
+                NotProvenAt: new NotProvenAtDescriptor(
+                    "vault",
+                    new NewBackupProofDescriptor(
+                        null, null, ProvingSnapshotId: "snap-2", ProvingCapturedAt: now, BlobsProven: 3, BlobsLeft: 7)))
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        var warning = page.Locator("#rst-not-proven");
+        await Expect(warning).ToContainTextAsync("This backup is not proven at vault");
+        await Expect(warning).ToContainTextAsync("no check of it there has finished");
+        await Expect(warning).ToContainTextAsync("no backup is proven there yet");
+        await Expect(warning).Not.ToContainTextAsync("3 of 10");
+    }
+
+    [TestMethod]
     public async Task Wizard_ARunThatRestoredTheVersionBackedUpBefore_SaysHowManyAndWhich()
     {
         // FR-RST-004, ADR-0194 Amendment 1: what the plan said before the run,
@@ -340,6 +401,7 @@ public sealed class RestoreWizardDomTests
         await Expect(page.Locator("#rst-read")).ToHaveCountAsync(0);
         await Expect(page.Locator("#rst-archived")).ToHaveCountAsync(0);
         await Expect(page.Locator("#rst-earlier")).ToHaveCountAsync(0);
+        await Expect(page.Locator("#rst-not-proven")).ToHaveCountAsync(0);
     }
 
     [TestMethod]

@@ -1220,6 +1220,34 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void ABackupNotProvenWhereAPlanReadsIt_WireNamesAndPre193Default()
+    {
+        // Contract 1.93 (FR-RST-003, ADR-0199 Amendment 6): a plan read
+        // through a destination names it where the backup it restores is not
+        // proven there, with where that destination's proof stands.
+        var modern = JsonSerializer.Serialize(
+            new RestorePlanResult(
+                2, 9_000, [],
+                NotProvenAt: new NotProvenAtDescriptor(
+                    "vault",
+                    new NewBackupProofDescriptor(
+                        ProvenSnapshotId: "0a", ProvenCapturedAt: 1_000, ProvingSnapshotId: "0b", ProvingCapturedAt: 2_000,
+                        BlobsProven: 3, BlobsLeft: 7))),
+            FrameCodec.SerializerOptions);
+
+        const string Field = ",\"not_proven_at\":{\"destination\":\"vault\",\"proof\":{\"proven_snapshot_id\":\"0a\","
+            + "\"proven_captured_at\":1000,\"proving_snapshot_id\":\"0b\",\"proving_captured_at\":2000,"
+            + "\"blobs_proven\":3,\"blobs_left\":7,\"failed_blob\":null}}";
+        Assert.Contains(Field, modern, StringComparison.Ordinal);
+
+        // A pre-1.93 service says nothing of it, and a client warns of
+        // nothing: never a backup called unproven on no word of the service.
+        var old = modern.Replace(Field, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<RestorePlanResult>(old, FrameCodec.SerializerOptions)!.NotProvenAt);
+    }
+
+    [TestMethod]
     public void WhatAStoreWasAsked_WireNamesAndPre169Default()
     {
         // Contract 1.69 (FR-DEST-019, ADR-0111): a cloud destination's row

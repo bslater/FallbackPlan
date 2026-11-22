@@ -6664,7 +6664,7 @@ function rstStep6() {
   if (W.resume) {
     const plan = W.resumePlan;
     const short = rstShort(plan);
-    const details = plan ? rstPlanDetails(plan, 'data-action-change="rst-resume-arm"')
+    const details = plan ? rstPlanDetails(plan, 'data-action-change="rst-resume-arm"', W.resume.snapshotId)
       : W.resumePlanFailed
         ? `<p class="subtle">The resume was not planned; it is still measured before it writes anything.</p>
           <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
@@ -6688,7 +6688,7 @@ function rstStep6() {
   // until there is one (FR-RST-003) — and the plan's arrival re-renders this
   // step, which would throw away a word typed while it was on its way.
   const plan = W.plan;
-  const figures = plan ? rstPlanDetails(plan, 'data-arms="confirm-word"')
+  const figures = plan ? rstPlanDetails(plan, 'data-arms="confirm-word"', W.snapshot?.snapshotId)
     : W.planFailed
       ? `<p class="subtle">No plan could be made, so there is nothing to confirm. Go back and continue to plan again.</p>`
       : `<p class="subtle">Planning…</p>`;
@@ -6717,7 +6717,10 @@ const RST_ACK_WIDER_UNPLANNED = `<label class="check"><input type="checkbox" id=
 
 /* The plan of the resume a result offers, as a resume's plan is shown (ADR-0123). */
 function rstResumeOffer(offer) {
-  if (offer.plan) return rstPlanDetails(offer.plan, 'data-action-change="rst-resume-arm" data-arms-button="rst-resume-confirm"');
+  if (offer.plan) {
+    return rstPlanDetails(
+      offer.plan, 'data-action-change="rst-resume-arm" data-arms-button="rst-resume-confirm"', W.snapshot?.snapshotId);
+  }
   if (offer.failed) {
     return `<p class="subtle">The resume was not planned; it is still measured before it writes anything.</p>
       <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
@@ -6775,8 +6778,9 @@ function rstAcknowledged() {
  * needs, and what will not come back. A volume short of room arms the run only
  * when the person chooses to go on; `arming` is how its checkbox says so. A
  * resume's plan says how many files its run already landed (ADR-0120).
+ * `planned` is the snapshot the plan restores, where the wizard knows it.
  */
-function rstPlanDetails(plan, arming) {
+function rstPlanDetails(plan, arming, planned) {
   const space = plan.space ?? [];
   return `
     <div class="plan-figures">
@@ -6807,8 +6811,39 @@ function rstPlanDetails(plan, arming) {
       will be restored as the version backed up before: when the backup ran, their cloud provider did not deliver
       the one on the device. They restore; what they restore is older.</li></ul>
       <pre class="report">${esc(plan.earlierVersions.slice(0, 20).map(version => `${version.path} — ${version.detail}`).join("\n"))}</pre></div>` : ""}
+    ${plan.notProvenAt ? rstNotProven(plan.notProvenAt, planned) : ""}
     ${plan.conflictSample?.length ? `<pre class="report">${esc(plan.conflictSample.join("\n"))}</pre>` : ""}
     ${plan.degradations?.length ? `<p class="subtle">${plan.degradations.map(esc).join("<br>")}</p>` : ""}`;
+}
+
+/*
+ * A plan read through a destination where the backup it restores is not
+ * proven (contract 1.93, ADR-0199 Amendment 6), said before the restore and
+ * holding nothing back. The check under way there is counted as this
+ * backup's only when it is; where the wizard does not know which backup it
+ * planned, the backup under check is named instead, never counted as this one.
+ */
+function rstNotProven(notProven, planned) {
+  const p = notProven.proof ?? {};
+  const name = (id, at) => at == null ? `backup ${id}` : `the backup of ${fmtWhen(at)}`;
+  const counted = p.blobsProven == null || p.blobsLeft == null
+    ? null
+    : `${fmtCount(p.blobsProven)} of ${fmtCount(p.blobsProven + p.blobsLeft)} blobs`;
+  let check;
+  if (p.provingSnapshotId != null && planned != null && p.provingSnapshotId === planned) {
+    check = p.failedBlob != null ? `its check there failed at ${p.failedBlob}`
+      : counted != null ? `its check there has proven ${counted}` : "its check there is under way";
+  } else if (planned != null || p.provingSnapshotId == null) {
+    check = "no check of it there has finished";
+  } else {
+    check = `the check under way there is of ${name(p.provingSnapshotId, p.provingCapturedAt)}${counted ? `, ${counted} proven` : ""}`;
+  }
+
+  const standing = p.provenSnapshotId == null
+    ? "no backup is proven there yet"
+    : `the newest backup proven there is ${name(p.provenSnapshotId, p.provenCapturedAt)}`;
+  return `<div id="rst-not-proven"><ul class="warnings"><li>This backup is not proven at ${esc(notProven.destination)}:
+    ${esc(check)}; ${esc(standing)}. It restores as any backup does, each file checked as it is written.</li></ul></div>`;
 }
 
 async function rstGateCheck() {

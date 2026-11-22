@@ -991,12 +991,63 @@ public sealed partial class ServiceCommandHandler(
                 wider is { OpenedFolders: > 0 } ? wider.OpenedFolders : null,
                 probed.EarlierVersions.Count == 0
                     ? null
-                    : [.. probed.EarlierVersions.Select(earlier => new EarlierVersionDescriptor(earlier.Path, earlier.Detail))]);
+                    : [.. probed.EarlierVersions.Select(earlier => new EarlierVersionDescriptor(earlier.Path, earlier.Detail))],
+                NotProvenAt(context, catalogue, snapshotId));
         }
         finally
         {
             context.Source?.Gate.Release();
         }
+    }
+
+    /// <summary>
+    /// The destination a plan reads through, where the backup it restores is
+    /// not proven there (contract 1.93, ADR-0199 Amendment 6), with where its
+    /// proof stands. Null for a plan read from the set's own archive, which
+    /// is where every copy came from, and wherever the ledger does not know
+    /// the backup unproven there.
+    /// </summary>
+    /// <remarks>
+    /// The backups are named and dated from the catalogue the destination's
+    /// own copy answers with: a backup it no longer holds is named by its
+    /// identity, undated, and is not dated against.
+    /// </remarks>
+    private NotProvenAtDescriptor? NotProvenAt(
+        RestoreContext context, Repository.Catalogue.Catalogue catalogue, byte[] snapshotId)
+    {
+        if (context.Source is not { IsSetArchive: false } source
+            || runtime.DestinationSync.Find(source.SetId, source.Location) is not { } ledger)
+        {
+            return null;
+        }
+
+        var setId = Convert.FromHexString(source.SetId);
+        var backups = new Dictionary<string, KnownBackup>(StringComparer.Ordinal);
+        string? planned = null;
+        ulong plannedAt = 0;
+        foreach (var row in catalogue.EnumerateSnapshots())
+        {
+            if (!row.BackupSetId.Span.SequenceEqual(setId))
+            {
+                continue;
+            }
+
+            var key = Repository.Packing.MetadataStoreKeys.Snapshot(
+                row.DeviceId.Span, row.BackupSetId.Span, row.SnapshotId.Span).Value;
+            backups[key] = new KnownBackup(Convert.ToHexStringLower(row.SnapshotId.Span), row.CapturedAt);
+            if (row.SnapshotId.Span.SequenceEqual(snapshotId))
+            {
+                planned = key;
+                plannedAt = row.CapturedAt;
+            }
+        }
+
+        ulong? provenAt = ledger.ProvenSnapshot is { } proven && backups.TryGetValue(proven, out var known)
+            ? known.CapturedAt
+            : null;
+        return planned is not null && NewBackupProof.IsNotProven(ledger, planned, plannedAt, provenAt)
+            ? new NotProvenAtDescriptor(source.Location, DescribeNewBackupProof(ledger, backups))
+            : null;
     }
 
     /// <summary>
@@ -3645,8 +3696,8 @@ public sealed partial class ServiceCommandHandler(
     /// and none is being proven.
     /// </summary>
     /// <remarks>
-    /// A backup the catalogue no longer holds, its retention having let it
-    /// go, is named by the identity its record key carries, undated.
+    /// A backup the catalogue no longer holds, a person having deleted it, is
+    /// named by the identity its record key carries, undated.
     /// </remarks>
     internal static NewBackupProofDescriptor? DescribeNewBackupProof(
         DestinationSyncRecord? ledger, IReadOnlyDictionary<string, KnownBackup>? backups)

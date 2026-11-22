@@ -51,6 +51,8 @@ A plan is constructed **before** any transfer, and it is the mechanism by which 
 
   > **Built 2026-11 ([ADR-0194](../adr/0194-a-restores-plan-names-the-files-an-earlier-version-stands-in-for.md)).** A plan names each file it restores as a version backed up before, standing in for one its backup could not fetch from its cloud provider ([ADR-0185 Amendment 3](../adr/0185-a-run-stops-fetching-online-only-files-after-the-first-that-does-not-come.md#amendment-3-2026-11--a-file-not-fetched-keeps-its-version-before)), with what the backup said of it, read from the snapshot's failures. Nothing is refused for them.
 
+  > **Built 2026-11 ([ADR-0199 Amendment 6](../adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-6-2026-11--a-restores-plan-says-when-its-backup-is-not-proven-where-it-is-read)).** A plan read through a destination names it where the backup it restores is not proven there: the backup under proof there, or one taken after the newest proven there, beside where that destination's proof stands (contract 1.93). It holds nothing back; each file is still checked as it is written. A backup proven there, one taken before it, and a plan read from the set's own archive are said nothing of.
+
 Plans are exportable and resumable. A plan that reveals unacceptable degradation can be abandoned before a single byte is written, which is the entire point of producing one.
 
 > **2026-10 ([ADR-0107](../adr/0107-the-command-line-plans-a-restore-on-its-own.md)).** The command line prints a plan on its own with `restore --plan`, through the service or in direct mode alike, restoring nothing, and exits non-zero unless the run would restore every file and fit. A plan is not yet exported to a file, and a restore cut short is not resumed.
