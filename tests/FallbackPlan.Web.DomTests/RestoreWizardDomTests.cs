@@ -1,3 +1,4 @@
+using System.Globalization;
 using FallbackPlan.Api;
 using FallbackPlan.TestSupport;
 using Microsoft.Playwright;
@@ -392,6 +393,43 @@ public sealed class RestoreWizardDomTests
         CollectionAssert.AreEqual(new[] { "notes.txt" }, planned.Paths?.ToArray(), "the files chosen were not the files planned");
         await Expect(page.Locator(".plan-figures")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-not-proven")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task Wizard_TheProvenBackupChosen_ThenAnotherDayChosen_NoLongerSaysItIsTheProvenOne()
+    {
+        // The note belongs to the backup the offer chose: a day chosen after
+        // it that resolves to another backup carries no such note.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var earlier = now - 86_400_000;
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            OpenRestoreSourceCommand => new RestoreSourceOpenedResult(
+                "src-1", "docs", "vault", [Wire.Snapshot(earlier, id: "snap-0"), Wire.Snapshot(now)], []),
+            PlanRestoreCommand { SnapshotId: "snap-1" } => new RestorePlanResult(1, 42, [], WriteBytes: 42,
+                NotProvenAt: new NotProvenAtDescriptor(
+                    "vault",
+                    new NewBackupProofDescriptor(
+                        "snap-0", earlier, ProvingSnapshotId: "snap-1", ProvingCapturedAt: now, BlobsProven: 3, BlobsLeft: 7))),
+            PlanRestoreCommand => new RestorePlanResult(1, 42, [], WriteBytes: 42),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await page.Locator("[data-action=\"rst-use-proven\"]").ClickAsync();
+        await Expect(page.Locator("#rst-proven-chosen")).ToBeVisibleAsync();
+
+        await page.ClickAsync("[data-action=\"rst-back\"]");
+        var today = DateTimeOffset.FromUnixTimeMilliseconds((long)now).ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        await page.FillAsync("#rst-date", today);
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+
+        await Expect(page.Locator("#rst-tree")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-proven-chosen")).ToHaveCountAsync(0);
     }
 
     [TestMethod]
