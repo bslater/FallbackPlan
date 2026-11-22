@@ -305,6 +305,8 @@ What the scheduled drill does **not** prove is as load-bearing as what it does. 
 
 > **2026-10 ([ADR-0105](../adr/0105-a-drill-takes-archived-content-as-a-stated-limit.md)).** A store can hold a sampled file's content only in an archival tier, which serves nothing until it is rehydrated. At such a store the drill plans each sampled file before restoring it, does not read one the plan names archived, and records it as proved as far as its content under a second stated limit. It says so in the pair's notice for archived objects ([ADR-0104](../adr/0104-a-replicas-readers-take-an-archived-object-as-archived.md)). A missing object still fails the drill.
 
+> **2026-11 ([ADR-0199 Amendment 8](../adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-8-2026-11--a-drill-says-when-the-backup-it-drilled-was-not-yet-proven)).** A passing drill proves the files it sampled come back, not that every blob the backup needs is whole at the destination. A drill of a backup whose proof there had not ended states that as a limit, with how far the proof had got and the newest backup proven there; the console draws a limit as sealed content only where it is.
+
 ---
 
 **Previous:** [07 — Retention and garbage collection](07-retention-and-gc.md) · **Next:** [09 — Replication and peers](09-replication-and-peers.md)

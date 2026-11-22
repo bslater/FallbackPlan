@@ -808,9 +808,14 @@ function drillLabel(d) {
   // A pass with a stated limit (contract 1.27): a write-only set's drill
   // proves the road back as far as the sealed content, and says so rather
   // than claiming a restore it did not perform — or a failure it did not
-  // find.
+  // find. Any other limit — content archived, a peer's byte cap, a backup
+  // not yet proven there (ADR-0199 Amendment 8) — is the drill's own words
+  // beside the files it restored, never called sealed content.
   if (d.drillLimit) {
-    const proved = d.drillFiles > 0 ? `${fmtCount(d.drillFiles)} file(s) proved to the sealed content` : "proved to the sealed content";
+    const sealed = d.drillLimit.startsWith("content sealed:");
+    const proved = sealed
+      ? (d.drillFiles > 0 ? `${fmtCount(d.drillFiles)} file(s) proved to the sealed content` : "proved to the sealed content")
+      : (d.drillFiles > 0 ? `${fmtCount(d.drillFiles)} file(s) restored` : "restored");
     return `${esc(proved)} <span class="detail">${esc(rel(d.drilledAt))} — ${esc(d.drillLimit)}</span>`;
   }
 

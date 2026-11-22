@@ -1,3 +1,4 @@
+using System.Globalization;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 
@@ -344,11 +345,13 @@ internal static class RecoveryDrillJob
             runtime.RestoreCacheRoot, $"drill-{Convert.ToHexStringLower(Guid.NewGuid().ToByteArray())[..16]}");
         string? sourceId = null;
         string? at = null;
+        string? drilled = null;
 
         try
         {
             var outcome = await DrillAsync(
                 handler, set, destinationName, scratch, budget, draw, id => sourceId = id, path => at = path,
+                id => drilled = id,
                 plansFirst: runtime.Configuration.FindDestination(destinationName)?.Kind.IsObjectStore() == true,
                 cancellationToken)
                 .ConfigureAwait(false);
@@ -360,6 +363,18 @@ internal static class RecoveryDrillJob
             if (outcome.Failure is not null && Stopping(runtime, cancellationToken))
             {
                 return Unrecorded;
+            }
+
+            // A passing drill proves the files it sampled come back, not every
+            // blob the backup needs whole at the destination: where the
+            // backup's proof there had not ended, that is a limit of its own
+            // (ADR-0199 Amendment 8). Only a passing drill proves files; a
+            // drill that failed proved none.
+            if (outcome is { Files: > 0 } && drilled is not null
+                && await NotYetProvenAsync(runtime, set, destinationName, drilled, cancellationToken).ConfigureAwait(false)
+                    is { } notYetProven)
+            {
+                outcome = outcome with { Limit = outcome.Limit is null ? notYetProven : $"{outcome.Limit} {notYetProven}" };
             }
 
             runtime.DestinationSync.RecordDrill(
@@ -518,6 +533,7 @@ internal static class RecoveryDrillJob
         Random draw,
         Action<string> keepSourceId,
         Action<string> keepPath,
+        Action<string> keepSnapshot,
         bool plansFirst,
         CancellationToken cancellationToken)
     {
@@ -549,6 +565,8 @@ internal static class RecoveryDrillJob
         {
             return new DrillOutcome(0, 0, "the replica holds no snapshot of this set.");
         }
+
+        keepSnapshot(newest.SnapshotId);
 
         var (paths, skipped) = await SampleAsync(
             handler, source.SourceId, newest.SnapshotId, budget, draw, keepPath, cancellationToken).ConfigureAwait(false);
@@ -672,6 +690,90 @@ internal static class RecoveryDrillJob
         {
             Archived = archivedFiles,
         };
+    }
+
+    /// <summary>
+    /// What a passing drill states of the backup it drilled where the ledger
+    /// knows that backup was not yet proven at the destination (ADR-0199
+    /// Amendment 8): how far its proof there had got, and the newest backup
+    /// proven there. Null where the ledger does not know it unproven there,
+    /// by the rule a restore's plan follows (Amendment 6).
+    /// </summary>
+    /// <remarks>
+    /// Said in the past tense: the drill's limit stands until the next drill,
+    /// and the proof may end before then. The backups are named from the
+    /// set's own catalogue; a backup it does not hold is not dated against,
+    /// and a lookup that fails states nothing rather than fail the drill.
+    /// </remarks>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set drilled.</param>
+    /// <param name="destinationName">The destination drilled.</param>
+    /// <param name="snapshotId">The backup drilled, hex.</param>
+    /// <param name="cancellationToken">Cancels the lookup.</param>
+    internal static async Task<string?> NotYetProvenAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, string snapshotId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (runtime.DestinationSync.Find(set.Id, destinationName) is not { } ledger
+                || await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false) is not { } archive)
+            {
+                return null;
+            }
+
+            string? drilled = null;
+            ulong drilledAt = 0;
+            ulong? provenAt = null;
+            using (var catalogue = archive.OpenReadCatalogue())
+            {
+                var setId = Convert.FromHexString(set.Id);
+                var wanted = Convert.FromHexString(snapshotId);
+                foreach (var row in catalogue.EnumerateSnapshots())
+                {
+                    if (!row.BackupSetId.Span.SequenceEqual(setId))
+                    {
+                        continue;
+                    }
+
+                    var key = Repository.Packing.MetadataStoreKeys.Snapshot(
+                        row.DeviceId.Span, row.BackupSetId.Span, row.SnapshotId.Span).Value;
+                    if (row.SnapshotId.Span.SequenceEqual(wanted))
+                    {
+                        drilled = key;
+                        drilledAt = row.CapturedAt;
+                    }
+
+                    if (string.Equals(key, ledger.ProvenSnapshot, StringComparison.Ordinal))
+                    {
+                        provenAt = row.CapturedAt;
+                    }
+                }
+            }
+
+            if (drilled is null || !NewBackupProof.IsNotProven(ledger, drilled, drilledAt, provenAt))
+            {
+                return null;
+            }
+
+            var check = !string.Equals(ledger.ProvingSnapshot, drilled, StringComparison.Ordinal)
+                ? string.Empty
+                : ledger switch
+                {
+                    { ProvingFailedKey: { } failed } => $": its check had failed at {failed}",
+                    { ProvingBlobsProven: { } done, ProvingBlobsLeft: { } left } => string.Create(
+                        CultureInfo.InvariantCulture, $": its check had proven {done} of {done + left} blobs"),
+                    _ => ": its check was under way",
+                };
+            var standing = ledger.ProvenSnapshot is { } proven
+                ? $"the newest backup proven here was {NewBackupProof.NameOf(archive, set, proven)}"
+                : "no backup was proven here yet";
+            return $"The backup drilled, {NewBackupProof.NameOf(archive, set, drilled)}, was not yet proven here{check}; {standing}.";
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

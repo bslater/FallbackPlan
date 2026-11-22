@@ -11,7 +11,9 @@ namespace FallbackPlan.Web.DomTests;
 /// was last proven through, and a proof under way said as progress, how many
 /// of the backup's blobs are proven of how many it needs. A destination the
 /// service reports no proof for draws no row, never one proven through
-/// nothing.
+/// nothing. A drill's stated limit that its backup was not yet proven
+/// there is drawn beside the files it restored, never as sealed content
+/// (ADR-0199 Amendment 8).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -89,7 +91,42 @@ public sealed class NewBackupProofDomTests
         await Expect(vault.GetByText("no backup proven here yet", new() { Exact = false })).ToBeVisibleAsync();
     }
 
-    private static async Task<DomHarness> StartAsync(NewBackupProofDescriptor proof)
+    [TestMethod]
+    public async Task ADrillThatStatesItsBackupWasNotYetProven_IsDrawnAsTheFilesItRestored_NeverAsSealedContent()
+    {
+        // ADR-0199 Amendment 8: the drill's stated limit is drawn as its own
+        // words beside what the drill did. Only a write-only set's drill
+        // proves to the sealed content, and only it is called that.
+        const string NotYetProven = "The backup drilled, the backup of 2026-11-21 09:00 UTC (0b0b0b0b), was not yet proven here: "
+            + "its check had proven 3 of 10 blobs; the newest backup proven here was the backup of 2026-11-20 14:03 UTC (0a0a0a0a).";
+        await using var harness = await StartAsync(
+            new NewBackupProofDescriptor(Earlier, NowMs - 86_400_000, ProvingSnapshotId: Newest, BlobsProven: 3, BlobsLeft: 7),
+            drill: (3, NotYetProven));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenAsync(context, harness);
+
+        var vault = page.Locator("details.dest[data-dest=\"docs|vault\"]");
+        await vault.Locator("> summary").ClickAsync();
+        await Expect(vault.GetByText("3 file(s) restored", new() { Exact = false })).ToBeVisibleAsync();
+        await Expect(vault.GetByText("was not yet proven here", new() { Exact = false })).ToBeVisibleAsync();
+        await Expect(vault.GetByText("sealed content", new() { Exact = false })).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task AWriteOnlySetsDrill_IsStillDrawnAsProvedToTheSealedContent()
+    {
+        await using var harness = await StartAsync(
+            new NewBackupProofDescriptor(Earlier, NowMs - 86_400_000),
+            drill: (3, "content sealed: this set is write-only, so the service could prove the road back only as far as the sealed content."));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenAsync(context, harness);
+
+        var vault = page.Locator("details.dest[data-dest=\"docs|vault\"]");
+        await vault.Locator("> summary").ClickAsync();
+        await Expect(vault.GetByText("3 file(s) proved to the sealed content", new() { Exact = false })).ToBeVisibleAsync();
+    }
+
+    private static async Task<DomHarness> StartAsync(NewBackupProofDescriptor proof, (int Files, string Limit)? drill = null)
     {
         var harness = await DomHarness.StartAsync();
         harness.Clients.Client.Respond = command => command switch
@@ -104,7 +141,9 @@ public sealed class NewBackupProofDomTests
                         [
                             new DestinationStatusDescriptor(
                                 "vault", "local-path", "in-sync", NowMs, null, "independent", "verified",
-                                FilesHeld: 400, FilesTotal: 400, HoldsNewest: true, NewBackupProof: proof),
+                                FilesHeld: 400, FilesTotal: 400, HoldsNewest: true, NewBackupProof: proof,
+                                DrilledAt: drill is null ? null : NowMs - 60_000, DrillFiles: drill?.Files ?? 0,
+                                DrillLimit: drill?.Limit),
                             new DestinationStatusDescriptor(
                                 "cloud", "s3", "in-sync", NowMs, null, "offsite", "verified",
                                 FilesHeld: 400, FilesTotal: 400, HoldsNewest: true),
