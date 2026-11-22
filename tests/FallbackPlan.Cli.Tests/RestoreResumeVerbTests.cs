@@ -25,7 +25,12 @@ namespace FallbackPlan.Cli.Tests;
 /// than that go, and how many stay is said; without <c>--forget-all</c>, or
 /// below one day, it is refused (ADR-0165). A resume goes past a file a
 /// folder would open wider only when told, the run's own acknowledgement not
-/// being kept with it (FR-RST-003, ADR-0178 Amendment 1).
+/// being kept with it (FR-RST-003, ADR-0178 Amendment 1). With
+/// <c>--from</c> a resume reads its run's backup from that destination's
+/// copy, as the console's source step lets one, and a destination the
+/// service does not declare is refused in its words before anything is
+/// resumed; beside no run, or a letting go, it is refused (FR-RST-008,
+/// ADR-0199 Amendment 10).
 /// </summary>
 [TestClass]
 public sealed class RestoreResumeVerbTests : IDisposable
@@ -97,7 +102,7 @@ public sealed class RestoreResumeVerbTests : IDisposable
             [new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000)],
             new RestoreResult(2, 0, $"/srv/restored/.fbp-quarantine/{Run}", "complete", FoundInPlace: 1, Run: Run));
 
-        var report = await ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: true, acknowledgeWiderAccess: false, token));
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: true, acknowledgeWiderAccess: false, from: null, token));
 
         Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
         var asked = Assert.ContainsSingle(client.Received.OfType<ResumeRestoreCommand>());
@@ -121,7 +126,7 @@ public sealed class RestoreResumeVerbTests : IDisposable
             new RestoreResult(2, 0, $"/srv/restored/.fbp-quarantine/{Run}", "complete", Run: Run));
 
         var report = await ThroughAsync(
-            client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: true, token));
+            client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: true, from: null, token));
 
         Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
         var asked = Assert.ContainsSingle(client.Received.OfType<ResumeRestoreCommand>());
@@ -136,10 +141,63 @@ public sealed class RestoreResumeVerbTests : IDisposable
             [new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000)],
             new RestoreResult(1, 1, $"/srv/restored/.fbp-quarantine/{Run}", "failed", Run: Run));
 
-        var report = await ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, token));
+        var report = await ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, from: null, token));
 
         Assert.IsFalse(report.Ok);
         Assert.IsTrue(report.Lines.Any(printed => printed.Contains($"restore-resume {Run}", StringComparison.Ordinal)), string.Join(" | ", report.Lines));
+    }
+
+    [TestMethod]
+    public async Task ARunResumedFromADestination_ReadsThatCopy_AndOneWithout_TheSetsOwnArchive()
+    {
+        // ADR-0199 Amendment 10: a resume is run again as it was asked, and
+        // where it reads the run's backup is the caller's to say, as the
+        // console's source step lets a person say it.
+        await using var client = new ScriptedClient(
+            [new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000)],
+            new RestoreResult(2, 0, $"/srv/restored/.fbp-quarantine/{Run}", "complete", Run: Run));
+
+        await ThroughAsync(
+            client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, from: "vault", token));
+        await ThroughAsync(
+            client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, from: null, token));
+
+        var opened = client.Received.OfType<OpenRestoreSourceCommand>().ToList();
+        Assert.HasCount(2, opened);
+        Assert.AreEqual("vault", opened[0].DestinationName);
+        Assert.IsNull(opened[1].DestinationName);
+        var resumed = client.Received.OfType<ResumeRestoreCommand>().ToList();
+        Assert.HasCount(2, resumed);
+        Assert.IsTrue(resumed.All(resume => resume.Source == ScriptedClient.SourceId), "each resume reads through the source opened for it");
+    }
+
+    [TestMethod]
+    public async Task ARunResumedFromADestinationTheServiceDoesNotDeclare_IsRefusedInItsWords_AndNothingIsResumed()
+    {
+        await using var client = new ScriptedClient(
+            [new RestoreRunDescriptor(Run, SnapshotId, "docs", "/srv/restored", 1_000)],
+            new RestoreResult(2, 0, $"/srv/restored/.fbp-quarantine/{Run}", "complete", Run: Run));
+
+        var refused = await Assert.ThrowsExactlyAsync<CliFailureException>(() => ThroughAsync(
+            client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, from: "nonesuch", token)));
+
+        Assert.Contains("No destination named 'nonesuch' is declared.", refused.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(client.Received.OfType<ResumeRestoreCommand>(), "a resume was asked through no source");
+    }
+
+    [TestMethod]
+    [DataRow("--from vault")]
+    [DataRow("--forget-all --from vault")]
+    [DataRow(Run + " --forget --from vault")]
+    public async Task ADestinationToReadFrom_BesideNoRunOrALettingGo_IsRefused(string arguments)
+    {
+        using var cli = new CliHarness();
+        await cli.InitAsync();
+
+        var refused = await cli.RunAsync(["restore-resume", .. arguments.Split(' ')]);
+
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains("--from says where a resume or its plan reads", refused.All, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -148,7 +206,7 @@ public sealed class RestoreResumeVerbTests : IDisposable
         await using var client = new ScriptedClient([]);
 
         var refused = await Assert.ThrowsExactlyAsync<CliFailureException>(
-            () => ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, token)));
+            () => ThroughAsync(client, (gateway, token) => gateway.ResumeRestoreAsync(Run, ignoreFreeSpace: false, acknowledgeWiderAccess: false, from: null, token)));
 
         Assert.Contains(Run, refused.Message, StringComparison.Ordinal);
         Assert.IsEmpty(client.Received.OfType<OpenRestoreSourceCommand>());
@@ -402,6 +460,8 @@ public sealed class RestoreResumeVerbTests : IDisposable
                     SealingPublicKey: SealingPublicKey),
                 ListBackupSetsCommand => new BackupSetsResult(
                     [new BackupSetDescriptor(SetId, "docs", "/docs", null, [], [], [])]),
+                OpenRestoreSourceCommand { DestinationName: "nonesuch" } =>
+                    new ServiceError(ServiceErrorReason.NotFound, "No destination named 'nonesuch' is declared."),
                 OpenRestoreSourceCommand { Envelope: { } envelope } when Proves(envelope) =>
                     new RestoreSourceOpenedResult(
                         SourceId, "docs", "/archives/docs", [new SnapshotDescriptor(SnapshotId, SetId, 0, 0, 2)], []),
