@@ -99,12 +99,12 @@ internal static class RestorePlanReport
 
         // Read through a destination where the backup is not proven
         // (ADR-0199 Amendments 6 and 9): said, and the backup proven there
-        // named for a run of it, holding nothing back.
+        // named for a run of it, holding nothing back. The service never
+        // says this of the backup proven there, so the one named is another.
         if (plan.NotProvenAt is { } notProven)
         {
             lines.Add(NotProven(notProven, request.SnapshotId));
-            if (notProven.Proof?.ProvenSnapshotId is { } provenId
-                && !string.Equals(provenId, request.SnapshotId, StringComparison.OrdinalIgnoreCase))
+            if (notProven.Proof?.ProvenSnapshotId is { } provenId)
             {
                 lines.Add(
                     $"proven there: to restore the newest backup proven at {notProven.Destination} instead, run "
