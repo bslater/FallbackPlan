@@ -28,7 +28,9 @@ namespace FallbackPlan.Cli.Tests;
 /// plan that names each file an earlier version stands in for, and why,
 /// holding nothing back for it (FR-RST-003, ADR-0194). And a run that says
 /// how many files it restored as the version backed up before, and which and
-/// why, the receipt naming each (FR-RST-004, ADR-0194 Amendment 1).
+/// why, the receipt naming each (FR-RST-004, ADR-0194 Amendment 1). And
+/// <c>--from</c> reads a destination's copy, the plan saying when its backup
+/// is not proven there (FR-RST-001, FR-RST-003, ADR-0199 Amendment 9).
 /// </summary>
 [TestClass]
 public sealed class GatewayRestoreReportTests
@@ -36,6 +38,8 @@ public sealed class GatewayRestoreReportTests
     private const string ThePassphrase = "the scripted installation's passphrase";
 
     private static readonly string SnapshotId = new('e', 32);
+
+    private static readonly string ProvenId = new('d', 32);
 
     private const string UnfinishedRun = "0123456789abcdef";
 
@@ -189,6 +193,96 @@ public sealed class GatewayRestoreReportTests
         Assert.AreEqual("rename", plan.Existing);
         Assert.IsTrue(plan.InPlace);
         Assert.AreEqual("/out", plan.OutputDirectory);
+    }
+
+    [TestMethod]
+    public async Task APlanFromADestination_ReadsThatCopy_AndSaysWhereItsBackupIsNotProven()
+    {
+        // ADR-0199 Amendment 9: --from reads the destination's copy, as the
+        // console's source step does, and the plan prints what the service
+        // says of the backup's proof there, holding nothing back.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 11, [], NotProvenAt: new NotProvenAtDescriptor(
+                "vault",
+                new NewBackupProofDescriptor(
+                    ProvenSnapshotId: ProvenId, ProvenCapturedAt: 1_763_640_000_000, ProvingSnapshotId: SnapshotId,
+                    ProvingCapturedAt: 1_763_726_400_000, BlobsProven: 3, BlobsLeft: 7))));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.PlanRestoreAsync(new RestoreRequest(SnapshotId, "docs/a.txt", "/out", From: "vault"), token),
+            timeout.Token);
+
+        Assert.AreEqual("vault", Assert.ContainsSingle(client.Received.OfType<OpenRestoreSourceCommand>()).DestinationName);
+        Assert.IsTrue(report.Ok, "a backup not yet proven where it is read holds nothing back: " + string.Join(" | ", report.Lines));
+        var line = Assert.ContainsSingle(report.Lines, line => line.StartsWith("not proven:", StringComparison.Ordinal));
+        Assert.Contains("this backup is not proven at vault", line, StringComparison.Ordinal);
+        Assert.Contains("its check there has proven 3 of 10 blobs", line, StringComparison.Ordinal);
+        Assert.Contains("the newest backup proven there is the backup of 2025-11-20", line, StringComparison.Ordinal);
+        var hint = Assert.ContainsSingle(report.Lines, line => line.StartsWith("proven there:", StringComparison.Ordinal));
+        Assert.Contains($"restore {ProvenId}", hint, StringComparison.Ordinal);
+        Assert.Contains("--from vault", hint, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task APlanFromADestination_WhereANewerBackupIsUnderProof_SaysNoCheckOfThisOneFinished()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 11, [], NotProvenAt: new NotProvenAtDescriptor(
+                "vault",
+                new NewBackupProofDescriptor(
+                    ProvenSnapshotId: null, ProvenCapturedAt: null, ProvingSnapshotId: ProvenId,
+                    ProvingCapturedAt: 1_763_726_400_000, BlobsProven: 3, BlobsLeft: 7))));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.PlanRestoreAsync(new RestoreRequest(SnapshotId, null, "/out", From: "vault"), token),
+            timeout.Token);
+
+        var line = Assert.ContainsSingle(report.Lines, line => line.StartsWith("not proven:", StringComparison.Ordinal));
+        Assert.Contains("no check of it there has finished", line, StringComparison.Ordinal);
+        Assert.Contains("no backup is proven there yet", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("3 of 10", line, StringComparison.Ordinal);
+        Assert.IsFalse(report.Lines.Any(line => line.StartsWith("proven there:", StringComparison.Ordinal)), "a hint named no backup");
+    }
+
+    [TestMethod]
+    public async Task ARestoreFromADestination_RunsThroughThatCopy_AndOneWithoutIt_ThroughTheSetsOwnArchive()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(2, 0, "/out", "complete"), new RestorePlanResult(2, 11, []));
+
+        await ThroughAsync(
+            client, (gateway, token) => gateway.RestoreAsync(new RestoreRequest(SnapshotId, null, "/out", From: "vault"), token),
+            timeout.Token);
+        await ThroughAsync(client, (gateway, token) => gateway.RestoreAsync(new RestoreRequest(SnapshotId, null, "/out"), token), timeout.Token);
+
+        var opened = client.Received.OfType<OpenRestoreSourceCommand>().ToList();
+        Assert.HasCount(2, opened);
+        Assert.AreEqual("vault", opened[0].DestinationName);
+        Assert.IsNull(opened[1].DestinationName);
+        Assert.IsTrue(client.Received.OfType<RunRestoreCommand>().All(run => run.Source == "scripted-source"));
+        Assert.IsEmpty(
+            client.Received.OfType<PlanRestoreCommand>().Where(plan => plan.Source is null),
+            "a plan or run asked with no source would read nothing the passphrase unlocked");
+    }
+
+    [TestMethod]
+    public async Task ARestoreFromADestinationTheServiceDoesNotDeclare_IsRefusedInTheServicesWords()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(new RestoreResult(2, 0, "/out", "complete"), new RestorePlanResult(2, 11, []));
+
+        var refused = await Assert.ThrowsExactlyAsync<CliFailureException>(async () => await ThroughAsync(
+            client, (gateway, token) => gateway.PlanRestoreAsync(new RestoreRequest(SnapshotId, null, "/out", From: "nonesuch"), token),
+            timeout.Token));
+
+        Assert.Contains("No destination named 'nonesuch' is declared.", refused.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(client.Received.OfType<PlanRestoreCommand>(), "a plan was asked through no source");
     }
 
     [TestMethod]
@@ -604,6 +698,8 @@ public sealed class GatewayRestoreReportTests
                     SealingPublicKey: SealingPublicKey),
                 ListBackupSetsCommand => new BackupSetsResult(
                     [new BackupSetDescriptor(SetId, "docs", "/docs", null, [], [], [])]),
+                OpenRestoreSourceCommand { DestinationName: "nonesuch" } =>
+                    new ServiceError(ServiceErrorReason.NotFound, "No destination named 'nonesuch' is declared."),
                 OpenRestoreSourceCommand { Envelope: { } envelope } when Proves(envelope) =>
                     new RestoreSourceOpenedResult(
                         SourceId, "docs", "/archives/docs", [new SnapshotDescriptor(SnapshotId, SetId, 0, 0, 2)], []),
