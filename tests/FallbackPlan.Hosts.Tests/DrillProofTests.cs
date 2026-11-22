@@ -98,6 +98,51 @@ public sealed class DrillProofTests : IAsyncDisposable
         Assert.IsNull(Row(runtime).DrillLimit, "a drill that failed stated a limit beside its failure");
     }
 
+    [TestMethod]
+    public async Task TheNote_SaysWhereTheDrilledBackupsProofStood_ForEachStandingTheLedgerKnows()
+    {
+        FanOut.NewBackupProofBudget = 1;
+        await using var runtime = await StartAsync();
+        await ProveFirstAsync(runtime);
+        var first = Row(runtime).ProvenSnapshot!;
+        var second = await BackUpAndSyncAsync(runtime);
+        var set = runtime.Configuration.BackupSets.Single();
+        var drilled = NewBackupProof.IdentityOf(second);
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // Taken after the newest proven there, its own proof never begun or
+        // taken over: not yet proven, with no check of its own to count.
+        runtime.DestinationSync.RecordNewBackupProof(_harness.DocsSetId, "vault", first, proving: null, cursor: null, now);
+        var after = await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout);
+        Assert.IsNotNull(after, "a backup taken after the one proven there was not said unproven");
+        Assert.Contains("was not yet proven here; the newest backup proven here was the backup of", after, StringComparison.Ordinal);
+        Assert.DoesNotContain("its check", after, StringComparison.Ordinal);
+
+        // Its own check failed at a blob.
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", first, second, cursor: null, now, blobsProven: 1, blobsLeft: 1, failedKey: "blobs/data/ab/cd");
+        Assert.Contains(
+            "was not yet proven here: its check had failed at blobs/data/ab/cd;",
+            await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
+
+        // Its own check under way, begun before the ledger counted.
+        runtime.DestinationSync.RecordNewBackupProof(_harness.DocsSetId, "vault", first, second, cursor: null, now);
+        Assert.Contains(
+            "was not yet proven here: its check was under way;",
+            await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
+
+        // No backup proven there at all.
+        runtime.DestinationSync.RecordNewBackupProof(_harness.DocsSetId, "vault", proven: null, second, cursor: null, now);
+        Assert.EndsWith(
+            "; no backup was proven here yet.",
+            await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
+
+        // The backup proven there, and one the set's catalogue does not hold.
+        runtime.DestinationSync.RecordNewBackupProof(_harness.DocsSetId, "vault", second, proving: null, cursor: null, now);
+        Assert.IsNull(await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout));
+        Assert.IsNull(await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", new string('0', 32), Timeout));
+    }
+
     private async Task ProveFirstAsync(ServiceRuntime runtime)
     {
         var pass = await Scheduler.RunPassAsync(runtime, _start, Timeout);

@@ -368,8 +368,9 @@ internal static class RecoveryDrillJob
             // A passing drill proves the files it sampled come back, not every
             // blob the backup needs whole at the destination: where the
             // backup's proof there had not ended, that is a limit of its own
-            // (ADR-0199 Amendment 8).
-            if (outcome is { Failure: null, Files: > 0 } && drilled is not null
+            // (ADR-0199 Amendment 8). Only a passing drill proves files; a
+            // drill that failed proved none.
+            if (outcome is { Files: > 0 } && drilled is not null
                 && await NotYetProvenAsync(runtime, set, destinationName, drilled, cancellationToken).ConfigureAwait(false)
                     is { } notYetProven)
             {
