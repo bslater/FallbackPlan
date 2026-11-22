@@ -17,6 +17,8 @@ Every path starts at the passphrase. A person sees a backup's file names — lis
 > **2026-10 ([ADR-0117](../adr/0117-the-command-line-asks-a-restore-as-the-console-does.md)).** The command line asks the runs the console asks: several paths, the original location, a policy for a file in the way, and a landing in place. The original location needs the service, which knows a set's roots.
 >
 > **2026-10 ([ADR-0119](../adr/0119-direct-mode-restores-to-the-original-location.md)).** Direct mode restores the original location too: a set's roots are in the state directory's configuration, which the service reads them from, and the service and direct mode map a plan onto them with the same code.
+>
+> **2026-11 ([ADR-0199 Amendment 9](../adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-9-2026-11--the-command-line-reads-a-destinations-copy-and-says-its-proof)).** The command line reads a destination's copy too: `restore --from <destination>` reads the run and its plan through it, through the service, as the console's source step does, and the plan says when its backup is not proven there. Direct mode, which opens no source, refuses it.
 
 ## 2. Restore planning
 

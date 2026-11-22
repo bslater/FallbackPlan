@@ -118,6 +118,9 @@
   <data name="DirectGateway_CatalogueKnowsNothingUnderSnapshot" xml:space="preserve">
     <value>The catalogue knows nothing under snapshot {0} — run `rebuild-index` first.</value>
   </data>
+  <data name="DirectGateway_FromNeedsTheService" xml:space="preserve">
+    <value>--from reads a destination's copy through the service, which opens it under the grant the passphrase derives; in direct mode nothing opens it. Run the restore through the service, or point --repo at that copy itself.</value>
+  </data>
   <data name="DirectGateway_RestoreWouldNotFit" xml:space="preserve">
     <value>{0} Nothing was written. Free some space or choose another folder, or pass --ignore-free-space to restore anyway: a volume that compresses what it stores can hold more than this estimate.</value>
   </data>
