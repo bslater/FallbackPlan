@@ -75,6 +75,8 @@ Plans are exportable and resumable. A plan that reveals unacceptable degradation
 
 > **2026-10 ([ADR-0116](../adr/0116-the-console-resumes-a-restore-it-did-not-see-end.md)).** The console lists them too, on its snapshots page, and offers to restore what is left from there and from the run's notice. Its wizard unlocks the passphrase, opens a source of the run's own set, and asks the service to resume the run by its name, with nothing else to choose.
 
+> **2026-11 ([ADR-0199 Amendment 10](../adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-10-2026-11--a-resume-reads-a-destinations-copy-too)).** `restore-resume <run> --from <destination>` resumes a run, and plans its resume, from that destination's copy, as the console's resume reads through the source it chooses. Where a resume reads is the caller's to say each time and is not kept with the run, and a resume's plan offers no other backup than its run's.
+
 > **2026-10 ([ADR-0129](../adr/0129-a-restore-cut-short-resumes-within-a-file.md)).** Through the service, a file a run was cut short in is resumed from what the run had assembled of it. Each run keeps a part of each such file under its name, and a resume takes the part up only as far as each segment proves against its object identifier and each hole reads as zeroes, reading only the rest from the store. In direct mode the file is restored whole, as before.
 
 > **2026-10 ([ADR-0130](../adr/0130-a-restore-says-which-files-it-resumed-within.md)).** The receipt, at schema 11, says where each file a resume wrote from its part was resumed, and the result counts those files, which the command line and the console say.

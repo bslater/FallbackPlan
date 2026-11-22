@@ -473,6 +473,11 @@ internal static class Strings
     internal static string CliApplication_ALetGoIsNotPlanned => Get(nameof(CliApplication_ALetGoIsNotPlanned));
 
     /// <summary>
+    /// --from says where a resume or its plan reads the run's backup, and a list of runs or a letting go reads none: restore-resume &lt;run&gt; --from &lt;destination&gt;.
+    /// </summary>
+    internal static string CliApplication_FromReadsAResume => Get(nameof(CliApplication_FromReadsAResume));
+
+    /// <summary>
     /// This snapshot's set is not configured in {0}, so nothing here says where its files were captured. Restore it to a folder with --output.
     /// </summary>
     private static string DirectGateway_OriginalSetNotConfigured => Get(nameof(DirectGateway_OriginalSetNotConfigured));

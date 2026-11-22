@@ -212,10 +212,15 @@ public interface IOperationGateway : IAsyncDisposable
     /// Whether to restore although a folder would open a file wider than it
     /// was (ADR-0178 Amendment 1): the run's own acknowledgement is not kept.
     /// </param>
+    /// <param name="from">
+    /// The destination whose copy of the run's backup to read (ADR-0199
+    /// Amendment 10); null reads the set's own archive. Where a resume reads is
+    /// not the run's: it is asked again as it was, through the source named.
+    /// </param>
     /// <param name="cancellationToken">Cancels the resume.</param>
     /// <returns>What the restore says; not ok when a file failed.</returns>
     ValueTask<OperationReport> ResumeRestoreAsync(
-        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, CancellationToken cancellationToken);
+        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, string? from, CancellationToken cancellationToken);
 
     /// <summary>
     /// Plans the resume of a restore run left unfinished, by its name alone
@@ -223,9 +228,10 @@ public interface IOperationGateway : IAsyncDisposable
     /// the resume will meet it, and restores nothing.
     /// </summary>
     /// <param name="run">The run, as the list names it.</param>
+    /// <param name="from">The destination whose copy of the run's backup to read; null reads the set's own archive.</param>
     /// <param name="cancellationToken">Cancels the plan.</param>
     /// <returns>The plan's lines; not ok unless the resume would bring back every file and fit.</returns>
-    ValueTask<OperationReport> PlanResumeRestoreAsync(string run, CancellationToken cancellationToken);
+    ValueTask<OperationReport> PlanResumeRestoreAsync(string run, string? from, CancellationToken cancellationToken);
 
     /// <summary>Lets a restore run left unfinished go (ADR-0115): the service names it no more.</summary>
     /// <param name="run">The run, as the list names it.</param>
@@ -759,7 +765,7 @@ internal sealed class ServiceGateway(
 
     /// <inheritdoc/>
     public async ValueTask<OperationReport> ResumeRestoreAsync(
-        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, CancellationToken cancellationToken)
+        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, string? from, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(run);
 
@@ -771,7 +777,7 @@ internal sealed class ServiceGateway(
             ?? throw new CliFailureException(Strings.FormatServiceGateway_NoSuchRestoreRun(run));
 
         var source = (await GrantedSources.OpenHoldingAsync(
-            client, passphraseEnvironmentVariable, "A restore", named.SnapshotId, destination: null, cancellationToken)
+            client, passphraseEnvironmentVariable, "A restore", named.SnapshotId, from, cancellationToken)
             .ConfigureAwait(false)).SourceId;
         try
         {
@@ -787,7 +793,7 @@ internal sealed class ServiceGateway(
     }
 
     /// <inheritdoc/>
-    public async ValueTask<OperationReport> PlanResumeRestoreAsync(string run, CancellationToken cancellationToken)
+    public async ValueTask<OperationReport> PlanResumeRestoreAsync(string run, string? from, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(run);
 
@@ -799,7 +805,7 @@ internal sealed class ServiceGateway(
             ?? throw new CliFailureException(Strings.FormatServiceGateway_NoSuchRestoreRun(run));
 
         var source = (await GrantedSources.OpenHoldingAsync(
-            client, passphraseEnvironmentVariable, "A restore's plan", named.SnapshotId, destination: null, cancellationToken)
+            client, passphraseEnvironmentVariable, "A restore's plan", named.SnapshotId, from, cancellationToken)
             .ConfigureAwait(false)).SourceId;
         try
         {
@@ -2160,11 +2166,11 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> ResumeRestoreAsync(
-        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, CancellationToken cancellationToken) =>
+        string run, bool ignoreFreeSpace, bool acknowledgeWiderAccess, string? from, CancellationToken cancellationToken) =>
         throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
 
     /// <inheritdoc/>
-    public ValueTask<OperationReport> PlanResumeRestoreAsync(string run, CancellationToken cancellationToken) =>
+    public ValueTask<OperationReport> PlanResumeRestoreAsync(string run, string? from, CancellationToken cancellationToken) =>
         throw new CliFailureException(Strings.DirectGateway_RestoreRunsNeedTheService);
 
     /// <inheritdoc/>

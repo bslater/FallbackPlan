@@ -5,6 +5,7 @@ using System.Text;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
+using FallbackPlan.Application;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -40,7 +41,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// parts of each with it (ADR-0162), or only those begun longer ago than it
 /// says, keeping the rest and their parts (ADR-0165). A resume is refused
 /// where a folder would open a file wider than it was, as its run was, unless
-/// it says to go on (FR-RST-003, ADR-0178 Amendment 1).
+/// it says to go on (FR-RST-003, ADR-0178 Amendment 1). The command line
+/// resumes a run, and plans its resume, from a destination's copy, and a
+/// destination the service does not declare is refused leaving the run as it
+/// was (FR-RST-008, ADR-0199 Amendment 10).
 /// </summary>
 [TestClass]
 public sealed partial class RestoreUnfinishedServiceTests : IDisposable
@@ -270,6 +274,55 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         var resumed = await CliAsync("restore-resume", run, "--acknowledge-wider-access");
         Assert.AreEqual(0, resumed.ExitCode, resumed.Output + resumed.Error);
         Assert.IsEmpty(await RunsAsync(handler));
+    }
+
+    [TestMethod]
+    public async Task ARunCutShort_IsResumedFromADestinationsCopy_AndOneNotDeclaredIsRefused_LeavingTheRun()
+    {
+        // ADR-0199 Amendment 10: restore-resume --from reads the run's backup
+        // from that destination's copy. The service's own pass backs the set
+        // up and lands it at the vault; the set's own archive is then
+        // spoiled, so only the vault's copy restores it.
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteSourceFile("nested/deeper.txt", "deeper");
+        _harness.WriteConfiguration("every 1h");
+        await _harness.SetupAsync();
+        await using var runtime = await StartAsync();
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, _timeout.Token);
+        Assert.AreEqual(1, pass.Ran, "the pass ran no backup");
+        await pass.Transfers.WaitAsync(_timeout.Token);
+
+        // The pass drills what landed; done before a run is cut short, so the
+        // seam that cuts it short stops no drill.
+        await pass.Drills.WaitAsync(_timeout.Token);
+        var row = runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!;
+        Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var run = (await CutShortAsync(handler)).Run!;
+
+        foreach (var asked in new[] { new[] { "restore-resume", run, "--from", "nonesuch", "--plan" }, ["restore-resume", run, "--from", "nonesuch"] })
+        {
+            var refused = await CliAsync(asked);
+            Assert.AreNotEqual(0, refused.ExitCode, refused.Output + refused.Error);
+            Assert.Contains("No destination named 'nonesuch' is declared.", refused.Output + refused.Error, StringComparison.Ordinal);
+        }
+
+        // The pass's drill restores its samples as runs of their own, so the
+        // run is looked for by its name.
+        Assert.IsTrue((await RunsAsync(handler)).Any(listed => listed.Run == run), "a refused resume leaves the run as it was");
+
+        Tamper(_harness.RepositoryPath);
+        var planned = await CliAsync("restore-resume", run, "--from", "vault", "--plan");
+        Assert.AreEqual(0, planned.ExitCode, planned.Output + planned.Error);
+        var resumed = await CliAsync("restore-resume", run, "--from", "vault");
+
+        Assert.AreEqual(0, resumed.ExitCode, resumed.Output + resumed.Error);
+        Assert.AreEqual("hello", await File.ReadAllTextAsync(Path.Combine(Destination, ".fbp-quarantine", run, "notes.txt"), _timeout.Token));
+        Assert.AreEqual(
+            "deeper", await File.ReadAllTextAsync(Path.Combine(Destination, ".fbp-quarantine", run, "nested", "deeper.txt"), _timeout.Token));
+        Assert.IsFalse((await RunsAsync(handler)).Any(listed => listed.Run == run), "a run that finished is named no more");
     }
 
     [TestMethod]
