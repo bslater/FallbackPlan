@@ -171,6 +171,41 @@ internal static class NewBackupProof
     }
 
     /// <summary>
+    /// Whether the ledger knows <paramref name="backup"/> is not proven at its
+    /// destination (ADR-0199 Amendment 6): it is the backup whose proof is
+    /// under way there, no backup is proven there, or it was taken after the
+    /// newest backup proven there.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is said where the ledger recorded no proof at the destination,
+    /// as on a machine set up again to restore, whose ledger is new; nor of a
+    /// backup taken before the newest proven there, whose own proof may have
+    /// ended or been taken over, which the ledger does not keep; nor where
+    /// either backup cannot be dated.
+    /// </remarks>
+    /// <param name="ledger">The destination's ledger row, or null where it has none.</param>
+    /// <param name="backup">The backup's record key.</param>
+    /// <param name="capturedAt">When the backup was taken, Unix milliseconds, where known.</param>
+    /// <param name="provenCapturedAt">When the newest backup proven there was taken, where known.</param>
+    /// <returns>Whether it is known not proven there.</returns>
+    public static bool IsNotProven(DestinationSyncRecord? ledger, string backup, ulong? capturedAt, ulong? provenCapturedAt)
+    {
+        ThrowHelper.ThrowIfNull(backup);
+        if (ledger is null || (ledger.ProvenSnapshot is null && ledger.ProvingSnapshot is null)
+            || string.Equals(ledger.ProvenSnapshot, backup, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (ledger.ProvenSnapshot is null || string.Equals(ledger.ProvingSnapshot, backup, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return capturedAt is { } taken && provenCapturedAt is { } provenTaken && taken > provenTaken;
+    }
+
+    /// <summary>
     /// The identity a backup's record key carries, hex as the snapshot listing
     /// prints it: its last segment decoded, or the segment itself where it
     /// does not decode.

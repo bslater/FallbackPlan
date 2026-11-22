@@ -898,8 +898,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// that did not prove at the last pass that asked about it. Additive: a
     /// pre-1.92 service names none, and its proof reads as under way.
     /// </para>
+    /// <para>
+    /// 1.93 has a restore's plan read through a destination say when the
+    /// backup it restores is not proven there (FR-RST-003, ADR-0199
+    /// Amendment 6). `RestorePlanResult` gains `not_proven_at`: the
+    /// destination's name, and `proof`, where its proof of new backups stands,
+    /// as its status row's `new_backup_proof` says it. Null for a plan read
+    /// from the set's own archive, and for a backup proven there or taken
+    /// before it. Additive: a pre-1.93 service says nothing, and a client
+    /// warns of nothing.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 92);
+    public static ContractVersion Current { get; } = new(1, 93);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>
