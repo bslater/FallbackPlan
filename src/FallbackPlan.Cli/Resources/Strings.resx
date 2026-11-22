@@ -217,6 +217,9 @@
   <data name="CliApplication_ALetGoIsNotPlanned" xml:space="preserve">
     <value>--forget lets a run go and --plan plans its resume: ask one or the other.</value>
   </data>
+  <data name="CliApplication_FromReadsAResume" xml:space="preserve">
+    <value>--from says where a resume or its plan reads the run's backup, and a list of runs or a letting go reads none: restore-resume &lt;run&gt; --from &lt;destination&gt;.</value>
+  </data>
   <data name="DirectGateway_OriginalSetNotConfigured" xml:space="preserve">
     <value>This snapshot's set is not configured in {0}, so nothing here says where its files were captured. Restore it to a folder with --output.</value>
   </data>

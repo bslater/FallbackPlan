@@ -1833,6 +1833,11 @@ public static class CliApplication
                 Description = "Say what the resume would do and resume nothing: what it would write and read, whether it "
                     + "fits, and how many files the run already landed.",
             };
+            var resumeFromOption = new Option<string>("--from")
+            {
+                Description = "Read the run's backup from this destination's copy rather than the set's own archive, as "
+                    + "the console's source step lets a resume. The plan says when the backup is not yet proven there.",
+            };
             var command = WithRemoteCapableSession(new Command(
                 "restore-resume",
                 "Resume a restore the service began and has not seen finish, by its name alone: it is run again as it "
@@ -1844,6 +1849,7 @@ public static class CliApplication
             command.Options.Add(ignoreFreeSpaceOption);
             command.Options.Add(acknowledgeWiderAccessOption);
             command.Options.Add(planOption);
+            command.Options.Add(resumeFromOption);
             command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() =>
@@ -1853,6 +1859,15 @@ public static class CliApplication
                 var plan = parse.GetValue(planOption);
                 var forgetAll = parse.GetValue(forgetAllOption);
                 var olderThanDays = parse.GetValue(olderThanOption);
+                var from = parse.GetValue(resumeFromOption);
+
+                // A list of runs and a letting go read no backup, so there is
+                // nowhere for them to read it from.
+                if (from is not null && (run is null || forget || forgetAll))
+                {
+                    throw new CliFailureException(Strings.CliApplication_FromReadsAResume);
+                }
+
                 if (forgetAll && (run is not null || forget || plan))
                 {
                     throw new CliFailureException(Strings.CliApplication_ForgetAllNamesNoRestoreRun);
@@ -1892,9 +1907,9 @@ public static class CliApplication
                         : forget
                             ? gateway.ForgetRestoreRunAsync(run, token)
                             : plan
-                                ? gateway.PlanResumeRestoreAsync(run, token)
+                                ? gateway.PlanResumeRestoreAsync(run, from, token)
                                 : gateway.ResumeRestoreAsync(
-                                    run, parse.GetValue(ignoreFreeSpaceOption), parse.GetValue(acknowledgeWiderAccessOption), token),
+                                    run, parse.GetValue(ignoreFreeSpaceOption), parse.GetValue(acknowledgeWiderAccessOption), from, token),
                     cancellationToken);
             }));
         }

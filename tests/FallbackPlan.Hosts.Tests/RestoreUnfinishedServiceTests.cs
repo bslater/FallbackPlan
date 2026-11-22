@@ -5,6 +5,7 @@ using System.Text;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
+using FallbackPlan.Application;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -279,10 +280,24 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
     public async Task ARunCutShort_IsResumedFromADestinationsCopy_AndOneNotDeclaredIsRefused_LeavingTheRun()
     {
         // ADR-0199 Amendment 10: restore-resume --from reads the run's backup
-        // from that destination's copy. The set's own archive is spoiled once
-        // the vault holds the backup, so only the vault's copy restores it.
+        // from that destination's copy. The service's own pass backs the set
+        // up and lands it at the vault; the set's own archive is then
+        // spoiled, so only the vault's copy restores it.
         Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
-        await using var runtime = await BackUpAndStartAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteSourceFile("nested/deeper.txt", "deeper");
+        _harness.WriteConfiguration("every 1h");
+        await _harness.SetupAsync();
+        await using var runtime = await StartAsync();
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, _timeout.Token);
+        Assert.AreEqual(1, pass.Ran, "the pass ran no backup");
+        await pass.Transfers.WaitAsync(_timeout.Token);
+
+        // The pass drills what landed; done before a run is cut short, so the
+        // seam that cuts it short stops no drill.
+        await pass.Drills.WaitAsync(_timeout.Token);
+        var row = runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!;
+        Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
         var run = (await CutShortAsync(handler)).Run!;
@@ -294,12 +309,11 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
             Assert.Contains("No destination named 'nonesuch' is declared.", refused.Output + refused.Error, StringComparison.Ordinal);
         }
 
-        Assert.AreEqual(run, Assert.ContainsSingle(await RunsAsync(handler)).Run, "a refused resume leaves the run as it was");
+        // The pass's drill restores its samples as runs of their own, so the
+        // run is looked for by its name.
+        Assert.IsTrue((await RunsAsync(handler)).Any(listed => listed.Run == run), "a refused resume leaves the run as it was");
 
-        var synced = await handler.ExecuteAsync(new SyncCommand("docs", "vault"), _timeout.Token);
-        Assert.IsInstanceOfType<SyncResult>(synced, (synced as ServiceError)?.Message);
         Tamper(_harness.RepositoryPath);
-
         var planned = await CliAsync("restore-resume", run, "--from", "vault", "--plan");
         Assert.AreEqual(0, planned.ExitCode, planned.Output + planned.Error);
         var resumed = await CliAsync("restore-resume", run, "--from", "vault");
@@ -308,7 +322,7 @@ public sealed partial class RestoreUnfinishedServiceTests : IDisposable
         Assert.AreEqual("hello", await File.ReadAllTextAsync(Path.Combine(Destination, ".fbp-quarantine", run, "notes.txt"), _timeout.Token));
         Assert.AreEqual(
             "deeper", await File.ReadAllTextAsync(Path.Combine(Destination, ".fbp-quarantine", run, "nested", "deeper.txt"), _timeout.Token));
-        Assert.IsEmpty(await RunsAsync(handler), "a run that finished is named no more");
+        Assert.IsFalse((await RunsAsync(handler)).Any(listed => listed.Run == run), "a run that finished is named no more");
     }
 
     [TestMethod]
