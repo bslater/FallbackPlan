@@ -246,11 +246,7 @@ internal static class RecoveryDrillJob
             : null;
         return RunAsync(
             runtime,
-            new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service)
-            {
-                PacesRestoreSources = !userInitiated,
-                RestoresForADrill = true,
-            },
+            HandlerFor(runtime, pacesSources: !userInitiated),
             set,
             destinationName,
             nowMs,
@@ -299,8 +295,7 @@ internal static class RecoveryDrillJob
         Random draw,
         CancellationToken cancellationToken) =>
         RunAsync(
-            runtime, new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service) { RestoresForADrill = true },
-            set, destinationName,
+            runtime, HandlerFor(runtime, pacesSources: false), set, destinationName,
             nowMs, budget, draw,
             cancellationToken);
 
@@ -332,6 +327,18 @@ internal static class RecoveryDrillJob
             set.Id,
             destinationName,
             () => DrillAndRecordAsync(runtime, handler, set, destinationName, nowMs, budget, draw, cancellationToken));
+
+    /// <summary>
+    /// The handler a drill restores its samples through: the service's own,
+    /// whose restores are never on record as a person's are (ADR-0115
+    /// Amendment 1), pacing its reads where nobody waits on it.
+    /// </summary>
+    private static ServiceCommandHandler HandlerFor(ServiceRuntime runtime, bool pacesSources) =>
+        new(runtime, RemoteBindingState.Off, CallerScope.Service)
+        {
+            PacesRestoreSources = pacesSources,
+            RestoresForADrill = true,
+        };
 
     private static async Task<DrillOutcome> DrillAndRecordAsync(
         ServiceRuntime runtime,

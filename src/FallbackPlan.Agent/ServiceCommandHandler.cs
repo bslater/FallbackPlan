@@ -1468,7 +1468,9 @@ public sealed partial class ServiceCommandHandler(
     private void Settle(RestoreRunRecord record, RestoreResult? answered)
     {
         // A drill's sample is never on record, however it ended: the drill
-        // says how it went, and nothing is left for a person to resume.
+        // says how it went, and nothing is left for a person to resume. A
+        // sample that stops at its sealed content keeps its parts as a run
+        // cut short does, so they go with it.
         if (RestoresForADrill)
         {
             runtime.RestoreRuns.Finish(record.Run);

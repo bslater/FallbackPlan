@@ -109,13 +109,13 @@ A drill ([ADR-0054](0054-scheduled-restore-drills.md)) restores a sample of file
 - **Under way while it runs.** It is under way for its set, as any run is, so a retention pass holds the set's blobs while it reads them ([ADR-0172](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) Amendment 3).
 - **Never on record.** It is not written to `restore-runs.json`. So it is never listed, let go, resumed or said at start, and a machine stopping mid-drill leaves nothing to say.
 - **Not noticed.** However it ends, it raises no notice and withdraws none. The drill says how it went, in its own record and its own notice.
-- **Not kept.** It keeps no receipt among a person's receipts, and lets go any parts it assembled.
+- **Not kept.** It keeps no receipt among a person's receipts, and lets go the parts it assembled, which a sample that stops at its sealed content keeps as a run cut short does.
 
 This holds for the pass's drill and for one a person asks for (ADR-0054 Amendment 6) alike. A person's restore is named, noticed and kept as before.
 
 **Built:**
 - The journal: `Application/RestoreRunJournal`'s `BeginUnrecorded` holds a run under way, for its set, without writing or listing it; finishing or leaving it ends it.
-- The service: `Agent/ServiceCommandHandler`'s `RestoresForADrill`, set only on the handler `Agent/RecoveryDrillJob` restores through, begins a run that way, keeps no receipt, and settles it by letting it and its parts go. `ServiceOptions.RestoreBegun` lets a test see a run while it is under way.
+- The service: `Agent/ServiceCommandHandler`'s `RestoresForADrill`, set only on the handler `Agent/RecoveryDrillJob` restores through, begins a run that way, keeps no receipt, and settles it by letting it and its parts go. `Agent/RecoveryDrillJob` builds that handler in one place. `ServiceOptions.RestoreBegun` lets a test see a run while it is under way.
 - The tests:
   - `Application.Tests/RestoreRunJournalTests`: a run begun off the record says its set is being restored but is never written, listed, let go or left, and a run on record beside it is written without it; one that finishes is under way no more.
   - `Hosts.Tests/DrillRestoresOffTheRecordTests`:

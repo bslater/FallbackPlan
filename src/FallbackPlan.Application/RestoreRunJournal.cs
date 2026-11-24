@@ -205,8 +205,10 @@ public sealed class RestoreRunJournal
     {
         lock (_gate)
         {
-            return _runs.Concat(_unrecorded.Values).Any(run =>
-                _live.Contains(run.Run) && string.Equals(run.SetName, setName, StringComparison.Ordinal));
+            // A run off the record is held only while it is under way.
+            return _runs.Any(run =>
+                    _live.Contains(run.Run) && string.Equals(run.SetName, setName, StringComparison.Ordinal))
+                || _unrecorded.Values.Any(run => string.Equals(run.SetName, setName, StringComparison.Ordinal));
         }
     }
 
