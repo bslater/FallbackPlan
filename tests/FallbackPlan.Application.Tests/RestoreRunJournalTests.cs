@@ -11,7 +11,10 @@ namespace FallbackPlan.Application.Tests;
 /// that wrote it, because a run cut short by the machine stopping is the one
 /// nobody heard end. It also says whether a restore of a set is under way,
 /// which a retention pass of that set holds its blobs for (FR-GC-003,
-/// ADR-0172 Amendment 3).
+/// ADR-0172 Amendment 3). A run begun off the record, as a drill's sample
+/// is, says its set is being restored while it is under way and is never
+/// written, listed or left, however it ends (FR-RST-008, ADR-0115
+/// Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class RestoreRunJournalTests
@@ -105,6 +108,44 @@ public sealed class RestoreRunJournalTests
         journal.Begin(Record(Run) with { SetName = "docs" });
         journal.Finish(Run);
         Assert.IsFalse(journal.IsUnderWayFor("docs"), "a run that finished reads nothing any more");
+    }
+
+    [TestMethod]
+    public void ARunBegunOffTheRecord_SaysItsSetIsBeingRestored_ButIsNeverWrittenListedOrLeft()
+    {
+        var journal = RestoreRunJournal.Open(_state);
+
+        journal.BeginUnrecorded(Record(Run) with { SetName = "docs" });
+
+        Assert.IsTrue(journal.IsUnderWayFor("docs"), "a retention pass holds a set's blobs while a drill restores from it");
+        Assert.IsTrue(journal.IsLive(Run));
+        Assert.IsEmpty(journal.Runs);
+        Assert.IsEmpty(journal.Unfinished);
+        Assert.IsNull(journal.Find(Run));
+        Assert.IsFalse(journal.Forget(Run), "a person lets go only a run on record");
+
+        // A run on record begun beside it is written without it.
+        journal.Begin(Record(Other) with { SetName = "docs" });
+        Assert.AreEqual(Other, Assert.ContainsSingle(RestoreRunJournal.Open(_state).Runs).Run);
+
+        journal.Leave(Run);
+        Assert.IsFalse(journal.IsLive(Run));
+        Assert.AreEqual(Other, Assert.ContainsSingle(journal.Unfinished).Run, "a run off the record that ended unfinished was left");
+        journal.Finish(Other);
+        Assert.IsFalse(journal.IsUnderWayFor("docs"), "a run off the record that ended is still under way");
+    }
+
+    [TestMethod]
+    public void ARunBegunOffTheRecord_ThatFinishes_IsUnderWayNoMore()
+    {
+        var journal = RestoreRunJournal.Open(_state);
+        journal.BeginUnrecorded(Record(Run) with { SetName = "docs" });
+
+        journal.Finish(Run);
+
+        Assert.IsFalse(journal.IsUnderWayFor("docs"));
+        Assert.IsFalse(journal.IsLive(Run));
+        Assert.IsFalse(File.Exists(FilePath), "a run off the record was written");
     }
 
     [TestMethod]
