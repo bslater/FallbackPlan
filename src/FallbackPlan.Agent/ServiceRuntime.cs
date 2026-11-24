@@ -134,6 +134,15 @@ public sealed record ServiceOptions
     internal Func<string, CancellationToken, ValueTask>? EnteredScanning { get; init; }
 
     /// <summary>
+    /// Asked with a restore run's name once the run is under way and before
+    /// it writes: a test harness's view of what the service says of a run
+    /// while it runs, which no answer and no probe reaches, the room being
+    /// measured before the run begins. Null, the production value, observes
+    /// nothing.
+    /// </summary>
+    internal Action<string>? RestoreBegun { get; init; }
+
+    /// <summary>
     /// What says which of a set's folders changed between its backups
     /// (ADR-0188): on Windows the volume's change journal, on Linux the
     /// process's own watch of the sets' folders (ADR-0190), on macOS the

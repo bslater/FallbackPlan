@@ -249,6 +249,7 @@ internal static class RecoveryDrillJob
             new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service)
             {
                 PacesRestoreSources = !userInitiated,
+                RestoresForADrill = true,
             },
             set,
             destinationName,
@@ -298,7 +299,8 @@ internal static class RecoveryDrillJob
         Random draw,
         CancellationToken cancellationToken) =>
         RunAsync(
-            runtime, new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service), set, destinationName,
+            runtime, new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service) { RestoresForADrill = true },
+            set, destinationName,
             nowMs, budget, draw,
             cancellationToken);
 

@@ -338,6 +338,16 @@ public sealed partial class ServiceCommandHandler
     /// </summary>
     internal bool PacesRestoreSources { get; init; }
 
+    /// <summary>
+    /// Whether this handler is the one a drill restores its samples through
+    /// (ADR-0115 Amendment 1). Its restores are the service's own, never a
+    /// person's: each is under way while it runs, so a retention pass holds
+    /// its set's blobs, but none is on record, noticed, kept as a receipt or
+    /// left with parts, however it ends. Every handler that serves a person
+    /// leaves it false.
+    /// </summary>
+    internal bool RestoresForADrill { get; init; }
+
     private Application.ByteRateLimiter? SourcePacing(Application.DestinationConfiguration destination) =>
         PacesRestoreSources ? runtime.Pacing.ForDestination(destination) : null;
 

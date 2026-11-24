@@ -129,10 +129,10 @@ public sealed class RestoreRunJournalTests
         Assert.AreEqual(Other, Assert.ContainsSingle(RestoreRunJournal.Open(_state).Runs).Run);
 
         journal.Leave(Run);
+        journal.Leave(Other);
         Assert.IsFalse(journal.IsLive(Run));
-        Assert.AreEqual(Other, Assert.ContainsSingle(journal.Unfinished).Run, "a run off the record that ended unfinished was left");
-        journal.Finish(Other);
         Assert.IsFalse(journal.IsUnderWayFor("docs"), "a run off the record that ended is still under way");
+        Assert.AreEqual(Other, Assert.ContainsSingle(journal.Unfinished).Run, "a run off the record that ended unfinished was left");
     }
 
     [TestMethod]

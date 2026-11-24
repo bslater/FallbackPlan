@@ -88,7 +88,9 @@ internal sealed record RestoreRunFile
 /// Sacrificial, like everything beside it: a run it forgot is still resumed
 /// by its folder's name (ADR-0109). Which runs are under way is the running
 /// process's own knowledge and is never written: every run on record when
-/// the journal opens was left by a process that has gone.
+/// the journal opens was left by a process that has gone. A run begun off
+/// the record, as a drill's sample is (ADR-0115 Amendment 1), is only ever
+/// that knowledge.
 /// </remarks>
 public sealed class RestoreRunJournal
 {
@@ -100,6 +102,7 @@ public sealed class RestoreRunJournal
     private readonly string _path;
     private readonly List<RestoreRunRecord> _runs;
     private readonly HashSet<string> _live = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RestoreRunRecord> _unrecorded = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
 
     private RestoreRunJournal(string path, List<RestoreRunRecord> runs)
@@ -202,7 +205,7 @@ public sealed class RestoreRunJournal
     {
         lock (_gate)
         {
-            return _runs.Any(run =>
+            return _runs.Concat(_unrecorded.Values).Any(run =>
                 _live.Contains(run.Run) && string.Equals(run.SetName, setName, StringComparison.Ordinal));
         }
     }
@@ -233,13 +236,34 @@ public sealed class RestoreRunJournal
         }
     }
 
-    /// <summary>Drops a run a run of it finished.</summary>
+    /// <summary>
+    /// Records a run about to write that is the service's own, a drill's
+    /// sample (ADR-0115 Amendment 1): under way while it runs, as any run
+    /// is, so a retention pass holds its set's blobs, but never on record.
+    /// It is not written, listed or let go, and once it ends, however it
+    /// ends, nothing names it.
+    /// </summary>
+    /// <param name="record">The run, as it was asked.</param>
+    public void BeginUnrecorded(RestoreRunRecord record)
+    {
+        ThrowHelper.ThrowIfNull(record);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(record.Run);
+
+        lock (_gate)
+        {
+            _unrecorded[record.Run] = record;
+            _live.Add(record.Run);
+        }
+    }
+
+    /// <summary>Drops a run a run of it finished, or one begun off the record however it ended.</summary>
     /// <param name="run">The run's name.</param>
     public void Finish(string run)
     {
         lock (_gate)
         {
             _live.Remove(run);
+            _unrecorded.Remove(run);
             if (_runs.RemoveAll(existing => string.Equals(existing.Run, run, StringComparison.Ordinal)) > 0)
             {
                 WriteLocked();
@@ -247,13 +271,17 @@ public sealed class RestoreRunJournal
         }
     }
 
-    /// <summary>Records that a run under way ended without finishing; it stays on record.</summary>
+    /// <summary>
+    /// Records that a run under way ended without finishing; it stays on
+    /// record, unless it was begun off the record.
+    /// </summary>
     /// <param name="run">The run's name.</param>
     public void Leave(string run)
     {
         lock (_gate)
         {
             _live.Remove(run);
+            _unrecorded.Remove(run);
         }
     }
 

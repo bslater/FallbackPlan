@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** FR-RST-008 (amended: the service names each restore run it began and has not seen finish, says so, and resumes one by its name alone)
+**Requirements:** FR-RST-008 (amended: the service names each restore run it began and has not seen finish, says so, and resumes one by its name alone); FR-RST-008, FR-RST-004 and FR-DRL-002 (amended by [Amendment 1](#amendment-1-2026-11--a-drills-restores-are-never-on-record): a drill's sampled restores are under way while they run, but never on record, noticed, kept as receipts or left with parts)
 **Related:** [ADR-0109](0109-a-restore-cut-short-is-resumed.md) (a resume, and the record that left finding the run to whoever read its folder), [ADR-0110](0110-the-console-resumes-a-restore-cut-short.md) (a result names its run, and the record that left a run the console did not see end to the command line), [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md) (a backup's file names need the passphrase), [ADR-0049](0049-service-lifecycle-hygiene.md) (the job journal's crash leftovers, noticed at start), [architecture 08 §2](../architecture/08-restore-and-recovery.md#2-restore-planning)
 
 **Built:**
@@ -38,6 +38,8 @@ Once a run is planned and found to fit, and before its first file, the service r
 - **What it keeps:** the run's name, its snapshot and set, the paths it was asked for, where it writes, its target, policy and whether it lands in place, and when it began.
 - **Under which name:** the one its result gives (ADR-0110). A resumed quarantined run is the run it continues, begun again. A resumed run in place names itself, and takes the place of the run it continues.
 - **Which runs are under way:** the running process's own knowledge, never written. Every run on record when the service starts was left by a process that has gone.
+
+> **Amended by [Amendment 1](#amendment-1-2026-11--a-drills-restores-are-never-on-record).** A drill's sampled restore is not named. It is under way while it runs, as any run is, but never written to `restore-runs.json`, noticed, listed, kept as a receipt or left with parts, however it ends.
 
 ### 2. A run stays named until a run of it finishes
 
@@ -98,6 +100,29 @@ In direct mode a run lands in place and names none, so the verb is refused there
 - **Resume through `restore --resume` with the snapshot and folder taken from the run.** Rejected. That verb names the snapshot and the output it restores, and holding those to a run would be two answers to one question. A verb that takes the run alone says what it does.
 - **Let acknowledging the notice let the run go.** Rejected. Acknowledging says a person has seen it, not that they will not resume it.
 
+## Amendment 1 (2026-11) — a drill's restores are never on record
+
+A drill ([ADR-0054](0054-scheduled-restore-drills.md)) restores a sample of files through the service's own restore, into a scratch folder it deletes, and this record named every restore the service ran. A drill of a write-only set restores each sample only as far as its sealed content: an end the drill counts as passing, and a restore counts as failed. So every drill of every write-only set left each sample named as a run left unfinished. Each was said in a notice telling a person to resume a folder inside the drill's scratch space, which by then was gone. Each sample's receipt was kept among a person's receipts ([ADR-0125](0125-the-service-lists-the-restore-receipts-it-keeps.md)). Every pass that drilled added more.
+
+**Decision.** A restore a drill runs is the service's own, never a person's, and leaves nothing a person's restore leaves.
+
+- **Under way while it runs.** It is under way for its set, as any run is, so a retention pass holds the set's blobs while it reads them ([ADR-0172](0172-a-blob-that-goes-while-a-restore-reads-it-is-one-the-store-no-longer-holds.md) Amendment 3).
+- **Never on record.** It is not written to `restore-runs.json`. So it is never listed, let go, resumed or said at start, and a machine stopping mid-drill leaves nothing to say.
+- **Not noticed.** However it ends, it raises no notice and withdraws none. The drill says how it went, in its own record and its own notice.
+- **Not kept.** It keeps no receipt among a person's receipts, and lets go any parts it assembled.
+
+This holds for the pass's drill and for one a person asks for (ADR-0054 Amendment 6) alike. A person's restore is named, noticed and kept as before.
+
+**Built:**
+- The journal: `Application/RestoreRunJournal`'s `BeginUnrecorded` holds a run under way, for its set, without writing or listing it; finishing or leaving it ends it.
+- The service: `Agent/ServiceCommandHandler`'s `RestoresForADrill`, set only on the handler `Agent/RecoveryDrillJob` restores through, begins a run that way, keeps no receipt, and settles it by letting it and its parts go. `ServiceOptions.RestoreBegun` lets a test see a run while it is under way.
+- The tests:
+  - `Application.Tests/RestoreRunJournalTests`: a run begun off the record says its set is being restored but is never written, listed, let go or left, and a run on record beside it is written without it; one that finishes is under way no more.
+  - `Hosts.Tests/DrillRestoresOffTheRecordTests`:
+    - the pass's drill, and a drill a person asks for, pass and leave no run, notice, receipt or parts;
+    - a service starting again after a drill says nothing of its restores;
+    - a drill's restore is under way for its set while it runs, yet never on record.
+
 ## Status history
 
 | Date | Status | Note |
@@ -108,3 +133,4 @@ In direct mode a run lands in place and names none, so the verb is refused there
 | 2026-10 | Accepted | [ADR-0129](0129-a-restore-cut-short-resumes-within-a-file.md): each run keeps the parts of the files it was cut short in under its name, a resume under a new name carries them, and a run let go, or one that finishes, takes its parts with it. |
 | 2026-10 | Accepted | [ADR-0133](0133-a-run-left-unfinished-says-what-its-parts-hold.md): each run this record lists says what the parts it kept hold (contract 1.77), which letting it go removes. |
 | 2026-11 | Accepted | [ADR-0199 Amendment 10](0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-10-2026-11--a-resume-reads-a-destinations-copy-too): a run is resumed by its name alone from a destination's copy too, with `restore-resume <run> --from <destination>`, as the console's resume reads through the source it chooses; where a resume reads is not kept with the run. |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--a-drills-restores-are-never-on-record): a drill's sampled restores are under way while they run, so a retention pass holds their set's blobs, but are never on record, noticed, kept as receipts or left with parts, whether the drill was the pass's or a person's; before, every drill of a write-only set left each sample as a run unfinished with a notice. `Application/RestoreRunJournal`; `Agent/ServiceCommandHandler`; `Agent/RecoveryDrillJob`; `Application.Tests/RestoreRunJournalTests`; `Hosts.Tests/DrillRestoresOffTheRecordTests` |

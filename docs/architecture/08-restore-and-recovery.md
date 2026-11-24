@@ -71,6 +71,8 @@ Plans are exportable and resumable. A plan that reveals unacceptable degradation
 
 > **2026-10 ([ADR-0115](../adr/0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md)).** The service names each restore run before it writes and keeps it until a run of it finishes, so a run stopped, one that failed files, and one cut short with the service or the machine are each on record, and said in a notice. `restore-resume` lists them without the backup's file names, resumes one by its name alone as it was asked, and lets one go.
 
+> **2026-11 ([ADR-0115 Amendment 1](../adr/0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md#amendment-1-2026-11--a-drills-restores-are-never-on-record)).** A drill's sampled restores are the service's own: under way while they run, so retention holds their set's blobs, but never named as runs, noticed, kept as receipts or left with parts.
+
 > **2026-10 ([ADR-0118](../adr/0118-the-console-runs-a-kept-plan-as-it-was-approved.md)).** The console runs a kept plan too. The console process reads the file with the command line's reader, plans the kept run again through a source of its set, and holds the plan to the kept one with the comparison both clients share; the run is offered only where nothing changed.
 
 > **2026-10 ([ADR-0116](../adr/0116-the-console-resumes-a-restore-it-did-not-see-end.md)).** The console lists them too, on its snapshots page, and offers to restore what is left from there and from the run's notice. Its wizard unlocks the passphrase, opens a source of the run's own set, and asks the service to resume the run by its name, with nothing else to choose.
