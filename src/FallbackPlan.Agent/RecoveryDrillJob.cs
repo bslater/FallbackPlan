@@ -590,13 +590,12 @@ internal static class RecoveryDrillJob
 
         keepNewest(newestHeld.SnapshotId);
 
-        // Unless the newest is taken after the backup proven there, which the
-        // destination still holds: that one's every blob is known whole there,
-        // so it is the backup the drill's samples speak for while the newest's
-        // proof is under way (ADR-0199 Amendment 11).
+        // Unless the destination still holds the backup proven there: that
+        // one's every blob is known whole there, so it is the backup the
+        // drill's samples speak for while the newest's proof is under way
+        // (ADR-0199 Amendment 11).
         var newest = ofSet.FirstOrDefault(snapshot =>
-                string.Equals(snapshot.SnapshotId, proven, StringComparison.OrdinalIgnoreCase)
-                && snapshot.CapturedAt < newestHeld.CapturedAt)
+                string.Equals(snapshot.SnapshotId, proven, StringComparison.OrdinalIgnoreCase))
             ?? newestHeld;
         keepSnapshot(newest.SnapshotId);
 
