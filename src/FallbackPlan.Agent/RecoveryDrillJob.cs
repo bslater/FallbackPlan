@@ -747,31 +747,41 @@ internal static class RecoveryDrillJob
         {
             if (await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false) is { } archive)
             {
+                string? newestKey;
+                string? restoredKey;
                 using (var catalogue = archive.OpenReadCatalogue())
                 {
                     var setId = Convert.FromHexString(set.Id);
-                    foreach (var row in catalogue.EnumerateSnapshots())
+                    string? KeyOf(string wanted)
                     {
-                        var id = Convert.ToHexStringLower(row.SnapshotId.Span);
-                        if (!row.BackupSetId.Span.SequenceEqual(setId) || (id != newest && id != restored))
+                        foreach (var row in catalogue.EnumerateSnapshots())
                         {
-                            continue;
+                            if (row.BackupSetId.Span.SequenceEqual(setId)
+                                && Convert.ToHexStringLower(row.SnapshotId.Span) == wanted)
+                            {
+                                return Repository.Packing.MetadataStoreKeys.Snapshot(
+                                    row.DeviceId.Span, row.BackupSetId.Span, row.SnapshotId.Span).Value;
+                            }
                         }
 
-                        var key = Repository.Packing.MetadataStoreKeys.Snapshot(
-                            row.DeviceId.Span, row.BackupSetId.Span, row.SnapshotId.Span).Value;
-                        if (id == newest)
-                        {
-                            newestName = NewBackupProof.NameOf(archive, set, key);
-                            check = runtime.DestinationSync.Find(set.Id, destinationName) is { } ledger
-                                ? CheckOf(ledger, key)
-                                : string.Empty;
-                        }
-                        else
-                        {
-                            restoredName = NewBackupProof.NameOf(archive, set, key);
-                        }
+                        return null;
                     }
+
+                    newestKey = KeyOf(newest);
+                    restoredKey = KeyOf(restored);
+                }
+
+                if (newestKey is not null)
+                {
+                    newestName = NewBackupProof.NameOf(archive, set, newestKey);
+                    check = runtime.DestinationSync.Find(set.Id, destinationName) is { } ledger
+                        ? CheckOf(ledger, newestKey)
+                        : string.Empty;
+                }
+
+                if (restoredKey is not null)
+                {
+                    restoredName = NewBackupProof.NameOf(archive, set, restoredKey);
                 }
             }
         }
