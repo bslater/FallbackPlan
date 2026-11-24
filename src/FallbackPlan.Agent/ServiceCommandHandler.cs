@@ -1347,7 +1347,16 @@ public sealed partial class ServiceCommandHandler(
                 InPlace = command.InPlace,
                 BeganAt = options.NowUnixMilliseconds,
             };
-            runtime.RestoreRuns.Begin(record, continues: command.Resume);
+            if (RestoresForADrill)
+            {
+                runtime.RestoreRuns.BeginUnrecorded(record);
+            }
+            else
+            {
+                runtime.RestoreRuns.Begin(record, continues: command.Resume);
+            }
+
+            runtime.Options.RestoreBegun?.Invoke(record.Run);
             if (command.Resume is { } continued && continued != record.Run)
             {
                 UnfinishedRestoreNotice.Resolve(runtime, continued, options.NowUnixMilliseconds);
@@ -1374,7 +1383,7 @@ public sealed partial class ServiceCommandHandler(
                     Set = record.SetName,
                     SetId = context.Source?.SetId ?? context.Set?.Id,
                 });
-                var receiptPath = PersistReceipt(receipt, options.RunId);
+                var receiptPath = RestoresForADrill ? null : PersistReceipt(receipt, options.RunId);
                 if (copies is not null)
                 {
                     RecordReadAroundFindings(context.Set!, context.Archive!, copies, reader, options.NowUnixMilliseconds);
@@ -1458,6 +1467,17 @@ public sealed partial class ServiceCommandHandler(
     /// </summary>
     private void Settle(RestoreRunRecord record, RestoreResult? answered)
     {
+        // A drill's sample is never on record, however it ended: the drill
+        // says how it went, and nothing is left for a person to resume. A
+        // sample that stops at its sealed content keeps its parts as a run
+        // cut short does, so they go with it.
+        if (RestoresForADrill)
+        {
+            runtime.RestoreRuns.Finish(record.Run);
+            RestoreParts.LetGo(runtime, record.Run);
+            return;
+        }
+
         var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (answered?.Outcome is "complete" or "partial")
         {
