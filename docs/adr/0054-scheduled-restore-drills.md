@@ -186,6 +186,12 @@ legitimately have been trimmed from a destination under its own retention
 (FR-GC-010) — a drill that sampled those would report damage about a policy
 working correctly.
 
+> **2026-11 ([ADR-0199 Amendment 11](0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-11-2026-11--a-drill-restores-the-newest-backup-proven-where-it-reads)).** Where an older
+> backup is proven at the destination and the newest's proof there is under
+> way, the drill samples the backup proven there instead, whose every blob
+> the destination is known to hold whole, and says the newest was not yet
+> proven. Elsewhere it samples the newest, as above.
+
 ## Consequences
 
 **Positive**
@@ -528,3 +534,4 @@ person who asked give up while the drill finishes.
 | 2026-10 | Amended | [Amendment 6](#amendment-6--a-person-can-drill-now-2026-10): a person runs a pair's drill now, outside its cadence, from the console, the CLI and the service's own command line, contract 1.58's `run_drill`. A peer with no stated cadence may be drilled by asking; a pair with nothing there to restore is said and not drilled; an ask joins the pair's drill under way; the drill runs on the service's lifetime. `Agent/DrillFlights` holds the drills under way; `Agent/RecoveryDrillJob` runs every drill through it; `Agent/ServiceCommandHandler` answers the command; `Hosts.Tests/DrillNowTests` pins it |
 | 2026-10 | Amended | [ADR-0105](0105-a-drill-takes-archived-content-as-a-stated-limit.md): at a store with an archival tier a drill plans each sampled file first, and one whose content the store holds only archived is proved as far as that content under a stated limit, not read and not failed; Amendment 2's bullet on what earns a limit gains a blockquote. |
 | 2026-11 | Amended | [ADR-0115 Amendment 1](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md#amendment-1-2026-11--a-drills-restores-are-never-on-record): a drill's sampled restores are never on record as runs, noticed, or kept as receipts, so a drill of a write-only set, whose samples end at their sealed content, no longer leaves each as a restore left unfinished. |
+| 2026-11 | Amended | [ADR-0199 Amendment 11](0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-11-2026-11--a-drill-restores-the-newest-backup-proven-where-it-reads): §7's newest snapshot gives way to the newest backup proven at the destination while the newest's proof there is under way, and the drill says so. |

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
@@ -10,7 +11,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// sampled restore, not that every blob the backup needs is whole there, so
 /// a drill of a backup whose proof had not ended states that as a limit,
 /// with how far the proof had got and the newest backup proven there. A drill
-/// of the backup proven there states nothing of it.
+/// of the backup proven there states nothing of it. A drill restores the
+/// newest backup proven where it reads, where the destination holds it, and
+/// says the newest backup there was not yet proven; where nothing is proven
+/// there yet, or the destination no longer holds the backup proven there, it
+/// restores the newest as before (FR-DRL-002, ADR-0199 Amendment 11).
 /// </summary>
 /// <remarks>
 /// One blob a pass, set before the runtime starts, so a second backup's
@@ -29,11 +34,12 @@ public sealed class DrillProofTests : IAsyncDisposable
     private string Vault => Path.Combine(_harness.WorkPath, "vault");
 
     [TestMethod]
-    public async Task ADrillOfABackupWhoseProofIsUnderWay_StatesItWasNotYetProvenThere()
+    public async Task ADrillWhereTheNewestBackupIsUnderProof_SaysItWasNotYetProven_AndWhichBackupItRestored()
     {
         FanOut.NewBackupProofBudget = 1;
         await using var runtime = await StartAsync();
         await ProveFirstAsync(runtime);
+        var first = Row(runtime).ProvenSnapshot!;
         var second = await BackUpAndSyncAsync(runtime);
         var proof = Row(runtime);
         Assert.AreEqual(second, proof.ProvingSnapshot, "the premise: the second backup's proof is under way at the vault");
@@ -42,13 +48,14 @@ public sealed class DrillProofTests : IAsyncDisposable
 
         Assert.AreEqual(0, drilled.Failed, string.Join(" | ", drilled.Lines));
         var row = Row(runtime);
-        Assert.IsNotNull(row.DrillLimit, "a drill of a backup not yet proven there stated nothing of it");
-        Assert.Contains("was not yet proven here", row.DrillLimit, StringComparison.Ordinal);
-        Assert.Contains(
-            $"its check had proven {proof.ProvingBlobsProven} of {proof.ProvingBlobsProven + proof.ProvingBlobsLeft} blobs",
-            row.DrillLimit, StringComparison.Ordinal);
-        Assert.Contains("the newest backup proven here was the backup of", row.DrillLimit, StringComparison.Ordinal);
+        Assert.IsNotNull(row.DrillLimit, "a drill where the newest backup is not yet proven there stated nothing of it");
+        Assert.Contains("The newest backup, the backup of", row.DrillLimit, StringComparison.Ordinal);
         Assert.Contains(NewBackupProof.IdentityOf(second)[..8], row.DrillLimit, StringComparison.Ordinal);
+        Assert.Contains(
+            $"was not yet proven here: its check had proven {proof.ProvingBlobsProven} of {proof.ProvingBlobsProven + proof.ProvingBlobsLeft} blobs",
+            row.DrillLimit, StringComparison.Ordinal);
+        Assert.Contains("the drill restored the newest backup proven here, the backup of", row.DrillLimit, StringComparison.Ordinal);
+        Assert.Contains(NewBackupProof.IdentityOf(first)[..8], row.DrillLimit, StringComparison.Ordinal);
         Assert.Contains("was not yet proven here", Assert.ContainsSingle(drilled.Lines), StringComparison.Ordinal);
 
         // Recorded where every surface that reports a drill reads it.
@@ -58,7 +65,25 @@ public sealed class DrillProofTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task ADrillOfTheBackupProvenThere_StatesNothingOfItsProof()
+    public async Task ADrillWhereTheNewestBackupIsUnderProof_RestoresTheNewestBackupProvenThere()
+    {
+        FanOut.NewBackupProofBudget = 1;
+        await using var runtime = await StartAsync();
+        await ProveFirstAsync(runtime);
+        var first = Row(runtime).ProvenSnapshot!;
+        await BackUpAndSyncAsync(runtime);
+
+        var (outcome, restored) = await DrillRecordingAsync(runtime);
+
+        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.IsNotEmpty(restored, "the premise: the drill restored samples");
+        Assert.IsTrue(
+            restored.All(id => id == NewBackupProof.IdentityOf(first)),
+            "the drill restored a backup not proven there: " + string.Join(", ", restored));
+    }
+
+    [TestMethod]
+    public async Task ADrillOfTheBackupProvenThere_RestoresIt_AndStatesNothingOfItsProof()
     {
         FanOut.NewBackupProofBudget = 1;
         await using var runtime = await StartAsync();
@@ -66,11 +91,51 @@ public sealed class DrillProofTests : IAsyncDisposable
         var second = await BackUpAndSyncAsync(runtime);
         await SyncUntilProvenAsync(runtime, second);
 
-        var drilled = await DrillAsync(runtime);
+        var (outcome, restored) = await DrillRecordingAsync(runtime);
 
-        Assert.AreEqual(0, drilled.Failed, string.Join(" | ", drilled.Lines));
-        var limit = Row(runtime).DrillLimit ?? string.Empty;
-        Assert.DoesNotContain("proven here", limit, StringComparison.Ordinal);
+        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.IsTrue(restored.All(id => id == NewBackupProof.IdentityOf(second)), string.Join(", ", restored));
+        Assert.DoesNotContain("proven here", outcome.Limit ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ADrillWhereNoBackupIsProvenYet_RestoresTheNewest_AndSaysItWasNotYetProven()
+    {
+        FanOut.NewBackupProofBudget = 1;
+        await using var runtime = await StartAsync();
+        var pass = await Scheduler.RunPassAsync(runtime, _start, Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+        await pass.Drills.WaitAsync(Timeout);
+        var only = Assert.ContainsSingle(StagingRecords(runtime));
+        Assert.IsNull(Row(runtime).ProvenSnapshot, "the premise: one blob a pass leaves the first backup's proof under way");
+
+        var (outcome, restored) = await DrillRecordingAsync(runtime);
+
+        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.IsNotEmpty(restored, "the premise: the drill restored samples");
+        Assert.IsTrue(restored.All(id => id == NewBackupProof.IdentityOf(only)), string.Join(", ", restored));
+        Assert.Contains("was not yet proven here", outcome.Limit ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("no backup was proven here yet", outcome.Limit ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("the drill restored", outcome.Limit ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ADrillWhoseDestinationNoLongerHoldsTheBackupProvenThere_RestoresTheNewest()
+    {
+        FanOut.NewBackupProofBudget = 1;
+        await using var runtime = await StartAsync();
+        await ProveFirstAsync(runtime);
+        var second = await BackUpAndSyncAsync(runtime);
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", "snapshots/gone/gone/gone", proving: null, cursor: null,
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        var (outcome, restored) = await DrillRecordingAsync(runtime);
+
+        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.IsNotEmpty(restored, "the premise: the drill restored samples");
+        Assert.IsTrue(restored.All(id => id == NewBackupProof.IdentityOf(second)), string.Join(", ", restored));
+        Assert.DoesNotContain("the drill restored", outcome.Limit ?? string.Empty, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -174,6 +239,17 @@ public sealed class DrillProofTests : IAsyncDisposable
         }
     }
 
+    /// <summary>Drills the vault through a handler that records which backup each of the drill's restores read.</summary>
+    private async Task<(RecoveryDrillJob.DrillOutcome Outcome, List<string> Restored)> DrillRecordingAsync(ServiceRuntime runtime)
+    {
+        var recording = new RecordingService(
+            new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service) { RestoresForADrill = true });
+        var outcome = await RecoveryDrillJob.RunAsync(
+            runtime, recording, runtime.Configuration.BackupSets.Single(), "vault",
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), budget: null, Random.Shared, Timeout);
+        return (outcome, [.. recording.Restored]);
+    }
+
     private async Task<DrillResult> DrillAsync(ServiceRuntime runtime)
     {
         var answer = await new ServiceCommandHandler(runtime, RemoteBindingState.Off)
@@ -239,6 +315,25 @@ public sealed class DrillProofTests : IAsyncDisposable
             ? [.. Directory.GetFiles(folder, "*", SearchOption.AllDirectories)
                 .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))]
             : [];
+    }
+
+    /// <summary>The service, recording the backup each restore asked of it read.</summary>
+    private sealed class RecordingService(IFallbackPlanService inner) : IFallbackPlanService
+    {
+        public ConcurrentQueue<string> Restored { get; } = new();
+
+        public ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
+        {
+            if (command is RunRestoreCommand restore)
+            {
+                Restored.Enqueue(restore.SnapshotId);
+            }
+
+            return inner.ExecuteAsync(command, cancellationToken);
+        }
+
+        public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
+            inner.WatchAsync(cancellationToken);
     }
 
     /// <inheritdoc />

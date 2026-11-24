@@ -313,6 +313,8 @@ What the scheduled drill does **not** prove is as load-bearing as what it does. 
 
 > **2026-11 ([ADR-0199 Amendment 8](../adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-8-2026-11--a-drill-says-when-the-backup-it-drilled-was-not-yet-proven)).** A passing drill proves the files it sampled come back, not that every blob the backup needs is whole at the destination. A drill of a backup whose proof there had not ended states that as a limit, with how far the proof had got and the newest backup proven there; the console draws a limit as sealed content only where it is.
 
+> **2026-11 ([ADR-0199 Amendment 11](../adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-11-2026-11--a-drill-restores-the-newest-backup-proven-where-it-reads)).** While the newest backup's proof at a destination is under way, a drill restores the newest backup proven there, where the destination still holds it, and its limit says the newest was not yet proven and which backup it restored.
+
 ---
 
 **Previous:** [07 — Retention and garbage collection](07-retention-and-gc.md) · **Next:** [09 — Replication and peers](09-replication-and-peers.md)
