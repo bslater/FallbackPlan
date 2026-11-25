@@ -12,7 +12,10 @@ namespace FallbackPlan.Application.Tests;
 /// set's full walk (FR-SNP-012) is written under its own name, and a file that
 /// says nothing of it leaves it daily. So is a set's choice to leave its
 /// online-only files to their cloud provider (FR-SNP-015), written only where
-/// it is made: a file that says nothing fetches them.
+/// it is made: a file that says nothing fetches them. A destination's share of
+/// a new backup's blobs one pass proves (FR-VER-002) is written under its own
+/// name, a file that says nothing of it leaving the service's default, and a
+/// share of none is refused naming it.
 /// </summary>
 [TestClass]
 public sealed class ClientConfigurationTests
@@ -397,6 +400,45 @@ public sealed class ClientConfigurationTests
         Assert.Contains("usb", refusal.Message, StringComparison.Ordinal);
         Assert.Contains("drill_interval_days", refusal.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("deep_verify_interval_days", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(-3)]
+    public void Save_ANonPositiveProofShare_IsRefusedNamingTheProofShare(int share)
+    {
+        // A pass that proves none of a new backup's blobs would carry the
+        // pair due for ever with the proof never moving on.
+        var none = new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb") with { NewBackupProofShare = share }],
+            BackupSets = [Set("docs", Ref("usb"))],
+        };
+
+        var refusal = Assert.ThrowsExactly<ClientStateException>(() => none.Save(ConfigPath));
+        Assert.Contains("usb", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("new_backup_proof_share", refusal.Message, StringComparison.Ordinal);
+        Assert.IsFalse(File.Exists(ConfigPath), "a refused save wrote the file");
+    }
+
+    [TestMethod]
+    public void AProofShare_IsWrittenUnderItsName_AndAFileSilentOnItLeavesTheDefault()
+    {
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb") with { NewBackupProofShare = 32 }, Peer("nas")],
+            BackupSets = [Set("docs", Ref("usb"), Ref("nas"))],
+        }.Save(ConfigPath);
+
+        var text = File.ReadAllText(ConfigPath);
+        Assert.Contains("\"new_backup_proof_share\": 32", text, StringComparison.Ordinal);
+        Assert.AreEqual(1, text.Split("new_backup_proof_share").Length - 1, "a destination that says nothing wrote the field");
+        var loaded = ClientConfiguration.Load(ConfigPath);
+        Assert.AreEqual(32, loaded.FindDestination("usb")!.NewBackupProofShare);
+        Assert.IsNull(loaded.FindDestination("nas")!.NewBackupProofShare);
+        Assert.AreEqual(256, DestinationConfiguration.DefaultNewBackupProofShare, "the default ADR-0199 decision 3 states");
     }
 
     [TestMethod]

@@ -878,6 +878,13 @@ public sealed record ClientConfiguration
                 Strings.FormatClientConfiguration_DestinationDrillIntervalMustBePositive(destination.Name));
         }
 
+        if (destination.NewBackupProofShare is { } share && share <= 0)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationProofShareMustBePositive(
+                    destination.Name, DestinationConfiguration.DefaultNewBackupProofShare));
+        }
+
         // A limit this build cannot read is refused rather than ignored, and
         // the refusal names the destination: a configuration can declare one
         // per destination, and "which one" is the first thing to ask.

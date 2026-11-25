@@ -49,14 +49,6 @@ public static class VerificationSampler
     /// </remarks>
     public const int PeerReservoirShare = 4;
 
-    /// <summary>
-    /// The most of a new backup's blobs one pass proves (ADR-0199). A daily
-    /// backup adds a handful and is proven by the pass that sends it; a first
-    /// backup of many thousands is proven over the passes after it, each
-    /// asking a few ranged reads of each blob.
-    /// </summary>
-    public const int NewBackupBudget = 256;
-
     /// <summary>The range length aimed for; shorter objects are challenged whole.</summary>
     private const uint PreferredLength = 4096;
 

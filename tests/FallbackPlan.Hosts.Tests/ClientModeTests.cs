@@ -17,8 +17,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// FR-VER-003's report of a circuit, the CLI half of FR-GC-008's granted
 /// collection run, the CLI half of FR-GC-013's snapshot deletion, the
 /// CLI half of FR-DRL-003's drill on request, the CLI half of
-/// FR-DEST-005's access key for an S3-compatible destination, and the CLI
-/// half of NFR-OPS-002's warnings beside a set's state.
+/// FR-DEST-005's access key for an S3-compatible destination, the CLI
+/// half of NFR-OPS-002's warnings beside a set's state, and the CLI half of
+/// FR-VER-002's share of a new backup's blobs one pass proves at a
+/// destination.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable
@@ -1090,6 +1092,52 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task DestinationSettings_AProofShare_IsSetAndShown_AndZeroReturnsItToTheDefault()
+    {
+        // The most of a new backup's blobs one pass proves there (ADR-0199
+        // Amendment 13). Set alone, it keeps the destination's other
+        // settings; zero removes it, as for the drill cadence.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        var configuration = Path.Combine(_harness.StateDirectory, "config.json");
+        var loaded = ClientConfiguration.Load(configuration);
+        (loaded with
+        {
+            Destinations = [.. loaded.Destinations.Select(destination => destination with { TransferLimit = "2 MiB/s", DrillIntervalDays = 3 })],
+        }).Save(configuration);
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var unset = await RunAgainstServiceAsync("destination-settings", "vault", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, unset.ExitCode, unset.All);
+        Assert.Contains(
+            $"proof share: the default, {DestinationConfiguration.DefaultNewBackupProofShare} blobs a pass",
+            unset.All,
+            StringComparison.Ordinal);
+
+        var result = await RunAgainstServiceAsync(
+            "destination-settings", "vault", "--state", _harness.StateDirectory, "--proof-share", "32");
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        var vault = ClientConfiguration.Load(configuration).Destinations.Single();
+        Assert.AreEqual(32, vault.NewBackupProofShare);
+        Assert.AreEqual("2 MiB/s", vault.TransferLimit, "the edit must carry back what it did not change");
+        Assert.AreEqual(3, vault.DrillIntervalDays, "the edit must carry back what it did not change");
+
+        var shown = await RunAgainstServiceAsync("destination-settings", "vault", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, shown.ExitCode, shown.All);
+        Assert.Contains("proof share: 32 blobs a pass", shown.All, StringComparison.Ordinal);
+
+        var cleared = await RunAgainstServiceAsync(
+            "destination-settings", "vault", "--state", _harness.StateDirectory, "--proof-share", "0");
+
+        Assert.AreEqual(0, cleared.ExitCode, cleared.All);
+        Assert.IsNull(ClientConfiguration.Load(configuration).Destinations.Single().NewBackupProofShare);
+    }
+
+    [TestMethod]
     public async Task DestinationSettings_AnObjectStoreWithNoCadence_IsSaidNeverToBeDrilled()
     {
         // A bucket or a container is drilled only on a cadence written for
@@ -1109,8 +1157,9 @@ public sealed class ClientModeTests : IDisposable
         {
             var shown = await RunAgainstServiceAsync("destination-settings", name, "--state", _harness.StateDirectory);
             Assert.AreEqual(0, shown.ExitCode, shown.All);
-            Assert.Contains("drill every: never", shown.All, StringComparison.Ordinal);
-            Assert.DoesNotContain("default", shown.All, StringComparison.Ordinal);
+            var drill = shown.All.Split('\n').Single(line => line.StartsWith("drill every:", StringComparison.Ordinal));
+            Assert.Contains("drill every: never", drill, StringComparison.Ordinal);
+            Assert.DoesNotContain("default", drill, StringComparison.Ordinal);
         }
     }
 

@@ -106,7 +106,8 @@ public sealed partial class ServiceCommandHandler
             destination.Account,
             destination.Container,
             credential.Kind,
-            credential.Expires);
+            credential.Expires,
+            destination.NewBackupProofShare);
     }
 
     private ServiceResult UpsertDestination(UpsertDestinationCommand command)
@@ -183,6 +184,20 @@ public sealed partial class ServiceCommandHandler
             drillIntervalDays = drillDays == 0 ? null : drillDays;
         }
 
+        var proofShare = existing?.NewBackupProofShare;
+        if (command.Destination.NewBackupProofShare is { } share)
+        {
+            if (share < 0)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"Destination '{command.Destination.Name}': new_backup_proof_share must be a positive number of "
+                    + $"blobs, or 0 to take the default again; {share} is neither.");
+            }
+
+            proofShare = share == 0 ? null : share;
+        }
+
         // A relative path is pinned to an absolute one HERE, at the moment
         // the operator can still see what it meant. Stored verbatim, it
         // resolves against whatever working directory the service happens to
@@ -213,6 +228,7 @@ public sealed partial class ServiceCommandHandler
             // the file says (ADR-0037 §1).
             Verification = existing?.Verification,
             DrillIntervalDays = drillIntervalDays,
+            NewBackupProofShare = proofShare,
             TransferLimit = transferLimit,
             // An empty text is no value, as the console's empty field is: the
             // configuration's own validation then says which ones an object

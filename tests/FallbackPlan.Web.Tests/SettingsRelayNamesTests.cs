@@ -8,7 +8,9 @@ namespace FallbackPlan.Web.Tests;
 /// Contract 1.44's settings reaching the console both ways: the names the
 /// settings card and the destination form read off the relay, and the
 /// camelCase the console sends arriving at the service as the command it
-/// means, the clearing spellings included. The relay half of FR-SVC-021.
+/// means, the clearing spellings included. The relay half of FR-SVC-021,
+/// and of FR-VER-002's share of a new backup's blobs one pass proves at a
+/// destination (contract 1.94).
 /// </summary>
 /// <remarks>
 /// Same rationale as <see cref="StatusRelayNamesTests"/>: the relay's names
@@ -60,14 +62,14 @@ public sealed class SettingsRelayNamesTests
     }
 
     [TestMethod]
-    public async Task ListDestinations_OverTheRelay_CarriesTheLimitAndTheCadence()
+    public async Task ListDestinations_OverTheRelay_CarriesTheLimitTheCadenceAndTheProofShare()
     {
         await using var harness = await ConsoleHarness.StartAsync();
         harness.Clients.Client.Respond = _ => new DestinationsResult(
         [
             new DestinationDescriptor(
                 "dest-1", "vault", "local-path", "/backups", null, null,
-                TransferLimit: "2 MiB/s", DrillIntervalDays: 7),
+                TransferLimit: "2 MiB/s", DrillIntervalDays: 7, NewBackupProofShare: 32),
         ]);
 
         using var request = harness.Command("""{"command":"list_destinations"}""");
@@ -78,5 +80,6 @@ public sealed class SettingsRelayNamesTests
         var vault = body.RootElement.GetProperty("destinations")[0];
         Assert.AreEqual("2 MiB/s", vault.GetProperty("transferLimit").GetString());
         Assert.AreEqual(7, vault.GetProperty("drillIntervalDays").GetInt32());
+        Assert.AreEqual(32, vault.GetProperty("newBackupProofShare").GetInt32());
     }
 }

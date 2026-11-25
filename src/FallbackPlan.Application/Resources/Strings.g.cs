@@ -259,6 +259,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationDrillIntervalMustBePositive, arg0);
 
     /// <summary>
+    /// Destination '{0}': 'new_backup_proof_share' must be a positive number of blobs; omit it to take the default of {1}.
+    /// </summary>
+    private static string ClientConfiguration_DestinationProofShareMustBePositive => Get(nameof(ClientConfiguration_DestinationProofShareMustBePositive));
+
+    /// <summary>
+    /// Destination '{0}': 'new_backup_proof_share' must be a positive number of blobs; omit it to take the default of {1}.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationProofShareMustBePositive(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationProofShareMustBePositive, arg0, arg1);
+
+    /// <summary>
     /// Destination '{0}': id must be 32 hex digits.
     /// </summary>
     private static string ClientConfiguration_DestinationIdMustHex => Get(nameof(ClientConfiguration_DestinationIdMustHex));

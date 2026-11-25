@@ -5687,6 +5687,7 @@ Object.assign(actions, {
     const s3 = kind === "s3";
     const azure = kind === "azure-blob";
     const drillText = document.getElementById("dest-drill").value.trim();
+    const shareText = document.getElementById("dest-proof-share").value;
     const field = id => document.getElementById(id)?.value.trim() ?? "";
     const descriptor = {
       id: el.dataset.id || null,
@@ -5713,10 +5714,16 @@ Object.assign(actions, {
       // empty limit and the zero cadence are the wire's "remove it".
       transferLimit: document.getElementById("dest-limit").value.trim(),
       drillIntervalDays: drillText === "" ? 0 : Number(drillText),
+      // Contract 1.94: the same, an emptied field reading as the zero that
+      // returns the share to the default.
+      newBackupProofShare: Number(shareText),
     };
     if (!descriptor.name) { toast("warn", "A destination needs a name."); return; }
     if (!Number.isInteger(descriptor.drillIntervalDays) || descriptor.drillIntervalDays < 0) {
       toast("warn", "A drill cadence is a whole number of days."); return;
+    }
+    if (!Number.isInteger(descriptor.newBackupProofShare) || descriptor.newBackupProofShare < 0) {
+      toast("warn", "A proof share is a whole number of blobs."); return;
     }
     if (document.getElementById("dest-priority").value.trim() !== "" && descriptor.priority === null) {
       toast("warn", "Priority is a whole number."); return;
@@ -6090,9 +6097,12 @@ function openDestEditor(kind, destination) {
         value="${esc(destination?.transferLimit ?? "")}" placeholder="unlimited — e.g. 2 MiB/s"></label>
       <label class="mini">drill every (days) <input type="text" id="dest-drill" class="num"
         value="${esc(destination?.drillIntervalDays ?? "")}" placeholder="${kind === "local-path" ? "default" : "never"}"></label>
+      <label class="mini">new-backup blobs proven a pass <input type="text" id="dest-proof-share" class="num"
+        value="${esc(destination?.newBackupProofShare ?? "")}" placeholder="default"></label>
     </div>
     <p class="subtle">Among waiting transfers, the higher-priority destination ships first; a prioritised backup writes
-    to its destinations in priority order.</p>
+    to its destinations in priority order. A pass proves at most the share of a new backup's blobs here: a larger
+    share proves a first backup in fewer passes, with more reads in each.</p>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn primary" data-action="dest-save" data-kind="${esc(kind)}" data-id="${esc(destination?.id ?? "")}">

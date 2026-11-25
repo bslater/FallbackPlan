@@ -269,6 +269,32 @@ public sealed record DestinationConfiguration
     public int? DrillIntervalDays { get; init; }
 
     /// <summary>
+    /// The most of a new backup's blobs one pass proves at this destination
+    /// ([ADR-0199](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md)
+    /// Amendment 13). Absent takes <see cref="DefaultNewBackupProofShare"/>.
+    /// </summary>
+    /// <remarks>
+    /// Each blob proven is a few ranged reads where it sits, so a larger
+    /// share proves a first backup of many thousands of blobs in fewer
+    /// passes at the cost of more reads in each, and a smaller one spreads
+    /// them over more passes, which a store charging by the request or a
+    /// peer on a slow link may want. Zero or negative is refused at load: a
+    /// pass that proved none would keep the destination due with the proof
+    /// never moving on.
+    /// </remarks>
+    [JsonPropertyName("new_backup_proof_share")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? NewBackupProofShare { get; init; }
+
+    /// <summary>
+    /// The most of a new backup's blobs one pass proves at a destination that
+    /// states no <see cref="NewBackupProofShare"/>. A daily backup adds a
+    /// handful and is proven by the pass that sends it; a first backup of
+    /// many thousands is proven over the passes after it.
+    /// </summary>
+    public const int DefaultNewBackupProofShare = 256;
+
+    /// <summary>
     /// The destination's priority (ADR-0047): among waiting transfers of the
     /// same initiation, higher ships first, and a prioritised backup writes
     /// to its destinations in this order. Absent means 0; a set's reference
