@@ -15,7 +15,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// newest backup proven where it reads, where the destination holds it, and
 /// says the newest backup there was not yet proven; where nothing is proven
 /// there yet, or the destination no longer holds the backup proven there, it
-/// restores the newest as before (FR-DRL-002, ADR-0199 Amendment 11).
+/// restores the newest as before (FR-DRL-002, ADR-0199 Amendment 11). A
+/// counted check says at least how many more passes it had to go at the
+/// destination's share, as the status row does (FR-DRL-002, ADR-0199
+/// Amendment 16).
 /// </summary>
 /// <remarks>
 /// One blob a pass, set before the runtime starts, so a second backup's
@@ -54,6 +57,9 @@ public sealed class DrillProofTests : IAsyncDisposable
         Assert.Contains(
             $"was not yet proven here: its check had proven {proof.ProvingBlobsProven} of {proof.ProvingBlobsProven + proof.ProvingBlobsLeft} blobs",
             row.DrillLimit, StringComparison.Ordinal);
+        var left = proof.ProvingBlobsLeft!.Value;
+        Assert.Contains(
+            $" blobs, with at least {left} more {(left == 1 ? "pass" : "passes")} to go;", row.DrillLimit, StringComparison.Ordinal);
         Assert.Contains("the drill restored the newest backup proven here, the backup of", row.DrillLimit, StringComparison.Ordinal);
         Assert.Contains(NewBackupProof.IdentityOf(first)[..8], row.DrillLimit, StringComparison.Ordinal);
         Assert.Contains("was not yet proven here", Assert.ContainsSingle(drilled.Lines), StringComparison.Ordinal);
@@ -164,6 +170,29 @@ public sealed class DrillProofTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task TheRestoredInsteadNote_SaysTheNewestsPassesToGo_AtTheDestinationsShare()
+    {
+        // One blob a pass: seven left is seven passes, where the default
+        // share would count one.
+        FanOut.NewBackupProofBudget = 1;
+        await using var runtime = await StartAsync();
+        await ProveFirstAsync(runtime);
+        var first = Row(runtime).ProvenSnapshot!;
+        var second = await BackUpAndSyncAsync(runtime);
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", first, second, cursor: null,
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), blobsProven: 3, blobsLeft: 7);
+
+        var note = await RecoveryDrillJob.RestoredInsteadAsync(
+            runtime, runtime.Configuration.BackupSets.Single(), "vault",
+            NewBackupProof.IdentityOf(second), NewBackupProof.IdentityOf(first), Timeout);
+
+        Assert.Contains(
+            "was not yet proven here: its check had proven 3 of 10 blobs, with at least 7 more passes to go;",
+            note, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task TheNote_SaysWhereTheDrilledBackupsProofStood_ForEachStandingTheLedgerKnows()
     {
         FanOut.NewBackupProofBudget = 1;
@@ -188,6 +217,39 @@ public sealed class DrillProofTests : IAsyncDisposable
             _harness.DocsSetId, "vault", first, second, cursor: null, now, blobsProven: 1, blobsLeft: 1, failedKey: "blobs/data/ab/cd");
         Assert.Contains(
             "was not yet proven here: its check had failed at blobs/data/ab/cd;",
+            await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
+
+        // Its own check counted, with passes to go at one blob a pass.
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", first, second, cursor: null, now, blobsProven: 3, blobsLeft: 7);
+        Assert.Contains(
+            "was not yet proven here: its check had proven 3 of 10 blobs, with at least 7 more passes to go;",
+            await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
+
+        // One pass to go.
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", first, second, cursor: null, now, blobsProven: 9, blobsLeft: 1);
+        Assert.Contains(
+            "was not yet proven here: its check had proven 9 of 10 blobs, with at least 1 more pass to go;",
+            await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
+
+        // At the vault's own share of four blobs a pass, not the default's.
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<DestinationsResult>(
+            await handler.ExecuteAsync(new ListDestinationsCommand(), Timeout), out var listed);
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(Assert.ContainsSingle(listed.Destinations) with { NewBackupProofShare = 4 }), Timeout));
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", first, second, cursor: null, now, blobsProven: 3, blobsLeft: 7);
+        Assert.Contains(
+            "was not yet proven here: its check had proven 3 of 10 blobs, with at least 2 more passes to go;",
+            await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
+
+        // None left to count: no passes said.
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", first, second, cursor: null, now, blobsProven: 10, blobsLeft: 0);
+        Assert.Contains(
+            "was not yet proven here: its check had proven 10 of 10 blobs;",
             await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
 
         // Its own check under way, begun before the ledger counted.

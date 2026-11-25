@@ -775,7 +775,7 @@ internal static class RecoveryDrillJob
                 {
                     newestName = NewBackupProof.NameOf(archive, set, newestKey);
                     check = runtime.DestinationSync.Find(set.Id, destinationName) is { } ledger
-                        ? CheckOf(ledger, newestKey)
+                        ? CheckOf(ledger, newestKey, ShareAt(runtime, destinationName))
                         : string.Empty;
                 }
 
@@ -797,18 +797,30 @@ internal static class RecoveryDrillJob
     /// <summary>
     /// How far the proof of <paramref name="backup"/> had got at the
     /// destination, as a note's clause: empty where it is not the backup under
-    /// proof there.
+    /// proof there. A counted check says at least how many more passes it had
+    /// to go at <paramref name="share"/> (ADR-0199 Amendment 16).
     /// </summary>
-    private static string CheckOf(DestinationSyncRecord ledger, string backup) =>
+    private static string CheckOf(DestinationSyncRecord ledger, string backup, int share) =>
         !string.Equals(ledger.ProvingSnapshot, backup, StringComparison.Ordinal)
             ? string.Empty
             : ledger switch
             {
                 { ProvingFailedKey: { } failed } => $": its check had failed at {failed}",
                 { ProvingBlobsProven: { } done, ProvingBlobsLeft: { } left } => string.Create(
-                    CultureInfo.InvariantCulture, $": its check had proven {done} of {done + left} blobs"),
+                    CultureInfo.InvariantCulture, $": its check had proven {done} of {done + left} blobs{PassesToGo(left, share)}"),
                 _ => ": its check was under way",
             };
+
+    /// <summary>The passes a counted check had to go, as a clause; empty where none is left.</summary>
+    private static string PassesToGo(int blobsLeft, int share) =>
+        NewBackupProof.PassesLeft(blobsLeft, share) is var passes and > 0
+            ? string.Create(
+                CultureInfo.InvariantCulture, $", with at least {passes} more {(passes == 1 ? "pass" : "passes")} to go")
+            : string.Empty;
+
+    /// <summary>The most of a new backup's blobs one pass proves at the destination drilled.</summary>
+    private static int ShareAt(ServiceRuntime runtime, string destinationName) =>
+        FanOut.NewBackupProofShareAt(runtime.Configuration.FindDestination(destinationName));
 
     /// <summary>
     /// What a passing drill states of the backup it drilled where the ledger
@@ -874,7 +886,7 @@ internal static class RecoveryDrillJob
                 return null;
             }
 
-            var check = CheckOf(ledger, drilled);
+            var check = CheckOf(ledger, drilled, ShareAt(runtime, destinationName));
             var standing = ledger.ProvenSnapshot is { } proven
                 ? $"the newest backup proven here was {NewBackupProof.NameOf(archive, set, proven)}"
                 : "no backup was proven here yet";

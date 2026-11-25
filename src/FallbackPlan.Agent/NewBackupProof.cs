@@ -35,6 +35,18 @@ internal static class NewBackupProof
     internal sealed record Step(string? Proven, string? Proving, string? Cursor, int? BlobsProven = null, int? BlobsLeft = null);
 
     /// <summary>
+    /// At least how many more passes a proof with <paramref name="blobsLeft"/>
+    /// blobs left needs at <paramref name="share"/> a pass (ADR-0199
+    /// Amendment 14): no pass proves more than the share, and one the digest
+    /// tier's byte budget cuts short proves fewer.
+    /// </summary>
+    /// <param name="blobsLeft">The blobs left to prove.</param>
+    /// <param name="share">The most of them one pass proves at the destination.</param>
+    internal static int PassesLeft(int blobsLeft, int share) =>
+        // Widened, so a count near the top of an int cannot wrap.
+        (int)(((long)blobsLeft + share - 1) / share);
+
+    /// <summary>
     /// What the pass asks about: the blobs <paramref name="newest"/> needs
     /// that the backup last proven at the destination did not, after where a
     /// proof of it under way stopped. Null when there is nothing to ask:

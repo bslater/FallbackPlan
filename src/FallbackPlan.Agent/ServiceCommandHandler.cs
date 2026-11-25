@@ -3743,8 +3743,7 @@ public sealed partial class ServiceCommandHandler(
             ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsProven,
             left,
             ledger.ProvingSnapshot is null ? null : ledger.ProvingFailedKey,
-            // Widened, so a count near the top of an int cannot wrap.
-            left is { } blobs ? (int)(((long)blobs + share - 1) / share) : null);
+            left is { } blobs ? NewBackupProof.PassesLeft(blobs, share) : null);
 
         (string Id, ulong? CapturedAt)? Name(string? key)
         {
