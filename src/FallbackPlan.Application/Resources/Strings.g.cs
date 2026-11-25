@@ -270,6 +270,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationProofShareMustBePositive, arg0, arg1);
 
     /// <summary>
+    /// Destination '{0}': 'rotation_sample' must be a positive number of keys; omit it to take the default of {1}.
+    /// </summary>
+    private static string ClientConfiguration_DestinationRotationSampleMustBePositive => Get(nameof(ClientConfiguration_DestinationRotationSampleMustBePositive));
+
+    /// <summary>
+    /// Destination '{0}': 'rotation_sample' must be a positive number of keys; omit it to take the default of {1}.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationRotationSampleMustBePositive(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationRotationSampleMustBePositive, arg0, arg1);
+
+    /// <summary>
     /// Destination '{0}': id must be 32 hex digits.
     /// </summary>
     private static string ClientConfiguration_DestinationIdMustHex => Get(nameof(ClientConfiguration_DestinationIdMustHex));

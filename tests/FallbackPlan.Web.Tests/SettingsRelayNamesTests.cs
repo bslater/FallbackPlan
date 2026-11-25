@@ -10,7 +10,8 @@ namespace FallbackPlan.Web.Tests;
 /// camelCase the console sends arriving at the service as the command it
 /// means, the clearing spellings included. The relay half of FR-SVC-021,
 /// and of FR-VER-002's share of a new backup's blobs one pass proves at a
-/// destination (contract 1.94).
+/// destination (contract 1.94) and of its rotating sample a pass (contract
+/// 1.96).
 /// </summary>
 /// <remarks>
 /// Same rationale as <see cref="StatusRelayNamesTests"/>: the relay's names
@@ -69,7 +70,7 @@ public sealed class SettingsRelayNamesTests
         [
             new DestinationDescriptor(
                 "dest-1", "vault", "local-path", "/backups", null, null,
-                TransferLimit: "2 MiB/s", DrillIntervalDays: 7, NewBackupProofShare: 32),
+                TransferLimit: "2 MiB/s", DrillIntervalDays: 7, NewBackupProofShare: 32, RotationSample: 48),
         ]);
 
         using var request = harness.Command("""{"command":"list_destinations"}""");
@@ -81,5 +82,6 @@ public sealed class SettingsRelayNamesTests
         Assert.AreEqual("2 MiB/s", vault.GetProperty("transferLimit").GetString());
         Assert.AreEqual(7, vault.GetProperty("drillIntervalDays").GetInt32());
         Assert.AreEqual(32, vault.GetProperty("newBackupProofShare").GetInt32());
+        Assert.AreEqual(48, vault.GetProperty("rotationSample").GetInt32());
     }
 }

@@ -36,7 +36,7 @@ public sealed class TestHookScopeTests
             () => FanOut.ReadBackBudget);
 
         Assert.AreEqual(VerificationSampler.PeerReservoirShare + 1, inside);
-        Assert.AreEqual(VerificationSampler.DefaultBudget, outside);
+        Assert.AreEqual(DestinationConfiguration.DefaultRotationSample, outside);
     }
 
     [TestMethod]

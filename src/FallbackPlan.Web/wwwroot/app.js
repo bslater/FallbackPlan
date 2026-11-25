@@ -5692,6 +5692,7 @@ Object.assign(actions, {
     const azure = kind === "azure-blob";
     const drillText = document.getElementById("dest-drill").value.trim();
     const shareText = document.getElementById("dest-proof-share").value;
+    const sampleText = document.getElementById("dest-rotation-sample").value;
     const field = id => document.getElementById(id)?.value.trim() ?? "";
     const descriptor = {
       id: el.dataset.id || null,
@@ -5721,6 +5722,8 @@ Object.assign(actions, {
       // Contract 1.94: the same, an emptied field reading as the zero that
       // returns the share to the default.
       newBackupProofShare: Number(shareText),
+      // Contract 1.96: the rotating sample, the same way.
+      rotationSample: Number(sampleText),
     };
     if (!descriptor.name) { toast("warn", "A destination needs a name."); return; }
     if (!Number.isInteger(descriptor.drillIntervalDays) || descriptor.drillIntervalDays < 0) {
@@ -5728,6 +5731,9 @@ Object.assign(actions, {
     }
     if (!Number.isInteger(descriptor.newBackupProofShare) || descriptor.newBackupProofShare < 0) {
       toast("warn", "A proof share is a whole number of blobs."); return;
+    }
+    if (!Number.isInteger(descriptor.rotationSample) || descriptor.rotationSample < 0) {
+      toast("warn", "A rotating sample is a whole number of keys."); return;
     }
     if (document.getElementById("dest-priority").value.trim() !== "" && descriptor.priority === null) {
       toast("warn", "Priority is a whole number."); return;
@@ -6103,6 +6109,8 @@ function openDestEditor(kind, destination) {
         value="${esc(destination?.drillIntervalDays ?? "")}" placeholder="${kind === "local-path" ? "default" : "never"}"></label>
       <label class="mini">new-backup blobs proven a pass <input type="text" id="dest-proof-share" class="num"
         value="${esc(destination?.newBackupProofShare ?? "")}" placeholder="default"></label>
+      <label class="mini">keys sampled a pass <input type="text" id="dest-rotation-sample" class="num"
+        value="${esc(destination?.rotationSample ?? "")}" placeholder="default"></label>
     </div>
     <p class="subtle">Among waiting transfers, the higher-priority destination ships first; a prioritised backup writes
     to its destinations in priority order. A pass proves at most the share of a new backup's blobs here: a larger

@@ -42,9 +42,11 @@ namespace FallbackPlan.Api.Tests;
 /// not list, with how many kept what was backed up before and whether the
 /// failure named was a listing, the wire half of FR-SNP-014's amendment;
 /// 1.94's share of a new backup's blobs one pass proves at a destination, the
-/// wire half of FR-VER-002's amendment by ADR-0199 Amendment 13; and 1.95's
+/// wire half of FR-VER-002's amendment by ADR-0199 Amendment 13; 1.95's
 /// passes a proof under way still needs, the wire half of FR-VER-003's
-/// amendment by ADR-0199 Amendment 14.
+/// amendment by ADR-0199 Amendment 14; and 1.96's rotating sample a pass
+/// draws at a destination, the wire half of FR-VER-002's amendment by
+/// ADR-0035 Amendment 4.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -768,6 +770,29 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var parsed = JsonSerializer.Deserialize<ServiceCommand>(old, FrameCodec.SerializerOptions);
         Assert.IsInstanceOfType<UpsertDestinationCommand>(parsed, out var command);
         Assert.IsNull(command.Destination.NewBackupProofShare);
+    }
+
+    [TestMethod]
+    public void ADestinationsRotationSample_WireNameAndPre196Default()
+    {
+        // Contract 1.96 (FR-VER-002, ADR-0035 Amendment 4): the destination
+        // descriptor carries how many keys a pass's rotating sample asks about
+        // there, both ways. Null preserves, so a pre-1.96 client's save keeps
+        // what the file says, and a pre-1.96 service's listing reads as none
+        // stated.
+        var modern = JsonSerializer.Serialize<ServiceCommand>(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('d', 32), "vault", "local-path", "/backups", null, null,
+                RotationSample: 48)),
+            FrameCodec.SerializerOptions);
+        const string Field = ",\"rotation_sample\":48";
+        Assert.Contains(Field, modern, StringComparison.Ordinal);
+
+        var old = modern.Replace(Field, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        var parsed = JsonSerializer.Deserialize<ServiceCommand>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<UpsertDestinationCommand>(parsed, out var command);
+        Assert.IsNull(command.Destination.RotationSample);
     }
 
     [TestMethod]

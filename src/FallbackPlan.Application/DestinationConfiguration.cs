@@ -295,6 +295,31 @@ public sealed record DestinationConfiguration
     public const int DefaultNewBackupProofShare = 256;
 
     /// <summary>
+    /// How many keys a pass's rotating sample asks about at this destination
+    /// ([ADR-0035](../../docs/adr/0035-destination-fitness.md) §5,
+    /// Amendment 4), the newest record among them. Absent takes
+    /// <see cref="DefaultRotationSample"/>.
+    /// </summary>
+    /// <remarks>
+    /// A larger sample reaches every key sooner at the cost of more reads
+    /// each pass; a smaller one spreads them thinner, which a store charging
+    /// by the request or a peer on a slow link may want. A store's and a
+    /// peer's random share is drawn from it. Zero or negative is refused at
+    /// load: a pass that asked about nothing would stamp the destination
+    /// verified on no answer.
+    /// </remarks>
+    [JsonPropertyName("rotation_sample")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? RotationSample { get; init; }
+
+    /// <summary>
+    /// How many keys a pass's rotating sample asks about at a destination
+    /// that states no <see cref="RotationSample"/>: few enough that
+    /// verification stays cheap enough to run every sync.
+    /// </summary>
+    public const int DefaultRotationSample = 16;
+
+    /// <summary>
     /// The destination's priority (ADR-0047): among waiting transfers of the
     /// same initiation, higher ships first, and a prioritised backup writes
     /// to its destinations in this order. Absent means 0; a set's reference

@@ -107,7 +107,8 @@ public sealed partial class ServiceCommandHandler
             destination.Container,
             credential.Kind,
             credential.Expires,
-            destination.NewBackupProofShare);
+            destination.NewBackupProofShare,
+            destination.RotationSample);
     }
 
     private ServiceResult UpsertDestination(UpsertDestinationCommand command)
@@ -198,6 +199,20 @@ public sealed partial class ServiceCommandHandler
             proofShare = share == 0 ? null : share;
         }
 
+        var rotationSample = existing?.RotationSample;
+        if (command.Destination.RotationSample is { } sample)
+        {
+            if (sample < 0)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"Destination '{command.Destination.Name}': rotation_sample must be a positive number of "
+                    + $"keys, or 0 to take the default again; {sample} is neither.");
+            }
+
+            rotationSample = sample == 0 ? null : sample;
+        }
+
         // A relative path is pinned to an absolute one HERE, at the moment
         // the operator can still see what it meant. Stored verbatim, it
         // resolves against whatever working directory the service happens to
@@ -229,6 +244,7 @@ public sealed partial class ServiceCommandHandler
             Verification = existing?.Verification,
             DrillIntervalDays = drillIntervalDays,
             NewBackupProofShare = proofShare,
+            RotationSample = rotationSample,
             TransferLimit = transferLimit,
             // An empty text is no value, as the console's empty field is: the
             // configuration's own validation then says which ones an object

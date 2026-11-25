@@ -15,7 +15,8 @@ namespace FallbackPlan.Application.Tests;
 /// it is made: a file that says nothing fetches them. A destination's share of
 /// a new backup's blobs one pass proves (FR-VER-002) is written under its own
 /// name, a file that says nothing of it leaving the service's default, and a
-/// share of none is refused naming it.
+/// share of none is refused naming it. So is its rotating sample a pass
+/// (FR-VER-002, ADR-0035 Amendment 4).
 /// </summary>
 [TestClass]
 public sealed class ClientConfigurationTests
@@ -439,6 +440,45 @@ public sealed class ClientConfigurationTests
         Assert.AreEqual(32, loaded.FindDestination("usb")!.NewBackupProofShare);
         Assert.IsNull(loaded.FindDestination("nas")!.NewBackupProofShare);
         Assert.AreEqual(256, DestinationConfiguration.DefaultNewBackupProofShare, "the default ADR-0199 decision 3 states");
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(-3)]
+    public void Save_ANonPositiveRotationSample_IsRefusedNamingIt(int sample)
+    {
+        // A pass whose rotation asked about nothing would stamp the
+        // destination verified on the newest record's word alone.
+        var none = new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb") with { RotationSample = sample }],
+            BackupSets = [Set("docs", Ref("usb"))],
+        };
+
+        var refusal = Assert.ThrowsExactly<ClientStateException>(() => none.Save(ConfigPath));
+        Assert.Contains("usb", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("rotation_sample", refusal.Message, StringComparison.Ordinal);
+        Assert.IsFalse(File.Exists(ConfigPath), "a refused save wrote the file");
+    }
+
+    [TestMethod]
+    public void ARotationSample_IsWrittenUnderItsName_AndAFileSilentOnItLeavesTheDefault()
+    {
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb") with { RotationSample = 48 }, Peer("nas")],
+            BackupSets = [Set("docs", Ref("usb"), Ref("nas"))],
+        }.Save(ConfigPath);
+
+        var text = File.ReadAllText(ConfigPath);
+        Assert.Contains("\"rotation_sample\": 48", text, StringComparison.Ordinal);
+        Assert.AreEqual(1, text.Split("rotation_sample").Length - 1, "a destination that says nothing wrote the field");
+        var loaded = ClientConfiguration.Load(ConfigPath);
+        Assert.AreEqual(48, loaded.FindDestination("usb")!.RotationSample);
+        Assert.IsNull(loaded.FindDestination("nas")!.RotationSample);
+        Assert.AreEqual(16, DestinationConfiguration.DefaultRotationSample, "the default ADR-0035 §5 states");
     }
 
     [TestMethod]

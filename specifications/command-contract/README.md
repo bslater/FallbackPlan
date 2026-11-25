@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.95
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.96
 
 ---
 
@@ -88,8 +88,8 @@ not read is refused). Since 1.44, `get_service_settings` /
 `update_service_settings` read and set the installation's own settings — the
 background window, the background read limit and `max_concurrent_backups`
 (ADR-0037 Amendment 1, FR-SVC-021) — and the destination descriptor carries
-`transfer_limit` and `drill_interval_days`, and since 1.94
-`new_backup_proof_share`. On every one of them null keeps the stored value,
+`transfer_limit` and `drill_interval_days`, since 1.94
+`new_backup_proof_share`, and since 1.96 `rotation_sample`. On every one of them null keeps the stored value,
 and an empty text or a zero clears it. Since 1.49,
 `validate_set_draft` takes `set_id`, the set the draft edits or would create,
 and with it names each placement refusal the save would give (ADR-0037
@@ -286,3 +286,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.93 | A restore's plan read through a destination says when the backup it restores is not proven there ([ADR-0199 Amendment 6](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-6-2026-11--a-restores-plan-says-when-its-backup-is-not-proven-where-it-is-read), FR-RST-003). `restore_plan` gains `not_proven_at`: `destination`, the destination's name, and `proof`, where its proof of new backups stands, as `new_backup_proof` says it. Null for a plan read from the set's own archive, and for a backup proven there or taken before it. Additive: a pre-1.93 service says nothing, and a client warns of nothing. |
 | 1.94 | The most of a new backup's blobs one pass proves at a destination is a setting of that destination ([ADR-0199 Amendment 13](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-13-2026-11--a-destinations-share-of-a-new-backups-proof-is-a-setting), FR-VER-002). The destination descriptor gains `new_backup_proof_share`, null where the declaration states none and the service's default applies. On an upsert, null preserves what the declaration has and zero removes it. Additive: a pre-1.94 client's save keeps the share the file states, and a pre-1.94 service's listing reads as none stated. |
 | 1.95 | A proof under way says at least how many more passes it needs ([ADR-0199 Amendment 14](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-14-2026-11--a-proof-under-way-says-how-many-passes-it-still-needs), FR-VER-003). `new_backup_proof` gains `passes_left`: the blobs left over the destination's share a pass, rounded up. Null with `blobs_left`. Additive: a pre-1.95 service counts none, and a client says nothing of them. |
+| 1.96 | How many keys a pass's rotating sample asks about at a destination is a setting of that destination ([ADR-0035 Amendment 4](../../docs/adr/0035-destination-fitness.md#amendment-4-2026-11--a-destinations-rotating-sample-is-a-setting), FR-VER-002). The destination descriptor gains `rotation_sample`, null where the declaration states none and the service's default applies. On an upsert, null preserves what the declaration has and zero removes it. Additive: a pre-1.96 client's save keeps the sample the file states, and a pre-1.96 service's listing reads as none stated. |

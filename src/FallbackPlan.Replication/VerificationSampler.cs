@@ -31,9 +31,6 @@ namespace FallbackPlan.Replication;
 /// </remarks>
 public static class VerificationSampler
 {
-    /// <summary>Samples per pass — bounded so verification stays cheap enough to run every sync.</summary>
-    public const int DefaultBudget = 16;
-
     /// <summary>
     /// How much of a peer's budget stays random rather than following the
     /// rotation — and an S3-compatible store's, for the same reason.

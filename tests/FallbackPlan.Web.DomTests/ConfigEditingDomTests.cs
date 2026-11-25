@@ -13,8 +13,8 @@ namespace FallbackPlan.Web.DomTests;
 /// acknowledgement of a claim held on a replica stored here (FR-DR-005), the
 /// write-only provisioning ceremony, the adoption ceremony's preview and
 /// confirmation (FR-DR-009), the service-settings card with the
-/// destination form's limit and cadence (FR-SVC-021) and its proof share
-/// (FR-VER-002), an S3-compatible store's address and access key
+/// destination form's limit and cadence (FR-SVC-021) and its proof share and
+/// rotating sample (FR-VER-002), an S3-compatible store's address and access key
 /// (FR-DEST-005), and an Azure Blob
 /// container's address with either of its credentials (ADR-0093) — each
 /// asserting the command its dialog claims to send. And one thing about the
@@ -428,12 +428,14 @@ public sealed class ConfigEditingDomTests
         await page.FillAsync("#dest-limit", "2 MiB/s");
         await page.FillAsync("#dest-drill", "7");
         await page.FillAsync("#dest-proof-share", "32");
+        await page.FillAsync("#dest-rotation-sample", "48");
         await page.ClickAsync("[data-action=\"dest-save\"]");
 
         var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
         Assert.AreEqual("2 MiB/s", upsert.Destination.TransferLimit);
         Assert.AreEqual(7, upsert.Destination.DrillIntervalDays);
         Assert.AreEqual(32, upsert.Destination.NewBackupProofShare);
+        Assert.AreEqual(48, upsert.Destination.RotationSample);
     }
 
     [TestMethod]
@@ -446,7 +448,7 @@ public sealed class ConfigEditingDomTests
         {
             DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
             ListDestinationsCommand => new DestinationsResult(
-                [Vault with { TransferLimit = "2 MiB/s", DrillIntervalDays = 3, NewBackupProofShare = 32 }]),
+                [Vault with { TransferLimit = "2 MiB/s", DrillIntervalDays = 3, NewBackupProofShare = 32, RotationSample = 48 }]),
             UpsertDestinationCommand => new ConfigurationChangeResult(["Destination 'vault' is declared."]),
             _ => new AcknowledgedResult(),
         };
@@ -459,15 +461,18 @@ public sealed class ConfigEditingDomTests
         await Expect(page.Locator("#dest-limit")).ToHaveValueAsync("2 MiB/s");
         await Expect(page.Locator("#dest-drill")).ToHaveValueAsync("3");
         await Expect(page.Locator("#dest-proof-share")).ToHaveValueAsync("32");
+        await Expect(page.Locator("#dest-rotation-sample")).ToHaveValueAsync("48");
         await page.FillAsync("#dest-limit", "");
         await page.FillAsync("#dest-drill", "");
         await page.FillAsync("#dest-proof-share", "");
+        await page.FillAsync("#dest-rotation-sample", "");
         await page.ClickAsync("[data-action=\"dest-save\"]");
 
         var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
         Assert.AreEqual("", upsert.Destination.TransferLimit);
         Assert.AreEqual(0, upsert.Destination.DrillIntervalDays);
         Assert.AreEqual(0, upsert.Destination.NewBackupProofShare);
+        Assert.AreEqual(0, upsert.Destination.RotationSample);
     }
 
     [TestMethod]
@@ -493,6 +498,32 @@ public sealed class ConfigEditingDomTests
         await page.ClickAsync("[data-action=\"dest-save\"]");
 
         await Expect(page.Locator("#toasts")).ToContainTextAsync("A proof share is a whole number of blobs.");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<UpsertDestinationCommand>());
+    }
+
+    [TestMethod]
+    [DataRow("-1")]
+    [DataRow("2.5")]
+    [DataRow("many")]
+    public async Task DestinationEditor_ARotationSampleThatIsNoWholeNumber_IsRefusedBeforeAnythingIsSent(string sample)
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult([Vault]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"cfg-edit-dest\"][data-id=\"dest-1\"]");
+        await page.FillAsync("#dest-rotation-sample", sample);
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("A rotating sample is a whole number of keys.");
         Assert.IsEmpty(harness.Clients.Client.Received.OfType<UpsertDestinationCommand>());
     }
 
