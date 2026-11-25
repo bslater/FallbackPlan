@@ -303,7 +303,8 @@ internal static class DiagnosticBundle
                 destination.DeepVerifyIntervalDays,
                 destination.DrillIntervalDays,
                 destination.Priority,
-                destination.TransferLimit))],
+                destination.TransferLimit,
+                destination.NewBackupProofShare))],
             [.. configuration.BackupSets.Select(set => new SetEntry(
                 Render(LogId.BackupSet(set.Id), mode),
                 Render(new LogLabel(set.Name), mode),
@@ -516,7 +517,8 @@ internal static class DiagnosticBundle
         int? DeepVerifyIntervalDays,
         int? DrillIntervalDays,
         int? Priority,
-        string? TransferLimit);
+        string? TransferLimit,
+        int? NewBackupProofShare);
 
     private sealed record SetEntry(
         string? Id,
