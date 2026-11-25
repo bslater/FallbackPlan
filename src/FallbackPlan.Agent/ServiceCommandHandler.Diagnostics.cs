@@ -239,7 +239,8 @@ public sealed partial class ServiceCommandHandler
             statusProblem,
             runtime.Notices.Unacknowledged,
             runtime.Jobs.Jobs,
-            runtime.Options.Logging));
+            runtime.Options.Logging,
+            CredentialHeld));
 
         var log = runtime.LoggerFor<ServiceCommandHandler>();
         Log.DiagnosticBundleBuilt(log, scope, bundle.LogRecords, bundle.LogRecordsLeftOut, bundle.IncludesPaths);

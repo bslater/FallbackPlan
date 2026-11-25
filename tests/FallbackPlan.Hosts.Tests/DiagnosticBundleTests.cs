@@ -485,7 +485,7 @@ public sealed class DiagnosticBundleTests : IDisposable
         using var configuration = JsonDocument.Parse(text);
         var cloud = DestinationNamed(configuration, "cloud");
         Assert.AreEqual("eu-west-2", cloud.GetProperty("region").GetString());
-        Assert.AreEqual("virtual_host", cloud.GetProperty("addressing").GetString());
+        Assert.AreEqual("virtual-host", cloud.GetProperty("addressing").GetString());
         Assert.AreEqual(Identifier("bucket", TellingBucket), cloud.GetProperty("bucket").GetString());
         Assert.AreNotEqual(TellingPrefix, cloud.GetProperty("prefix").GetString(), "a prefix travelled without the person's opt-in to paths");
         Assert.IsTrue(cloud.GetProperty("credential_stored").GetBoolean());
@@ -506,6 +506,28 @@ public sealed class DiagnosticBundleTests : IDisposable
         {
             Assert.DoesNotContain(planted, text, StringComparison.Ordinal);
         }
+    }
+
+    [TestMethod]
+    public async Task ExportDiagnostics_AContainersSignature_SaysItsKindAndWhenItLapses_NeverItself()
+    {
+        // A lapsed signature is the commonest reason a container stops
+        // answering; when it lapses is what the token states, and travels.
+        const string PlantedSignatureValue = "cGxhbnRlZC1zaWduYXR1cmUtdmFsdWU";
+        await using var runtime = await StartAsync(stores: true);
+        runtime.DestinationCredentials.Save(
+            ContainerId,
+            Storage.AzureBlob.AzureBlobCredentials.SharedAccessSignature(
+                $"sv=2022-11-02&sr=c&sp=racwdl&se=2027-01-02T03:04:05Z&sig={PlantedSignatureValue}"));
+
+        var text = Open(await ExportAsync(runtime, includePaths: true))["configuration.json"];
+
+        using var configuration = JsonDocument.Parse(text);
+        var container = DestinationNamed(configuration, "container");
+        Assert.IsTrue(container.GetProperty("credential_stored").GetBoolean());
+        Assert.AreEqual("sas", container.GetProperty("credential_kind").GetString());
+        Assert.AreEqual("2027-01-02T03:04:05Z", container.GetProperty("credential_expires").GetString());
+        Assert.DoesNotContain(PlantedSignatureValue, text, StringComparison.Ordinal);
     }
 
     [TestMethod]
