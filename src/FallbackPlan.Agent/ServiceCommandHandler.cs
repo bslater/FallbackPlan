@@ -213,7 +213,7 @@ public sealed partial class ServiceCommandHandler(
         // A caller that gives up releases the lane rather than leaving it held
         // by work nobody is waiting for.
         using var registration = cancellationToken.Register(() => runtime.Queue.Cancel(jobId));
-        return await completion.Task.ConfigureAwait(false);
+        return await AnswerOf(completion).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -260,8 +260,17 @@ public sealed partial class ServiceCommandHandler(
         }
 
         using var registration = cancellationToken.Register(() => runtime.Queue.Cancel(jobId));
-        return await completion.Task.ConfigureAwait(false);
+        return await AnswerOf(completion).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The answer of a job the queue took, or cancelled once the queue stops.
+    /// The queue runs nothing it had not started by then, so a job still
+    /// waiting would never be answered, and a drill waiting on one would hold
+    /// the service's stop for ever (ADR-0049 Amendment 2).
+    /// </summary>
+    private Task<ServiceResult> AnswerOf(TaskCompletionSource<ServiceResult> completion) =>
+        completion.Task.WaitAsync(runtime.Queue.StoppingToken);
 
     /// <summary>
     /// One retention pass per configured set with an archive on disk —
