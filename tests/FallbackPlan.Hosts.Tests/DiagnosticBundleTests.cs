@@ -18,7 +18,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// The diagnostic bundle (contract 1.52, ADR-0081): one file a person can send
 /// to whoever is helping them, built by a running service and inspected byte
 /// for byte. Establishes NFR-PRIV-003, and the CLI half of it through
-/// <c>diagnostics-export</c>.
+/// <c>diagnostics-export</c>. Its configuration carries a destination's share
+/// of a new backup's blobs a pass, so a bundle explains a slow proof
+/// (FR-VER-002, ADR-0199 Amendment 15).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -86,7 +88,8 @@ public sealed class DiagnosticBundleTests : IDisposable
         new(runtime, RemoteBindingState.Off, scope);
 
     private async Task<ServiceRuntime> StartAsync(
-        int ringCapacity = 1024, bool withLogging = true, bool durable = true, RetentionConfiguration? retention = null)
+        int ringCapacity = 1024, bool withLogging = true, bool durable = true, RetentionConfiguration? retention = null,
+        int? proofShare = null)
     {
         if (withLogging)
         {
@@ -113,6 +116,7 @@ public sealed class DiagnosticBundleTests : IDisposable
                     Name = "vault",
                     Kind = DestinationKind.LocalPath,
                     Path = Path.Combine(_harness.StateDirectory, "vault"),
+                    NewBackupProofShare = proofShare,
                 },
             ],
             BackupSets =
@@ -384,6 +388,31 @@ public sealed class DiagnosticBundleTests : IDisposable
         var retention = configuration.RootElement.GetProperty("backup_sets")[0].GetProperty("retention");
         Assert.AreEqual(7, retention.GetProperty("keep_daily").GetInt32());
         Assert.AreEqual(90, retention.GetProperty("keep_deleted_days").GetInt32());
+    }
+
+    [TestMethod]
+    [DataRow(32)]
+    [DataRow(null)]
+    public async Task ExportDiagnostics_TheConfiguration_CarriesADestinationsProofShare(int? share)
+    {
+        // How many of a new backup's blobs a pass proves at a destination is
+        // the first thing to ask about a proof that is taking a long time;
+        // none stated is said as none, the service's default applying.
+        await using var runtime = await StartAsync(proofShare: share);
+
+        var entries = Open(await ExportAsync(runtime, includePaths: false));
+
+        using var configuration = JsonDocument.Parse(entries["configuration.json"]);
+        var vault = configuration.RootElement.GetProperty("destinations")[0];
+        Assert.IsTrue(vault.TryGetProperty("new_backup_proof_share", out var stated), "the bundle says nothing of the share");
+        if (share is { } value)
+        {
+            Assert.AreEqual(value, stated.GetInt32());
+        }
+        else
+        {
+            Assert.AreEqual(JsonValueKind.Null, stated.ValueKind);
+        }
     }
 
     [TestMethod]
