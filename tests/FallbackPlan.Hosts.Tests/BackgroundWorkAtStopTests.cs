@@ -170,6 +170,39 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task StoppingTheService_AnswersACommandStillWaitingInTheQueue_Cancelled()
+    {
+        // A person's command waits in the queue as a drill's step does, and
+        // the stop answers it rather than leaving the person waiting for
+        // ever. Each of the writer lane's workers is held by a job that ends
+        // when the queue tells it to.
+        var runtime = await StartAsync();
+        try
+        {
+            var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            for (var worker = 0; worker < runtime.BackupPoolWidth; worker++)
+            {
+                Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
+                    "hold-" + Guid.NewGuid().ToString("n"), JobLane.Writer, UserInitiated: true, "hold the writer lane",
+                    async token => await held.Task.WaitAsync(token))));
+            }
+
+            var asked = new ServiceCommandHandler(runtime, RemoteBindingState.Off)
+                .ExecuteAsync(new RetentionCommand(Apply: false), Timeout).AsTask();
+            await WaitUntilAsync(() => runtime.Queue.ActiveCount == runtime.BackupPoolWidth + 1);
+
+            await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+            Assert.IsInstanceOfType<ServiceError>(await asked.WaitAsync(Bound, Timeout), out var answer);
+            Assert.AreEqual(ServiceErrorReason.Cancelled, answer.Reason);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task TheWorkAPassLeavesBeside_IsLetGoOnceItHasEnded()
     {
         // A service runs a pass every poll for months: what it keeps for the
