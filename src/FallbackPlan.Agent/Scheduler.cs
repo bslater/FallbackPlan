@@ -255,16 +255,37 @@ public static class Scheduler
         // the same definition the captures are — the scheduler starts them
         // with nobody waiting — so a shut window holds all four rather than
         // only the one an operator would notice.
-        var transfers = shut
-            ? Task.CompletedTask
-            : RunTransferPhasesAsync(runtime, now, userInitiated, cancellationToken);
+        if (shut)
+        {
+            return new AgentPassResult(outcomes);
+        }
+
+        // Both phases run until the pass's token or the service's stop, and
+        // the service waits for the drill phase before it lets go of what the
+        // phases read (ADR-0049 Amendment 2). The drill phase awaits the
+        // transfer phases first, so it ends after them, and the token they
+        // share is let go once it has.
+        var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, runtime.Stopping);
+        var transfers = RunTransferPhasesAsync(runtime, now, userInitiated, stop.Token);
         return new AgentPassResult(outcomes)
         {
             Transfers = transfers,
-            Drills = shut
-                ? Task.CompletedTask
-                : RunDrillPhaseAsync(runtime, transfers, now, userInitiated, cancellationToken),
+            Drills = runtime.Track(
+                ReleasingAsync(RunDrillPhaseAsync(runtime, transfers, now, userInitiated, stop.Token), stop)),
         };
+    }
+
+    /// <summary>Awaits <paramref name="phase"/>, then lets go of the token it ran under.</summary>
+    private static async Task ReleasingAsync(Task phase, CancellationTokenSource stop)
+    {
+        try
+        {
+            await phase.ConfigureAwait(false);
+        }
+        finally
+        {
+            stop.Dispose();
+        }
     }
 
     /// <summary>
@@ -387,6 +408,8 @@ public static class Scheduler
             // The transfer phases guard their own failures; this await is for
             // ordering, not for outcome.
         }
+
+        runtime.Options.DrillPhaseBegun?.Invoke(cancellationToken);
 
         foreach (var set in runtime.Configuration.BackupSets)
         {

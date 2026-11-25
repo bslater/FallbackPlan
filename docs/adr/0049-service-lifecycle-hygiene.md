@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** FR-SVC-017, FR-SVC-010
+**Requirements:** FR-SVC-017, FR-SVC-010; FR-SVC-017 (amended by [Amendment 2](#amendment-2-2026-11--nothing-started-beside-the-queue-outlives-a-stop): nothing the service started beside its queue outlives its stop)
 **Related:** [ADR-0027](0027-services-scheduling-status-telemetry.md), [ADR-0033](0033-hosting-under-an-os-service-manager.md), [ADR-0045](0045-client-authentication.md), [ADR-0047](0047-backup-pool-and-priorities.md), [ADR-0043](0043-structured-logging-and-diagnostics.md)
 
 ---
@@ -159,6 +159,38 @@ Unchanged:
   either. That failure still leaves the loop, after the log line and the
   error line have recorded why.
 
+## Amendment 2 (2026-11) — nothing started beside the queue outlives a stop
+
+Disposing the runtime drained the job queue, waited for a restore source in use, and then let go of the archives. Two kinds of work run beside the queue, and the stop waited for neither:
+
+- **A pass's background phases.** A pass hands back its transfer and drill phases unawaited ([ADR-0029](0029-pipeline-and-service-concurrency.md) Amendment 4), so the scheduler is not held hostage by a long copy.
+- **Every drill.** A drill runs inline, as a flight one per pair, whether the schedule or a person asked for it ([ADR-0054](0054-scheduled-restore-drills.md) Amendment 6).
+
+So a drill between its asks of the service went on after the stop let go of what it reads, and could open the set's archive again. A Windows CI run (on #317) showed it. A test deleting a set's catalogue after its runtime was disposed failed, because a pass's drill phase still held the file open. Linux deletes an open file, so the window was always there and only Windows saw it.
+
+**Decision.** The runtime owns a stopping token, cancelled first when disposal begins. A pass's phases run under the pass's token and that one, whichever ends first, and so does every drill. Disposal proceeds in three steps:
+
+1. It drains the queue, as before.
+2. It waits for the pass's drill phase it was handed and for every drill in flight. The drill phase awaits the transfer phases first, so it ends after them.
+3. Only then does it let go of the restore sources and the archives.
+
+The runtime keeps only the work that has not yet ended. A service runs a pass at every poll for months, and what the stop waits on must not grow with every pass that has finished.
+
+**A job the queue never started is answered.** A drill's steps and a person's commands run as jobs on the queue's lanes, and the command handler waits for each job's own answer. Only the job running gives that answer. The queue runs nothing it had not started by the time it stops, so a job it took just before then was never answered. A drill waiting on one held the stop for ever, and a person waiting on one was never told. A macOS CI run (on #318) hung that way. That wait now ends when the queue stops, answered cancelled as any command the stop cuts short. A job already running is cancelled by the same stop, and the queue waits for its worker before the runtime lets go of anything.
+
+A drill cut short by the stop states nothing, as Amendment 4 of ADR-0054 has a stop's endings say nothing.
+
+**Built:** `Agent/ServiceRuntime` cancels its stopping token, waits for what it tracks and for `Agent/DrillFlights` to land, and lets go of what it tracks once that has ended. `Agent/Scheduler` runs a pass's phases under the stop and hands the runtime its drill phase. `Agent/RecoveryDrillJob` drills under the stop. `Agent/ServiceCommandHandler` answers a job the stopped queue never started cancelled. `Hosts.Tests/BackgroundWorkAtStopTests` holds a drill at its first ask, before it opens anything to restore from, or a pass's drill phase as it begins, through a hook the service's options carry for tests. Then it disposes the runtime:
+
+- with a drill held deaf to the stop, disposal returns only once the drill has ended, and the drill states nothing;
+- with a drill held on its token, disposal tells it to end and returns;
+- with a pass's drill phase held deaf to the stop, disposal returns only once the phase has ended;
+- with the phase held on its token, disposal tells it to end and returns;
+- with a drill's step queued behind a held reader lane, disposal ends the drill, which states nothing;
+- with a person's command queued behind a held writer lane, the stop answers it cancelled.
+
+After three passes, the runtime keeps no more than one piece of work for the stop to wait on.
+
 ## Status history
 
 | Date | Status | Note |
@@ -166,3 +198,4 @@ Unchanged:
 | 2026-08 | Accepted | Written from the 2026-08 stuck-job field report and the owner's restart and diagnostics asks |
 | 2026-08 | Built | The startup sweep and notice (`JobStateStore`, `ServiceRuntime`), the orphan-settling cancel and queue-aware delete guard (`ServiceCommandHandler`), the in-process recycle loop (`AgentHost`) with the Owner-gated `restart_service` verb (contract 1.21) surfaced on the console's Maintenance view and the CLI's `restart`, and the startup configuration record (events 3760–3763) — pinned by `Repository.Tests/ApplicationServiceTests`, `Hosts.Tests/JournalReconciliationTests`, `Hosts.Tests/RestartServiceTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/AgentServiceLifetimeTests` (the shipped apphost recycling in place), `Hosts.Tests/AgentHostTests`, `Cli.Tests/SessionVerbTests` and `Web.Tests/ConsoleAdminScriptTests` |
 | 2026-09 | Amended | A running service loses a pass it cannot run, not itself (FR-SVC-019). The run loop in `AgentHost` catches a pass's configuration and state failures, raises the scheduler-pass-lost notice, logs event 3786 and retries at the next tick. The first pass that runs resolves the notice and logs event 3787. Start-up and a single run still refuse by name. Pinned by `Hosts.Tests/AgentHostTests` |
+| 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--nothing-started-beside-the-queue-outlives-a-stop): disposing the runtime cancels a stopping token that a pass's phases and every drill run under, and waits for a pass's drill phase and every drill in flight before it lets go of the archives, so nothing started beside the queue outlives the stop; a drill the stop cuts short states nothing, and the runtime keeps only the work not yet ended; a command or a drill's step waiting on a job the stopped queue never started is answered cancelled. `Agent/ServiceRuntime`; `Agent/Scheduler`; `Agent/DrillFlights`; `Agent/RecoveryDrillJob`; `Agent/ServiceCommandHandler`; `Hosts.Tests/BackgroundWorkAtStopTests` |

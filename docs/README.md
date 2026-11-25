@@ -114,7 +114,7 @@ Status per record. **A hundred and seventy of the hundred and seventy-eight are 
 | [0046](adr/0046-direct-to-destination-publication.md) | Direct-to-destination publication: the ship sink, no staging archive |
 | [0047](adr/0047-backup-pool-and-priorities.md) | The backup pool: concurrency, priorities, preemption, a pass that never waits |
 | [0048](adr/0048-determinate-backup-progress.md) | Determinate backup progress: a counted plan, a replayed snapshot, a stream that idles |
-| [0049](adr/0049-service-lifecycle-hygiene.md) | Service lifecycle hygiene: a reconciled journal, an in-process restart, the startup record |
+| [0049](adr/0049-service-lifecycle-hygiene.md) | Service lifecycle hygiene: a reconciled journal, an in-process restart, the startup record; since Amendment 2 a stop waits for a pass's drill phase and every drill in flight before it lets go of the archives |
 | [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and its drill-down: a job that can say what it did |
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive |
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives |

@@ -180,6 +180,15 @@ public sealed record ServiceOptions
     internal Action<string, string>? DrillJoined { get; init; }
 
     /// <summary>
+    /// Called as a pass's drill phase begins, after its transfers and before
+    /// it asks whether a set holds a snapshot, with the token the phase runs
+    /// under: a test harness's way to hold the phase where the service's stop
+    /// must wait for it (ADR-0049 Amendment 2). Null, the production value,
+    /// observes nothing.
+    /// </summary>
+    internal Action<CancellationToken>? DrillPhaseBegun { get; init; }
+
+    /// <summary>
     /// The clock the byte-rate limits pace on (NFR-PERF-013, ADR-0074) — a
     /// test harness's way to prove a rate by the waits it asked for rather
     /// than by sleeping through them. Null, the production value, paces on
@@ -250,6 +259,13 @@ public sealed class ServiceRuntime : IAsyncDisposable
     private readonly SemaphoreSlim _archivesGate = new(1, 1);
     private bool _disposed;
 
+    /// <summary>Cancelled when disposal begins: what runs beside the queue is told to stop.</summary>
+    private readonly CancellationTokenSource _stopping = new();
+
+    /// <summary>Work started beside the queue that disposal waits for, guarded by <see cref="_backgroundGate"/>.</summary>
+    private readonly List<Task> _background = [];
+    private readonly Lock _backgroundGate = new();
+
     /// <summary>Guards <see cref="_configurationFingerprint"/>.</summary>
     private readonly Lock _configurationAnnounced = new();
 
@@ -280,6 +296,43 @@ public sealed class ServiceRuntime : IAsyncDisposable
         ReplicaOwners = ReplicaOwnerStore.Open(options.StateDirectory);
         Pacing = new BackgroundPacing(options.PacingClock ?? PacingClock.System);
         Drills = new DrillFlights(options.DrillJoined);
+        Stopping = _stopping.Token;
+    }
+
+    /// <summary>
+    /// Cancelled when the runtime begins to stop (ADR-0049 Amendment 2). A
+    /// pass's phases and every drill run beside the queue, so draining it
+    /// stops none of them: they run under this, and disposal waits for them.
+    /// </summary>
+    internal CancellationToken Stopping { get; }
+
+    /// <summary>How much work <see cref="Track"/> keeps now, ended or not: what a long-running service must not let grow.</summary>
+    internal int KeptBackgroundWork
+    {
+        get
+        {
+            lock (_backgroundGate)
+            {
+                return _background.Count;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Keeps <paramref name="work"/>, started beside the queue, for disposal
+    /// to wait for before it lets go of the archives the work reads.
+    /// </summary>
+    /// <param name="work">The work, which guards its own failures.</param>
+    /// <returns><paramref name="work"/>.</returns>
+    internal Task Track(Task work)
+    {
+        lock (_backgroundGate)
+        {
+            _background.RemoveAll(running => running.IsCompleted);
+            _background.Add(work);
+        }
+
+        return work;
     }
 
     /// <summary>How this service was started.</summary>
@@ -1771,7 +1824,13 @@ public sealed class ServiceRuntime : IAsyncDisposable
         }
 
         _disposed = true;
+        await _stopping.CancelAsync().ConfigureAwait(false);
         await Queue.DisposeAsync().ConfigureAwait(false);
+
+        // Then what runs beside the queue: a pass's drill phase and every
+        // drill in flight, each told to stop above. None may outlive the
+        // archives and sources let go of below (ADR-0049 Amendment 2).
+        await BackgroundStoppedAsync().ConfigureAwait(false);
         Progress.Complete();
         await RestoreSources.DisposeAsync().ConfigureAwait(false);
 
@@ -1796,5 +1855,27 @@ public sealed class ServiceRuntime : IAsyncDisposable
         // this would not count.
         StoreRequests.Dispose();
         _writerRole.Dispose();
+        _stopping.Dispose();
+    }
+
+    /// <summary>Waits for the work kept by <see cref="Track"/> and every drill in flight to end.</summary>
+    private async Task BackgroundStoppedAsync()
+    {
+        Task[] work;
+        lock (_backgroundGate)
+        {
+            work = [.. _background];
+        }
+
+        try
+        {
+            await Task.WhenAll([.. work, Drills.LandedAsync()]).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Each guards its own failures, and a drill's answer carries its
+            // own to whoever asked; this wait is for the order of the stop,
+            // not for any outcome.
+        }
     }
 }

@@ -326,7 +326,28 @@ internal static class RecoveryDrillJob
         runtime.Drills.RunOrJoin(
             set.Id,
             destinationName,
-            () => DrillAndRecordAsync(runtime, handler, set, destinationName, nowMs, budget, draw, cancellationToken));
+            () => DrillUntilStoppedAsync(runtime, handler, set, destinationName, nowMs, budget, draw, cancellationToken));
+
+    /// <summary>
+    /// A drill under its asker's token and the service's stop, whichever ends
+    /// first (ADR-0049 Amendment 2): it runs beside the queue, so the queue's
+    /// draining would not stop it, and a stop it does not hear would leave it
+    /// reading what the service has let go of.
+    /// </summary>
+    private static async Task<DrillOutcome> DrillUntilStoppedAsync(
+        ServiceRuntime runtime,
+        IFallbackPlanService handler,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        SampleBudget? budget,
+        Random draw,
+        CancellationToken cancellationToken)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, runtime.Stopping);
+        return await DrillAndRecordAsync(runtime, handler, set, destinationName, nowMs, budget, draw, stop.Token)
+            .ConfigureAwait(false);
+    }
 
     /// <summary>
     /// The handler a drill restores its samples through: the service's own,
