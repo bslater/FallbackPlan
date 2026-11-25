@@ -471,6 +471,32 @@ public sealed class ConfigEditingDomTests
     }
 
     [TestMethod]
+    [DataRow("-1")]
+    [DataRow("2.5")]
+    [DataRow("many")]
+    public async Task DestinationEditor_AProofShareThatIsNoWholeNumber_IsRefusedBeforeAnythingIsSent(string share)
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult([Vault]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"cfg-edit-dest\"][data-id=\"dest-1\"]");
+        await page.FillAsync("#dest-proof-share", share);
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("A proof share is a whole number of blobs.");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<UpsertDestinationCommand>());
+    }
+
+    [TestMethod]
     public async Task DestinationEditor_ASaveTheServiceSaysSomethingAbout_ShowsWhatItSaid()
     {
         // The service answers a destination save with lines only when it has

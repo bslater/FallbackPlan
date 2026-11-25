@@ -5714,8 +5714,9 @@ Object.assign(actions, {
       // empty limit and the zero cadence are the wire's "remove it".
       transferLimit: document.getElementById("dest-limit").value.trim(),
       drillIntervalDays: drillText === "" ? 0 : Number(drillText),
-      // Contract 1.94: the same, a zero share returning to the default.
-      newBackupProofShare: shareText === "" ? 0 : Number(shareText),
+      // Contract 1.94: the same, an emptied field reading as the zero that
+      // returns the share to the default.
+      newBackupProofShare: Number(shareText),
     };
     if (!descriptor.name) { toast("warn", "A destination needs a name."); return; }
     if (!Number.isInteger(descriptor.drillIntervalDays) || descriptor.drillIntervalDays < 0) {
