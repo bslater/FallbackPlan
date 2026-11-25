@@ -13,7 +13,9 @@ namespace FallbackPlan.Web.DomTests;
 /// service reports no proof for draws no row, never one proven through
 /// nothing. A drill's stated limit that its backup was not yet proven
 /// there is drawn beside the files it restored, never as sealed content
-/// (ADR-0199 Amendment 8).
+/// (ADR-0199 Amendment 8). A proof under way says at least how many more
+/// passes it needs (contract 1.95, ADR-0199 Amendment 14); a failed one says
+/// none.
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -44,6 +46,66 @@ public sealed class NewBackupProofDomTests
         await cloud.Locator("> summary").ClickAsync();
         await Expect(cloud.GetByText("Failure domain")).ToBeVisibleAsync();
         await Expect(cloud.GetByText("Proven backup", new() { Exact = true })).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task AProofUnderWay_SaysAtLeastHowManyMorePassesItNeeds()
+    {
+        await using var harness = await StartAsync(new NewBackupProofDescriptor(
+            Earlier, NowMs - 86_400_000, ProvingSnapshotId: Newest, ProvingCapturedAt: NowMs - 3_600_000,
+            BlobsProven: 3, BlobsLeft: 7, PassesLeft: 4));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenAsync(context, harness);
+
+        var vault = page.Locator("details.dest[data-dest=\"docs|vault\"]");
+        await vault.Locator("> summary").ClickAsync();
+        await Expect(vault.GetByText("3 of 10 blobs proven · at least 4 more passes", new() { Exact = false })).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    public async Task AProofOnePassFromItsEnd_SaysOneMorePass()
+    {
+        await using var harness = await StartAsync(new NewBackupProofDescriptor(
+            Earlier, NowMs - 86_400_000, ProvingSnapshotId: Newest, ProvingCapturedAt: NowMs - 3_600_000,
+            BlobsProven: 8, BlobsLeft: 2, PassesLeft: 1));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenAsync(context, harness);
+
+        var vault = page.Locator("details.dest[data-dest=\"docs|vault\"]");
+        await vault.Locator("> summary").ClickAsync();
+        await Expect(vault.GetByText("8 of 10 blobs proven · at least 1 more pass ·", new() { Exact = false })).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(null)]
+    public async Task AProofWithNoPassesToCount_SaysNoneRatherThanZero(int? passes)
+    {
+        await using var harness = await StartAsync(new NewBackupProofDescriptor(
+            Earlier, NowMs - 86_400_000, ProvingSnapshotId: Newest, ProvingCapturedAt: NowMs - 3_600_000,
+            BlobsProven: 10, BlobsLeft: 0, PassesLeft: passes));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenAsync(context, harness);
+
+        var vault = page.Locator("details.dest[data-dest=\"docs|vault\"]");
+        await vault.Locator("> summary").ClickAsync();
+        await Expect(vault.GetByText("10 of 10 blobs proven", new() { Exact = false })).ToBeVisibleAsync();
+        await Expect(vault.GetByText("more pass", new() { Exact = false })).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task AFailedProof_SaysNoPassesLeft()
+    {
+        await using var harness = await StartAsync(new NewBackupProofDescriptor(
+            Earlier, NowMs - 86_400_000, ProvingSnapshotId: Newest, ProvingCapturedAt: NowMs - 3_600_000,
+            BlobsProven: 3, BlobsLeft: 7, FailedBlob: "blobs/data/ab/cd", PassesLeft: 4));
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenAsync(context, harness);
+
+        var vault = page.Locator("details.dest[data-dest=\"docs|vault\"]");
+        await vault.Locator("> summary").ClickAsync();
+        await Expect(vault.Locator("b.bad", new() { HasText = "failed its check" })).ToBeVisibleAsync();
+        await Expect(vault.GetByText("more pass", new() { Exact = false })).ToHaveCountAsync(0);
     }
 
     [TestMethod]

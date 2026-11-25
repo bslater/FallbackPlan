@@ -9,7 +9,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// (FR-VER-003, contract 1.91, ADR-0199 Amendment 2): the backup it was last
 /// proven through, named as the snapshot listing names it and dated by when
 /// it was taken, and a proof under way counted in the backup's blobs, how
-/// many are proven and how many are left, moving on as the passes do.
+/// many are proven and how many are left, moving on as the passes do. Since
+/// contract 1.95 (ADR-0199 Amendment 14) a counted proof also says at least
+/// how many more passes it needs: the blobs left over the destination's
+/// share, rounded up.
 /// </summary>
 [TestClass]
 public sealed class NewBackupProofStatusTests : IAsyncDisposable
@@ -127,7 +130,8 @@ public sealed class NewBackupProofStatusTests : IAsyncDisposable
         var gone = Repository.Packing.MetadataStoreKeys.Snapshot(new byte[16], new byte[16], id).Value;
 
         var proof = ServiceCommandHandler.DescribeNewBackupProof(
-            Ledger() with { ProvenSnapshot = gone }, new Dictionary<string, ServiceCommandHandler.KnownBackup>());
+            Ledger() with { ProvenSnapshot = gone }, new Dictionary<string, ServiceCommandHandler.KnownBackup>(),
+            DestinationConfiguration.DefaultNewBackupProofShare);
 
         Assert.IsNotNull(proof);
         Assert.AreEqual(Convert.ToHexStringLower(id), proof.ProvenSnapshotId);
@@ -137,14 +141,76 @@ public sealed class NewBackupProofStatusTests : IAsyncDisposable
     [TestMethod]
     public void ADestinationProvenThroughNoBackup_WithNoneUnderWay_ReportsNothing() =>
         Assert.IsNull(ServiceCommandHandler.DescribeNewBackupProof(
-            Ledger(), new Dictionary<string, ServiceCommandHandler.KnownBackup>()));
+            Ledger(), new Dictionary<string, ServiceCommandHandler.KnownBackup>(),
+            DestinationConfiguration.DefaultNewBackupProofShare));
+
+    [TestMethod]
+    public async Task AProofUnderWay_CountsThePassesItStillNeeds_AtTheDestinationsShare()
+    {
+        // The vault's own share of one blob a pass, with the default left as
+        // it is: counted at the default, the passes left would read as one.
+        await using var runtime = await StartAsync(share: 1);
+        await PassAsync(runtime);
+
+        var proof = (await RowAsync(runtime)).NewBackupProof!;
+        Assert.IsNotNull(proof.ProvingSnapshotId, "the premise: the backup needs more than the vault's share");
+        Assert.IsGreaterThan(1, proof.BlobsLeft ?? 0, "the premise: more than one blob is left to prove");
+        Assert.AreEqual(proof.BlobsLeft, proof.PassesLeft, "the passes left were not counted at the vault's share");
+    }
+
+    [TestMethod]
+    [DataRow(7, 1, 7)]
+    [DataRow(5, 2, 3)]
+    [DataRow(4, 2, 2)]
+    [DataRow(1, 256, 1)]
+    [DataRow(0, 4, 0)]
+    [DataRow(int.MaxValue, 2, 1_073_741_824)]
+    public void ThePassesLeft_AreTheBlobsLeftOverTheShare_RoundedUp(int left, int share, int passes)
+    {
+        var proof = ServiceCommandHandler.DescribeNewBackupProof(
+            Ledger() with { ProvingSnapshot = Unheld(), ProvingBlobsProven = 3, ProvingBlobsLeft = left },
+            new Dictionary<string, ServiceCommandHandler.KnownBackup>(),
+            share);
+
+        Assert.IsNotNull(proof);
+        Assert.AreEqual(passes, proof.PassesLeft);
+    }
+
+    [TestMethod]
+    public void AProofTheLedgerHasNotCounted_CountsNoPassesEither()
+    {
+        var proof = ServiceCommandHandler.DescribeNewBackupProof(
+            Ledger() with { ProvingSnapshot = Unheld() }, new Dictionary<string, ServiceCommandHandler.KnownBackup>(), 2);
+
+        Assert.IsNotNull(proof);
+        Assert.IsNull(proof.BlobsLeft, "the premise: nothing counted the proof");
+        Assert.IsNull(proof.PassesLeft, "an uncounted proof was given passes");
+    }
+
+    [TestMethod]
+    public void AProofThatHasEnded_CountsNoPasses()
+    {
+        // The ledger keeps no count once nothing is under way; a stale one
+        // must not be read as passes still owed.
+        var proof = ServiceCommandHandler.DescribeNewBackupProof(
+            Ledger() with { ProvenSnapshot = Unheld(), ProvingBlobsProven = 3, ProvingBlobsLeft = 7 },
+            new Dictionary<string, ServiceCommandHandler.KnownBackup>(),
+            2);
+
+        Assert.IsNotNull(proof);
+        Assert.IsNull(proof.PassesLeft, "a proof that has ended was given passes");
+    }
+
+    /// <summary>A backup's record key the catalogue does not hold.</summary>
+    private static string Unheld() => Repository.Packing.MetadataStoreKeys.Snapshot(
+        new byte[16], new byte[16], [.. Enumerable.Range(1, 16).Select(value => (byte)value)]).Value;
 
     private DestinationSyncRecord Ledger() => new()
     {
         SetId = _harness.DocsSetId, Destination = "vault", State = DestinationSyncState.InSync, LastAttemptAt = 1_000,
     };
 
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(int? share = null)
     {
         Directory.CreateDirectory(Vault);
         new ClientConfiguration
@@ -155,6 +221,7 @@ public sealed class NewBackupProofStatusTests : IAsyncDisposable
                 new DestinationConfiguration
                 {
                     Id = new string('2', 32), Name = "vault", Kind = DestinationKind.LocalPath, Path = Vault,
+                    NewBackupProofShare = share,
                 },
             ],
             BackupSets =

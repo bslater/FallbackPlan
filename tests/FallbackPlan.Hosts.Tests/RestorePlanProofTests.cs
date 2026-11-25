@@ -48,6 +48,7 @@ public sealed class RestorePlanProofTests : IAsyncDisposable
         Assert.AreEqual(NewBackupProof.IdentityOf(second), proof.ProvingSnapshotId);
         Assert.AreEqual(row.ProvingBlobsProven, proof.BlobsProven);
         Assert.AreEqual(row.ProvingBlobsLeft, proof.BlobsLeft);
+        Assert.AreEqual(row.ProvingBlobsLeft, proof.PassesLeft, "one blob a pass: as many passes left as blobs");
     }
 
     [TestMethod]

@@ -8,7 +8,10 @@ namespace FallbackPlan.Cli.Tests;
 /// Where a destination's proof of new backups stands, on the line under its
 /// row of <c>status</c> (FR-VER-003, contract 1.91, ADR-0199 Amendment 2):
 /// the backup it was last proven through, and the backup whose proof is
-/// under way with how many of its blobs are proven of how many it needs.
+/// under way with how many of its blobs are proven of how many it needs. Since
+/// contract 1.95 (ADR-0199 Amendment 14) a proof under way also says at least
+/// how many more passes it needs; a failed proof says none, its next pass
+/// asking the failed blob again.
 /// </summary>
 /// <remarks>
 /// A backup is named by when it was taken, as a person knows it, and by its
@@ -36,6 +39,41 @@ public sealed class StatusNewBackupProofLineTests
             "proving the backup of 2026-11-21 09:00: 3 of 10 blobs; proven through the backup of 2026-11-20 14:03",
             CliApplication.DescribeNewBackupProof(Row(new NewBackupProofDescriptor(
                 Earlier, EarlierAt, ProvingSnapshotId: Newest, ProvingCapturedAt: NewestAt, BlobsProven: 3, BlobsLeft: 7))));
+
+    [TestMethod]
+    public void AProofUnderWay_SaysAtLeastHowManyMorePassesItNeeds() =>
+        Assert.AreEqual(
+            "proving the backup of 2026-11-21 09:00: 3 of 10 blobs, at least 4 more passes; "
+            + "proven through the backup of 2026-11-20 14:03",
+            CliApplication.DescribeNewBackupProof(Row(new NewBackupProofDescriptor(
+                Earlier, EarlierAt, ProvingSnapshotId: Newest, ProvingCapturedAt: NewestAt, BlobsProven: 3, BlobsLeft: 7,
+                PassesLeft: 4))));
+
+    [TestMethod]
+    public void AProofOnePassFromItsEnd_SaysOneMorePass() =>
+        Assert.AreEqual(
+            "proving the backup of 2026-11-21 09:00: 8 of 10 blobs, at least 1 more pass; "
+            + "proven through the backup of 2026-11-20 14:03",
+            CliApplication.DescribeNewBackupProof(Row(new NewBackupProofDescriptor(
+                Earlier, EarlierAt, ProvingSnapshotId: Newest, ProvingCapturedAt: NewestAt, BlobsProven: 8, BlobsLeft: 2,
+                PassesLeft: 1))));
+
+    [TestMethod]
+    public void AProofWithNoPassesLeftToCount_SaysNoneRatherThanZero() =>
+        Assert.AreEqual(
+            "proving the backup of 2026-11-21 09:00: 10 of 10 blobs; proven through the backup of 2026-11-20 14:03",
+            CliApplication.DescribeNewBackupProof(Row(new NewBackupProofDescriptor(
+                Earlier, EarlierAt, ProvingSnapshotId: Newest, ProvingCapturedAt: NewestAt, BlobsProven: 10, BlobsLeft: 0,
+                PassesLeft: 0))));
+
+    [TestMethod]
+    public void AFailedProof_SaysNoPassesLeft() =>
+        Assert.AreEqual(
+            "the backup of 2026-11-21 09:00 failed its proof at blobs/data/ab/cd: 3 of 10 blobs proven; "
+            + "proven through the backup of 2026-11-20 14:03",
+            CliApplication.DescribeNewBackupProof(Row(new NewBackupProofDescriptor(
+                Earlier, EarlierAt, ProvingSnapshotId: Newest, ProvingCapturedAt: NewestAt, BlobsProven: 3, BlobsLeft: 7,
+                FailedBlob: "blobs/data/ab/cd", PassesLeft: 4))));
 
     [TestMethod]
     public void AFirstProofUnderWay_SaysNoBackupIsProvenThereYet() =>

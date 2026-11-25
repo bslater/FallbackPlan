@@ -40,9 +40,11 @@ namespace FallbackPlan.Api.Tests;
 /// online-only files to their cloud provider, on the set and in its status,
 /// the wire half of FR-SNP-015; 1.90's folders a set's last backup could
 /// not list, with how many kept what was backed up before and whether the
-/// failure named was a listing, the wire half of FR-SNP-014's amendment; and
+/// failure named was a listing, the wire half of FR-SNP-014's amendment;
 /// 1.94's share of a new backup's blobs one pass proves at a destination, the
-/// wire half of FR-VER-002's amendment by ADR-0199 Amendment 13.
+/// wire half of FR-VER-002's amendment by ADR-0199 Amendment 13; and 1.95's
+/// passes a proof under way still needs, the wire half of FR-VER-003's
+/// amendment by ADR-0199 Amendment 14.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1211,10 +1213,11 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
                     ProvingSnapshotId: "0b", ProvingCapturedAt: 2_000, BlobsProven: 3, BlobsLeft: 7)),
             FrameCodec.SerializerOptions);
 
-        // 1.92 added failed_blob, null here (see the 1.92 test below).
+        // 1.92 added failed_blob and 1.95 passes_left, null here (see the
+        // tests below).
         const string Wire = ",\"new_backup_proof\":{\"proven_snapshot_id\":\"0a\",\"proven_captured_at\":1000,"
             + "\"proving_snapshot_id\":\"0b\",\"proving_captured_at\":2000,\"blobs_proven\":3,\"blobs_left\":7,"
-            + "\"failed_blob\":null}";
+            + "\"failed_blob\":null,\"passes_left\":null}";
         Assert.Contains(Wire, modern, StringComparison.Ordinal);
 
         // A pre-1.91 service says nothing of it, and a client draws nothing,
@@ -1245,6 +1248,26 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void ThePassesAProofStillNeeds_WireNameAndPre195Default()
+    {
+        // Contract 1.95 (FR-VER-003, ADR-0199 Amendment 14): at least how
+        // many more passes a proof under way needs at the destination's share.
+        var modern = JsonSerializer.Serialize(
+            new NewBackupProofDescriptor(
+                ProvenSnapshotId: "0a", ProvenCapturedAt: 1_000, ProvingSnapshotId: "0b", ProvingCapturedAt: 2_000,
+                BlobsProven: 3, BlobsLeft: 7, PassesLeft: 4),
+            FrameCodec.SerializerOptions);
+
+        const string Wire = ",\"passes_left\":4";
+        Assert.Contains(Wire, modern, StringComparison.Ordinal);
+
+        // A pre-1.95 service counts none, and a client says nothing of them.
+        var old = modern.Replace(Wire, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<NewBackupProofDescriptor>(old, FrameCodec.SerializerOptions)!.PassesLeft);
+    }
+
+    [TestMethod]
     public void ABackupNotProvenWhereAPlanReadsIt_WireNamesAndPre193Default()
     {
         // Contract 1.93 (FR-RST-003, ADR-0199 Amendment 6): a plan read
@@ -1262,7 +1285,7 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
 
         const string Field = ",\"not_proven_at\":{\"destination\":\"vault\",\"proof\":{\"proven_snapshot_id\":\"0a\","
             + "\"proven_captured_at\":1000,\"proving_snapshot_id\":\"0b\",\"proving_captured_at\":2000,"
-            + "\"blobs_proven\":3,\"blobs_left\":7,\"failed_blob\":null}}";
+            + "\"blobs_proven\":3,\"blobs_left\":7,\"failed_blob\":null,\"passes_left\":null}}";
         Assert.Contains(Field, modern, StringComparison.Ordinal);
 
         // A pre-1.93 service says nothing of it, and a client warns of
