@@ -210,6 +210,18 @@ public sealed class DrillProofTests : IAsyncDisposable
             "was not yet proven here: its check had proven 9 of 10 blobs, with at least 1 more pass to go;",
             await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
 
+        // At the vault's own share of four blobs a pass, not the default's.
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<DestinationsResult>(
+            await handler.ExecuteAsync(new ListDestinationsCommand(), Timeout), out var listed);
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(Assert.ContainsSingle(listed.Destinations) with { NewBackupProofShare = 4 }), Timeout));
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", first, second, cursor: null, now, blobsProven: 3, blobsLeft: 7);
+        Assert.Contains(
+            "was not yet proven here: its check had proven 3 of 10 blobs, with at least 2 more passes to go;",
+            await RecoveryDrillJob.NotYetProvenAsync(runtime, set, "vault", drilled, Timeout) ?? "", StringComparison.Ordinal);
+
         // None left to count: no passes said.
         runtime.DestinationSync.RecordNewBackupProof(
             _harness.DocsSetId, "vault", first, second, cursor: null, now, blobsProven: 10, blobsLeft: 0);
