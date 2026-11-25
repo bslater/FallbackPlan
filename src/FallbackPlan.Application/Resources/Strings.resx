@@ -124,6 +124,9 @@
   <data name="ClientConfiguration_DestinationProofShareMustBePositive" xml:space="preserve">
     <value>Destination '{0}': 'new_backup_proof_share' must be a positive number of blobs; omit it to take the default of {1}.</value>
   </data>
+  <data name="ClientConfiguration_DestinationRotationSampleMustBePositive" xml:space="preserve">
+    <value>Destination '{0}': 'rotation_sample' must be a positive number of keys; omit it to take the default of {1}.</value>
+  </data>
   <data name="ClientConfiguration_DestinationIdMustHex" xml:space="preserve">
     <value>Destination '{0}': id must be 32 hex digits.</value>
   </data>

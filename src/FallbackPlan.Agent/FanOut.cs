@@ -47,7 +47,7 @@ public static class FanOut
     /// </summary>
     internal static int ReadBackBudget
     {
-        get => ReadBackBudgetInFlow.Value ?? VerificationSampler.DefaultBudget;
+        get => ReadBackBudgetInFlow.Value ?? DestinationConfiguration.DefaultRotationSample;
         set => ReadBackBudgetInFlow.Value = value;
     }
 
@@ -75,6 +75,15 @@ public static class FanOut
     /// <param name="destination">The destination the pass proves the backup at; null for one no longer declared.</param>
     internal static int NewBackupProofShareAt(DestinationConfiguration? destination) =>
         destination?.NewBackupProofShare ?? NewBackupProofBudget;
+
+    /// <summary>
+    /// How many keys a pass's rotating sample asks about at
+    /// <paramref name="destination"/>: its own where it states one (ADR-0035
+    /// Amendment 4), otherwise <see cref="ReadBackBudget"/>.
+    /// </summary>
+    /// <param name="destination">The destination the pass verifies.</param>
+    private static int RotationSampleAt(DestinationConfiguration destination) =>
+        destination.RotationSample ?? ReadBackBudget;
 
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
     /// <param name="setId">The set's 32-hex identity.</param>
@@ -248,7 +257,7 @@ public static class FanOut
         var newBackup = NewBackupProof.Request(
             runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofShareAt(destination));
         var plan = VerificationSampler.Rotate(
-            blobs, previous?.SampleCursor, ReadBackBudget, VerificationSampler.PeerReservoirShare, newBackup);
+            blobs, previous?.SampleCursor, RotationSampleAt(destination), VerificationSampler.PeerReservoirShare, newBackup);
         var sample = WithNewBackup(plan).Select(chosen => chosen.Key).ToList();
 
         var log = runtime.LoggerFor(typeof(FanOut));
@@ -657,7 +666,7 @@ public static class FanOut
             var plan = challenged
                 ? await VerificationSampler.SampleAsync(
                     readFrom, keeps, newestSnapshot, previous?.SampleCursor,
-                    ReadBackBudget, VerificationSampler.PeerReservoirShare,
+                    RotationSampleAt(destination), VerificationSampler.PeerReservoirShare,
                     Protocol.VerificationChallenge.MaximumLength, cancellationToken, newBackup: newBackup)
                     .ConfigureAwait(false)
                 : new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor);
@@ -1520,7 +1529,7 @@ public static class FanOut
             ? new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor)
             : await VerificationSampler.SampleAsync(
                 readFrom, keeps, newestSnapshot, previous?.SampleCursor,
-                ReadBackBudget,
+                RotationSampleAt(destination),
                 destination.Kind == DestinationKind.LocalPath ? 0 : VerificationSampler.PeerReservoirShare,
                 Protocol.VerificationChallenge.MaximumLength, cancellationToken, copyScope, newBackup)
                 .ConfigureAwait(false);

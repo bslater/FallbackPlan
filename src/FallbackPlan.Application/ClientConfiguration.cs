@@ -885,6 +885,13 @@ public sealed record ClientConfiguration
                     destination.Name, DestinationConfiguration.DefaultNewBackupProofShare));
         }
 
+        if (destination.RotationSample is { } sample && sample <= 0)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationRotationSampleMustBePositive(
+                    destination.Name, DestinationConfiguration.DefaultRotationSample));
+        }
+
         // A limit this build cannot read is refused rather than ignored, and
         // the refusal names the destination: a configuration can declare one
         // per destination, and "which one" is the first thing to ask.

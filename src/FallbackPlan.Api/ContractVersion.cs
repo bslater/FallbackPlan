@@ -925,8 +925,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// rounded up. Null with `blobs_left`. Additive: a pre-1.95 service
     /// counts none, and a client says nothing of them.
     /// </para>
+    /// <para>
+    /// 1.96 makes how many keys a pass's rotating sample asks about at a
+    /// destination a setting of that destination (FR-VER-002, ADR-0035
+    /// Amendment 4). `DestinationDescriptor` gains `rotation_sample`, null
+    /// where the declaration states none and the service's default applies.
+    /// On an upsert, null preserves what the declaration has and zero removes
+    /// it. Additive: a pre-1.96 client's save keeps the sample the file
+    /// states, and a pre-1.96 service's listing reads as none stated.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 95);
+    public static ContractVersion Current { get; } = new(1, 96);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -17,7 +17,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// </summary>
 /// <remarks>
 /// The new backup's proof is held to one blob a pass by the destination's own
-/// share, so the count the pass proved is the rotation's plus one. The
+/// share, so the count the pass proved is the rotation's plus one, or the
+/// rotation's alone where it drew the blob the proof asked about. A
+/// peer-only set's peer is given more backups first, since it holds only
+/// blobs. The
 /// default sample is narrowed to one where the destination's must stand over
 /// it, and left as it is where the destination's is one.
 /// </remarks>
@@ -98,7 +101,7 @@ public sealed class RotationSampleTests : IAsyncDisposable
     {
         await using var runtime = await StartAtAPeerAsync(directShip: true, sample: 1);
 
-        await PassAsync(runtime);
+        await PassAndMoreBackupsAsync(runtime);
 
         var row = Row(runtime, "friend");
         Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
@@ -111,7 +114,7 @@ public sealed class RotationSampleTests : IAsyncDisposable
         FanOut.ReadBackBudget = 1;
         await using var runtime = await StartAtAPeerAsync(directShip: true, sample: 16);
 
-        await PassAsync(runtime);
+        await PassAndMoreBackupsAsync(runtime);
 
         var row = Row(runtime, "friend");
         Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
@@ -187,6 +190,27 @@ public sealed class RotationSampleTests : IAsyncDisposable
         var pass = await Scheduler.RunPassAsync(runtime, _start, Timeout);
         Assert.AreEqual(1, pass.Ran, "the pass ran no backup");
         await pass.Transfers.WaitAsync(Timeout);
+    }
+
+    /// <summary>
+    /// A pass, then two more backups and a sync: a peer-only set's peer holds
+    /// only blobs, and the first backup's two are too few for a larger sample
+    /// to ask about more than a sample of one and the proof together.
+    /// </summary>
+    private async Task PassAndMoreBackupsAsync(ServiceRuntime runtime)
+    {
+        await PassAsync(runtime);
+        foreach (var hours in new[] { 1, 2 })
+        {
+            _harness.WriteSourceFile($"docs/more-{hours}.txt", new string((char)('c' + hours), 30_000));
+            var ran = await Scheduler.Enqueue(runtime, runtime.Configuration.BackupSets.Single(), _start.AddHours(hours), userInitiated: true)
+                .WaitAsync(Timeout);
+            Assert.AreEqual("ran", ran.Outcome, ran.Detail);
+        }
+
+        var answer = await new ServiceCommandHandler(runtime, RemoteBindingState.Off)
+            .ExecuteAsync(new SyncCommand("docs", "friend"), Timeout);
+        Assert.IsInstanceOfType<SyncResult>(answer, (answer as ServiceError)?.Message);
     }
 
     private DestinationSyncRecord Row(ServiceRuntime runtime, string destination) =>

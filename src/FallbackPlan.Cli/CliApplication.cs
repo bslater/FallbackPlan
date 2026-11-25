@@ -2428,14 +2428,20 @@ public static class CliApplication
                 Description = "The most of a new backup's blobs one pass proves there; 0 returns it to the default of "
                     + $"{DestinationConfiguration.DefaultNewBackupProofShare}.",
             };
+            var rotationSampleOption = new Option<int?>("--rotation-sample")
+            {
+                Description = "How many keys a pass's rotating sample asks about there; 0 returns it to the default "
+                    + $"of {DestinationConfiguration.DefaultRotationSample}.",
+            };
             var destinationSettings = new Command(
                 "destination-settings",
-                "Show a destination's transfer limit, drill cadence and proof share, or change them.");
+                "Show a destination's transfer limit, drill cadence, proof share and rotating sample, or change them.");
             destinationSettings.Arguments.Add(destinationName);
             destinationSettings.Options.Add(destinationState);
             destinationSettings.Options.Add(transferLimitOption);
             destinationSettings.Options.Add(drillDaysOption);
             destinationSettings.Options.Add(proofShareOption);
+            destinationSettings.Options.Add(rotationSampleOption);
             root.Subcommands.Add(destinationSettings);
 
             destinationSettings.SetAction((parse, cancellationToken) => GuardAsync(async () =>
@@ -2445,6 +2451,7 @@ public static class CliApplication
                 var transferLimit = parse.GetValue(transferLimitOption);
                 var drillDays = parse.GetValue(drillDaysOption);
                 var proofShare = parse.GetValue(proofShareOption);
+                var rotationSample = parse.GetValue(rotationSampleOption);
 
                 var listed = await QueryLocalServiceAsync<DestinationsResult>(
                     state, new ListDestinationsCommand(), cancellationToken).ConfigureAwait(false);
@@ -2452,7 +2459,7 @@ public static class CliApplication
                         string.Equals(candidate.Name, name, StringComparison.Ordinal))
                     ?? throw new CliFailureException($"no destination named '{name}' is declared.");
 
-                if (transferLimit is null && drillDays is null && proofShare is null)
+                if (transferLimit is null && drillDays is null && proofShare is null && rotationSample is null)
                 {
                     output.WriteLine($"transfer limit: {destination.TransferLimit ?? "none"}");
                     // The scheduler's rule (ADR-0054 Amendment 3, ADR-0091,
@@ -2466,6 +2473,9 @@ public static class CliApplication
                     output.WriteLine(destination.NewBackupProofShare is { } share
                         ? $"proof share: {share} blobs a pass"
                         : $"proof share: the default, {DestinationConfiguration.DefaultNewBackupProofShare} blobs a pass");
+                    output.WriteLine(destination.RotationSample is { } sample
+                        ? $"rotating sample: {sample} keys a pass"
+                        : $"rotating sample: the default, {DestinationConfiguration.DefaultRotationSample} keys a pass");
                     return 0;
                 }
 
@@ -2476,6 +2486,7 @@ public static class CliApplication
                         TransferLimit = transferLimit,
                         DrillIntervalDays = drillDays,
                         NewBackupProofShare = proofShare,
+                        RotationSample = rotationSample,
                     }),
                     cancellationToken).ConfigureAwait(false);
                 if (answer is ConfigurationChangeResult change)

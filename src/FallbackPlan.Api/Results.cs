@@ -300,6 +300,12 @@ public sealed record BackupSetDescriptor(
 /// and the service's default applies. On an upsert, null preserves what the
 /// declaration has and zero removes the share.
 /// </param>
+/// <param name="RotationSample">
+/// How many keys a pass's rotating sample asks about there (ADR-0035
+/// Amendment 4, contract 1.96), or null where the declaration states none and
+/// the service's default applies. On an upsert, null preserves what the
+/// declaration has and zero removes the sample.
+/// </param>
 public sealed record DestinationDescriptor(
     string? Id,
     string Name,
@@ -322,7 +328,8 @@ public sealed record DestinationDescriptor(
     string? Container = null,
     string? AuthorisedBy = null,
     string? SignatureExpires = null,
-    int? NewBackupProofShare = null);
+    int? NewBackupProofShare = null,
+    int? RotationSample = null);
 
 /// <summary>Every declared destination, referenced by a set or not.</summary>
 /// <param name="Destinations">The declarations, in configuration order.</param>
