@@ -554,6 +554,31 @@ public sealed class ConfigurationCommandTests : IDisposable
         CollectionAssert.AreEqual(before, await File.ReadAllBytesAsync(ConfigurationPath, _timeout.Token));
     }
 
+    [TestMethod]
+    public async Task UpsertDestination_ANegativeProofShare_IsRefusedNamingTheWiresWayBackToTheDefault()
+    {
+        // The configuration file has no zero, but the wire does: a client
+        // told only "positive" would not learn that zero returns the share
+        // to the default.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new UpsertDestinationCommand(new DestinationDescriptor(
+                    vault.Id, "vault", "local-path", vault.Path, null, null, NewBackupProofShare: -1)),
+                _timeout.Token),
+            out var error);
+
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("or 0 to take the default again", error.Message, StringComparison.Ordinal);
+        Assert.Contains("-1 is neither", error.Message, StringComparison.Ordinal);
+    }
+
     private void WithTheStoredDestination(Func<DestinationConfiguration, DestinationConfiguration> edit)
     {
         var loaded = ClientConfiguration.Load(ConfigurationPath);

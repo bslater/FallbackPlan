@@ -438,6 +438,7 @@ public sealed class ClientConfigurationTests
         var loaded = ClientConfiguration.Load(ConfigPath);
         Assert.AreEqual(32, loaded.FindDestination("usb")!.NewBackupProofShare);
         Assert.IsNull(loaded.FindDestination("nas")!.NewBackupProofShare);
+        Assert.AreEqual(256, DestinationConfiguration.DefaultNewBackupProofShare, "the default ADR-0199 decision 3 states");
     }
 
     [TestMethod]

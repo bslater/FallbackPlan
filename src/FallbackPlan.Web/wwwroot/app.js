@@ -5687,7 +5687,7 @@ Object.assign(actions, {
     const s3 = kind === "s3";
     const azure = kind === "azure-blob";
     const drillText = document.getElementById("dest-drill").value.trim();
-    const shareText = document.getElementById("dest-proof-share").value.trim();
+    const shareText = document.getElementById("dest-proof-share").value;
     const field = id => document.getElementById(id)?.value.trim() ?? "";
     const descriptor = {
       id: el.dataset.id || null,
