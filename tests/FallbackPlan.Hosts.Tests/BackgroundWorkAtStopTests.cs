@@ -133,6 +133,43 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task StoppingTheService_WhileADrillsStepWaitsInTheQueue_EndsTheDrill_AndTheDrillStatesNothing()
+    {
+        // Every step of a drill queues on the reader lane, and the queue runs
+        // nothing it had not started by the time it stops: a step left
+        // waiting there is answered by the stop or by nothing. The lane is
+        // held by a job that ends when the queue tells it to.
+        var runtime = await StartAsync();
+        try
+        {
+            await PassAsync(runtime, _start);
+            var drilledBefore = Row(runtime).DrilledAt;
+            var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
+                "hold-" + Guid.NewGuid().ToString("n"), JobLane.Reader, UserInitiated: true, "hold the reader lane",
+                async token => await held.Task.WaitAsync(token))));
+
+            var drill = RecoveryDrillJob.RunAsync(
+                runtime,
+                runtime.Configuration.BackupSets.Single(),
+                "vault",
+                (ulong)_start.AddDays(RecoveryDrillJob.DefaultIntervalDays + 1).ToUnixTimeMilliseconds(),
+                userInitiated: false,
+                Timeout);
+            await WaitUntilAsync(() => runtime.Queue.ActiveCount == 2);
+
+            await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+            Assert.IsTrue(drill.IsCompleted, "the drill was still waiting on its step when the stop returned");
+            Assert.AreEqual(drilledBefore, Row(runtime).DrilledAt, "a drill the stop cut short stated an outcome");
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task TheWorkAPassLeavesBeside_IsLetGoOnceItHasEnded()
     {
         // A service runs a pass every poll for months: what it keeps for the
@@ -189,6 +226,14 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
         await Task.WhenAny(stopping, Task.Delay(TimeSpan.FromSeconds(1), Timeout));
         _release.Set();
         return await stopping.WaitAsync(Timeout);
+    }
+
+    private async Task WaitUntilAsync(Func<bool> condition)
+    {
+        while (!condition())
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(20), Timeout);
+        }
     }
 
     private async Task PassAsync(ServiceRuntime runtime, DateTimeOffset at)
