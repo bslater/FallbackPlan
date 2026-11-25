@@ -149,8 +149,12 @@ public sealed class NewBackupProofStatusTests : IAsyncDisposable
     {
         // The vault's own share of one blob a pass, with the default left as
         // it is: counted at the default, the passes left would read as one.
+        // A second backup lands before the first is proven, so the proof
+        // that takes it over owes the blobs of both.
         await using var runtime = await StartAsync(share: 1);
         await PassAsync(runtime);
+        await BackUpAloneAsync(runtime);
+        await SyncAsync(runtime);
 
         var proof = (await RowAsync(runtime)).NewBackupProof!;
         Assert.IsNotNull(proof.ProvingSnapshotId, "the premise: the backup needs more than the vault's share");

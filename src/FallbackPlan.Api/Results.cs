@@ -1473,6 +1473,14 @@ public sealed record DestinationStatusDescriptor(
 /// <paramref name="ProvenSnapshotId"/> is the newest that is. Null while none
 /// has failed, and from services before 1.92.
 /// </param>
+/// <param name="PassesLeft">
+/// At least how many more passes the proof needs at the destination
+/// (contract 1.95, ADR-0199 Amendment 14): the blobs left over the
+/// destination's share a pass, rounded up. A pass proves no more than the
+/// share, and fewer where the digest tier's byte budget leaves some over, so
+/// the proof takes no fewer. Null with <paramref name="BlobsLeft"/>, and from
+/// services before 1.95.
+/// </param>
 public sealed record NewBackupProofDescriptor(
     string? ProvenSnapshotId,
     ulong? ProvenCapturedAt,
@@ -1480,7 +1488,8 @@ public sealed record NewBackupProofDescriptor(
     ulong? ProvingCapturedAt = null,
     int? BlobsProven = null,
     int? BlobsLeft = null,
-    string? FailedBlob = null);
+    string? FailedBlob = null,
+    int? PassesLeft = null);
 
 /// <summary>
 /// What a cloud destination's store was asked, as its status row reports it

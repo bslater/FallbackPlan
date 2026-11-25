@@ -72,9 +72,9 @@ public static class FanOut
     /// <paramref name="destination"/>: its own share where it states one
     /// (ADR-0199 Amendment 13), otherwise <see cref="NewBackupProofBudget"/>.
     /// </summary>
-    /// <param name="destination">The destination the pass proves the backup at.</param>
-    private static int NewBackupProofShareAt(DestinationConfiguration destination) =>
-        destination.NewBackupProofShare ?? NewBackupProofBudget;
+    /// <param name="destination">The destination the pass proves the backup at; null for one no longer declared.</param>
+    internal static int NewBackupProofShareAt(DestinationConfiguration? destination) =>
+        destination?.NewBackupProofShare ?? NewBackupProofBudget;
 
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
     /// <param name="setId">The set's 32-hex identity.</param>
