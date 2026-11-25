@@ -324,7 +324,9 @@ Amendment 5 said the kept names answer where the catalogue no longer holds the b
 
 **Built:** `Agent/NewBackupProof`'s `OwedOf` draws the subtraction out of the catalogue lookup:
 
-- `Hosts.Tests/ProvenBlobsAfterDeletionTests`: a vault is proven through a first backup and a second is taken. The set's catalogue is then rebuilt without the first, whose record is gone. The second's proof asks about none of the blobs the first was proven through.
+- `Hosts.Tests/ProvenBlobsAfterDeletionTests`:
+  - a vault is proven through a first backup and a second is taken. The set's catalogue is then rebuilt without the first, whose record is gone. The second's proof asks about none of the blobs the first was proven through;
+  - where no names were kept, as for a destination proven before any were, the catalogue's own list of the backup proven there still spares its blobs.
 - `Hosts.Tests/NewBackupProofStepTests`: what a proof owes spares both what the catalogue lists and what was kept, so a catalogue that lists the proven backup short re-asks nothing; each spares what it says where only one says anything.
 
 ## Status history

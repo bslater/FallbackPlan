@@ -10,7 +10,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// the blobs its backup needed at that destination, and the next backup's
 /// proof asks only about the blobs none of them was, though the catalogue no
 /// longer holds the backup they were proven through. A catalogue rebuilt
-/// without that backup is answered the same way (ADR-0199 Amendment 12).
+/// without that backup is answered the same way, and where no names were
+/// kept, as for a destination proven before any were, the catalogue's own
+/// list of that backup's blobs still spares them (ADR-0199 Amendment 12).
 /// </summary>
 /// <remarks>
 /// Retention's expiry keeps a backup's row in the catalogue, so the case is a
@@ -149,6 +151,39 @@ public sealed class ProvenBlobsAfterDeletionTests : IAsyncDisposable
         Assert.IsNotEmpty(request.Names, "the premise: the second backup added blobs");
         var asked = request.Names.Where(firstBlobs.Contains).ToList();
         Assert.IsEmpty(asked, $"the proof asks again about blobs proven there through a backup the catalogue lost: {string.Join(", ", asked)}");
+    }
+
+    [TestMethod]
+    public async Task WhereNoNamesWereKept_TheCataloguesListOfTheBackupProvenThere_StillSparesItsBlobs()
+    {
+        // A destination proven before names were kept, or whose file does
+        // not read: the catalogue still holds the backup proven there.
+        FanOut.NewBackupProofBudget = 1;
+        await using var runtime = await StartAsync();
+        await PassAsync(runtime);
+        for (var passes = 0; Row(runtime).ProvenSnapshot is null; passes++)
+        {
+            Assert.IsLessThan(10, passes, "the first backup's proof never finished");
+            await SyncAsync(runtime);
+        }
+
+        var firstBlobs = StagingBlobs(runtime).Select(NameOf).ToHashSet(StringComparer.Ordinal);
+        var records = StagingRecords(runtime);
+        _harness.WriteSourceFile("docs/c.txt", new string('c', 30_000));
+        await BackUpAloneAsync(runtime, _start.AddHours(1));
+        var second = Assert.ContainsSingle(StagingRecords(runtime).Except(records, StringComparer.Ordinal));
+        Directory.Delete(Path.Combine(_harness.StateDirectory, "proven-blobs"), recursive: true);
+
+        var set = runtime.Configuration.BackupSets.Single();
+        var row = Row(runtime);
+        var request = NewBackupProof.Request(
+            runtime, set, "vault", await runtime.ArchiveForAsync(set, Timeout), second,
+            row with { ProvingSnapshot = null, ProvingCursor = null }, budget: 256);
+
+        Assert.IsNotNull(request);
+        Assert.IsNotEmpty(request.Names, "the premise: the second backup added blobs");
+        var asked = request.Names.Where(firstBlobs.Contains).ToList();
+        Assert.IsEmpty(asked, $"the proof asks again about blobs the catalogue lists for the backup proven there: {string.Join(", ", asked)}");
     }
 
     private async Task<IReadOnlyList<SnapshotDescriptor>> SnapshotsAsync(ServiceCommandHandler handler)
