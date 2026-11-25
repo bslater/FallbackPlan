@@ -1157,8 +1157,9 @@ public sealed class ClientModeTests : IDisposable
         {
             var shown = await RunAgainstServiceAsync("destination-settings", name, "--state", _harness.StateDirectory);
             Assert.AreEqual(0, shown.ExitCode, shown.All);
-            Assert.Contains("drill every: never", shown.All, StringComparison.Ordinal);
-            Assert.DoesNotContain("default", shown.All, StringComparison.Ordinal);
+            var drill = shown.All.Split('\n').Single(line => line.StartsWith("drill every:", StringComparison.Ordinal));
+            Assert.Contains("drill every: never", drill, StringComparison.Ordinal);
+            Assert.DoesNotContain("default", drill, StringComparison.Ordinal);
         }
     }
 

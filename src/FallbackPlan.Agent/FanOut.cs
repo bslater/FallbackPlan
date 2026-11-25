@@ -54,18 +54,27 @@ public static class FanOut
     private static readonly AsyncLocal<int?> ReadBackBudgetInFlow = new();
 
     /// <summary>
-    /// The most of the newest backup's blobs one pass proves at a local path
-    /// or a store (ADR-0199). A property for the same reason as
-    /// <see cref="ReadBackBudget"/>, and scoped the same way: a test narrows
-    /// it to watch a proof carried over passes.
+    /// The most of the newest backup's blobs one pass proves at a destination
+    /// that states no share of its own (ADR-0199). A property for the same
+    /// reason as <see cref="ReadBackBudget"/>, and scoped the same way: a test
+    /// narrows it to watch a proof carried over passes.
     /// </summary>
     internal static int NewBackupProofBudget
     {
-        get => NewBackupProofBudgetInFlow.Value ?? VerificationSampler.NewBackupBudget;
+        get => NewBackupProofBudgetInFlow.Value ?? DestinationConfiguration.DefaultNewBackupProofShare;
         set => NewBackupProofBudgetInFlow.Value = value;
     }
 
     private static readonly AsyncLocal<int?> NewBackupProofBudgetInFlow = new();
+
+    /// <summary>
+    /// The most of the newest backup's blobs one pass proves at
+    /// <paramref name="destination"/>: its own share where it states one
+    /// (ADR-0199 Amendment 13), otherwise <see cref="NewBackupProofBudget"/>.
+    /// </summary>
+    /// <param name="destination">The destination the pass proves the backup at.</param>
+    private static int NewBackupProofShareAt(DestinationConfiguration destination) =>
+        destination.NewBackupProofShare ?? NewBackupProofBudget;
 
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
     /// <param name="setId">The set's 32-hex identity.</param>
@@ -237,7 +246,7 @@ public static class FanOut
         var ledger = runtime.DestinationSync;
         var previous = ledger.Find(set.Id, destination.Name);
         var newBackup = NewBackupProof.Request(
-            runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofBudget);
+            runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofShareAt(destination));
         var plan = VerificationSampler.Rotate(
             blobs, previous?.SampleCursor, ReadBackBudget, VerificationSampler.PeerReservoirShare, newBackup);
         var sample = WithNewBackup(plan).Select(chosen => chosen.Key).ToList();
@@ -643,7 +652,7 @@ public static class FanOut
                 && session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature);
             var newBackup = challenged
                 ? NewBackupProof.Request(
-                    runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofBudget)
+                    runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofShareAt(destination))
                 : null;
             var plan = challenged
                 ? await VerificationSampler.SampleAsync(
@@ -1506,7 +1515,7 @@ public static class FanOut
         var newBackup = source is { ProvesContent: false }
             ? null
             : NewBackupProof.Request(
-                runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofBudget);
+                runtime, set, destination.Name, archive, newestSnapshot, previous, NewBackupProofShareAt(destination));
         var plan = source is { ProvesContent: false }
             ? new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor)
             : await VerificationSampler.SampleAsync(
@@ -1773,6 +1782,7 @@ public static class FanOut
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, ArchiveHandle archive,
         string? newestSnapshot, DestinationSyncRecord? previous, ulong nowMs)
     {
+        // Only what the backup owes is counted here, so no share is asked of it.
         if (string.Equals(previous?.ProvingSnapshot, newestSnapshot, StringComparison.Ordinal)
             || NewBackupProof.Request(
                 runtime, set, destinationName, archive, newestSnapshot, previous, NewBackupProofBudget) is not { } owed)

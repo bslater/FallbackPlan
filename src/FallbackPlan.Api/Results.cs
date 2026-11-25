@@ -294,6 +294,12 @@ public sealed record BackupSetDescriptor(
 /// states it, ISO 8601 in UTC; null for any other credential or a signature
 /// that states none. Ignored on an upsert.
 /// </param>
+/// <param name="NewBackupProofShare">
+/// The most of a new backup's blobs one pass proves there (ADR-0199
+/// Amendment 13, contract 1.94), or null where the declaration states none
+/// and the service's default applies. On an upsert, null preserves what the
+/// declaration has and zero removes the share.
+/// </param>
 public sealed record DestinationDescriptor(
     string? Id,
     string Name,
@@ -315,7 +321,8 @@ public sealed record DestinationDescriptor(
     string? Account = null,
     string? Container = null,
     string? AuthorisedBy = null,
-    string? SignatureExpires = null);
+    string? SignatureExpires = null,
+    int? NewBackupProofShare = null);
 
 /// <summary>Every declared destination, referenced by a set or not.</summary>
 /// <param name="Destinations">The declarations, in configuration order.</param>

@@ -2401,9 +2401,10 @@ public static class CliApplication
         }
 
         {
-            // A destination's two settings through the service (contract
-            // 1.44). The declaration is read back first and sent whole, so an
-            // edit of these two carries everything else it says unchanged.
+            // A destination's settings through the service (contract 1.44,
+            // and 1.94 for the proof share). The declaration is read back
+            // first and sent whole, so an edit of these carries everything
+            // else it says unchanged.
             var destinationName = new Argument<string>("name")
             {
                 Description = "The destination, by the name its declaration gives it.",
@@ -2422,13 +2423,19 @@ public static class CliApplication
                 Description = "How often a restore drill reads from it, in days; 0 removes the cadence, which "
                     + "means the default for a local path and never for a peer, a bucket or a container.",
             };
+            var proofShareOption = new Option<int?>("--proof-share")
+            {
+                Description = "The most of a new backup's blobs one pass proves there; 0 returns it to the default of "
+                    + $"{DestinationConfiguration.DefaultNewBackupProofShare}.",
+            };
             var destinationSettings = new Command(
                 "destination-settings",
-                "Show a destination's transfer limit and drill cadence, or change them.");
+                "Show a destination's transfer limit, drill cadence and proof share, or change them.");
             destinationSettings.Arguments.Add(destinationName);
             destinationSettings.Options.Add(destinationState);
             destinationSettings.Options.Add(transferLimitOption);
             destinationSettings.Options.Add(drillDaysOption);
+            destinationSettings.Options.Add(proofShareOption);
             root.Subcommands.Add(destinationSettings);
 
             destinationSettings.SetAction((parse, cancellationToken) => GuardAsync(async () =>
@@ -2437,6 +2444,7 @@ public static class CliApplication
                 var state = parse.GetValue(destinationState);
                 var transferLimit = parse.GetValue(transferLimitOption);
                 var drillDays = parse.GetValue(drillDaysOption);
+                var proofShare = parse.GetValue(proofShareOption);
 
                 var listed = await QueryLocalServiceAsync<DestinationsResult>(
                     state, new ListDestinationsCommand(), cancellationToken).ConfigureAwait(false);
@@ -2444,7 +2452,7 @@ public static class CliApplication
                         string.Equals(candidate.Name, name, StringComparison.Ordinal))
                     ?? throw new CliFailureException($"no destination named '{name}' is declared.");
 
-                if (transferLimit is null && drillDays is null)
+                if (transferLimit is null && drillDays is null && proofShare is null)
                 {
                     output.WriteLine($"transfer limit: {destination.TransferLimit ?? "none"}");
                     // The scheduler's rule (ADR-0054 Amendment 3, ADR-0091,
@@ -2455,6 +2463,9 @@ public static class CliApplication
                             ? "drill every: the default cadence"
                             : $"drill every: never — a {destination.Kind} destination is drilled only on a cadence "
                                 + "written for it");
+                    output.WriteLine(destination.NewBackupProofShare is { } share
+                        ? $"proof share: {share} blobs a pass"
+                        : $"proof share: the default, {DestinationConfiguration.DefaultNewBackupProofShare} blobs a pass");
                     return 0;
                 }
 
@@ -2464,6 +2475,7 @@ public static class CliApplication
                     {
                         TransferLimit = transferLimit,
                         DrillIntervalDays = drillDays,
+                        NewBackupProofShare = proofShare,
                     }),
                     cancellationToken).ConfigureAwait(false);
                 if (answer is ConfigurationChangeResult change)

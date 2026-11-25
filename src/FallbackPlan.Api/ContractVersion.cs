@@ -908,8 +908,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// before it. Additive: a pre-1.93 service says nothing, and a client
     /// warns of nothing.
     /// </para>
+    /// <para>
+    /// 1.94 makes the most of a new backup's blobs one pass proves at a
+    /// destination a setting of that destination (FR-VER-002, ADR-0199
+    /// Amendment 13). `DestinationDescriptor` gains `new_backup_proof_share`,
+    /// null where the declaration states none and the service's default
+    /// applies. On an upsert, null preserves what the declaration has and
+    /// zero removes it. Additive: a pre-1.94 client's save keeps the share
+    /// the file states, and a pre-1.94 service's listing reads as none
+    /// stated.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 93);
+    public static ContractVersion Current { get; } = new(1, 94);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>
