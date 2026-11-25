@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -81,7 +82,8 @@ internal static class DiagnosticBundle
         string? StatusProblem,
         IReadOnlyList<Notice> Notices,
         IReadOnlyList<JobRecord> Jobs,
-        LoggingComposition? Logging);
+        LoggingComposition? Logging,
+        Func<DestinationConfiguration, (bool? Stored, string? Kind, string? Expires)>? CredentialOf = null);
 
     /// <summary>Builds the bundle, dropping the log's oldest records until it fits.</summary>
     internal static DiagnosticBundleResult Build(Inputs inputs)
@@ -282,6 +284,52 @@ internal static class DiagnosticBundle
         }
     }
 
+    /// <summary>
+    /// One destination's projection, each part rendered by its class
+    /// (ADR-0081 Amendment 2): an object store's region and addressing as
+    /// written, its prefix as a path, and its bucket, account and container
+    /// as identifiers that do not spell them; which credential is held, of a
+    /// fixed vocabulary, and when a signature lapses, never the credential.
+    /// </summary>
+    private static DestinationEntry DestinationOf(DestinationConfiguration destination, Inputs inputs, RenderMode mode)
+    {
+        var credential = inputs.CredentialOf?.Invoke(destination) ?? default;
+        return new DestinationEntry(
+            Render(LogId.Destination(destination.Id), mode),
+            Render(new LogLabel(destination.Name), mode),
+            destination.Kind.ToString(),
+            RenderPath(destination.Path, mode),
+            Render(destination.Fingerprint is null ? null : LogId.Fingerprint(destination.Fingerprint), mode),
+            Render(destination.Endpoint, mode),
+            destination.FailureDomain?.ToString(),
+            destination.Verification?.ToString(),
+            destination.DeepVerifyIntervalDays,
+            destination.DrillIntervalDays,
+            destination.Priority,
+            destination.TransferLimit,
+            destination.NewBackupProofShare,
+            destination.RotationSample,
+            Render(NameId("bucket", destination.Bucket), mode),
+            destination.Region is null ? null : Render(new LogLabel(destination.Region), mode),
+            RenderPath(destination.Prefix, mode),
+            destination.Addressing,
+            Render(NameId("account", destination.Account), mode),
+            Render(NameId("container", destination.Container), mode),
+            credential.Stored,
+            credential.Kind,
+            credential.Expires);
+    }
+
+    /// <summary>
+    /// A name a person chose for a store, as an identifier that does not spell
+    /// it: its digest, wrapped so it shortens as every identifier does. A
+    /// public service holds a bucket's or an account's name unique the world
+    /// over, and the first characters of the name itself would say what it
+    /// holds.
+    /// </summary>
+    private static LogId? NameId(string kind, string? name) =>
+        name is null ? null : LogId.FromText(kind, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(name))));
+
     private static ConfigurationEntry Configuration(Inputs inputs, RenderMode mode)
     {
         if (inputs.Configuration is not { } configuration)
@@ -291,21 +339,7 @@ internal static class DiagnosticBundle
 
         return new ConfigurationEntry(
             configuration.SchemaVersion,
-            [.. configuration.Destinations.Select(destination => new DestinationEntry(
-                Render(LogId.Destination(destination.Id), mode),
-                Render(new LogLabel(destination.Name), mode),
-                destination.Kind.ToString(),
-                RenderPath(destination.Path, mode),
-                Render(destination.Fingerprint is null ? null : LogId.Fingerprint(destination.Fingerprint), mode),
-                Render(destination.Endpoint, mode),
-                destination.FailureDomain?.ToString(),
-                destination.Verification?.ToString(),
-                destination.DeepVerifyIntervalDays,
-                destination.DrillIntervalDays,
-                destination.Priority,
-                destination.TransferLimit,
-                destination.NewBackupProofShare,
-                destination.RotationSample))],
+            [.. configuration.Destinations.Select(destination => DestinationOf(destination, inputs, mode))],
             [.. configuration.BackupSets.Select(set => new SetEntry(
                 Render(LogId.BackupSet(set.Id), mode),
                 Render(new LogLabel(set.Name), mode),
@@ -520,7 +554,16 @@ internal static class DiagnosticBundle
         int? Priority,
         string? TransferLimit,
         int? NewBackupProofShare,
-        int? RotationSample);
+        int? RotationSample,
+        string? Bucket,
+        string? Region,
+        string? Prefix,
+        BucketAddressing? Addressing,
+        string? Account,
+        string? Container,
+        bool? CredentialStored,
+        string? CredentialKind,
+        string? CredentialExpires);
 
     private sealed record SetEntry(
         string? Id,

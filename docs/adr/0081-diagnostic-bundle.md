@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-10
-**Requirements:** NFR-PRIV-003, NFR-SEC-006
+**Requirements:** NFR-PRIV-003, NFR-SEC-006; NFR-PRIV-003 (amended by [Amendment 2](#amendment-2-2026-11--an-object-stores-address-travels-by-the-class-of-each-part): an object store's bucket, account and container travel only as identifiers that do not spell them, its prefix as a path, and its credential never)
 **Related:** [ADR-0043](0043-structured-logging-and-diagnostics.md) (redaction by declared type, §4, and the local/remote split, §6; amended by this record), [ADR-0028 §6](0028-service-boundary-and-deployment-topologies.md) (what a paired console may decide), [architecture 10 §4](../architecture/10-observability.md#4-diagnostics), [threat model T-16](../threat-model.md) (no filesystem access for clients), [specification 03 §8](../../specifications/repository-format/03-keys.md) (no secret in any log)
 
 **Built:**
@@ -168,6 +168,23 @@ it to records, the service's bundle renders its fields through it as before, and
 recovery tool's bundle renders through it too. An architecture canary fails if the
 tool ever grows a copy. The Built line above names where the rule was first built.
 
+## Amendment 2 (2026-11) — an object store's address travels by the class of each part
+
+The configuration entry projected a destination's kind, path, fingerprint and endpoint, and nothing of an S3-compatible store's ([ADR-0091](0091-an-s3-compatible-destination.md)) or an Azure container's ([ADR-0093](0093-an-azure-blob-destination.md)) address, nor whether the service held a credential for it. A store that will not answer is a question a bundle is sent to have answered, and where the store is and how it is reached is most of the answer.
+
+**Decision.** The entry carries a store's address, each part rendered by its class:
+
+- **Region and addressing** as written: the region as a label, the addressing in the configuration's own spelling.
+- **Prefix** as a path: withheld unless the person opts in to paths for that bundle.
+- **Bucket, account and container** as identifiers: the SHA-256 of the name, wrapped as a `LogId` so it shortens as every identifier does, in both modes. Shortening the name itself would keep its first characters, and those say what the store holds. A person chose the name, and a public service holds it unique the world over. A digest lets two bundles match a store, and neither names it. The opt-in is to paths, not to correlation.
+- **The credential** never travels. The entry says only whether one is held, its kind from a fixed vocabulary, and when a shared access signature lapses, as the destination listing says them (contract 1.61). A lapsed signature is the commonest reason a container stops answering.
+
+**Built:** `Agent/DiagnosticBundle` projects each part and takes the service's own description of the credential held. `Hosts.Tests/DiagnosticBundleTests`:
+
+- a store's and a container's address travel by class, with their names, prefix, key id and secret planted and absent;
+- with paths, the prefix travels and the names still do not;
+- a container's signature says its kind and expiry and never itself.
+
 ## Status history
 
 | Date | Status | Note |
@@ -176,3 +193,4 @@ tool ever grows a copy. The Built line above names where the rule was first buil
 | 2026-10 | Amended | [ADR-0082](0082-the-recovery-tools-diagnostic-bundle.md): the owed recovery tool's bundle is built, and the rule of §1 moved, unchanged, to Domain so the tool can render through it |
 | 2026-11 | Amended (related) | [ADR-0199 Amendment 15](0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-15-2026-11--the-diagnostic-bundle-carries-a-destinations-proof-share): the configuration entry carries each destination's share of a new backup's blobs a pass, a count rendered as the entry's other numbers are. `Agent/DiagnosticBundle`; `Hosts.Tests/DiagnosticBundleTests` |
 | 2026-11 | Amended (related) | [ADR-0035 Amendment 4](0035-destination-fitness.md#amendment-4-2026-11--a-destinations-rotating-sample-is-a-setting): the configuration entry carries each destination's rotating sample a pass, a count rendered as the entry's other numbers are. `Agent/DiagnosticBundle`; `Hosts.Tests/DiagnosticBundleTests` |
+| 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--an-object-stores-address-travels-by-the-class-of-each-part): an object store's address travels by the class of each part, its region and addressing as written, its prefix as a path, its bucket, account and container as digests shortened as identifiers, and which credential is held and when a signature lapses, never the credential. `Agent/DiagnosticBundle`; `Hosts.Tests/DiagnosticBundleTests` |

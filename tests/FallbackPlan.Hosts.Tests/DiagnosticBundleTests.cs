@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
@@ -21,7 +22,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// <c>diagnostics-export</c>. Its configuration carries a destination's share
 /// of a new backup's blobs a pass, so a bundle explains a slow proof
 /// (FR-VER-002, ADR-0199 Amendment 15), and its rotating sample a pass
-/// (ADR-0035 Amendment 4).
+/// (ADR-0035 Amendment 4). An object store's address travels by the class of
+/// each part: its region and addressing as written, its prefix as a path, its
+/// bucket, account and container only as identifiers that do not spell them,
+/// and which credential the service holds and when a signature lapses, never
+/// the credential (NFR-PRIV-003, FR-DEST-005, ADR-0081 Amendment 2).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -90,7 +95,7 @@ public sealed class DiagnosticBundleTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync(
         int ringCapacity = 1024, bool withLogging = true, bool durable = true, RetentionConfiguration? retention = null,
-        int? proofShare = null, int? rotationSample = null)
+        int? proofShare = null, int? rotationSample = null, bool stores = false)
     {
         if (withLogging)
         {
@@ -120,6 +125,22 @@ public sealed class DiagnosticBundleTests : IDisposable
                     NewBackupProofShare = proofShare,
                     RotationSample = rotationSample,
                 },
+                .. (stores
+                    ?
+                    [
+                        new DestinationConfiguration
+                        {
+                            Id = StoreId, Name = "cloud", Kind = DestinationKind.S3,
+                            Endpoint = "https://objects.example.net", Bucket = TellingBucket, Region = "eu-west-2",
+                            Prefix = TellingPrefix, Addressing = BucketAddressing.VirtualHost,
+                        },
+                        new DestinationConfiguration
+                        {
+                            Id = ContainerId, Name = "container", Kind = DestinationKind.AzureBlob,
+                            Account = TellingAccount, Container = TellingContainer, Prefix = TellingPrefix,
+                        },
+                    ]
+                    : Array.Empty<DestinationConfiguration>()),
             ],
             BackupSets =
             [
@@ -438,6 +459,100 @@ public sealed class DiagnosticBundleTests : IDisposable
             Assert.AreEqual(JsonValueKind.Null, stated.ValueKind);
         }
     }
+
+    private const string StoreId = "5353535353535353535353535353535a";
+    private const string ContainerId = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+    private const string TellingBucket = "the-harrisons-medical-scans";
+    private const string TellingAccount = "harrisonsfamily";
+    private const string TellingContainer = "medical-scans";
+    private const string TellingPrefix = "harrison-laptop/scans";
+    private const string PlantedKeyId = "AKIAPLANTEDKEYID0001";
+    private const string PlantedSecret = "planted-secret-access-key-never-to-travel";
+
+    [TestMethod]
+    public async Task ExportDiagnostics_AnObjectStoresAddress_TravelsByItsClass_AndItsNamesOnlyAsIdentifiers()
+    {
+        // A store that will not answer is a question a bundle is sent to have
+        // answered, and where the store is and how it is reached is most of
+        // the answer. A bucket's or an account's name is chosen by a person
+        // and, at a public service, unique the world over: it travels only as
+        // an identifier that two bundles can match and neither spells.
+        await using var runtime = await StartAsync(stores: true);
+        runtime.DestinationCredentials.Save(StoreId, new Storage.S3.S3Credentials(PlantedKeyId, PlantedSecret));
+
+        var text = Open(await ExportAsync(runtime, includePaths: false))["configuration.json"];
+
+        using var configuration = JsonDocument.Parse(text);
+        var cloud = DestinationNamed(configuration, "cloud");
+        Assert.AreEqual("eu-west-2", cloud.GetProperty("region").GetString());
+        Assert.AreEqual("virtual-host", cloud.GetProperty("addressing").GetString());
+        Assert.AreEqual(Identifier("bucket", TellingBucket), cloud.GetProperty("bucket").GetString());
+        Assert.AreNotEqual(TellingPrefix, cloud.GetProperty("prefix").GetString(), "a prefix travelled without the person's opt-in to paths");
+        Assert.IsTrue(cloud.GetProperty("credential_stored").GetBoolean());
+        Assert.AreEqual("access-key", cloud.GetProperty("credential_kind").GetString());
+        Assert.AreEqual(JsonValueKind.Null, cloud.GetProperty("credential_expires").ValueKind);
+
+        var container = DestinationNamed(configuration, "container");
+        Assert.AreEqual(Identifier("account", TellingAccount), container.GetProperty("account").GetString());
+        Assert.AreEqual(Identifier("container", TellingContainer), container.GetProperty("container").GetString());
+        Assert.IsFalse(container.GetProperty("credential_stored").GetBoolean(), "a container the service holds no credential for");
+        Assert.AreEqual(JsonValueKind.Null, container.GetProperty("credential_kind").ValueKind);
+
+        var vault = DestinationNamed(configuration, "vault");
+        Assert.AreEqual(JsonValueKind.Null, vault.GetProperty("bucket").ValueKind);
+        Assert.AreEqual(JsonValueKind.Null, vault.GetProperty("credential_stored").ValueKind, "a local path signs nothing, and lacks nothing");
+
+        foreach (var planted in new[] { TellingBucket, TellingAccount, TellingContainer, TellingPrefix, PlantedKeyId, PlantedSecret })
+        {
+            Assert.DoesNotContain(planted, text, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
+    public async Task ExportDiagnostics_AContainersSignature_SaysItsKindAndWhenItLapses_NeverItself()
+    {
+        // A lapsed signature is the commonest reason a container stops
+        // answering; when it lapses is what the token states, and travels.
+        const string PlantedSignatureValue = "cGxhbnRlZC1zaWduYXR1cmUtdmFsdWU";
+        await using var runtime = await StartAsync(stores: true);
+        runtime.DestinationCredentials.Save(
+            ContainerId,
+            Storage.AzureBlob.AzureBlobCredentials.SharedAccessSignature(
+                $"sv=2022-11-02&sr=c&sp=racwdl&se=2027-01-02T03:04:05Z&sig={PlantedSignatureValue}"));
+
+        var text = Open(await ExportAsync(runtime, includePaths: true))["configuration.json"];
+
+        using var configuration = JsonDocument.Parse(text);
+        var container = DestinationNamed(configuration, "container");
+        Assert.IsTrue(container.GetProperty("credential_stored").GetBoolean());
+        Assert.AreEqual("sas", container.GetProperty("credential_kind").GetString());
+        Assert.AreEqual("2027-01-02T03:04:05Z", container.GetProperty("credential_expires").GetString());
+        Assert.DoesNotContain(PlantedSignatureValue, text, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ExportDiagnostics_WithPaths_CarriesAStoresPrefix_AndStillNotItsNames()
+    {
+        await using var runtime = await StartAsync(stores: true);
+
+        var text = Open(await ExportAsync(runtime, includePaths: true))["configuration.json"];
+
+        using var configuration = JsonDocument.Parse(text);
+        Assert.AreEqual(TellingPrefix, DestinationNamed(configuration, "cloud").GetProperty("prefix").GetString());
+        Assert.AreEqual(Identifier("bucket", TellingBucket), DestinationNamed(configuration, "cloud").GetProperty("bucket").GetString());
+        foreach (var planted in new[] { TellingBucket, TellingAccount, TellingContainer })
+        {
+            Assert.DoesNotContain(planted, text, StringComparison.Ordinal, "the opt-in is to paths, not to correlation");
+        }
+    }
+
+    /// <summary>A name as the bundle carries it: its digest, shortened as an identifier is.</summary>
+    private static string Identifier(string kind, string name) =>
+        $"{kind}#{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(name)))[..8]}";
+
+    private static JsonElement DestinationNamed(JsonDocument configuration, string name) =>
+        configuration.RootElement.GetProperty("destinations").EnumerateArray()
+            .Single(destination => destination.GetProperty("name").GetString() == name);
 
     [TestMethod]
     public async Task ExportDiagnostics_OnAServiceWithoutLogging_IsStillBuiltAndSaysItHoldsNoLog()

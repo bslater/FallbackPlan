@@ -238,6 +238,11 @@ public sealed class ProvenBlobsAfterDeletionTests : IAsyncDisposable
         var pass = await Scheduler.RunPassAsync(runtime, _start, Timeout);
         Assert.AreEqual(1, pass.Ran, "the pass ran no backup");
         await pass.Transfers.WaitAsync(Timeout);
+
+        // The pass's drills too: a drill phase still under way when the
+        // runtime is disposed opens the set's archive again, and its
+        // catalogue held open stops a test that deletes the file.
+        await pass.Drills.WaitAsync(Timeout);
     }
 
     private async Task BackUpAloneAsync(ServiceRuntime runtime, DateTimeOffset at)
