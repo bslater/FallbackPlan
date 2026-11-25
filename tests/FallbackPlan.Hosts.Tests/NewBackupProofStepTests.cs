@@ -9,7 +9,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// way, resumed after the last blob proven without a gap before it. Where
 /// it is under way, it says how many of the backup's blobs it has proven and
 /// how many are left, which the status reports (FR-VER-003, ADR-0199
-/// Amendment 2).
+/// Amendment 2). What a new backup's proof asks about spares both the blobs
+/// the catalogue lists for the backup proven there and the names kept when
+/// that backup's proof ended, so a catalogue rebuilt short of its records
+/// re-asks nothing proven there already (FR-VER-002, ADR-0199 Amendment 12).
 /// </summary>
 [TestClass]
 public sealed class NewBackupProofStepTests
@@ -18,6 +21,27 @@ public sealed class NewBackupProofStepTests
     private const string Newest = "snapshots/d/s/newest";
 
     private static readonly string[] Asked = ["blobs/data/a/x1", "blobs/data/a/x2", "blobs/meta/b/x3"];
+
+    [TestMethod]
+    public void TheBlobsOwed_SpareThoseKeptForTheBackupProvenThere_WhereTheCatalogueListsItShort()
+    {
+        // A catalogue rebuilt short of the proven backup's records lists only
+        // part of what it needed; the names kept when its proof ended say the rest.
+        var owed = NewBackupProof.OwedOf(["a", "b", "c", "d"], provenClosure: ["a"], kept: new HashSet<string>(["a", "b"]));
+
+        CollectionAssert.AreEquivalent(new[] { "c", "d" }, owed.ToArray());
+    }
+
+    [TestMethod]
+    public void TheBlobsOwed_SpareWhatTheCatalogueListsOrWhatWasKept_WhereOnlyOneSays()
+    {
+        CollectionAssert.AreEquivalent(
+            new[] { "b", "c" }, NewBackupProof.OwedOf(["a", "b", "c"], provenClosure: ["a"], kept: null).ToArray());
+        CollectionAssert.AreEquivalent(
+            new[] { "a", "c" }, NewBackupProof.OwedOf(["a", "b", "c"], provenClosure: null, kept: new HashSet<string>(["b"])).ToArray());
+        CollectionAssert.AreEquivalent(
+            new[] { "a", "b", "c" }, NewBackupProof.OwedOf(["a", "b", "c"], provenClosure: null, kept: null).ToArray());
+    }
 
     [TestMethod]
     public void EveryBlobAskedProven_WithNoneRemaining_ProvesTheDestinationThroughTheBackup()
