@@ -170,6 +170,29 @@ public sealed class DrillProofTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task TheRestoredInsteadNote_SaysTheNewestsPassesToGo_AtTheDestinationsShare()
+    {
+        // One blob a pass: seven left is seven passes, where the default
+        // share would count one.
+        FanOut.NewBackupProofBudget = 1;
+        await using var runtime = await StartAsync();
+        await ProveFirstAsync(runtime);
+        var first = Row(runtime).ProvenSnapshot!;
+        var second = await BackUpAndSyncAsync(runtime);
+        runtime.DestinationSync.RecordNewBackupProof(
+            _harness.DocsSetId, "vault", first, second, cursor: null,
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), blobsProven: 3, blobsLeft: 7);
+
+        var note = await RecoveryDrillJob.RestoredInsteadAsync(
+            runtime, runtime.Configuration.BackupSets.Single(), "vault",
+            NewBackupProof.IdentityOf(second), NewBackupProof.IdentityOf(first), Timeout);
+
+        Assert.Contains(
+            "was not yet proven here: its check had proven 3 of 10 blobs, with at least 7 more passes to go;",
+            note, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task TheNote_SaysWhereTheDrilledBackupsProofStood_ForEachStandingTheLedgerKnows()
     {
         FanOut.NewBackupProofBudget = 1;
