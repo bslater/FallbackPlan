@@ -918,8 +918,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// the file states, and a pre-1.94 service's listing reads as none
     /// stated.
     /// </para>
+    /// <para>
+    /// 1.95 has a proof under way say at least how many more passes it needs
+    /// (FR-VER-003, ADR-0199 Amendment 14). `new_backup_proof` gains
+    /// `passes_left`: the blobs left over the destination's share a pass,
+    /// rounded up. Null with `blobs_left`. Additive: a pre-1.95 service
+    /// counts none, and a client says nothing of them.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 94);
+    public static ContractVersion Current { get; } = new(1, 95);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

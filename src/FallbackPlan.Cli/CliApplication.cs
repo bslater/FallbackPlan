@@ -4224,8 +4224,13 @@ public static class CliApplication
                 + (through ?? "no backup proven here yet");
         }
 
+        // At least so many more passes at the destination's share (contract
+        // 1.95); nothing where none is left to count.
+        var passes = proof.PassesLeft is { } count and > 0
+            ? string.Create(CultureInfo.InvariantCulture, $", at least {count} more {(count == 1 ? "pass" : "passes")}")
+            : string.Empty;
         var progress = proof is { BlobsProven: { } done, BlobsLeft: { } left }
-            ? string.Create(CultureInfo.InvariantCulture, $"{done} of {done + left} blobs")
+            ? string.Create(CultureInfo.InvariantCulture, $"{done} of {done + left} blobs{passes}")
             : "under way";
         return $"proving {BackupName(proving, proof.ProvingCapturedAt)}: {progress}; {through ?? "no backup proven here yet"}";
 

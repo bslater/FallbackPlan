@@ -906,7 +906,11 @@ function newBackupProofLabel(d) {
     return `<b class="bad">${esc(name(p.provingSnapshotId, p.provingCapturedAt))} failed its check</b> <span class="detail">${esc(detail)}</span>`;
   }
 
-  return `checking ${esc(name(p.provingSnapshotId, p.provingCapturedAt))} <span class="detail">${esc(counted ?? "under way")} · ${esc(before)}</span>`;
+  // At least so many more passes at the destination's share (contract 1.95);
+  // nothing where none is left to count, or from a service before it.
+  const passes = p.passesLeft > 0 ? `at least ${fmtCount(p.passesLeft)} more ${p.passesLeft === 1 ? "pass" : "passes"}` : null;
+  const progress = [counted ?? "under way", passes, before].filter(Boolean).join(" · ");
+  return `checking ${esc(name(p.provingSnapshotId, p.provingCapturedAt))} <span class="detail">${esc(progress)}</span>`;
 }
 
 // A store that holds an object of the replica's own only in an archival

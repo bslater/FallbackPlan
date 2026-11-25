@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.94
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.95
 
 ---
 
@@ -285,3 +285,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.92 | A failed proof of a new backup names the blob that failed it ([ADR-0199 Amendment 4](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-4-2026-11--a-failed-proof-names-the-backup), FR-VER-005). `new_backup_proof` gains `failed_blob`, the store key of the blob of the backup under proof that did not prove at the last pass that asked about it. Additive: a pre-1.92 service names none, and its proof reads as under way. |
 | 1.93 | A restore's plan read through a destination says when the backup it restores is not proven there ([ADR-0199 Amendment 6](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-6-2026-11--a-restores-plan-says-when-its-backup-is-not-proven-where-it-is-read), FR-RST-003). `restore_plan` gains `not_proven_at`: `destination`, the destination's name, and `proof`, where its proof of new backups stands, as `new_backup_proof` says it. Null for a plan read from the set's own archive, and for a backup proven there or taken before it. Additive: a pre-1.93 service says nothing, and a client warns of nothing. |
 | 1.94 | The most of a new backup's blobs one pass proves at a destination is a setting of that destination ([ADR-0199 Amendment 13](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-13-2026-11--a-destinations-share-of-a-new-backups-proof-is-a-setting), FR-VER-002). The destination descriptor gains `new_backup_proof_share`, null where the declaration states none and the service's default applies. On an upsert, null preserves what the declaration has and zero removes it. Additive: a pre-1.94 client's save keeps the share the file states, and a pre-1.94 service's listing reads as none stated. |
+| 1.95 | A proof under way says at least how many more passes it needs ([ADR-0199 Amendment 14](../../docs/adr/0199-a-backup-is-proven-at-each-destination-it-lands-at.md#amendment-14-2026-11--a-proof-under-way-says-how-many-passes-it-still-needs), FR-VER-003). `new_backup_proof` gains `passes_left`: the blobs left over the destination's share a pass, rounded up. Null with `blobs_left`. Additive: a pre-1.95 service counts none, and a client says nothing of them. |

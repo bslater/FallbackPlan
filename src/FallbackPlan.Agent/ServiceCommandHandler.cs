@@ -1046,7 +1046,10 @@ public sealed partial class ServiceCommandHandler(
             ? known.CapturedAt
             : null;
         return planned is not null && NewBackupProof.IsNotProven(ledger, planned, plannedAt, provenAt)
-            ? new NotProvenAtDescriptor(source.Location, DescribeNewBackupProof(ledger, backups))
+            ? new NotProvenAtDescriptor(
+                source.Location,
+                DescribeNewBackupProof(
+                    ledger, backups, FanOut.NewBackupProofShareAt(runtime.Configuration.FindDestination(source.Location))))
             : null;
     }
 
@@ -3654,7 +3657,7 @@ public sealed partial class ServiceCommandHandler(
                 Requests: DescribeRequests(destination),
                 ArchivedMetadata: ledger?.MetadataArchivedKey,
                 ArchivedMetadataSince: ledger?.MetadataArchivedSince,
-                NewBackupProof: DescribeNewBackupProof(ledger, backups)));
+                NewBackupProof: DescribeNewBackupProof(ledger, backups, FanOut.NewBackupProofShareAt(destination))));
         }
 
         return (inputs, rows, lastCompleted);
@@ -3717,10 +3720,15 @@ public sealed partial class ServiceCommandHandler(
     /// </summary>
     /// <remarks>
     /// A backup the catalogue no longer holds, a person having deleted it, is
-    /// named by the identity its record key carries, undated.
+    /// named by the identity its record key carries, undated. A counted proof
+    /// under way says at least how many more passes it needs at
+    /// <paramref name="share"/> (contract 1.95, ADR-0199 Amendment 14).
     /// </remarks>
+    /// <param name="ledger">The pair's ledger row.</param>
+    /// <param name="backups">The backups the catalogue holds, by record key, to name and date them.</param>
+    /// <param name="share">The most of a new backup's blobs one pass proves at the destination.</param>
     internal static NewBackupProofDescriptor? DescribeNewBackupProof(
-        DestinationSyncRecord? ledger, IReadOnlyDictionary<string, KnownBackup>? backups)
+        DestinationSyncRecord? ledger, IReadOnlyDictionary<string, KnownBackup>? backups, int share)
     {
         if (ledger is null || (ledger.ProvenSnapshot is null && ledger.ProvingSnapshot is null))
         {
@@ -3729,11 +3737,14 @@ public sealed partial class ServiceCommandHandler(
 
         var proven = Name(ledger.ProvenSnapshot);
         var proving = Name(ledger.ProvingSnapshot);
+        var left = ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsLeft;
         return new NewBackupProofDescriptor(
             proven?.Id, proven?.CapturedAt, proving?.Id, proving?.CapturedAt,
             ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsProven,
-            ledger.ProvingSnapshot is null ? null : ledger.ProvingBlobsLeft,
-            ledger.ProvingSnapshot is null ? null : ledger.ProvingFailedKey);
+            left,
+            ledger.ProvingSnapshot is null ? null : ledger.ProvingFailedKey,
+            // Widened, so a count near the top of an int cannot wrap.
+            left is { } blobs ? (int)(((long)blobs + share - 1) / share) : null);
 
         (string Id, ulong? CapturedAt)? Name(string? key)
         {
