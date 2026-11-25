@@ -8,7 +8,9 @@ namespace FallbackPlan.Web.Tests;
 /// the control ADR-0069 §8 and ADR-0074 §7 named as owed. The console half of
 /// FR-SVC-021. A third field, a destination's share of a new backup's blobs
 /// one pass proves (contract 1.94), is the console half of FR-VER-002's
-/// amendment by ADR-0199 Amendment 13.
+/// amendment by ADR-0199 Amendment 13. A fourth, its rotating sample a pass
+/// (contract 1.96), is the console half of FR-VER-002's amendment by
+/// ADR-0035 Amendment 4.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -75,11 +77,13 @@ public sealed class ConsoleServiceSettingsScriptTests
         Assert.Contains("id=\"dest-limit\"", script, StringComparison.Ordinal);
         Assert.Contains("id=\"dest-drill\"", script, StringComparison.Ordinal);
         Assert.Contains("id=\"dest-proof-share\"", script, StringComparison.Ordinal);
+        Assert.Contains("id=\"dest-rotation-sample\"", script, StringComparison.Ordinal);
 
         var body = ActionBody("dest-save");
         Assert.Contains("transferLimit:", body, StringComparison.Ordinal);
         Assert.Contains("drillIntervalDays:", body, StringComparison.Ordinal);
         Assert.Contains("newBackupProofShare:", body, StringComparison.Ordinal);
+        Assert.Contains("rotationSample:", body, StringComparison.Ordinal);
     }
 
     [TestMethod]

@@ -20,7 +20,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// for byte. Establishes NFR-PRIV-003, and the CLI half of it through
 /// <c>diagnostics-export</c>. Its configuration carries a destination's share
 /// of a new backup's blobs a pass, so a bundle explains a slow proof
-/// (FR-VER-002, ADR-0199 Amendment 15).
+/// (FR-VER-002, ADR-0199 Amendment 15), and its rotating sample a pass
+/// (ADR-0035 Amendment 4).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -89,7 +90,7 @@ public sealed class DiagnosticBundleTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync(
         int ringCapacity = 1024, bool withLogging = true, bool durable = true, RetentionConfiguration? retention = null,
-        int? proofShare = null)
+        int? proofShare = null, int? rotationSample = null)
     {
         if (withLogging)
         {
@@ -117,6 +118,7 @@ public sealed class DiagnosticBundleTests : IDisposable
                     Kind = DestinationKind.LocalPath,
                     Path = Path.Combine(_harness.StateDirectory, "vault"),
                     NewBackupProofShare = proofShare,
+                    RotationSample = rotationSample,
                 },
             ],
             BackupSets =
@@ -406,6 +408,28 @@ public sealed class DiagnosticBundleTests : IDisposable
         var vault = configuration.RootElement.GetProperty("destinations")[0];
         Assert.IsTrue(vault.TryGetProperty("new_backup_proof_share", out var stated), "the bundle says nothing of the share");
         if (share is { } value)
+        {
+            Assert.AreEqual(value, stated.GetInt32());
+        }
+        else
+        {
+            Assert.AreEqual(JsonValueKind.Null, stated.ValueKind);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(48)]
+    [DataRow(null)]
+    public async Task ExportDiagnostics_TheConfiguration_CarriesADestinationsRotationSample(int? sample)
+    {
+        await using var runtime = await StartAsync(rotationSample: sample);
+
+        var entries = Open(await ExportAsync(runtime, includePaths: false));
+
+        using var configuration = JsonDocument.Parse(entries["configuration.json"]);
+        var vault = configuration.RootElement.GetProperty("destinations")[0];
+        Assert.IsTrue(vault.TryGetProperty("rotation_sample", out var stated), "the bundle says nothing of the sample");
+        if (sample is { } value)
         {
             Assert.AreEqual(value, stated.GetInt32());
         }

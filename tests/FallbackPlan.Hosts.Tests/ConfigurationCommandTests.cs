@@ -23,7 +23,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// cloud provider (FR-SNP-015): kept where an edit is silent, listed, and
 /// let go of where an edit says false. And a destination's share of a new
 /// backup's blobs one pass proves (FR-VER-002): kept where an edit is silent,
-/// listed, removed by zero and refused below it.
+/// listed, removed by zero and refused below it; and its rotating sample a
+/// pass (FR-VER-002, ADR-0035 Amendment 4), the same way.
 /// </summary>
 [TestClass]
 public sealed class ConfigurationCommandTests : IDisposable
@@ -354,7 +355,7 @@ public sealed class ConfigurationCommandTests : IDisposable
     [
         "id", "name", "kind", "path", "fingerprint", "endpoint",
         "failure_domain", "deep_verify_interval_days", "priority",
-        "transfer_limit", "drill_interval_days", "new_backup_proof_share",
+        "transfer_limit", "drill_interval_days", "new_backup_proof_share", "rotation_sample",
         "bucket", "region", "prefix", "addressing",
         "account", "container",
     ];
@@ -418,7 +419,7 @@ public sealed class ConfigurationCommandTests : IDisposable
         _harness.WriteConfiguration("every 1h");
         WithTheStoredDestination(vault => vault with
         {
-            TransferLimit = "2 MiB/s", DrillIntervalDays = 3, NewBackupProofShare = 32,
+            TransferLimit = "2 MiB/s", DrillIntervalDays = 3, NewBackupProofShare = 32, RotationSample = 48,
         });
 
         await using var runtime = await StartAsync();
@@ -435,6 +436,7 @@ public sealed class ConfigurationCommandTests : IDisposable
         Assert.AreEqual("2 MiB/s", saved.TransferLimit);
         Assert.AreEqual(3, saved.DrillIntervalDays);
         Assert.AreEqual(32, saved.NewBackupProofShare);
+        Assert.AreEqual(48, saved.RotationSample);
     }
 
     [TestMethod]
@@ -551,6 +553,60 @@ public sealed class ConfigurationCommandTests : IDisposable
         Assert.Contains(field, error.Message, StringComparison.Ordinal);
         Assert.Contains("vault", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(ConfigurationPath, error.Message, StringComparison.Ordinal);
+        CollectionAssert.AreEqual(before, await File.ReadAllBytesAsync(ConfigurationPath, _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_CarryingARotationSample_WritesAndListsIt_AndZeroRemovesIt()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null, RotationSample: 48)),
+            _timeout.Token));
+
+        Assert.AreEqual(48, ClientConfiguration.Load(ConfigurationPath).Destinations.Single().RotationSample);
+        Assert.IsInstanceOfType<DestinationsResult>(
+            await handler.ExecuteAsync(new ListDestinationsCommand(), _timeout.Token), out var listed);
+        Assert.AreEqual(48, Assert.ContainsSingle(listed.Destinations).RotationSample);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null, RotationSample: 0)),
+            _timeout.Token));
+
+        Assert.IsNull(ClientConfiguration.Load(ConfigurationPath).Destinations.Single().RotationSample);
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_ANegativeRotationSample_IsRefusedNamingTheWiresWayBackToTheDefault()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+        var before = await File.ReadAllBytesAsync(ConfigurationPath, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new UpsertDestinationCommand(new DestinationDescriptor(
+                    vault.Id, "vault", "local-path", vault.Path, null, null, RotationSample: -1)),
+                _timeout.Token),
+            out var error);
+
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("rotation_sample", error.Message, StringComparison.Ordinal);
+        Assert.Contains("vault", error.Message, StringComparison.Ordinal);
+        Assert.Contains("or 0 to take the default again", error.Message, StringComparison.Ordinal);
+        Assert.Contains("-1 is neither", error.Message, StringComparison.Ordinal);
         CollectionAssert.AreEqual(before, await File.ReadAllBytesAsync(ConfigurationPath, _timeout.Token));
     }
 
