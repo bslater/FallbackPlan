@@ -94,6 +94,13 @@ public sealed class RestorePlanProofTests : IAsyncDisposable
         Assert.AreEqual("vault", plan.NotProvenAt.Destination);
         Assert.AreEqual(NewBackupProof.IdentityOf(first), plan.NotProvenAt.Proof?.ProvenSnapshotId);
         Assert.AreEqual(NewBackupProof.IdentityOf(third), plan.NotProvenAt.Proof?.ProvingSnapshotId);
+
+        // The third backup's proof owes the blobs the second added too, so
+        // more than one is left: one blob a pass counts as many passes, where
+        // the default share would count one.
+        var proof = plan.NotProvenAt.Proof!;
+        Assert.IsGreaterThan(1, proof.BlobsLeft ?? 0, "the premise: more than one blob is left to prove");
+        Assert.AreEqual(proof.BlobsLeft, proof.PassesLeft, "the plan's passes left were not counted at the vault's share");
     }
 
     [TestMethod]
