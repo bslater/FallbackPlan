@@ -15,9 +15,12 @@ namespace FallbackPlan.Hosts.Tests;
 /// stop cuts short states nothing.
 /// </summary>
 /// <remarks>
-/// Each test holds a drill at its first ask of the service, before it opens
-/// a source to restore from: the only waits the stop made before were for
-/// queued jobs and for a restore source in use.
+/// A drill is held at its first ask of the service, before it opens a source
+/// to restore from, and a pass's drill phase at its start, before it asks
+/// whether the set holds a snapshot: the only waits the stop made before were
+/// for queued jobs and for a restore source in use. Held deaf to its token,
+/// the work shows the stop waits for it; held on its token, that the stop
+/// tells it to end.
 /// </remarks>
 [TestClass]
 public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
@@ -26,7 +29,9 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(3));
     private readonly DateTimeOffset _start = DateTimeOffset.Now;
     private readonly SemaphoreSlim _underWay = new(0);
-    private readonly SemaphoreSlim _joined = new(0);
+    private readonly SemaphoreSlim _phaseBegun = new(0);
+    private bool _holdThePhase;
+    private bool _holdOnToken;
     private readonly ManualResetEventSlim _release = new();
 
     private CancellationToken Timeout => _timeout.Token;
@@ -59,23 +64,23 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task StoppingTheService_WhileAPassWaitsOnADrill_ReturnsOnlyOnceThePassHasEnded()
+    public async Task StoppingTheService_TellsADrillUnderWayToEnd()
     {
+        // Held on its own token and never let go by the test: only the stop
+        // can end it, and a stop that did not tell it would wait for ever.
         var runtime = await StartAsync();
         try
         {
             await PassAsync(runtime, _start);
-            _ = HeldDrill(runtime);
+            var drilledBefore = Row(runtime).DrilledAt;
+            _holdOnToken = true;
+            var drill = HeldDrill(runtime);
             await _underWay.WaitAsync(Timeout);
 
-            // A pass that finds the vault due a drill joins the one under way.
-            var pass = await Scheduler.RunPassAsync(runtime, _start.AddDays(RecoveryDrillJob.DefaultIntervalDays + 1), Timeout);
-            await pass.Transfers.WaitAsync(Timeout);
-            await _joined.WaitAsync(Timeout);
+            await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
 
-            var passEndedFirst = await StopAsync(runtime, () => pass.Drills.IsCompleted);
-
-            Assert.IsTrue(passEndedFirst, "the service let go of its archives with a pass's drill phase still under way");
+            Assert.IsTrue(drill.IsCompleted, "the drill was still under way when the stop returned");
+            Assert.AreEqual(drilledBefore, Row(runtime).DrilledAt, "a drill the stop cut short stated an outcome");
         }
         finally
         {
@@ -83,6 +88,73 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
             await runtime.DisposeAsync();
         }
     }
+
+    [TestMethod]
+    public async Task StoppingTheService_WhileAPassesDrillPhaseIsUnderWay_ReturnsOnlyOnceThePhaseHasEnded()
+    {
+        var runtime = await StartAsync();
+        try
+        {
+            _holdThePhase = true;
+            var pass = await Scheduler.RunPassAsync(runtime, _start, Timeout);
+            await _phaseBegun.WaitAsync(Timeout);
+
+            var phaseEndedFirst = await StopAsync(runtime, () => pass.Drills.IsCompleted);
+
+            Assert.IsTrue(phaseEndedFirst, "the service let go of its archives with a pass's drill phase still under way");
+        }
+        finally
+        {
+            _release.Set();
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task StoppingTheService_TellsAPassesDrillPhaseToEnd()
+    {
+        var runtime = await StartAsync();
+        try
+        {
+            _holdThePhase = true;
+            _holdOnToken = true;
+            var pass = await Scheduler.RunPassAsync(runtime, _start, Timeout);
+            await _phaseBegun.WaitAsync(Timeout);
+
+            await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+            Assert.IsTrue(pass.Drills.IsCompleted, "the pass's drill phase was still under way when the stop returned");
+        }
+        finally
+        {
+            _release.Set();
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task TheWorkAPassLeavesBeside_IsLetGoOnceItHasEnded()
+    {
+        // A service runs a pass every poll for months: what it keeps for the
+        // stop to wait on must not grow with every pass that has finished.
+        var runtime = await StartAsync();
+        try
+        {
+            for (var pass = 0; pass < 3; pass++)
+            {
+                await PassAsync(runtime, _start.AddHours(pass));
+            }
+
+            Assert.IsLessThanOrEqualTo(1, runtime.KeptBackgroundWork, "the service kept every pass's finished work");
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    /// <summary>Longer than a stop that tells its work to end takes, far shorter than one that waits for ever.</summary>
+    private static TimeSpan Bound => TimeSpan.FromSeconds(30);
 
     /// <summary>A drill of the vault through a service that holds its first ask until the test lets it go.</summary>
     private Task<RecoveryDrillJob.DrillOutcome> HeldDrill(ServiceRuntime runtime) =>
@@ -92,6 +164,7 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
                 new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service) { RestoresForADrill = true },
                 _underWay,
                 _release,
+                _holdOnToken,
                 Timeout),
             runtime.Configuration.BackupSets.Single(),
             "vault",
@@ -164,7 +237,14 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
-                DrillJoined = (_, _) => _joined.Release(),
+                DrillPhaseBegun = token =>
+                {
+                    if (Volatile.Read(ref _holdThePhase))
+                    {
+                        _phaseBegun.Release();
+                        Hold(Volatile.Read(ref _holdOnToken) ? token : Timeout);
+                    }
+                },
             },
             Timeout);
     }
@@ -175,7 +255,11 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
     /// the drill end before the stop had waited for it.
     /// </summary>
     private sealed class HoldingService(
-        IFallbackPlanService inner, SemaphoreSlim underWay, ManualResetEventSlim release, CancellationToken timeout)
+        IFallbackPlanService inner,
+        SemaphoreSlim underWay,
+        ManualResetEventSlim release,
+        bool onTheDrillsToken,
+        CancellationToken timeout)
         : IFallbackPlanService
     {
         private int _asked;
@@ -185,7 +269,7 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
             if (Interlocked.Increment(ref _asked) == 1)
             {
                 underWay.Release();
-                await Task.Run(() => release.Wait(timeout), CancellationToken.None);
+                await Task.Run(() => Wait(onTheDrillsToken ? cancellationToken : timeout), CancellationToken.None);
             }
 
             return await inner.ExecuteAsync(command, cancellationToken);
@@ -193,6 +277,30 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
 
         public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
             inner.WatchAsync(cancellationToken);
+
+        /// <summary>Waits to be let go, or for <paramref name="until"/>; a cancelled wait just ends.</summary>
+        private void Wait(CancellationToken until)
+        {
+            try
+            {
+                release.Wait(until);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Holds the caller until the test lets it go, or until <paramref name="until"/>.</summary>
+    private void Hold(CancellationToken until)
+    {
+        try
+        {
+            _release.Wait(until);
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     /// <inheritdoc />
@@ -201,7 +309,7 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
         _release.Set();
         _release.Dispose();
         _underWay.Dispose();
-        _joined.Dispose();
+        _phaseBegun.Dispose();
         _timeout.Dispose();
         _harness.Dispose();
         return ValueTask.CompletedTask;
