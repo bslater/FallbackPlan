@@ -409,6 +409,8 @@ public static class Scheduler
             // ordering, not for outcome.
         }
 
+        runtime.Options.DrillPhaseBegun?.Invoke(cancellationToken);
+
         foreach (var set in runtime.Configuration.BackupSets)
         {
             if (!await HoldsSnapshotAsync(runtime, set.Id, cancellationToken).ConfigureAwait(false))

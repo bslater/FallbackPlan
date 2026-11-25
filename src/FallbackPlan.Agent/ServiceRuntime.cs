@@ -180,6 +180,15 @@ public sealed record ServiceOptions
     internal Action<string, string>? DrillJoined { get; init; }
 
     /// <summary>
+    /// Called as a pass's drill phase begins, after its transfers and before
+    /// it asks whether a set holds a snapshot, with the token the phase runs
+    /// under: a test harness's way to hold the phase where the service's stop
+    /// must wait for it (ADR-0049 Amendment 2). Null, the production value,
+    /// observes nothing.
+    /// </summary>
+    internal Action<CancellationToken>? DrillPhaseBegun { get; init; }
+
+    /// <summary>
     /// The clock the byte-rate limits pace on (NFR-PERF-013, ADR-0074) — a
     /// test harness's way to prove a rate by the waits it asked for rather
     /// than by sleeping through them. Null, the production value, paces on
@@ -296,6 +305,18 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// stops none of them: they run under this, and disposal waits for them.
     /// </summary>
     internal CancellationToken Stopping { get; }
+
+    /// <summary>How much work <see cref="Track"/> keeps now, ended or not: what a long-running service must not let grow.</summary>
+    internal int KeptBackgroundWork
+    {
+        get
+        {
+            lock (_backgroundGate)
+            {
+                return _background.Count;
+            }
+        }
+    }
 
     /// <summary>
     /// Keeps <paramref name="work"/>, started beside the queue, for disposal
