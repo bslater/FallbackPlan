@@ -38,6 +38,23 @@ internal sealed class DrillFlights(Action<string, string>? joined)
     }
 
     /// <summary>
+    /// Completes once every drill under way now has ended and been answered,
+    /// whatever its answer: what a stopping service waits for before it lets
+    /// go of what drills read (ADR-0049 Amendment 2).
+    /// </summary>
+    /// <returns>A task that faults where a drill's answer did.</returns>
+    public Task LandedAsync()
+    {
+        Task[] flying;
+        lock (_gate)
+        {
+            flying = [.. _flights.Values];
+        }
+
+        return Task.WhenAll(flying);
+    }
+
+    /// <summary>
     /// Starts <paramref name="drill"/> for the pair, or joins the drill of the
     /// pair already under way.
     /// </summary>
