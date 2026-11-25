@@ -21,7 +21,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// silent, cleared back to daily where it speaks empty, refused where it does
 /// not read. So is a set's choice to leave its online-only files to their
 /// cloud provider (FR-SNP-015): kept where an edit is silent, listed, and
-/// let go of where an edit says false.
+/// let go of where an edit says false. And a destination's share of a new
+/// backup's blobs one pass proves (FR-VER-002): kept where an edit is silent,
+/// listed, removed by zero and refused below it.
 /// </summary>
 [TestClass]
 public sealed class ConfigurationCommandTests : IDisposable
@@ -352,7 +354,7 @@ public sealed class ConfigurationCommandTests : IDisposable
     [
         "id", "name", "kind", "path", "fingerprint", "endpoint",
         "failure_domain", "deep_verify_interval_days", "priority",
-        "transfer_limit", "drill_interval_days",
+        "transfer_limit", "drill_interval_days", "new_backup_proof_share",
         "bucket", "region", "prefix", "addressing",
         "account", "container",
     ];
@@ -414,7 +416,10 @@ public sealed class ConfigurationCommandTests : IDisposable
         // destination without them, and must not clear what the file says.
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
-        WithTheStoredDestination(vault => vault with { TransferLimit = "2 MiB/s", DrillIntervalDays = 3 });
+        WithTheStoredDestination(vault => vault with
+        {
+            TransferLimit = "2 MiB/s", DrillIntervalDays = 3, NewBackupProofShare = 32,
+        });
 
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
@@ -429,6 +434,7 @@ public sealed class ConfigurationCommandTests : IDisposable
         Assert.AreEqual(14, saved.DeepVerifyIntervalDays, "the edit itself must land");
         Assert.AreEqual("2 MiB/s", saved.TransferLimit);
         Assert.AreEqual(3, saved.DrillIntervalDays);
+        Assert.AreEqual(32, saved.NewBackupProofShare);
     }
 
     [TestMethod]
@@ -484,11 +490,46 @@ public sealed class ConfigurationCommandTests : IDisposable
     }
 
     [TestMethod]
-    [DataRow("10 MB/s", null, "transfer_limit")]
-    [DataRow("fast", null, "transfer_limit")]
-    [DataRow(null, -1, "drill_interval_days")]
+    public async Task UpsertDestination_CarryingAProofShare_WritesAndListsIt_AndZeroRemovesIt()
+    {
+        // The most of a new backup's blobs one pass proves there (contract
+        // 1.94, ADR-0199 Amendment 13). Zero is the wire's spelling of
+        // "remove it", as for the drill cadence: the service's default again.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null, NewBackupProofShare: 32)),
+            _timeout.Token));
+
+        Assert.AreEqual(32, ClientConfiguration.Load(ConfigurationPath).Destinations.Single().NewBackupProofShare);
+        Assert.IsInstanceOfType<DestinationsResult>(
+            await handler.ExecuteAsync(new ListDestinationsCommand(), _timeout.Token), out var listed);
+        Assert.AreEqual(32, Assert.ContainsSingle(listed.Destinations).NewBackupProofShare);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null, NewBackupProofShare: 0)),
+            _timeout.Token));
+
+        Assert.IsNull(ClientConfiguration.Load(ConfigurationPath).Destinations.Single().NewBackupProofShare);
+        Assert.IsInstanceOfType<DestinationsResult>(
+            await handler.ExecuteAsync(new ListDestinationsCommand(), _timeout.Token), out var cleared);
+        Assert.IsNull(Assert.ContainsSingle(cleared.Destinations).NewBackupProofShare);
+    }
+
+    [TestMethod]
+    [DataRow("10 MB/s", null, null, "transfer_limit")]
+    [DataRow("fast", null, null, "transfer_limit")]
+    [DataRow(null, -1, null, "drill_interval_days")]
+    [DataRow(null, null, -1, "new_backup_proof_share")]
     public async Task UpsertDestination_AnUnreadableSetting_IsRefusedNamingItAndTheDestination(
-        string? limit, int? cadence, string field)
+        string? limit, int? cadence, int? share, string field)
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
@@ -502,7 +543,7 @@ public sealed class ConfigurationCommandTests : IDisposable
             await handler.ExecuteAsync(
                 new UpsertDestinationCommand(new DestinationDescriptor(
                     vault.Id, "vault", "local-path", vault.Path, null, null,
-                    TransferLimit: limit, DrillIntervalDays: cadence)),
+                    TransferLimit: limit, DrillIntervalDays: cadence, NewBackupProofShare: share)),
                 _timeout.Token),
             out var error);
 

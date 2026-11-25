@@ -1,4 +1,5 @@
 using FallbackPlan.Agent;
+using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.Replication;
 
@@ -46,7 +47,7 @@ public sealed class TestHookScopeTests
             () => FanOut.NewBackupProofBudget);
 
         Assert.AreEqual(1, inside);
-        Assert.AreEqual(VerificationSampler.NewBackupBudget, outside);
+        Assert.AreEqual(DestinationConfiguration.DefaultNewBackupProofShare, outside);
     }
 
     // One flow sets the hook and holds it. While it does, this flow reads the

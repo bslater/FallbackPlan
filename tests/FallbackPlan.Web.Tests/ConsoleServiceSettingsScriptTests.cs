@@ -6,7 +6,9 @@ namespace FallbackPlan.Web.Tests;
 /// installation settings and writes them back, and two fields on the
 /// destination form for a destination's transfer limit and drill cadence —
 /// the control ADR-0069 §8 and ADR-0074 §7 named as owed. The console half of
-/// FR-SVC-021.
+/// FR-SVC-021. A third field, a destination's share of a new backup's blobs
+/// one pass proves (contract 1.94), is the console half of FR-VER-002's
+/// amendment by ADR-0199 Amendment 13.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -67,15 +69,17 @@ public sealed class ConsoleServiceSettingsScriptTests
     }
 
     [TestMethod]
-    public void TheDestinationForm_CarriesTheLimitAndTheCadence()
+    public void TheDestinationForm_CarriesTheLimitTheCadenceAndTheProofShare()
     {
         var script = AppJs();
         Assert.Contains("id=\"dest-limit\"", script, StringComparison.Ordinal);
         Assert.Contains("id=\"dest-drill\"", script, StringComparison.Ordinal);
+        Assert.Contains("id=\"dest-proof-share\"", script, StringComparison.Ordinal);
 
         var body = ActionBody("dest-save");
         Assert.Contains("transferLimit:", body, StringComparison.Ordinal);
         Assert.Contains("drillIntervalDays:", body, StringComparison.Ordinal);
+        Assert.Contains("newBackupProofShare:", body, StringComparison.Ordinal);
     }
 
     [TestMethod]

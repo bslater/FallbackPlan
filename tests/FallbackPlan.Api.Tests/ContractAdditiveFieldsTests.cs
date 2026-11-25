@@ -38,9 +38,11 @@ namespace FallbackPlan.Api.Tests;
 /// 1.82's full walk on a set and when its status says it last walked in
 /// full, the wire half of FR-SNP-012; 1.89's choice of a set to leave its
 /// online-only files to their cloud provider, on the set and in its status,
-/// the wire half of FR-SNP-015; and 1.90's folders a set's last backup could
+/// the wire half of FR-SNP-015; 1.90's folders a set's last backup could
 /// not list, with how many kept what was backed up before and whether the
-/// failure named was a listing, the wire half of FR-SNP-014's amendment.
+/// failure named was a listing, the wire half of FR-SNP-014's amendment; and
+/// 1.94's share of a new backup's blobs one pass proves at a destination, the
+/// wire half of FR-VER-002's amendment by ADR-0199 Amendment 13.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -741,6 +743,29 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.IsInstanceOfType<UpsertDestinationCommand>(parsed, out var command);
         Assert.IsNull(command.Destination.TransferLimit);
         Assert.IsNull(command.Destination.DrillIntervalDays);
+    }
+
+    [TestMethod]
+    public void ADestinationsProofShare_WireNameAndPre194Default()
+    {
+        // Contract 1.94 (FR-VER-002, ADR-0199 Amendment 13): the destination
+        // descriptor carries the most of a new backup's blobs one pass proves
+        // there, both ways. Null preserves, as every setting on this
+        // descriptor does, so a pre-1.94 client's save keeps what the file
+        // says, and a pre-1.94 service's listing reads as the default.
+        var modern = JsonSerializer.Serialize<ServiceCommand>(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('d', 32), "vault", "local-path", "/backups", null, null,
+                NewBackupProofShare: 32)),
+            FrameCodec.SerializerOptions);
+        const string Field = ",\"new_backup_proof_share\":32";
+        Assert.Contains(Field, modern, StringComparison.Ordinal);
+
+        var old = modern.Replace(Field, "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        var parsed = JsonSerializer.Deserialize<ServiceCommand>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<UpsertDestinationCommand>(parsed, out var command);
+        Assert.IsNull(command.Destination.NewBackupProofShare);
     }
 
     [TestMethod]
