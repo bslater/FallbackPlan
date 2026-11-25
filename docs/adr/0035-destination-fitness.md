@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** FR-DEST-001, FR-DEST-003, FR-DEST-004, FR-DEST-009, FR-DEST-010, FR-VER-002, FR-VER-003, FR-VER-004, FR-VER-005, FR-VER-007, FR-VER-008, FR-GC-009
+**Requirements:** FR-DEST-001, FR-DEST-003, FR-DEST-004, FR-DEST-009, FR-DEST-010, FR-VER-002, FR-VER-003, FR-VER-004, FR-VER-005, FR-VER-007, FR-VER-008, FR-GC-009; FR-VER-002 (amended by [Amendment 4](#amendment-4-2026-11--a-destinations-rotating-sample-is-a-setting): how many keys a pass's rotating sample asks about at a destination is that destination's own setting where it states one, and sixteen where it does not)
 **Related:** [ADR-0011](0011-commit-versus-replication-semantics.md), [ADR-0018](0018-replica-failure-domains.md), [ADR-0027](0027-services-scheduling-status-telemetry.md), [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [architecture 09](../architecture/09-replication-and-peers.md), [peer-protocol 03](../../specifications/peer-protocol/03-replication.md), [peer-protocol 04](../../specifications/peer-protocol/04-verification.md), [peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)
 
 ---
@@ -190,6 +190,8 @@ half.
 > and never without one.
 
 ### 5. Sampling coverage accumulates
+
+> **Amended 2026-11 ([Amendment 4](#amendment-4-2026-11--a-destinations-rotating-sample-is-a-setting)).** The rotation's sixteen keys a pass are the default. A destination may state its own sample, `rotation_sample`, and a pass asks there about that many.
 
 The sync-time challenge rotates: the newest snapshot always, then the keys after
 the last *passed* challenge's cursor, which lives in the sync ledger. The cursor
@@ -622,6 +624,35 @@ read back in full last night from one never read back at all (FR-VER-003).
    status reports it, so a row cannot promise a cadence the scheduler never
    keeps.
 
+## Amendment 4 (2026-11) — a destination's rotating sample is a setting
+
+§5's rotation asked about sixteen keys a pass at every destination, the newest record among them, with a random share at a store or a peer. Sixteen was a constant. At a fast local disk a person may want every key reached sooner. At a store that charges by the request, or a peer on a slow link, they may want the reads spread more thinly. [ADR-0199](0199-a-backup-is-proven-at-each-destination-it-lands-at.md) Amendment 13 made the new backup's share a pass a setting of each destination. The rotation beside it was not.
+
+**Decision.** How many keys a pass's rotating sample asks about is a setting of each destination, `rotation_sample`, a positive number of keys. A destination that states none takes the default of sixteen. Each place a pass draws the rotation asks for it:
+
+- a local path's or a store's sync;
+- a staging set's push to a peer;
+- the read-back of a set whose content is only at the peer.
+
+A store's and a peer's random share is drawn from it as before. A sample smaller than that share is drawn wholly at random. The configuration refuses a sample of zero or less at load, naming the field: a pass that asked about nothing would stamp the destination verified on no answer.
+
+The setting travels as the proof share does (contract 1.96, `rotation_sample`). On an upsert, null keeps what the file says, zero removes it, and a negative one is refused naming the field and the wire's zero. `destination-settings --rotation-sample` sets it, and the read-out says it or the default. The console's destination form carries it, and the diagnostic bundle's configuration entry carries it ([ADR-0081](0081-diagnostic-bundle.md)).
+
+Nothing else changes: the rotation's order, its cursor and its wrap are as §5 states, and a changed sample applies from the next pass.
+
+**Built:** `Application/DestinationConfiguration` holds the setting and its default, `Application/ClientConfiguration` refuses a sample of none, and `Agent/FanOut` draws each rotation at the destination's sample. `Agent/ServiceCommandHandler` carries it on the descriptor, `Cli/CliApplication` sets and shows it, and `Agent/DiagnosticBundle` projects it. The tests:
+
+- `Hosts.Tests/RotationSampleTests`:
+  - a sample of one asks about one key beside the proof at a local path, a staging set's peer and a peer-only set's peer;
+  - a larger sample asks about more whatever the default;
+  - a destination stating none asks as far as the default.
+- `Hosts.Tests/ConfigurationCommandTests`: an upsert writes, lists, keeps and removes the sample, and refuses a negative one naming it and the wire's zero.
+- `Hosts.Tests/ClientModeTests`: the command line sets, shows and removes it.
+- `Application.Tests/ClientConfigurationTests`: a sample of none refused, the field written only where stated, the default pinned at sixteen.
+- `Api.Tests/ContractAdditiveFieldsTests`: the wire name, and a pre-1.96 frame.
+- `Web.Tests/SettingsRelayNamesTests`, `Web.DomTests/ConfigEditingDomTests`: the console reads it, sends it and its clearing zero, and refuses one that is no whole number.
+- `Hosts.Tests/DiagnosticBundleTests`: the bundle carries it.
+
 ## Status history
 
 | Date | Status | Note |
@@ -641,3 +672,4 @@ read back in full last night from one never read back at all (FR-VER-003).
 | 2026-10 | Amended (related) | [ADR-0104](0104-a-replicas-readers-take-an-archived-object-as-archived.md): a blob the store holds only in an archival tier is no stall. The deep sweep passes over it and closes its circuit, a sync's read-back counts it neither proven nor failed, and one notice for the pair says so until a circuit meets none (ledger schema 11). |
 | 2026-10 | Amended | [ADR-0106](0106-a-closed-circuit-says-what-it-did-not-read.md): Amendment 3's `circuit_closed_at` supports every stored object read back only where contract 1.66's `circuit_archived` is zero, since a circuit closes past archived blobs; a blockquote at decision 1. |
 | 2026-11 | Amended (related) | [ADR-0199](0199-a-backup-is-proven-at-each-destination-it-lands-at.md): §5's newest snapshot covered its record and left its blobs to the rotation. The pass that finds a local path or a store holding the newest backup whole now proves there every blob it needs that the backup last proven did not, a share a pass, beside the rotation. |
+| 2026-11 | Amended | [Amendment 4](#amendment-4-2026-11--a-destinations-rotating-sample-is-a-setting): how many keys a pass's rotating sample asks about at a destination is that destination's own setting where it states one, sixteen where it does not, set through the service (contract 1.96), the command line and the console and carried by the diagnostic bundle, a sample of none refused; §5 noted. `Application/DestinationConfiguration`; `Agent/FanOut`; `Agent/ServiceCommandHandler`; `Cli/CliApplication`; `Hosts.Tests/RotationSampleTests` |
