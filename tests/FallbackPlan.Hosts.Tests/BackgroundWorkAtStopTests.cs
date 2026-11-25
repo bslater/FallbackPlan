@@ -91,7 +91,8 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
             new HoldingService(
                 new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service) { RestoresForADrill = true },
                 _underWay,
-                _release),
+                _release,
+                Timeout),
             runtime.Configuration.BackupSets.Single(),
             "vault",
             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -168,8 +169,13 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
             Timeout);
     }
 
-    /// <summary>The service a drill asks, holding its first ask until the test lets it go.</summary>
-    private sealed class HoldingService(IFallbackPlanService inner, SemaphoreSlim underWay, ManualResetEventSlim release)
+    /// <summary>
+    /// The service a drill asks, holding its first ask until the test lets it
+    /// go, deaf to the drill's own token: a hold the stop could end would let
+    /// the drill end before the stop had waited for it.
+    /// </summary>
+    private sealed class HoldingService(
+        IFallbackPlanService inner, SemaphoreSlim underWay, ManualResetEventSlim release, CancellationToken timeout)
         : IFallbackPlanService
     {
         private int _asked;
@@ -179,7 +185,7 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
             if (Interlocked.Increment(ref _asked) == 1)
             {
                 underWay.Release();
-                await Task.Run(() => release.Wait(cancellationToken), CancellationToken.None);
+                await Task.Run(() => release.Wait(timeout), CancellationToken.None);
             }
 
             return await inner.ExecuteAsync(command, cancellationToken);
