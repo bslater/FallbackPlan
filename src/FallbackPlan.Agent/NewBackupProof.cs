@@ -241,10 +241,10 @@ internal static class NewBackupProof
     /// <summary>
     /// The keyed store names of the blobs <paramref name="newest"/> needs and
     /// <paramref name="proven"/> did not, or null when the catalogue does not
-    /// hold <paramref name="newest"/>. A proven backup the catalogue no longer
-    /// holds, a person having deleted it, subtracts the names
-    /// <paramref name="kept"/> when its proof ended (Amendment 5), and
-    /// nothing where none were kept.
+    /// hold <paramref name="newest"/>. The names <paramref name="kept"/> when
+    /// the proven backup's proof ended are subtracted too (Amendments 5 and
+    /// 12), whether the catalogue lost that backup, a person having deleted
+    /// it, or was rebuilt short of its records.
     /// </summary>
     private static HashSet<string>? Owed(
         ArchiveHandle archive, BackupSetConfiguration set, string newest, string? proven, IReadOnlySet<string>? kept)
@@ -267,12 +267,35 @@ internal static class NewBackupProof
         IEnumerable<string> NamesOf(ReadOnlyMemory<byte> snapshotId) =>
             catalogue.ClosureOf(snapshotId.Span).Select(blob => (blob.StoreBlobKey ?? derive.Derive(blob.BlobId)).ToBase32());
 
-        var owed = new HashSet<string>(NamesOf(target), StringComparer.Ordinal);
-        if (proven is not null && snapshots.TryGetValue(proven, out var before))
+        return OwedOf(
+            NamesOf(target),
+            proven is not null && snapshots.TryGetValue(proven, out var before) ? NamesOf(before) : null,
+            kept);
+    }
+
+    /// <summary>
+    /// The blobs a new backup's proof owes at a destination: those the backup
+    /// needs, less those the catalogue lists for the backup proven there, and
+    /// less the names kept when that backup's proof there ended (ADR-0199
+    /// Amendments 5 and 12). Both are taken away, not either: a catalogue
+    /// that lost the proven backup lists nothing of it, and one rebuilt short
+    /// of its records lists only part of what it needed, while the names kept
+    /// are what it needed whole.
+    /// </summary>
+    /// <param name="needed">The names of the blobs the new backup needs.</param>
+    /// <param name="provenClosure">The names the catalogue lists for the backup proven there, or null where it holds none.</param>
+    /// <param name="kept">The names kept for the backup proven there, or null where none were.</param>
+    /// <returns>The names owed.</returns>
+    internal static HashSet<string> OwedOf(
+        IEnumerable<string> needed, IEnumerable<string>? provenClosure, IReadOnlySet<string>? kept)
+    {
+        var owed = new HashSet<string>(needed, StringComparer.Ordinal);
+        if (provenClosure is not null)
         {
-            owed.ExceptWith(NamesOf(before));
+            owed.ExceptWith(provenClosure);
         }
-        else if (kept is not null)
+
+        if (kept is not null)
         {
             owed.ExceptWith(kept);
         }
