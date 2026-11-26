@@ -157,12 +157,16 @@ public sealed class PendingChangesTests : IDisposable
         var set = runtime.Configuration.BackupSets.Single();
         _journal.Answer = _ => [new ChangedFolder(_harness.SourceRoot, "docs")];
 
-        // Nothing counted yet: the status says so, and a count begins.
+        // Nothing counted yet: the status says so, and a count begins. Each
+        // count is held on its lane while the test looks, or a quick one
+        // could have ended before the test asked whether it was under way.
+        var lane = await HoldTheReaderLaneAsync(runtime);
         Assert.IsNull(runtime.PendingChanges.Describe(set, start));
         var first = runtime.PendingChanges.Counting(set.Id) ?? throw new AssertFailedException("a count began");
         Assert.AreSame(first, runtime.PendingChanges.Counting(set.Id));
         runtime.PendingChanges.Describe(set, start);
         Assert.AreSame(first, runtime.PendingChanges.Counting(set.Id), "never two at once");
+        lane.SetResult();
         await first.WaitAsync(Timeout);
         var asked = _journal.Asked.Count;
 
@@ -173,8 +177,11 @@ public sealed class PendingChangesTests : IDisposable
 
         // A minute on it is asked for again, and the old one is given meanwhile.
         _harness.WriteSourceFile("docs/a.txt", "alpha, changed");
+        lane = await HoldTheReaderLaneAsync(runtime);
         Assert.AreEqual(0L, runtime.PendingChanges.Describe(set, start.AddSeconds(61))!.Files);
-        await (runtime.PendingChanges.Counting(set.Id) ?? throw new AssertFailedException("a new count began")).WaitAsync(Timeout);
+        var again = runtime.PendingChanges.Counting(set.Id) ?? throw new AssertFailedException("a new count began");
+        lane.SetResult();
+        await again.WaitAsync(Timeout);
         Assert.AreEqual(asked + 1, _journal.Asked.Count);
         Assert.AreEqual(1L, runtime.PendingChanges.Describe(set, start.AddSeconds(62))!.Files);
 
@@ -274,6 +281,26 @@ public sealed class PendingChangesTests : IDisposable
         _harness.WriteConfiguration("every 1h");
         _harness.WriteSourceFile("docs/a.txt", "alpha");
         _harness.WriteSourceFile("photos/b.jpg", "bravo");
+    }
+
+    /// <summary>
+    /// Holds the reader lane, where a count queues and which has one worker,
+    /// until the returned source is set. The job holding it ends when the
+    /// queue tells it to as well.
+    /// </summary>
+    private async Task<TaskCompletionSource> HoldTheReaderLaneAsync(ServiceRuntime runtime)
+    {
+        var holding = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
+            "hold-" + Guid.NewGuid().ToString("n"), JobLane.Reader, UserInitiated: true, "hold the reader lane",
+            async token =>
+            {
+                holding.SetResult();
+                await release.Task.WaitAsync(token);
+            })));
+        await holding.Task.WaitAsync(Timeout);
+        return release;
     }
 
     private async Task<BackupOutcome> BackUpAsync(ServiceRuntime runtime, DateTimeOffset now)
