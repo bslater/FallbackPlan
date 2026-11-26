@@ -55,7 +55,9 @@ public enum JobLane
 /// queue at the command and the callback is invoked there, once; a job
 /// without one keeps the original path — it stays queued and runs, when its
 /// turn comes, with a token already cancelled — which fan-out and the sweep
-/// rely on, their runners settling their own cancellation.
+/// rely on, their runners settling their own cancellation. A queue that
+/// stops with the job still queued invokes it too, once, since the job will
+/// never run (Amendment 7).
 /// </param>
 /// <param name="OnSettled">
 /// Called once the job's run has ended, however it ended, and the queue has
@@ -566,6 +568,28 @@ public sealed class JobScheduler : IAsyncDisposable
             // Stopping is not a failure.
         }
 
+        // What the queue took and never started will not run now. A job that
+        // records its own cancellation is answered as a cancel before it
+        // started would answer it, or whoever waits on it waits for ever
+        // (ADR-0029 Amendment 7). Only workers start a job, and they have all
+        // exited, so nothing queued here can start behind this.
+        List<QueuedJob> neverStarted = [];
+        lock (_gate)
+        {
+            foreach (var lane in (ReadOnlySpan<JobLane>)[JobLane.Writer, JobLane.Reader, JobLane.Transfer])
+            {
+                while (LaneQueue(lane).TryDequeue(out var job, out _))
+                {
+                    neverStarted.Add(job);
+                }
+            }
+        }
+
+        foreach (var job in neverStarted)
+        {
+            NeverStarted(job);
+        }
+
         lock (_gate)
         {
             foreach (var cancellation in _running.Values)
@@ -936,6 +960,23 @@ public sealed class JobScheduler : IAsyncDisposable
             {
                 cancellation.Dispose();
             }
+        }
+    }
+
+    /// <summary>
+    /// Tells a job the stopping queue never started that it will not run.
+    /// Outside the gate, because the callback writes the journal; and a
+    /// callback that throws is the job's failure to log, not the stop's.
+    /// </summary>
+    private void NeverStarted(QueuedJob job)
+    {
+        try
+        {
+            job.OnCancelledBeforeStart?.Invoke();
+        }
+        catch (Exception exception)
+        {
+            Log.JobFaulted(_log, LogId.FromText("job", job.JobId), new LogLabel(job.Description), exception);
         }
     }
 

@@ -255,7 +255,10 @@ public static class Scheduler
         // the same definition the captures are — the scheduler starts them
         // with nobody waiting — so a shut window holds all four rather than
         // only the one an operator would notice.
-        if (shut)
+        // Nor once the service has begun to stop: a pass its stop answered
+        // starts nothing beside the queue, which the stop has already waited
+        // past (ADR-0029 Amendment 7).
+        if (shut || runtime.Stopping.IsCancellationRequested)
         {
             return new AgentPassResult(outcomes);
         }
@@ -732,6 +735,12 @@ public static class Scheduler
     internal const string CancelledBeforeStart = "cancelled before it started";
 
     /// <summary>
+    /// Why a backup the stopping queue never started, or one asked of a queue
+    /// that had stopped, did not run (ADR-0029 Amendment 7).
+    /// </summary>
+    internal const string StoppedBeforeStart = "the service stopped before it started";
+
+    /// <summary>
     /// Queues one set's backup and hands back a task that completes when it
     /// does — so a caller that must wait can, and the service, which must not,
     /// need not.
@@ -831,30 +840,32 @@ public static class Scheduler
                 // the journal settles at the command rather than when the lane
                 // drains, the stream hears it so a watching card does not sit
                 // at Pending, and whoever awaits the outcome is answered
-                // instead of waiting on a run that will never happen.
+                // instead of waiting on a run that will never happen. A
+                // stopping queue answers it the same way (Amendment 7), and
+                // says the stop was why.
                 OnCancelledBeforeStart: () =>
                 {
+                    var reason = runtime.Queue.HasStopped ? StoppedBeforeStart : CancelledBeforeStart;
                     runtime.Jobs.Transition(
-                        job.Id, JobState.Cancelled, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        CancelledBeforeStart);
+                        job.Id, JobState.Cancelled, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), reason);
                     runtime.Progress.Report(new JobProgress(job.Id, JobState.Cancelled, 0, 0, 0, 0, 0, 0));
-                    completion.SetResult(new BackupOutcome(set.Name, "cancelled", CancelledBeforeStart));
+                    completion.SetResult(new BackupOutcome(set.Name, "cancelled", reason));
                     FollowUp(runtime, set.Id);
                 },
                 OnSettled: () => FollowUp(runtime, set.Id)));
 
             if (!accepted)
             {
-                // Unreachable while job identities are fresh GUIDs — but a refusal
-                // that silently orphaned the completion would hang whoever awaits
-                // it, forever, the day that ever changes. The journal row is
-                // closed for the same reason: a Pending row nothing runs is a
-                // stuck job in every listing.
+                // The only refusal a fresh identity can draw is a queue that
+                // has stopped (ADR-0029 Amendment 7). Answering it is not
+                // optional: the completion is otherwise signalled by the job
+                // running, and a refusal that orphaned it would hang whoever
+                // awaits it for ever. The journal row is closed for the same
+                // reason: a Pending row nothing runs is a stuck job in every
+                // listing.
                 runtime.Jobs.Transition(
-                    job.Id, JobState.Cancelled, (ulong)now.ToUnixTimeMilliseconds(),
-                    "refused by the queue: a job with this identity is already active");
-                completion.SetResult(new BackupOutcome(
-                    set.Name, "already-running", $"job {job.Id} is already queued or running"));
+                    job.Id, JobState.Cancelled, (ulong)now.ToUnixTimeMilliseconds(), StoppedBeforeStart);
+                completion.SetResult(new BackupOutcome(set.Name, "cancelled", StoppedBeforeStart));
             }
         }
 
