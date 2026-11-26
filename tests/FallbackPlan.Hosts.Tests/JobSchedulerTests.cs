@@ -11,8 +11,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// started never takes the callback path. And settlement (Amendment 6): a
 /// job's <see cref="QueuedJob.OnSettled"/> runs only once its identity is
 /// free again, however its run ended, so whoever it answers can ask for the
-/// same job at once. Everything gates on task completions, never on delays,
-/// so the drills cannot flake on timing.
+/// same job at once. A stopping queue (Amendment 7) answers each job it never
+/// started through the same callback, and no job it started. Everything gates
+/// on task completions, never on delays, so the drills cannot flake on timing.
 /// </summary>
 [TestClass]
 public sealed class JobSchedulerTests
@@ -128,6 +129,80 @@ public sealed class JobSchedulerTests
 
         await observedCancel.Task.WaitAsync(Patience);
         Assert.AreEqual(0, callbacks, "a started job is stopped through its token, not the callback");
+    }
+
+    [TestMethod]
+    public async Task Stopping_AnswersEachJobItNeverStarted_ThroughItsCallback_AndNoJobItStarted()
+    {
+        // The queue runs nothing it had not started by the time it stops. A
+        // job that records its own cancellation is told so there, as a cancel
+        // before it started would tell it, or whoever waits on it waits for
+        // ever. On every lane: the job holding each had started, and is
+        // stopped through its token.
+        await using var scheduler = new JobScheduler();
+        var lanes = new[] { JobLane.Writer, JobLane.Reader, JobLane.Transfer };
+        var holderCallbacks = 0;
+        var callbacks = new int[lanes.Length];
+        var ran = 0;
+        for (var index = 0; index < lanes.Length; index++)
+        {
+            var lane = lanes[index];
+            var holding = Signal();
+            Assert.IsTrue(scheduler.Enqueue(new QueuedJob(
+                $"holder-{lane}", lane, UserInitiated: false, $"hold {lane}",
+                async token =>
+                {
+                    holding.SetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                },
+                OnCancelledBeforeStart: () => Interlocked.Increment(ref holderCallbacks))));
+            await holding.Task.WaitAsync(Patience);
+
+            var slot = index;
+            Assert.IsTrue(scheduler.Enqueue(new QueuedJob(
+                $"never-started-{lane}", lane, UserInitiated: false, $"never started {lane}",
+                _ =>
+                {
+                    Interlocked.Increment(ref ran);
+                    return ValueTask.CompletedTask;
+                },
+                OnCancelledBeforeStart: () => Interlocked.Increment(ref callbacks[slot]))));
+        }
+
+        await scheduler.DisposeAsync().AsTask().WaitAsync(Patience);
+
+        for (var index = 0; index < lanes.Length; index++)
+        {
+            Assert.AreEqual(1, callbacks[index], $"the {lanes[index]} lane's job the queue never started was not answered once");
+        }
+
+        Assert.AreEqual(0, ran, "the stopping queue ran a job it had not started");
+        Assert.AreEqual(0, holderCallbacks, "a job the queue had started was answered as one it never started");
+    }
+
+    [TestMethod]
+    public async Task Stopping_AJobWhoseCallbackThrows_IsTheJobsFault_AndTheRestAreStillAnswered()
+    {
+        // The stop answers what it never started from inside its own
+        // disposal, where nobody is left to handle an exception: one job's
+        // callback failing must neither escape the stop nor leave the jobs
+        // queued behind it unanswered.
+        await using var scheduler = new JobScheduler();
+        var holding = Signal();
+        scheduler.Enqueue(Job("lane-holder", async token =>
+        {
+            holding.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        await holding.Task.WaitAsync(Patience);
+
+        var answered = 0;
+        scheduler.Enqueue(Job("faulting", _ => ValueTask.CompletedTask, () => throw new InvalidOperationException("the callback's own failure")));
+        scheduler.Enqueue(Job("behind", _ => ValueTask.CompletedTask, () => Interlocked.Increment(ref answered)));
+
+        await scheduler.DisposeAsync().AsTask().WaitAsync(Patience);
+
+        Assert.AreEqual(1, answered, "a job queued behind one whose callback threw was not answered");
     }
 
     [TestMethod]

@@ -1,6 +1,7 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Jobs;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -179,14 +180,7 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
         var runtime = await StartAsync();
         try
         {
-            var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            for (var worker = 0; worker < runtime.BackupPoolWidth; worker++)
-            {
-                Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
-                    "hold-" + Guid.NewGuid().ToString("n"), JobLane.Writer, UserInitiated: true, "hold the writer lane",
-                    async token => await held.Task.WaitAsync(token))));
-            }
-
+            HoldEveryWriter(runtime);
             var asked = new ServiceCommandHandler(runtime, RemoteBindingState.Off)
                 .ExecuteAsync(new RetentionCommand(Apply: false), Timeout).AsTask();
             await WaitUntilAsync(() => runtime.Queue.ActiveCount == runtime.BackupPoolWidth + 1);
@@ -195,6 +189,68 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
 
             Assert.IsInstanceOfType<ServiceError>(await asked.WaitAsync(Bound, Timeout), out var answer);
             Assert.AreEqual(ServiceErrorReason.Cancelled, answer.Reason);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task StoppingTheService_AnswersAPassWhoseBackupItNeverStarted_AndLeavesTheRowForTheNextStart()
+    {
+        // A pass waits for its backups, and the queue runs none it had not
+        // started by the time it stops (ADR-0029 Amendment 7). The stop
+        // answers the pass, which starts nothing beside the queue once the
+        // stop has answered it. The backup's row is left as it was, for the
+        // next start to settle as a run to retry and say so (ADR-0049
+        // Decision 1): nobody cancelled it.
+        var runtime = await StartAsync();
+        try
+        {
+            HoldEveryWriter(runtime);
+            var pass = Scheduler.RunPassAsync(runtime, _start, Timeout).AsTask();
+            await WaitUntilAsync(() => runtime.Queue.ActiveCount == runtime.BackupPoolWidth + 1);
+
+            await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+            var answered = Assert.ContainsSingle((await pass.WaitAsync(Bound, Timeout)).Sets);
+            Assert.AreEqual("cancelled", answered.Outcome);
+            Assert.AreEqual(Scheduler.StoppedBeforeStart, answered.Detail);
+            Assert.AreEqual(0, runtime.KeptBackgroundWork, "the pass started work beside the queue after the stop had answered it");
+            Assert.AreEqual(JobState.Pending, Assert.ContainsSingle(runtime.Jobs.Jobs).State, "the stop settled the row the next start's sweep is for");
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+
+        await using var again = await ServiceRuntime.StartAsync(Options(), Timeout);
+        Assert.AreEqual(JobState.FailedRecoverable, Assert.ContainsSingle(again.Jobs.Jobs).State);
+        Assert.IsTrue(
+            again.Notices.Unacknowledged.Any(notice => notice.Message.Contains("interrupted", StringComparison.OrdinalIgnoreCase)),
+            "the next start settled the backup the stop left without a notice saying so");
+    }
+
+    [TestMethod]
+    public async Task ABackupAskedOnceTheQueueHasStopped_IsAnsweredCancelled_NotAlreadyRunning()
+    {
+        // A stopped queue takes no work. That refusal was read as the one a
+        // job already active draws, so a backup asked during the stop was
+        // answered as if another run of the set were under way.
+        var runtime = await StartAsync();
+        try
+        {
+            await runtime.Queue.DisposeAsync();
+
+            var outcome = await Scheduler.Enqueue(runtime, runtime.Configuration.BackupSets.Single(), _start, userInitiated: true)
+                .WaitAsync(Bound, Timeout);
+
+            Assert.AreEqual("cancelled", outcome.Outcome, outcome.Detail);
+            Assert.AreEqual(Scheduler.StoppedBeforeStart, outcome.Detail);
+            var row = Assert.ContainsSingle(runtime.Jobs.Jobs);
+            Assert.AreEqual(JobState.Cancelled, row.State);
+            Assert.AreEqual(Scheduler.StoppedBeforeStart, row.Detail);
         }
         finally
         {
@@ -261,6 +317,18 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
         return await stopping.WaitAsync(Timeout);
     }
 
+    /// <summary>Holds each of the writer lane's workers with a job that ends only when the queue tells it to.</summary>
+    private static void HoldEveryWriter(ServiceRuntime runtime)
+    {
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        for (var worker = 0; worker < runtime.BackupPoolWidth; worker++)
+        {
+            Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
+                "hold-" + Guid.NewGuid().ToString("n"), JobLane.Writer, UserInitiated: true, "hold the writer lane",
+                async token => await held.Task.WaitAsync(token))));
+        }
+    }
+
     private async Task WaitUntilAsync(Func<bool> condition)
     {
         while (!condition())
@@ -309,23 +377,23 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
         _harness.WriteSourceFile("docs/b.txt", new string('b', 40_000));
 
         await _harness.SetupAsync();
-        return await ServiceRuntime.StartAsync(
-            new ServiceOptions
-            {
-                ArchivesRoot = _harness.ArchivesRoot,
-                StateDirectory = _harness.StateDirectory,
-                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
-                DrillPhaseBegun = token =>
-                {
-                    if (Volatile.Read(ref _holdThePhase))
-                    {
-                        _phaseBegun.Release();
-                        Hold(Volatile.Read(ref _holdOnToken) ? token : Timeout);
-                    }
-                },
-            },
-            Timeout);
+        return await ServiceRuntime.StartAsync(Options(), Timeout);
     }
+
+    private ServiceOptions Options() => new()
+    {
+        ArchivesRoot = _harness.ArchivesRoot,
+        StateDirectory = _harness.StateDirectory,
+        VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+        DrillPhaseBegun = token =>
+        {
+            if (Volatile.Read(ref _holdThePhase))
+            {
+                _phaseBegun.Release();
+                Hold(Volatile.Read(ref _holdOnToken) ? token : Timeout);
+            }
+        },
+    };
 
     /// <summary>
     /// The service a drill asks, holding its first ask until the test lets it

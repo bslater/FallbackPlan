@@ -315,6 +315,48 @@ identities are new every time, so nothing can be coalesced into one that has
 finished. `Hosts.Tests/JobSchedulerTests` drills settlement on all three lanes,
 including a run that throws.
 
+#### Amendment 7 (2026-11): a stopping queue answers what it never started
+
+The queue runs nothing it had not started by the time it stops. Each lane's
+pump leaves its loop, and whatever was still queued was dropped without a
+word. Amendment 5's callback, a job's own record of a cancellation before it
+started, was called only by a cancel command. So a pass whose backup was still
+queued when the service stopped waited for ever on an outcome nothing would
+give.
+
+Once its workers and parked runs have ended, so that nothing can start a job,
+the stopping queue now takes every job still queued out of its lane and calls
+its callback, once. A callback that throws is logged as the job's fault, as
+settlement is, and is never thrown out of the stop. A job without the callback
+keeps its path. Fan-out and the sweep are waited on under their askers' tokens,
+and a pass's transfer phases under the service's stop.
+
+A backup answers whoever awaits it "cancelled", with "the service stopped
+before it started". Its journal row is left as it was.
+[ADR-0049](0049-service-lifecycle-hygiene.md) Decision 1 gives the
+queued-but-never-started shutdown case to the next start's sweep, which lands
+it on `FailedRecoverable` with a notice, because nobody cancelled it. So the
+progress stream is not told otherwise, and no follow-up is asked of a queue
+that would refuse it. A cancel at the command keeps Amendment 5's path. A pass
+the stop has answered starts no transfer or drill phase, because the stop has
+already counted the phases it waits for.
+
+A backup asked of a queue that has stopped is refused. A fresh identity can
+draw no other refusal, so the refusal is no longer read as one a job already
+active draws. The asker is answered cancelled with the stop's words, and the
+row begun for the ask settles `Cancelled`, as a refused row always has: the
+ask never entered the queue.
+
+`Hosts.Tests/JobSchedulerTests` drills the queue on every lane: each job it
+never started is answered once and none runs, and a job it had started is not
+answered that way. One job's callback throwing escapes nothing, and the jobs
+behind it are still answered.
+`Hosts.Tests/BackgroundWorkAtStopTests` drills the service. A pass whose backup
+waits behind every held writer worker is answered at the stop and starts no
+phase, and its row is `Pending` until the next start lands it on
+`FailedRecoverable` with the notice. A backup asked of a stopped queue is
+answered cancelled.
+
 ### 5. Progress is emitted, not inferred
 
 The client contract needs per-job progress that nothing currently produces.
@@ -544,3 +586,4 @@ cost is no longer a question worth asking.
 | 2026-09 | Accepted (amended) | Two more of the four are built: the **disk** and **network** limits ([ADR-0074](0074-background-byte-rate-limits.md)), byte rates pacing the same scheduler-started work the window governs. CPU alone remains unbuilt, for the reason the amendment gives |
 | 2026-10 | Accepted (amended) | Amendment 2 notes that the set gate keeps neither a sync nor a retention apply from the set's backup. The jobs that run beside a backup now use catalogue connections of their own ([ADR-0010 Amendment 5](0010-local-store-separation.md#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself)), held by `ArchitectureTests/CatalogueConnectionTests` |
 | 2026-11 | Accepted (related) | [ADR-0049 Amendment 2](0049-service-lifecycle-hygiene.md#amendment-2-2026-11--nothing-started-beside-the-queue-outlives-a-stop): a command waiting on a job in the reader or writer lane is answered cancelled once the queue stops, since the queue still runs nothing it had not started by then. `Agent/ServiceCommandHandler`; `Hosts.Tests/BackgroundWorkAtStopTests` |
+| 2026-11 | Accepted (amended) | Amendment 7: a stopping queue answers each job it never started through its callback once its workers have ended; a backup's waiter is answered cancelled ("the service stopped before it started") and its row is left to ADR-0049's sweep; a pass the stop has answered starts no phase; a backup asked of a stopped queue is answered cancelled, not as already running. `Agent/JobScheduler`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests`, `Hosts.Tests/BackgroundWorkAtStopTests` |
