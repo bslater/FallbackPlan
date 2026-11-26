@@ -1,6 +1,7 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Jobs;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -179,14 +180,7 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
         var runtime = await StartAsync();
         try
         {
-            var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            for (var worker = 0; worker < runtime.BackupPoolWidth; worker++)
-            {
-                Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
-                    "hold-" + Guid.NewGuid().ToString("n"), JobLane.Writer, UserInitiated: true, "hold the writer lane",
-                    async token => await held.Task.WaitAsync(token))));
-            }
-
+            HoldEveryWriter(runtime);
             var asked = new ServiceCommandHandler(runtime, RemoteBindingState.Off)
                 .ExecuteAsync(new RetentionCommand(Apply: false), Timeout).AsTask();
             await WaitUntilAsync(() => runtime.Queue.ActiveCount == runtime.BackupPoolWidth + 1);
@@ -195,6 +189,62 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
 
             Assert.IsInstanceOfType<ServiceError>(await asked.WaitAsync(Bound, Timeout), out var answer);
             Assert.AreEqual(ServiceErrorReason.Cancelled, answer.Reason);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task StoppingTheService_AnswersAPassWhoseBackupItNeverStarted_AndTheRowSaysTheServiceStopped()
+    {
+        // A pass waits for its backups, and the queue runs none it had not
+        // started by the time it stops (ADR-0029 Amendment 7). The stop
+        // answers the pass, settles the backup's row as cancelled for the
+        // reason it was, and the pass starts nothing beside the queue once
+        // the stop has answered it.
+        var runtime = await StartAsync();
+        try
+        {
+            HoldEveryWriter(runtime);
+            var pass = Scheduler.RunPassAsync(runtime, _start, Timeout).AsTask();
+            await WaitUntilAsync(() => runtime.Queue.ActiveCount == runtime.BackupPoolWidth + 1);
+
+            await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+            var answered = await pass.WaitAsync(Bound, Timeout);
+            Assert.AreEqual("cancelled", Assert.ContainsSingle(answered.Sets).Outcome);
+            var row = Assert.ContainsSingle(runtime.Jobs.Jobs);
+            Assert.AreEqual(JobState.Cancelled, row.State);
+            Assert.AreEqual(Scheduler.StoppedBeforeStart, row.Detail);
+            Assert.AreEqual(0, runtime.KeptBackgroundWork, "the pass started work beside the queue after the stop had answered it");
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task ABackupAskedOnceTheQueueHasStopped_IsAnsweredCancelled_NotAlreadyRunning()
+    {
+        // A stopped queue takes no work. That refusal was read as the one a
+        // job already active draws, so a backup asked during the stop was
+        // answered as if another run of the set were under way.
+        var runtime = await StartAsync();
+        try
+        {
+            await runtime.Queue.DisposeAsync();
+
+            var outcome = await Scheduler.Enqueue(runtime, runtime.Configuration.BackupSets.Single(), _start, userInitiated: true)
+                .WaitAsync(Bound, Timeout);
+
+            Assert.AreEqual("cancelled", outcome.Outcome, outcome.Detail);
+            Assert.AreEqual(Scheduler.StoppedBeforeStart, outcome.Detail);
+            var row = Assert.ContainsSingle(runtime.Jobs.Jobs);
+            Assert.AreEqual(JobState.Cancelled, row.State);
+            Assert.AreEqual(Scheduler.StoppedBeforeStart, row.Detail);
         }
         finally
         {
@@ -259,6 +309,18 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
         await Task.WhenAny(stopping, Task.Delay(TimeSpan.FromSeconds(1), Timeout));
         _release.Set();
         return await stopping.WaitAsync(Timeout);
+    }
+
+    /// <summary>Holds each of the writer lane's workers with a job that ends only when the queue tells it to.</summary>
+    private static void HoldEveryWriter(ServiceRuntime runtime)
+    {
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        for (var worker = 0; worker < runtime.BackupPoolWidth; worker++)
+        {
+            Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
+                "hold-" + Guid.NewGuid().ToString("n"), JobLane.Writer, UserInitiated: true, "hold the writer lane",
+                async token => await held.Task.WaitAsync(token))));
+        }
     }
 
     private async Task WaitUntilAsync(Func<bool> condition)

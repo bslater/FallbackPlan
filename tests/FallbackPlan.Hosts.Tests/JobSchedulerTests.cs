@@ -11,8 +11,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// started never takes the callback path. And settlement (Amendment 6): a
 /// job's <see cref="QueuedJob.OnSettled"/> runs only once its identity is
 /// free again, however its run ended, so whoever it answers can ask for the
-/// same job at once. Everything gates on task completions, never on delays,
-/// so the drills cannot flake on timing.
+/// same job at once. A stopping queue (Amendment 7) answers each job it never
+/// started through the same callback, and no job it started. Everything gates
+/// on task completions, never on delays, so the drills cannot flake on timing.
 /// </summary>
 [TestClass]
 public sealed class JobSchedulerTests
@@ -128,6 +129,45 @@ public sealed class JobSchedulerTests
 
         await observedCancel.Task.WaitAsync(Patience);
         Assert.AreEqual(0, callbacks, "a started job is stopped through its token, not the callback");
+    }
+
+    [TestMethod]
+    public async Task Stopping_AnswersEachJobItNeverStarted_ThroughItsCallback_AndNoJobItStarted()
+    {
+        // The queue runs nothing it had not started by the time it stops. A
+        // job that records its own cancellation is told so there, as a cancel
+        // before it started would tell it, or whoever waits on it waits for
+        // ever. The job holding the lane had started, and is stopped through
+        // its token.
+        await using var scheduler = new JobScheduler();
+        var holderCallbacks = 0;
+        var holding = Signal();
+        scheduler.Enqueue(Job(
+            "lane-holder",
+            async token =>
+            {
+                holding.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            },
+            () => Interlocked.Increment(ref holderCallbacks)));
+        await holding.Task.WaitAsync(Patience);
+
+        var callbacks = 0;
+        var ran = false;
+        scheduler.Enqueue(Job(
+            "never-started",
+            _ =>
+            {
+                ran = true;
+                return ValueTask.CompletedTask;
+            },
+            () => Interlocked.Increment(ref callbacks)));
+
+        await scheduler.DisposeAsync().AsTask().WaitAsync(Patience);
+
+        Assert.AreEqual(1, callbacks, "the job the queue never started was not answered, or was answered twice");
+        Assert.IsFalse(ran, "the stopping queue ran a job it had not started");
+        Assert.AreEqual(0, holderCallbacks, "a job the queue had started was answered as one it never started");
     }
 
     [TestMethod]
