@@ -126,7 +126,11 @@ public static class FanOut
     /// <param name="destinationName">The declared destination.</param>
     /// <param name="now">The pass clock.</param>
     /// <param name="userInitiated">Whether a person is waiting.</param>
-    /// <returns>A task completing when the sync has run, or null when coalesced away.</returns>
+    /// <returns>
+    /// A task completing when the sync has run, cancelled when the queue
+    /// stopped before it ran (ADR-0029 Amendment 8), or null when coalesced
+    /// away.
+    /// </returns>
     public static Task? Enqueue(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
         DateTimeOffset now, bool userInitiated)
@@ -180,9 +184,21 @@ public static class FanOut
                 {
                     completion.SetException(failure);
                 }
-            }));
+            },
+            // The stop's own answer (ADR-0029 Amendment 8): a cancel command
+            // leaves the sync to run with its token cancelled, and its runner
+            // settles that, but a stopping queue runs nothing it had not
+            // started, so nothing else would answer whoever waits.
+            OnStoppedBeforeStart: () => completion.SetCanceled(runtime.Queue.StoppingToken)));
 
-        return accepted ? completion.Task : null;
+        if (accepted)
+        {
+            return completion.Task;
+        }
+
+        // A stopped queue refuses every job, and is not a pair whose sync is
+        // under way: its asker is answered cancelled, not as coalesced.
+        return runtime.Queue.HasStopped ? Task.FromCanceled(runtime.Queue.StoppingToken) : null;
     }
 
     /// <summary>

@@ -57,7 +57,8 @@ public enum JobLane
 /// turn comes, with a token already cancelled — which fan-out and the sweep
 /// rely on, their runners settling their own cancellation. A queue that
 /// stops with the job still queued invokes it too, once, since the job will
-/// never run (Amendment 7).
+/// never run (Amendment 7), unless the job carries
+/// <paramref name="OnStoppedBeforeStart"/>.
 /// </param>
 /// <param name="OnSettled">
 /// Called once the job's run has ended, however it ended, and the queue has
@@ -68,6 +69,14 @@ public enum JobLane
 /// of play before it started; <paramref name="OnCancelledBeforeStart"/> is
 /// that job's ending.
 /// </param>
+/// <param name="OnStoppedBeforeStart">
+/// How whoever waits on the job is answered when the queue stops before it
+/// has started it (Amendment 8). The stop calls it, once, in place of
+/// <paramref name="OnCancelledBeforeStart"/>; a cancel command never does.
+/// A job that keeps the cooperative cancel path answers the stop through it,
+/// and a job whose cancellation before it started is recorded can say
+/// through it that nobody cancelled it.
+/// </param>
 public sealed record QueuedJob(
     string JobId,
     JobLane Lane,
@@ -77,7 +86,8 @@ public sealed record QueuedJob(
     int Priority = 0,
     PauseGate? PauseGate = null,
     Action? OnCancelledBeforeStart = null,
-    Action? OnSettled = null);
+    Action? OnSettled = null,
+    Action? OnStoppedBeforeStart = null);
 
 /// <summary>
 /// Service-level concurrency (ADR-0029 §4). ADR-0028 gave the service the sole
@@ -568,10 +578,10 @@ public sealed class JobScheduler : IAsyncDisposable
             // Stopping is not a failure.
         }
 
-        // What the queue took and never started will not run now. A job that
-        // records its own cancellation is answered as a cancel before it
-        // started would answer it, or whoever waits on it waits for ever
-        // (ADR-0029 Amendment 7). Only workers start a job, and they have all
+        // What the queue took and never started will not run now. A job is
+        // answered through the stop's callback where it has one, and as a
+        // cancel before it started would answer it where it has not, or
+        // whoever waits on it waits for ever (ADR-0029 Amendments 7 and 8). Only workers start a job, and they have all
         // exited, so nothing queued here can start behind this.
         List<QueuedJob> neverStarted = [];
         lock (_gate)
@@ -972,7 +982,7 @@ public sealed class JobScheduler : IAsyncDisposable
     {
         try
         {
-            job.OnCancelledBeforeStart?.Invoke();
+            (job.OnStoppedBeforeStart ?? job.OnCancelledBeforeStart)?.Invoke();
         }
         catch (Exception exception)
         {
