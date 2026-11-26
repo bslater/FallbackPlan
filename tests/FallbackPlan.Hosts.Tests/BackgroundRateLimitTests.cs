@@ -9,7 +9,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// destination's <c>transfer_limit</c> paces every background byte to or from
 /// it — the fan-out's copy, a direct-ship capture's writes, the deep sweep's
 /// reads and a drill's — and <c>background_read_limit</c> paces what a
-/// background capture reads from the source. A person is never paced.
+/// background capture reads from the source. A person is never paced. And a
+/// job waiting on its limit does not hold the service's stop (FR-SVC-017).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,6 +27,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// and the class runs concurrently with the rest of the suite.
 /// </para>
 /// <para>
+/// The stop is held to that with a clock that never ends a wait on its own:
+/// a job paced under a token the stop cancels ends with the stop, and one
+/// paced under none would hold it for ever.
+/// </para>
+/// <para>
 /// Does not establish FR-DRL-002 or FR-VER-004 — the drill and the sweep are
 /// observed here as background readers of a destination and nothing about
 /// what they prove is tested.
@@ -39,6 +45,7 @@ public sealed class BackgroundRateLimitTests : IDisposable
 
     private readonly HostHarness _harness = new();
     private readonly VirtualPacing _pacing = new();
+    private readonly HoldingPacing _holding = new();
 
     // A hang guard, not a performance claim: the virtual clock makes every
     // paced wait instant, and what remains is real captures of small trees.
@@ -215,6 +222,59 @@ public sealed class BackgroundRateLimitTests : IDisposable
     }
 
     [TestMethod]
+    public async Task StoppingTheService_WhileAScheduledCaptureWaitsOnTheReadLimit_EndsIt()
+    {
+        // At a tight limit a paced wait is many seconds a chunk, the longest
+        // a background job sits still. The stop must end it, not wait it out.
+        await using var runtime = await StartAsync(readLimit: Limit, clock: _holding.Clock);
+        var set = runtime.Configuration.BackupSets.Single();
+
+        var capture = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: false);
+        await _holding.Waiting.WaitAsync(Timeout);
+
+        await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+        Assert.IsTrue(capture.IsCompleted, "the capture was still waiting on its limit when the stop returned");
+    }
+
+    [TestMethod]
+    public async Task StoppingTheService_WhileAScheduledSyncWaitsOnTheTransferLimit_EndsIt()
+    {
+        await using var runtime = await StartAsync(transferLimit: Limit, clock: _holding.Clock);
+        var set = runtime.Configuration.BackupSets.Single();
+        var captured = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+        Assert.AreEqual("ran", captured.Outcome, captured.Detail);
+
+        var sync = FanOut.Enqueue(runtime, set, "vault", DateTimeOffset.Now, userInitiated: false)
+            ?? throw new AssertFailedException("the sync was not queued");
+        await _holding.Waiting.WaitAsync(Timeout);
+
+        await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+        Assert.IsTrue(sync.IsCompleted, "the sync was still waiting on its limit when the stop returned");
+    }
+
+    [TestMethod]
+    public async Task StoppingTheService_WhileAScheduledDrillWaitsOnTheTransferLimit_EndsIt_AndItStatesNothing()
+    {
+        await using var runtime = await StartAsync(transferLimit: Limit, clock: _holding.Clock);
+        await ReachTheVaultAsAPersonAsync(runtime);
+        var set = runtime.Configuration.BackupSets.Single();
+        var drilledBefore = runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!.DrilledAt;
+
+        var drill = RecoveryDrillJob.RunAsync(
+            runtime, set, "vault", (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), userInitiated: false, Timeout);
+        await _holding.Waiting.WaitAsync(Timeout);
+
+        await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+        Assert.IsTrue(drill.IsCompleted, "the drill was still waiting on its limit when the stop returned");
+        Assert.AreEqual(
+            drilledBefore, runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!.DrilledAt,
+            "a drill the stop cut short stated an outcome");
+    }
+
+    [TestMethod]
     public async Task EveryJobUsingADestination_SharesItsOneLimiter_UntilTheLimitChanges()
     {
         // Two sets syncing to one peer get that peer's rate between them only
@@ -357,8 +417,11 @@ public sealed class BackgroundRateLimitTests : IDisposable
             ],
         }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
 
+    /// <summary>Longer than a stop that ends a paced wait takes, far shorter than one that waits it out.</summary>
+    private static TimeSpan Bound => TimeSpan.FromSeconds(30);
+
     private async Task<ServiceRuntime> StartAsync(
-        string? transferLimit = null, string? readLimit = null, bool directShip = false)
+        string? transferLimit = null, string? readLimit = null, bool directShip = false, PacingClock? clock = null)
     {
         Directory.CreateDirectory(Vault);
         WriteRandomSourceFile("docs/content.bin", 256 * 1024);
@@ -372,13 +435,37 @@ public sealed class BackgroundRateLimitTests : IDisposable
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
-                PacingClock = _pacing.Clock,
+                PacingClock = clock ?? _pacing.Clock,
                 // The placement condition (ADR-0051) judges by volume, and the
                 // fixture's every path shares one real volume — the vault is
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
             Timeout);
+    }
+
+    /// <summary>
+    /// A clock that stands still and never ends a wait on its own: the first
+    /// second's burst passes, and the first wait past it is held until its
+    /// token is cancelled.
+    /// </summary>
+    private sealed class HoldingPacing
+    {
+        private readonly TaskCompletionSource _waiting = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public HoldingPacing() =>
+            Clock = new PacingClock(
+                static () => 0,
+                async (wait, token) =>
+                {
+                    _waiting.TrySetResult();
+                    await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, token);
+                });
+
+        public PacingClock Clock { get; }
+
+        /// <summary>Completes once a paced job is waiting on its limit.</summary>
+        public Task Waiting => _waiting.Task;
     }
 
     /// <summary>
