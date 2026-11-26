@@ -12,8 +12,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// job's <see cref="QueuedJob.OnSettled"/> runs only once its identity is
 /// free again, however its run ended, so whoever it answers can ask for the
 /// same job at once. A stopping queue (Amendment 7) answers each job it never
-/// started through the same callback, and no job it started. Everything gates
-/// on task completions, never on delays, so the drills cannot flake on timing.
+/// started through the same callback, and no job it started; a job may carry
+/// a callback of its own for the stop (Amendment 8), which the stop prefers and
+/// a cancel command never calls. Everything gates on task completions, never
+/// on delays, so the drills cannot flake on timing.
 /// </summary>
 [TestClass]
 public sealed class JobSchedulerTests
@@ -203,6 +205,62 @@ public sealed class JobSchedulerTests
         await scheduler.DisposeAsync().AsTask().WaitAsync(Patience);
 
         Assert.AreEqual(1, answered, "a job queued behind one whose callback threw was not answered");
+    }
+
+    [TestMethod]
+    public async Task Stopping_AnswersAJobItNeverStarted_ThroughItsStopCallback_RatherThanItsCancelOne()
+    {
+        // A job can be answered at the stop without recording a cancellation
+        // it was never given (Amendment 8): the stop's own callback, where the
+        // job has one, is the one the stop calls.
+        await using var scheduler = new JobScheduler();
+        var holding = Signal();
+        scheduler.Enqueue(Job("lane-holder", async token =>
+        {
+            holding.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }));
+        await holding.Task.WaitAsync(Patience);
+
+        var stopped = 0;
+        var cancelled = 0;
+        scheduler.Enqueue(new QueuedJob(
+            "never-started", JobLane.Writer, UserInitiated: false, "test never-started", _ => ValueTask.CompletedTask,
+            OnCancelledBeforeStart: () => Interlocked.Increment(ref cancelled),
+            OnStoppedBeforeStart: () => Interlocked.Increment(ref stopped)));
+
+        await scheduler.DisposeAsync().AsTask().WaitAsync(Patience);
+
+        Assert.AreEqual(1, stopped, "the stop did not answer the job through its own callback once");
+        Assert.AreEqual(0, cancelled, "the stop answered the job as one cancelled before it started");
+    }
+
+    [TestMethod]
+    public async Task Cancel_AQueuedJobWithOnlyTheStopsCallback_KeepsTheCooperativePath()
+    {
+        // The stop's callback is the stop's alone: a cancel command leaves a
+        // job carrying only that one queued, to run with a token already
+        // cancelled, as fan-out relies on (Amendment 5).
+        await using var scheduler = new JobScheduler();
+        var release = await HoldTheLaneAsync(scheduler);
+
+        var stopped = 0;
+        var observed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        scheduler.Enqueue(new QueuedJob(
+            "cooperative", JobLane.Writer, UserInitiated: false, "test cooperative",
+            token =>
+            {
+                observed.SetResult(token.IsCancellationRequested);
+                return ValueTask.CompletedTask;
+            },
+            OnStoppedBeforeStart: () => Interlocked.Increment(ref stopped)));
+
+        Assert.IsTrue(scheduler.Cancel("cooperative"));
+        Assert.IsTrue(scheduler.IsActive("cooperative"), "the cancel took the job out of the queue");
+
+        release.SetResult();
+        Assert.IsTrue(await observed.Task.WaitAsync(Patience), "the job did not run with its token already cancelled");
+        Assert.AreEqual(0, stopped, "a cancel command called the stop's callback");
     }
 
     [TestMethod]

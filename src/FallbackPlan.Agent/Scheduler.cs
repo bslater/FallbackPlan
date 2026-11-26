@@ -843,18 +843,6 @@ public static class Scheduler
                 // instead of waiting on a run that will never happen.
                 OnCancelledBeforeStart: () =>
                 {
-                    if (runtime.Queue.HasStopped)
-                    {
-                        // Never started because the service stopped (ADR-0029
-                        // Amendment 7). Whoever awaits the run is answered; its
-                        // row is the next start's to settle as one to retry,
-                        // and say so, since nobody cancelled it (ADR-0049
-                        // Decision 1). A follow-up asked now would only be
-                        // refused.
-                        completion.SetResult(new BackupOutcome(set.Name, "cancelled", StoppedBeforeStart));
-                        return;
-                    }
-
                     runtime.Jobs.Transition(
                         job.Id, JobState.Cancelled, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         CancelledBeforeStart);
@@ -862,7 +850,14 @@ public static class Scheduler
                     completion.SetResult(new BackupOutcome(set.Name, "cancelled", CancelledBeforeStart));
                     FollowUp(runtime, set.Id);
                 },
-                OnSettled: () => FollowUp(runtime, set.Id)));
+                OnSettled: () => FollowUp(runtime, set.Id),
+                // Never started because the service stopped (ADR-0029
+                // Amendments 7 and 8). Whoever awaits the run is answered;
+                // its row is the next start's to settle as one to retry, and
+                // say so, since nobody cancelled it (ADR-0049 Decision 1). A
+                // follow-up asked now would only be refused.
+                OnStoppedBeforeStart: () =>
+                    completion.SetResult(new BackupOutcome(set.Name, "cancelled", StoppedBeforeStart))));
 
             if (!accepted)
             {
