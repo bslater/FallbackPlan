@@ -840,16 +840,26 @@ public static class Scheduler
                 // the journal settles at the command rather than when the lane
                 // drains, the stream hears it so a watching card does not sit
                 // at Pending, and whoever awaits the outcome is answered
-                // instead of waiting on a run that will never happen. A
-                // stopping queue answers it the same way (Amendment 7), and
-                // says the stop was why.
+                // instead of waiting on a run that will never happen.
                 OnCancelledBeforeStart: () =>
                 {
-                    var reason = runtime.Queue.HasStopped ? StoppedBeforeStart : CancelledBeforeStart;
+                    if (runtime.Queue.HasStopped)
+                    {
+                        // Never started because the service stopped (ADR-0029
+                        // Amendment 7). Whoever awaits the run is answered; its
+                        // row is the next start's to settle as one to retry,
+                        // and say so, since nobody cancelled it (ADR-0049
+                        // Decision 1). A follow-up asked now would only be
+                        // refused.
+                        completion.SetResult(new BackupOutcome(set.Name, "cancelled", StoppedBeforeStart));
+                        return;
+                    }
+
                     runtime.Jobs.Transition(
-                        job.Id, JobState.Cancelled, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), reason);
+                        job.Id, JobState.Cancelled, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        CancelledBeforeStart);
                     runtime.Progress.Report(new JobProgress(job.Id, JobState.Cancelled, 0, 0, 0, 0, 0, 0));
-                    completion.SetResult(new BackupOutcome(set.Name, "cancelled", reason));
+                    completion.SetResult(new BackupOutcome(set.Name, "cancelled", CancelledBeforeStart));
                     FollowUp(runtime, set.Id);
                 },
                 OnSettled: () => FollowUp(runtime, set.Id)));
