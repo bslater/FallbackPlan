@@ -259,6 +259,61 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task StoppingTheService_AnswersAPersonsSyncItNeverStarted_Cancelled_AndTheLedgerStatesNothing()
+    {
+        // A person's sync waits for its job, which the queue had not started
+        // when it stopped (ADR-0029 Amendment 8). Fan-out keeps the
+        // cooperative cancel path, so the stop answers the sync through a
+        // callback of its own: the person is told cancelled, and the pair's
+        // ledger row says nothing about a sync that never ran.
+        var runtime = await StartAsync();
+        try
+        {
+            await PassAsync(runtime, _start);
+            var before = Row(runtime);
+            HoldTheLane(runtime, JobLane.Transfer, workers: 1);
+            var asked = new ServiceCommandHandler(runtime, RemoteBindingState.Off)
+                .ExecuteAsync(new SyncCommand("docs", "vault"), Timeout).AsTask();
+            await WaitUntilAsync(() => runtime.Queue.ActiveCount == 2);
+
+            await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+            Assert.IsInstanceOfType<ServiceError>(await asked.WaitAsync(Bound, Timeout), out var answer);
+            Assert.AreEqual(ServiceErrorReason.Cancelled, answer.Reason);
+            var after = Row(runtime);
+            Assert.AreEqual(before.State, after.State);
+            Assert.AreEqual(before.LastSuccessAt, after.LastSuccessAt, "the ledger recorded a sync that never ran");
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task ASyncAskedOnceTheQueueHasStopped_IsAnsweredCancelled_NotAlreadySyncing()
+    {
+        // A stopped queue takes no work. Fan-out read that refusal as the one
+        // a pair whose sync is under way draws, so a person's sync asked
+        // during the stop was told the pair was already syncing.
+        var runtime = await StartAsync();
+        try
+        {
+            await runtime.Queue.DisposeAsync();
+
+            var answer = await new ServiceCommandHandler(runtime, RemoteBindingState.Off)
+                .ExecuteAsync(new SyncCommand("docs", "vault"), Timeout).AsTask().WaitAsync(Bound, Timeout);
+
+            Assert.IsInstanceOfType<ServiceError>(answer, out var refused, string.Join("; ", (answer as SyncResult)?.Lines ?? []));
+            Assert.AreEqual(ServiceErrorReason.Cancelled, refused.Reason);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
     public async Task TheWorkAPassLeavesBeside_IsLetGoOnceItHasEnded()
     {
         // A service runs a pass every poll for months: what it keeps for the
@@ -318,13 +373,16 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
     }
 
     /// <summary>Holds each of the writer lane's workers with a job that ends only when the queue tells it to.</summary>
-    private static void HoldEveryWriter(ServiceRuntime runtime)
+    private static void HoldEveryWriter(ServiceRuntime runtime) => HoldTheLane(runtime, JobLane.Writer, runtime.BackupPoolWidth);
+
+    /// <summary>Holds each of a lane's workers with a job that ends only when the queue tells it to.</summary>
+    private static void HoldTheLane(ServiceRuntime runtime, JobLane lane, int workers)
     {
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        for (var worker = 0; worker < runtime.BackupPoolWidth; worker++)
+        for (var worker = 0; worker < workers; worker++)
         {
             Assert.IsTrue(runtime.Queue.Enqueue(new QueuedJob(
-                "hold-" + Guid.NewGuid().ToString("n"), JobLane.Writer, UserInitiated: true, "hold the writer lane",
+                "hold-" + Guid.NewGuid().ToString("n"), lane, UserInitiated: true, $"hold the {lane} lane",
                 async token => await held.Task.WaitAsync(token))));
         }
     }
