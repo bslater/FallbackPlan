@@ -94,7 +94,7 @@ Status per record. **A hundred and seventy of the hundred and seventy-eight are 
 | [0026](adr/0026-phase-1-capture-shapes.md) | Phase-1 capture shapes: hardlinks, diagnostics, special files, capabilities |
 | [0027](adr/0027-services-scheduling-status-telemetry.md) | Push-2 service shapes: scheduling, job-state store, status model, instrumentation |
 | [0028](adr/0028-service-boundary-and-deployment-topologies.md) | The service boundary: deployment topologies, process ownership, transport, unlock |
-| [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency: the ordering barrier, the bound, the order of work |
+| [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency: the ordering barrier, the bound, the order of work; since Amendment 7 a stopping queue answers what it never started |
 | [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing: a transport keypair the repository knows nothing about |
 | [0031](adr/0031-exception-messages-are-resources.md) | Exception messages are resources |
 | [0032](adr/0032-mstest-as-the-test-framework.md) | MSTest is the test framework |
