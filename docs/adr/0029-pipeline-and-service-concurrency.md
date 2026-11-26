@@ -331,6 +331,12 @@ settlement is, and is never thrown out of the stop. A job without the callback
 keeps its path. Fan-out and the sweep are waited on under their askers' tokens,
 and a pass's transfer phases under the service's stop.
 
+> **Amended 2026-11 ([Amendment 8](#amendment-8-2026-11-the-stop-answers-a-queued-sync-through-a-callback-of-its-own)).**
+> A person's sync waits under their own token, which the stop does not end. A
+> queued job may now carry a callback of the stop's own. Fan-out's answers a
+> sync the stop never started cancelled, and the backup's stop branch below
+> moved into its own.
+
 A backup answers whoever awaits it "cancelled", with "the service stopped
 before it started". Its journal row is left as it was.
 [ADR-0049](0049-service-lifecycle-hygiene.md) Decision 1 gives the
@@ -356,6 +362,42 @@ waits behind every held writer worker is answered at the stop and starts no
 phase, and its row is `Pending` until the next start lands it on
 `FailedRecoverable` with the notice. A backup asked of a stopped queue is
 answered cancelled.
+
+#### Amendment 8 (2026-11): the stop answers a queued sync through a callback of its own
+
+Amendment 7 answered what the stopping queue never started only through a
+job's record of its own cancellation. Fan-out has none, by Amendment 5's
+design: a cancel command leaves a queued sync to run with its token already
+cancelled, and the runner settles that. A person's *sync now* waits for each
+pair's job under their own request's token, which the service's stop does not
+end. So a sync still queued at the stop left the person waiting until their
+request gave up. And a stopped queue's refusal of a new sync was read as the
+one a pair whose sync is under way draws, so a sync asked during the stop was
+told the pair was already syncing.
+
+A queued job may now carry a callback for the stop alone. The stopping queue
+calls it, once, in place of the cancel-before-start record, and falls back to
+that record for a job without it. A cancel command never calls it. Fan-out's
+answers whoever waits on the sync cancelled, so the person is told the
+operation was cancelled and the pair's ledger says nothing of a sync that
+never ran. A stopped queue's refusal of a new sync is answered the same way. A
+coalesced pair still returns no task.
+
+The backup's stop branch from Amendment 7 moved into its own stop callback,
+unchanged in what it does: it answers the run's waiter with "the service
+stopped before it started", and leaves the row to ADR-0049's sweep. Its
+cancel-before-start record again records only a cancel at the command. The
+pending-changes count carries no stop callback, and is answered through its
+record at the stop as before. The sweep carries none either. Its only waiter
+is a pass's transfer phase, which waits under the service's stop.
+
+`Hosts.Tests/JobSchedulerTests` drills the queue. The stop answers a job it
+never started through the stop's callback, not its cancel record. A cancel
+command leaves a job carrying only the stop's callback to the cooperative
+path. `Hosts.Tests/BackgroundWorkAtStopTests` drills the service. A person's
+sync queued behind a held transfer lane is answered cancelled at the stop,
+with the ledger unchanged. A sync asked of a stopped queue is answered
+cancelled, not as already syncing.
 
 ### 5. Progress is emitted, not inferred
 
@@ -587,3 +629,4 @@ cost is no longer a question worth asking.
 | 2026-10 | Accepted (amended) | Amendment 2 notes that the set gate keeps neither a sync nor a retention apply from the set's backup. The jobs that run beside a backup now use catalogue connections of their own ([ADR-0010 Amendment 5](0010-local-store-separation.md#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself)), held by `ArchitectureTests/CatalogueConnectionTests` |
 | 2026-11 | Accepted (related) | [ADR-0049 Amendment 2](0049-service-lifecycle-hygiene.md#amendment-2-2026-11--nothing-started-beside-the-queue-outlives-a-stop): a command waiting on a job in the reader or writer lane is answered cancelled once the queue stops, since the queue still runs nothing it had not started by then. `Agent/ServiceCommandHandler`; `Hosts.Tests/BackgroundWorkAtStopTests` |
 | 2026-11 | Accepted (amended) | Amendment 7: a stopping queue answers each job it never started through its callback once its workers have ended; a backup's waiter is answered cancelled ("the service stopped before it started") and its row is left to ADR-0049's sweep; a pass the stop has answered starts no phase; a backup asked of a stopped queue is answered cancelled, not as already running. `Agent/JobScheduler`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests`, `Hosts.Tests/BackgroundWorkAtStopTests` |
+| 2026-11 | Accepted (amended) | Amendment 8: a queued job may carry a callback for the stop alone, which the stopping queue calls in place of the cancel-before-start record and a cancel command never calls; fan-out's answers a person's sync the stop never started cancelled, a stopped queue's refusal of a sync is no longer read as one already under way, and the backup's stop branch moved into its own. `Agent/JobScheduler`, `Agent/FanOut`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests`, `Hosts.Tests/BackgroundWorkAtStopTests` |
