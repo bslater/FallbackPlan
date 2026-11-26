@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
@@ -14,8 +16,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// a peer is drilled only when the source's operator states a cadence for it,
 /// the drill reads over the retrieval session the peer already serves, and
 /// the bytes one drill may pull are capped. A person may still ask for one
-/// drill of a peer the schedule leaves alone (FR-DRL-003). Does not establish
-/// FR-DRL-001.
+/// drill of a peer the schedule leaves alone (FR-DRL-003). A peer that goes
+/// silent partway through a drill does not hold the service's stop
+/// (FR-SVC-017). Does not establish FR-DRL-001.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -284,6 +287,156 @@ public sealed class PeerRecoveryDrillTests : IDisposable
         Assert.IsNull(outcome.Failure, outcome.Failure + WhatThePeerSaid());
         Assert.AreEqual(1, outcome.Files);
         Assert.DoesNotContain("cap", outcome.Limit ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
+    [DataRow(2_000L, DisplayName = "silent in the connection's setup")]
+    [DataRow(16_000L, DisplayName = "silent in the replica's metadata")]
+    [DataRow(150_000L, DisplayName = "silent in a blob")]
+    public async Task StoppingTheService_WhileADrillWaitsOnAPeerGoneSilent_EndsTheDrill_AndItStatesNothing(long after)
+    {
+        // The stop waits for every drill in flight (ADR-0049 Amendment 2), and
+        // a drill of a peer reads its replica over the wire. A peer that goes
+        // silent partway through, its connection still open, must not hold
+        // the service's stop for as long as that connection lives. The drill
+        // reads under a token the stop cancels, wherever it is waiting; the
+        // points are where the peer's bytes stop, counted on the drill's
+        // connection.
+        var fingerprint = await StartDestinationAsync();
+        await using var relay = SilencingRelay.Start(_endpoint!, silentAfterBytes: after);
+        _endpoint = relay.Endpoint;
+        WriteConfiguration(fingerprint, drillIntervalDays: 7);
+        _harness.WriteSourceFile("docs/content.txt", Convert.ToBase64String(RandomNumberGenerator.GetBytes(300_000)));
+
+        var runtime = await StartAsync();
+        try
+        {
+            await ShipAsync(runtime);
+            relay.Arm();
+            var drill = RecoveryDrillJob.RunAsync(
+                runtime, runtime.Configuration.BackupSets.Single(), "friend",
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), userInitiated: false, Timeout);
+            await relay.Silenced.WaitAsync(Timeout);
+            await Task.Delay(500, Timeout);
+            Assert.IsFalse(drill.IsCompleted, "the premise: the drill waits on the silent peer");
+
+            await runtime.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30), Timeout);
+
+            Assert.IsTrue(drill.IsCompleted, "the drill was still waiting on the silent peer when the stop returned");
+            Assert.IsNull(
+                runtime.DestinationSync.Find(_harness.DocsSetId, "friend")?.DrilledAt,
+                "a drill the stop cut short stated an outcome");
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// Forwards connections to the peer, and once armed stops passing the
+    /// peer's bytes back on any connection that has carried more than the
+    /// given number of them: a peer gone silent with its connection open.
+    /// </summary>
+    private sealed class SilencingRelay : IAsyncDisposable
+    {
+        private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+        private readonly IPEndPoint _target;
+        private readonly long _silentAfterBytes;
+        private readonly CancellationTokenSource _closing = new();
+        private readonly TaskCompletionSource _silenced = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly List<TcpClient> _connections = [];
+        private readonly Task _accepting;
+        private volatile bool _armed;
+
+        private SilencingRelay(IPEndPoint target, long silentAfterBytes)
+        {
+            _target = target;
+            _silentAfterBytes = silentAfterBytes;
+            _listener.Start();
+            _accepting = AcceptAsync();
+        }
+
+        public IPEndPoint Endpoint => (IPEndPoint)_listener.LocalEndpoint;
+
+        /// <summary>Completes once the peer's bytes have stopped on a connection.</summary>
+        public Task Silenced => _silenced.Task;
+
+        public static SilencingRelay Start(IPEndPoint target, long silentAfterBytes) => new(target, silentAfterBytes);
+
+        /// <summary>From now on, a connection that carries enough of the peer's bytes goes silent.</summary>
+        public void Arm() => _armed = true;
+
+        private async Task AcceptAsync()
+        {
+            try
+            {
+                while (true)
+                {
+                    var client = await _listener.AcceptTcpClientAsync(_closing.Token);
+                    var upstream = new TcpClient();
+                    lock (_connections)
+                    {
+                        _connections.Add(client);
+                        _connections.Add(upstream);
+                    }
+
+                    await upstream.ConnectAsync(_target, _closing.Token);
+                    _ = PumpAsync(client.GetStream(), upstream.GetStream(), fromThePeer: false);
+                    _ = PumpAsync(upstream.GetStream(), client.GetStream(), fromThePeer: true);
+                }
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or SocketException or ObjectDisposedException)
+            {
+                // The relay is closing.
+            }
+        }
+
+        private async Task PumpAsync(NetworkStream from, NetworkStream to, bool fromThePeer)
+        {
+            var buffer = new byte[16 * 1024];
+            long carried = 0;
+            try
+            {
+                while (true)
+                {
+                    var read = await from.ReadAsync(buffer, _closing.Token);
+                    if (read == 0)
+                    {
+                        return;
+                    }
+
+                    if (fromThePeer && _armed && carried + read > _silentAfterBytes)
+                    {
+                        _silenced.TrySetResult();
+                        await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, _closing.Token);
+                    }
+
+                    await to.WriteAsync(buffer.AsMemory(0, read), _closing.Token);
+                    carried += read;
+                }
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or IOException or ObjectDisposedException)
+            {
+                // The relay is closing, or a side hung up.
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _closing.CancelAsync();
+            _listener.Stop();
+            lock (_connections)
+            {
+                foreach (var connection in _connections)
+                {
+                    connection.Dispose();
+                }
+            }
+
+            await _accepting;
+            _closing.Dispose();
+        }
     }
 
     /// <summary>A direct-ship run, which is what lands the set at the peer.</summary>
