@@ -197,13 +197,14 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task StoppingTheService_AnswersAPassWhoseBackupItNeverStarted_AndTheRowSaysTheServiceStopped()
+    public async Task StoppingTheService_AnswersAPassWhoseBackupItNeverStarted_AndLeavesTheRowForTheNextStart()
     {
         // A pass waits for its backups, and the queue runs none it had not
         // started by the time it stops (ADR-0029 Amendment 7). The stop
-        // answers the pass, settles the backup's row as cancelled for the
-        // reason it was, and the pass starts nothing beside the queue once
-        // the stop has answered it.
+        // answers the pass, which starts nothing beside the queue once the
+        // stop has answered it. The backup's row is left as it was, for the
+        // next start to settle as a run to retry and say so (ADR-0049
+        // Decision 1): nobody cancelled it.
         var runtime = await StartAsync();
         try
         {
@@ -213,17 +214,22 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
 
             await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
 
-            var answered = await pass.WaitAsync(Bound, Timeout);
-            Assert.AreEqual("cancelled", Assert.ContainsSingle(answered.Sets).Outcome);
-            var row = Assert.ContainsSingle(runtime.Jobs.Jobs);
-            Assert.AreEqual(JobState.Cancelled, row.State);
-            Assert.AreEqual(Scheduler.StoppedBeforeStart, row.Detail);
+            var answered = Assert.ContainsSingle((await pass.WaitAsync(Bound, Timeout)).Sets);
+            Assert.AreEqual("cancelled", answered.Outcome);
+            Assert.AreEqual(Scheduler.StoppedBeforeStart, answered.Detail);
             Assert.AreEqual(0, runtime.KeptBackgroundWork, "the pass started work beside the queue after the stop had answered it");
+            Assert.AreEqual(JobState.Pending, Assert.ContainsSingle(runtime.Jobs.Jobs).State, "the stop settled the row the next start's sweep is for");
         }
         finally
         {
             await runtime.DisposeAsync();
         }
+
+        await using var again = await ServiceRuntime.StartAsync(Options(), Timeout);
+        Assert.AreEqual(JobState.FailedRecoverable, Assert.ContainsSingle(again.Jobs.Jobs).State);
+        Assert.IsTrue(
+            again.Notices.Unacknowledged.Any(notice => notice.Message.Contains("interrupted", StringComparison.OrdinalIgnoreCase)),
+            "the next start settled the backup the stop left without a notice saying so");
     }
 
     [TestMethod]
@@ -371,23 +377,23 @@ public sealed class BackgroundWorkAtStopTests : IAsyncDisposable
         _harness.WriteSourceFile("docs/b.txt", new string('b', 40_000));
 
         await _harness.SetupAsync();
-        return await ServiceRuntime.StartAsync(
-            new ServiceOptions
-            {
-                ArchivesRoot = _harness.ArchivesRoot,
-                StateDirectory = _harness.StateDirectory,
-                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
-                DrillPhaseBegun = token =>
-                {
-                    if (Volatile.Read(ref _holdThePhase))
-                    {
-                        _phaseBegun.Release();
-                        Hold(Volatile.Read(ref _holdOnToken) ? token : Timeout);
-                    }
-                },
-            },
-            Timeout);
+        return await ServiceRuntime.StartAsync(Options(), Timeout);
     }
+
+    private ServiceOptions Options() => new()
+    {
+        ArchivesRoot = _harness.ArchivesRoot,
+        StateDirectory = _harness.StateDirectory,
+        VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+        DrillPhaseBegun = token =>
+        {
+            if (Volatile.Read(ref _holdThePhase))
+            {
+                _phaseBegun.Release();
+                Hold(Volatile.Read(ref _holdOnToken) ? token : Timeout);
+            }
+        },
+    };
 
     /// <summary>
     /// The service a drill asks, holding its first ask until the test lets it
