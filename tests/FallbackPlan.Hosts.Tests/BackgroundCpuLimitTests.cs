@@ -213,6 +213,28 @@ public sealed class BackgroundCpuLimitTests : IDisposable
     }
 
     [TestMethod]
+    public async Task StoppingTheService_WhileAScheduledCaptureWaitsOnTheCpuLimitInItsWalk_EndsIt()
+    {
+        // Large enough that the counting walk looks at the limiter before
+        // any content is read, so the wait the clock holds is the walk's own
+        // and the stop has to reach it there.
+        for (var file = 0; file < 256; file++)
+        {
+            _harness.WriteSourceFile($"docs/tree/{file / 32:D2}/note-{file:D3}.txt", $"note {file}");
+        }
+
+        await using var runtime = await StartAsync(cpuLimit: Limit, clock: _holding.Clock, walkInFull: true);
+        var set = runtime.Configuration.BackupSets.Single();
+
+        var capture = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: false);
+        await _holding.Waiting.WaitAsync(Timeout);
+
+        await runtime.DisposeAsync().AsTask().WaitAsync(Bound, Timeout);
+
+        Assert.IsTrue(capture.IsCompleted, "the capture was still waiting on its limit when the stop returned");
+    }
+
+    [TestMethod]
     public async Task AnInstallationWithNoCpuLimit_NeverReadsTheMeter()
     {
         // Every file written before schema 12 says "unlimited" by not
