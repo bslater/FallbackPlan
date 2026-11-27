@@ -147,6 +147,11 @@ about to happen.
 **Not looked at:**
 - Work that moves no bytes through a seam. A scan stats and reads no content,
   so an incremental pass over a large unchanged tree spends its scan unpaced.
+
+  > **Amended 2026-11 ([Amendment 2](#amendment-2-2026-11--a-walk-is-looked-at-too)).**
+  > A walk is looked at now, every sixty-four scan events, so this bullet no
+  > longer holds for a capture's walk. Work that neither moves bytes nor walks
+  > a source still goes unlooked.
 - The two paths ADR-0074 §5 leaves unpaced by decision: the ship sink's reads
   and the push a retention apply makes. A person may be behind either one.
 
@@ -208,6 +213,9 @@ diagnostic bundle's copy of the configuration does not name it.
   and the service's own housekeeping are charged too. Background work gives
   way to them, for up to ten seconds after they end.
 - **A scan is not paced**, as decision 5 says.
+
+  > **Amended 2026-11 ([Amendment 2](#amendment-2-2026-11--a-walk-is-looked-at-too)).**
+  > It is, every sixty-four scan events.
 - **Each look reads the process's processor time**: a call per chunk, only
   where a limit is set.
 
@@ -282,9 +290,42 @@ nothing waits for a pass or a restart.
   that took far longer than its bytes explain is the first thing it is asked
   about.
 
+## Amendment 2 (2026-11) — a walk is looked at too
+
+**Built:** `Agent/PacedFileSystemSource`, held by
+`Hosts.Tests/PacedFileSystemSourceTests` and
+`Hosts.Tests/BackgroundCpuLimitTests`.
+
+Decision 5 named a gap: a scan reads no content, so it never looked at the
+limiter. That is the common case rather than an edge. An incremental run of a
+tree where nothing changed reuses every file on its stat and reads no content,
+so the walk is the whole of its processor time, and all of it went unpaced.
+
+Where a change journal says which folders changed
+([ADR-0188](0188-the-service-tells-a-backup-what-changed-since-the-sets-last.md)), the run
+does not walk unchanged folders, and the journal saves the walk. Where none
+does, the run walks in full: a platform without a journal, or one whose
+journal the service lost.
+
+**The walk is looked at.** When a capture's pace carries the CPU limiter, its
+paced source looks at the limiter once every sixty-four scan events. Every
+event passes through unchanged and in order. Sixty-four is often enough to hold
+the walk of an unchanged tree to the share. It is also seldom enough that
+reading the process's processor time costs little beside the stats in between.
+
+**Both walks are held.** A capture walks twice, once to count its plan and
+once to capture, and both go through the same source.
+
+The wait is on the walk's own cancellation token, so a parked capture, a
+preemption and the stop end it at once (decision 4).
+
+**A byte limit alone leaves the walk alone.** A stat moves no bytes, and the
+read limit is a limit on what is read (ADR-0074 §5).
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first, on an injected meter and a virtual clock: `Application/CpuShare`, `Application/CpuMeter`, `Application/CpuLimiter` and `Application/BackgroundPace`, the schema-12 field in `Application/ClientConfiguration`, the pace through every `Agent/BackgroundPacing` seam, and contract 1.97's `cpu_limit` on status. Setting it through the service and the diagnostic bundle's copy are owed |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-limit-is-set-through-the-service): contract 1.98 sets the limit through the service with the other installation settings — null keeps, empty clears, judged whole — and the CLI's `settings` verb, the console's settings card and `Agent/DiagnosticBundle` carry it |
+| 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--a-walk-is-looked-at-too): `Agent/PacedFileSystemSource` looks at the CPU limiter every sixty-four scan events of a background capture's walk, so a run of an unchanged tree that reads no content is held to the share; a byte limit alone still leaves the walk alone |
