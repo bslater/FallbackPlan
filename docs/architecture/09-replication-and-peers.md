@@ -21,7 +21,7 @@ never a silent skip, until the peer write adapter lands.
 > the ship sink serves a peer through a session it holds open for the run,
 > so a direct-ship set's captures write to its peers too. A set whose only
 > destinations are peers still defaults to staging
-> ([ADR-0046](../adr/0046-direct-to-destination-publication.md) §8).
+> ([ADR-0058](../adr/0058-peer-write-adapter.md) §9).
 
 > **2026-11 ([ADR-0196](../adr/0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md)).** A direct-ship set
 > whose only destinations are object stores writes through them as it goes,

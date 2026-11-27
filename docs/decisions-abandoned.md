@@ -184,7 +184,7 @@ Worth separating, because a deferred option is a decision someone still has to m
 | Per-device signing keys | [Q13](open-questions.md#q13--device-level-signature-attribution) — whether device-level attribution should exist at all |
 | A blob writer per worker | Measurement showing the barrier is the bound ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md)) |
 | RFC 7250, TLS exporters, Ed25519 certificates | Platform support; the protocol-layer proof stays authoritative either way ([ADR-0030 Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls)) |
-| The peer write adapter for direct-ship sets | The sink serving peer destinations (today a stated `NotSupported` in the ledger, never a silent skip) — one of the three tails gating the `direct_ship` default flip, with the retention-with-trimming drill ([ADR-0046](adr/0046-direct-to-destination-publication.md)) |
+| ~~The peer write adapter for direct-ship sets~~ | Built as [ADR-0058](adr/0058-peer-write-adapter.md): the ship sink serves a peer through a session held open for the run, and the retention-with-trimming drill that shared the gate has run ([ADR-0046](adr/0046-direct-to-destination-publication.md)). What stays deferred is the default, not the capability: a peer-only set still stages unless it is flagged otherwise (ADR-0058 §9) |
 
 ---
 
