@@ -334,7 +334,7 @@ internal static class DiagnosticBundle
     {
         if (inputs.Configuration is not { } configuration)
         {
-            return new ConfigurationEntry(null, [], [], null, null, null, null, null, Render(inputs.ConfigurationProblem, mode));
+            return new ConfigurationEntry(null, [], [], null, null, null, null, null, null, Render(inputs.ConfigurationProblem, mode));
         }
 
         return new ConfigurationEntry(
@@ -364,6 +364,7 @@ internal static class DiagnosticBundle
             configuration.BackgroundWindow,
             configuration.BackgroundReadLimit,
             configuration.ClockSkewMarginHours,
+            configuration.BackgroundCpuLimit,
             null);
     }
 
@@ -538,6 +539,7 @@ internal static class DiagnosticBundle
         string? BackgroundWindow,
         string? BackgroundReadLimit,
         int? ClockSkewMarginHours,
+        string? BackgroundCpuLimit,
         string? Unreadable);
 
     private sealed record DestinationEntry(

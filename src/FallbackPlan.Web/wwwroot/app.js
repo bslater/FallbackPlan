@@ -3902,6 +3902,8 @@ function serviceSettingsCard() {
             value="${esc(s.backgroundReadLimit ?? "")}" placeholder="unlimited — e.g. 40 MiB/s"></label>
           <label class="mini">max concurrent backups <input type="text" id="svc-max-backups" class="num"
             value="${esc(s.maxConcurrentBackups ?? "")}" placeholder="2"></label>
+          <label class="mini">background CPU limit, of this machine's processors <input type="text" id="svc-cpu-limit"
+            value="${esc(s.backgroundCpuLimit ?? "")}" placeholder="unlimited — e.g. 25%"></label>
         </div>
         ${waiting ? `<p class="sub">The pool runs ${esc(s.effectiveMaxConcurrentBackups)} until the service restarts.</p>` : ""}
         <div class="actions-row">
@@ -5674,6 +5676,7 @@ Object.assign(actions, {
       backgroundWindow: document.getElementById("svc-window").value.trim(),
       backgroundReadLimit: document.getElementById("svc-read-limit").value.trim(),
       maxConcurrentBackups: widthText === "" ? 0 : Number(widthText),
+      backgroundCpuLimit: document.getElementById("svc-cpu-limit").value.trim(),
     };
     if (!Number.isInteger(update.maxConcurrentBackups)) {
       toast("warn", "The pool's width is a whole number, 1 to 5."); return;

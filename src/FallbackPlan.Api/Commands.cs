@@ -220,8 +220,15 @@ public sealed record GetServiceSettingsCommand : ServiceCommand;
 /// The pool is sized when the service starts, so a change applies at the next
 /// restart.
 /// </param>
+/// <param name="BackgroundCpuLimit">
+/// The share of the machine's processors background work is held to, a whole
+/// percentage such as <c>25%</c> (contract 1.98, ADR-0200 Amendment 1); empty
+/// clears it, so background work is not held to one. Null keeps it, which is
+/// what a pre-1.98 client's request says by never naming it.
+/// </param>
 public sealed record UpdateServiceSettingsCommand(
-    string? BackgroundWindow, string? BackgroundReadLimit, int? MaxConcurrentBackups) : ServiceCommand;
+    string? BackgroundWindow, string? BackgroundReadLimit, int? MaxConcurrentBackups,
+    string? BackgroundCpuLimit = null) : ServiceCommand;
 
 /// <summary>
 /// Removes one declared destination (FR-DEST-007). Refused while any set

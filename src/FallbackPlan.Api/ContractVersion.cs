@@ -943,8 +943,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// configuration file. Additive with a null default: a pre-1.97 service
     /// never sends it, which a client reads as no CPU limit.
     /// </para>
+    /// <para>
+    /// 1.98 sets the CPU limit through the service with the other settings
+    /// (FR-SVC-021, ADR-0200 Amendment 1). `update_service_settings` and
+    /// `service_settings` gain `background_cpu_limit`: on the update, null
+    /// keeps what the configuration file says and an empty text clears it; on
+    /// the answer, the limit as the file states it, or null for none.
+    /// Additive: a pre-1.98 client's update keeps the limit, and a pre-1.98
+    /// service's answer reads as none stated.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 97);
+    public static ContractVersion Current { get; } = new(1, 98);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

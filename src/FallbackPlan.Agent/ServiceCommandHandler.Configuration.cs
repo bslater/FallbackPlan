@@ -359,7 +359,8 @@ public sealed partial class ServiceCommandHandler
             configuration.BackgroundWindow,
             configuration.BackgroundReadLimit,
             configuration.MaxConcurrentBackups,
-            runtime.BackupPoolWidth);
+            runtime.BackupPoolWidth,
+            configuration.BackgroundCpuLimit);
     }
 
     private ServiceResult UpdateServiceSettings(UpdateServiceSettingsCommand command)
@@ -390,6 +391,17 @@ public sealed partial class ServiceCommandHandler
             readLimit = rate!.Text;
         }
 
+        string? cpuLimit = null;
+        if (command.BackgroundCpuLimit is { Length: > 0 } shareText)
+        {
+            if (!CpuShare.TryParse(shareText, out var share, out var shareDefect))
+            {
+                return new ServiceError(ServiceErrorReason.InvalidArgument, $"background_cpu_limit: {shareDefect}");
+            }
+
+            cpuLimit = share!.Text;
+        }
+
         if (command.MaxConcurrentBackups is { } requestedWidth && requestedWidth is not 0 and (< 1 or > 5))
         {
             return new ServiceError(
@@ -418,6 +430,15 @@ public sealed partial class ServiceCommandHandler
             lines.Add(readLimit is null
                 ? "Background read limit removed: background captures read unpaced, from the next capture."
                 : $"Background reads limited to {readLimit}, from the next background capture.");
+        }
+
+        if (command.BackgroundCpuLimit is not null
+            && !string.Equals(cpuLimit, configuration.BackgroundCpuLimit, StringComparison.Ordinal))
+        {
+            updated = updated with { BackgroundCpuLimit = cpuLimit };
+            lines.Add(cpuLimit is null
+                ? "Background CPU limit removed: background work is held to no share of the processors, from its next chunk."
+                : $"Background work held to {cpuLimit} of this machine's processors, from its next chunk.");
         }
 
         if (command.MaxConcurrentBackups is { } width)
