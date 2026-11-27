@@ -1,6 +1,6 @@
 # Phase 2 — Execution plan: the service boundary and pipeline concurrency
 
-**Status:** the service boundary is built on both bindings; the remote binding carries a paired console over a real socket, and the peer-protocol documents this phase owed (03–06) are written and implemented — what remains is the direct-to-destination tail ([ADR-0046](adr/0046-direct-to-destination-publication.md): the peer write adapter, the retention-with-trimming drill, and the default flip) and the reference-machine measurement H1 still owes · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
+**Status:** the service boundary is built on both bindings; the remote binding carries a paired console over a real socket, and the peer-protocol documents this phase owed (03–06) are written and implemented — the direct-to-destination tail is discharged ([ADR-0046](adr/0046-direct-to-destination-publication.md): the retention-with-trimming drill run, new local-path sets born direct-ship, and the peer write adapter landed as [ADR-0058](adr/0058-peer-write-adapter.md)), and a peer-only set still stages by default, by that record's §9 decision; what remains is the reference-machine measurement H1 still owes · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
 
 ---
 
@@ -237,7 +237,7 @@ the sink, and the staging machinery retiring behind it.
 
 > **2026-10.** The first half is done: a set ships to a peer through the
 > sink ([ADR-0058](adr/0058-peer-write-adapter.md)). The second is not, and
-> by decision: §8 of that record keeps a peer-only set defaulting to
+> by decision: §9 of that record keeps a peer-only set defaulting to
 > staging, so the staging machinery has not retired, and that default is
 > the owner's call rather than a gap in the code.
 
