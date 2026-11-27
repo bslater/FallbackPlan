@@ -95,7 +95,7 @@ public sealed class DiagnosticBundleTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync(
         int ringCapacity = 1024, bool withLogging = true, bool durable = true, RetentionConfiguration? retention = null,
-        int? proofShare = null, int? rotationSample = null, bool stores = false)
+        int? proofShare = null, int? rotationSample = null, bool stores = false, string? cpuLimit = null)
     {
         if (withLogging)
         {
@@ -114,6 +114,7 @@ public sealed class DiagnosticBundleTests : IDisposable
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            BackgroundCpuLimit = cpuLimit,
             Destinations =
             [
                 new DestinationConfiguration
@@ -453,6 +454,32 @@ public sealed class DiagnosticBundleTests : IDisposable
         if (sample is { } value)
         {
             Assert.AreEqual(value, stated.GetInt32());
+        }
+        else
+        {
+            Assert.AreEqual(JsonValueKind.Null, stated.ValueKind);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("25%")]
+    [DataRow(null)]
+    public async Task ExportDiagnostics_TheConfiguration_CarriesTheBackgroundCpuLimit(string? cpuLimit)
+    {
+        // A background run that took far longer than its bytes explain is
+        // the first thing the CPU limit is asked about (ADR-0200); none
+        // stated is said as none, which is unlimited.
+        await using var runtime = await StartAsync(cpuLimit: cpuLimit);
+
+        var entries = Open(await ExportAsync(runtime, includePaths: false));
+
+        using var configuration = JsonDocument.Parse(entries["configuration.json"]);
+        Assert.IsTrue(
+            configuration.RootElement.TryGetProperty("background_cpu_limit", out var stated),
+            "the bundle says nothing of the CPU limit");
+        if (cpuLimit is { } value)
+        {
+            Assert.AreEqual(value, stated.GetString());
         }
         else
         {

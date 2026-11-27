@@ -2349,14 +2349,20 @@ public static class CliApplication
                 Description = "The backup pool's width, 1 to 5; 0 returns it to the default. The pool is sized "
                     + "when the service starts, so a change applies at the next restart.",
             };
+            var cpuLimitOption = new Option<string?>("--cpu-limit")
+            {
+                Description = "The share of this machine's processors background work is held to, a whole "
+                    + "percentage of all of them together, e.g. \"25%\". An empty value removes the limit.",
+            };
             var settings = new Command(
                 "settings",
-                "Show the service's installation settings — the background window, the background read limit "
-                + "and the backup pool's width — or change them.");
+                "Show the service's installation settings — the background window, the background read limit, "
+                + "the background CPU limit and the backup pool's width — or change them.");
             settings.Options.Add(settingsState);
             settings.Options.Add(windowOption);
             settings.Options.Add(readLimitOption);
             settings.Options.Add(maxBackupsOption);
+            settings.Options.Add(cpuLimitOption);
             root.Subcommands.Add(settings);
 
             settings.SetAction((parse, cancellationToken) => GuardAsync(async () =>
@@ -2365,19 +2371,23 @@ public static class CliApplication
                 var window = parse.GetValue(windowOption);
                 var readLimit = parse.GetValue(readLimitOption);
                 var maxBackups = parse.GetValue(maxBackupsOption);
+                var cpuLimit = parse.GetValue(cpuLimitOption);
 
-                if (window is null && readLimit is null && maxBackups is null)
+                if (window is null && readLimit is null && maxBackups is null && cpuLimit is null)
                 {
                     var current = await QueryLocalServiceAsync<ServiceSettingsResult>(
                         state, new GetServiceSettingsCommand(), cancellationToken).ConfigureAwait(false);
                     output.WriteLine($"background window: {current.BackgroundWindow ?? "none"}");
                     output.WriteLine($"background read limit: {current.BackgroundReadLimit ?? "none"}");
+                    output.WriteLine(current.BackgroundCpuLimit is { } share
+                        ? $"background CPU limit: {share} of this machine's processors"
+                        : "background CPU limit: none");
                     output.WriteLine($"max concurrent backups: {PoolWidth(current)}");
                     return 0;
                 }
 
                 var change = await QueryLocalServiceAsync<ConfigurationChangeResult>(
-                    state, new UpdateServiceSettingsCommand(window, readLimit, maxBackups), cancellationToken)
+                    state, new UpdateServiceSettingsCommand(window, readLimit, maxBackups, cpuLimit), cancellationToken)
                     .ConfigureAwait(false);
                 foreach (var line in change.Lines)
                 {

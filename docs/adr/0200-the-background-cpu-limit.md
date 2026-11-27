@@ -178,6 +178,10 @@ configuration file only for now: contract 1.44's settings commands, the CLI's
 `settings` verb and the console's settings form do not yet carry it. And the
 diagnostic bundle's copy of the configuration does not name it.
 
+> **Amended 2026-11 ([Amendment 1](#amendment-1-2026-11--the-limit-is-set-through-the-service)).**
+> Both are built: contract 1.98 sets the limit with the other settings, the
+> CLI and the console's card set it, and the bundle names it.
+
 ## Consequences
 
 **Positive**
@@ -233,8 +237,54 @@ waiting on a disk or a peer would be held back for waiting.
 needs saying, and the whole machine is the one whose 100% means the same thing
 on every machine.
 
+## Amendment 1 (2026-11) — the limit is set through the service
+
+**Built:** `Api/Commands.cs` and `Api/Results.cs` (contract 1.98),
+`Agent/ServiceCommandHandler.Configuration.cs`, `Agent/DiagnosticBundle`,
+`Cli/CliApplication` (the `settings` verb's `--cpu-limit`) and
+`Web/wwwroot/app.js` (the settings card); held by
+`Hosts.Tests/ServiceSettingsCommandTests`,
+`Api.Tests/ConfigurationContractTests`, `Hosts.Tests/ClientModeTests`,
+`Hosts.Tests/DiagnosticBundleTests`, `Web.Tests/SettingsRelayNamesTests` and
+`Web.DomTests/ConfigEditingDomTests`.
+
+Decision 7 left the limit readable on status but settable only in the
+configuration file. The window, the read limit and the pool's width have been
+set through the service since contract 1.44
+([ADR-0037](0037-configuration-over-the-command-contract.md) Amendment 1,
+FR-SVC-021), and the CPU limit now joins them on the same terms.
+
+**The command.** `update_service_settings` gains `background_cpu_limit`, and
+`service_settings` answers it:
+- **Null keeps** what the file says. That is what a pre-1.98 client's request
+  says by never naming it, so an older console's save does not remove a limit
+  it cannot see.
+- **An empty text clears** the limit, which means unlimited.
+- **A value is judged with the others** before anything is written, by
+  `CpuShare`, the parser the configuration load uses. A refusal names
+  `background_cpu_limit`, never the file's path, and lands nothing else in the
+  request.
+- **A set limit is stored as the parser read it**, trimmed, and said back as a
+  share "of this machine's processors".
+
+It takes effect from each background job's next chunk. The limiter is read
+afresh as jobs use it and replaced when its text changes (decision 4), so
+nothing waits for a pass or a restart.
+
+**The surfaces.**
+- The CLI's `settings` verb shows the limit, `none` where none is set, and
+  `--cpu-limit` sets it.
+- The console's settings card has a field for it, labelled a share of this
+  machine's processors, and sends it with the others. An emptied field is
+  sent empty, so it clears.
+- The diagnostic bundle's copy of the configuration names the limit beside
+  the window and the read limit, null where none is stated. A background run
+  that took far longer than its bytes explain is the first thing it is asked
+  about.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-11 | Accepted | Built in one slice, tests first, on an injected meter and a virtual clock: `Application/CpuShare`, `Application/CpuMeter`, `Application/CpuLimiter` and `Application/BackgroundPace`, the schema-12 field in `Application/ClientConfiguration`, the pace through every `Agent/BackgroundPacing` seam, and contract 1.97's `cpu_limit` on status. Setting it through the service and the diagnostic bundle's copy are owed |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-limit-is-set-through-the-service): contract 1.98 sets the limit through the service with the other installation settings — null keeps, empty clears, judged whole — and the CLI's `settings` verb, the console's settings card and `Agent/DiagnosticBundle` carry it |

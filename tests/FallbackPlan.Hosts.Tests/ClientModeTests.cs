@@ -989,6 +989,7 @@ public sealed class ClientModeTests : IDisposable
         Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.Contains("background window: none", result.All, StringComparison.Ordinal);
         Assert.Contains("background read limit: none", result.All, StringComparison.Ordinal);
+        Assert.Contains("background CPU limit: none", result.All, StringComparison.Ordinal);
         Assert.Contains("max concurrent backups: 2 (the default)", result.All, StringComparison.Ordinal);
     }
 
@@ -1004,17 +1005,20 @@ public sealed class ClientModeTests : IDisposable
 
         var result = await RunAgainstServiceAsync(
             "settings", "--state", _harness.StateDirectory,
-            "--window", "22:00-06:00", "--read-limit", "40 MiB/s", "--max-backups", "3");
+            "--window", "22:00-06:00", "--read-limit", "40 MiB/s", "--max-backups", "3", "--cpu-limit", "25%");
 
         Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.Contains("22:00-06:00", result.All, StringComparison.Ordinal);
         Assert.Contains("restart", result.All, StringComparison.Ordinal);
+        Assert.Contains("25% of this machine's processors", result.All, StringComparison.Ordinal);
         var saved = ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json"));
         Assert.AreEqual("22:00-06:00", saved.BackgroundWindow);
         Assert.AreEqual("40 MiB/s", saved.BackgroundReadLimit);
         Assert.AreEqual(3, saved.MaxConcurrentBackups);
+        Assert.AreEqual("25%", saved.BackgroundCpuLimit);
 
         var shown = await RunAgainstServiceAsync("settings", "--state", _harness.StateDirectory);
+        Assert.Contains("background CPU limit: 25% of this machine's processors", shown.All, StringComparison.Ordinal);
         Assert.Contains(
             "max concurrent backups: 3 (the pool runs 2 until the service restarts)",
             shown.All, StringComparison.Ordinal);
@@ -1035,6 +1039,12 @@ public sealed class ClientModeTests : IDisposable
         Assert.AreNotEqual(0, result.ExitCode, result.All);
         Assert.Contains("MiB/s", result.All, StringComparison.Ordinal);
         Assert.IsNull(ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json")).BackgroundReadLimit);
+
+        var cpu = await RunAgainstServiceAsync("settings", "--state", _harness.StateDirectory, "--cpu-limit", "100%");
+
+        Assert.AreNotEqual(0, cpu.ExitCode, cpu.All);
+        Assert.Contains("background_cpu_limit", cpu.All, StringComparison.Ordinal);
+        Assert.IsNull(ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json")).BackgroundCpuLimit);
     }
 
     [TestMethod]

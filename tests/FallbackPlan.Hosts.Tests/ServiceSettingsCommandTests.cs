@@ -7,7 +7,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// The installation's own settings over the command contract (contract 1.44):
 /// the background window, the background read limit and the backup pool's
-/// width, read and written through the service rather than only in the
+/// width, and since 1.98 the background CPU limit (ADR-0200 Amendment 1),
+/// read and written through the service rather than only in the
 /// configuration file. A setting the request leaves out keeps its value; an
 /// empty text or a zero width clears one; every refusal is asserted on its
 /// reason, on the parser's own defect, on the absence of the file's path, and
@@ -38,7 +39,81 @@ public sealed class ServiceSettingsCommandTests : IDisposable
         Assert.IsNull(settings.BackgroundWindow);
         Assert.IsNull(settings.BackgroundReadLimit);
         Assert.IsNull(settings.MaxConcurrentBackups);
+        Assert.IsNull(settings.BackgroundCpuLimit);
         Assert.AreEqual(2, settings.EffectiveMaxConcurrentBackups, "absent, the pool runs at its default width");
+    }
+
+    [TestMethod]
+    public async Task UpdateServiceSettings_TheCpuLimit_IsSavedSaidBackAndOnStatusAtOnce()
+    {
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new UpdateServiceSettingsCommand(null, null, null, BackgroundCpuLimit: " 25% "), _timeout.Token),
+            out var change);
+
+        Assert.AreEqual("25%", ClientConfiguration.Load(ConfigurationPath).BackgroundCpuLimit, "stored as the parser read it");
+
+        // A share of the whole machine, said so: "25%" alone reads as a
+        // quarter core to anyone used to a per-core figure.
+        var line = Assert.ContainsSingle(change.Lines);
+        Assert.Contains("25% of this machine's processors", line, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<ServiceSettingsResult>(
+            await handler.ExecuteAsync(new GetServiceSettingsCommand(), _timeout.Token), out var settings);
+        Assert.AreEqual("25%", settings.BackgroundCpuLimit);
+
+        Assert.IsInstanceOfType<StatusResult>(
+            await handler.ExecuteAsync(new GetStatusCommand(), _timeout.Token), out var status);
+        Assert.AreEqual(25, status.BackgroundLimits?.CpuLimit?.Percent);
+    }
+
+    [TestMethod]
+    public async Task UpdateServiceSettings_TheCpuLimit_IsKeptByARequestThatLeavesItOut_AndClearedByAnEmptyOne()
+    {
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsNotInstanceOfType<ServiceError>(await handler.ExecuteAsync(
+            new UpdateServiceSettingsCommand(null, null, null, BackgroundCpuLimit: "25%"), _timeout.Token));
+
+        // A pre-1.98 client's request carries no CPU limit, so it must keep
+        // the one the file has rather than remove it.
+        Assert.IsNotInstanceOfType<ServiceError>(await handler.ExecuteAsync(
+            new UpdateServiceSettingsCommand("22:00-06:00", null, null), _timeout.Token));
+        Assert.AreEqual("25%", ClientConfiguration.Load(ConfigurationPath).BackgroundCpuLimit);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new UpdateServiceSettingsCommand(null, null, null, BackgroundCpuLimit: ""), _timeout.Token),
+            out var change);
+        Assert.IsNull(ClientConfiguration.Load(ConfigurationPath).BackgroundCpuLimit, "an empty limit clears it");
+        Assert.Contains("CPU limit removed", Assert.ContainsSingle(change.Lines), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow("0%")]
+    [DataRow("100%")]
+    [DataRow("2.5%")]
+    [DataRow("a quarter")]
+    public async Task UpdateServiceSettings_AnUnreadableCpuLimit_IsRefusedNamingItButNotTheFile(string cpuLimit)
+    {
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var before = await File.ReadAllBytesAsync(ConfigurationPath, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new UpdateServiceSettingsCommand("22:00-06:00", null, null, BackgroundCpuLimit: cpuLimit), _timeout.Token),
+            out var error);
+
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains("background_cpu_limit", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(_harness.StateDirectory, error.Message, StringComparison.Ordinal);
+        CollectionAssert.AreEqual(
+            before, await File.ReadAllBytesAsync(ConfigurationPath, _timeout.Token),
+            "the window beside it must not land either: the request is one decision");
     }
 
     [TestMethod]

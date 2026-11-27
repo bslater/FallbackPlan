@@ -346,11 +346,16 @@ public sealed record DestinationsResult(IReadOnlyList<DestinationDescriptor> Des
 /// The width the running pool has. It differs from the stored one after a
 /// change the service has not yet restarted to apply.
 /// </param>
+/// <param name="BackgroundCpuLimit">
+/// The background CPU limit's text, or null for none (contract 1.98,
+/// ADR-0200) — which is also what a pre-1.98 service says.
+/// </param>
 public sealed record ServiceSettingsResult(
     string? BackgroundWindow,
     string? BackgroundReadLimit,
     int? MaxConcurrentBackups,
-    int EffectiveMaxConcurrentBackups) : ServiceResult;
+    int EffectiveMaxConcurrentBackups,
+    string? BackgroundCpuLimit = null) : ServiceResult;
 
 /// <summary>A configuration change that succeeded and owes the operator facts.</summary>
 /// <param name="Lines">
