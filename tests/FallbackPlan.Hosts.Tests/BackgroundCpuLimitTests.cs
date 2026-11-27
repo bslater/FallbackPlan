@@ -85,6 +85,35 @@ public sealed class BackgroundCpuLimitTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AScheduledCapture_OfAnUnchangedTree_IsPacedAsItWalks_AndAPersonsIsNot()
+    {
+        // A run over a tree where nothing changed reads no content: every
+        // file is reused on its stat, so its processor time is the walk's.
+        // A limit that looked only at content would never be consulted by
+        // the incremental backup a machine runs most often.
+        for (var file = 0; file < 256; file++)
+        {
+            _harness.WriteSourceFile($"docs/tree/{file / 32:D2}/note-{file:D3}.txt", $"note {file}");
+        }
+
+        await using var runtime = await StartAsync(cpuLimit: Limit);
+        var set = runtime.Configuration.BackupSets.Single();
+        var first = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+        Assert.AreEqual("ran", first.Outcome, first.Detail);
+        var limiter = runtime.Pacing.ForCpu(runtime.Configuration)!;
+
+        // The control: a person's run of the unchanged tree walks it too,
+        // and is not looked at.
+        var person = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+        Assert.AreEqual("ran", person.Outcome, person.Detail);
+        Assert.AreEqual(TimeSpan.Zero, limiter.ProcessorTimeCharged, "a person's walk is not looked at");
+
+        var scheduled = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: false).WaitAsync(Timeout);
+        Assert.AreEqual("ran", scheduled.Outcome, scheduled.Detail);
+        AssertPaced(limiter);
+    }
+
+    [TestMethod]
     public async Task AScheduledSync_IsPacedByTheCpuLimit_WithNoTransferLimitOnItsDestination()
     {
         // The CPU limit is the installation's and rides every seam on its own:
