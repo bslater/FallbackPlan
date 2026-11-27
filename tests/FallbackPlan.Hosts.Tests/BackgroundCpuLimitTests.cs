@@ -89,14 +89,15 @@ public sealed class BackgroundCpuLimitTests : IDisposable
     {
         // A run over a tree where nothing changed reads no content: every
         // file is reused on its stat, so its processor time is the walk's.
-        // A limit that looked only at content would never be consulted by
-        // the incremental backup a machine runs most often.
+        // With no change journal to say what changed — no journal on the
+        // platform, or one the service lost — the tree is walked in full, and
+        // a limit that looked only at content would never be consulted.
         for (var file = 0; file < 256; file++)
         {
             _harness.WriteSourceFile($"docs/tree/{file / 32:D2}/note-{file:D3}.txt", $"note {file}");
         }
 
-        await using var runtime = await StartAsync(cpuLimit: Limit);
+        await using var runtime = await StartAsync(cpuLimit: Limit, walkInFull: true);
         var set = runtime.Configuration.BackupSets.Single();
         var first = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
         Assert.AreEqual("ran", first.Outcome, first.Detail);
@@ -324,7 +325,7 @@ public sealed class BackgroundCpuLimitTests : IDisposable
     /// <summary>Longer than a stop that ends a paced wait takes, far shorter than one that waits it out.</summary>
     private static TimeSpan Bound => TimeSpan.FromSeconds(30);
 
-    private async Task<ServiceRuntime> StartAsync(string? cpuLimit = null, PacingClock? clock = null)
+    private async Task<ServiceRuntime> StartAsync(string? cpuLimit = null, PacingClock? clock = null, bool walkInFull = false)
     {
         Directory.CreateDirectory(Vault);
         WriteRandomSourceFile("docs/content.bin", 256 * 1024);
@@ -333,19 +334,21 @@ public sealed class BackgroundCpuLimitTests : IDisposable
 
         await _harness.SetupAsync();
 
-        return await ServiceRuntime.StartAsync(
-            new ServiceOptions
-            {
-                ArchivesRoot = _harness.ArchivesRoot,
-                StateDirectory = _harness.StateDirectory,
-                PacingClock = clock ?? _pacing.Clock,
-                CpuMeter = _meter.Meter,
-                // The placement condition (ADR-0051) judges by volume, and the
-                // fixture's every path shares one real volume — the vault is
-                // told apart by name, the compliant install's shape.
-                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
-            },
-            Timeout);
+        var options = new ServiceOptions
+        {
+            ArchivesRoot = _harness.ArchivesRoot,
+            StateDirectory = _harness.StateDirectory,
+            PacingClock = clock ?? _pacing.Clock,
+            CpuMeter = _meter.Meter,
+            // The placement condition (ADR-0051) judges by volume, and the
+            // fixture's every path shares one real volume — the vault is
+            // told apart by name, the compliant install's shape.
+            VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+        };
+
+        // No change journal: nothing tells a run which folders changed, so
+        // every run walks its tree in full (ADR-0188).
+        return await ServiceRuntime.StartAsync(walkInFull ? options with { ChangeJournal = null } : options, Timeout);
     }
 
     /// <summary>
