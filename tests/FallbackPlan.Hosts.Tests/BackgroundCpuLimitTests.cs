@@ -199,6 +199,44 @@ public sealed class BackgroundCpuLimitTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ACopyABackgroundRepairReadsFrom_IsLookedAtUnderTheCpuLimit_AndAPersonsIsNot()
+    {
+        // A sweep that finds damage replaces it from another copy of the
+        // set's blobs, through the set's copies. A background repair reads
+        // that copy as every other background read is read, and a person's
+        // repair or restore does not.
+        await using var runtime = await StartAsync(cpuLimit: Limit);
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout, userInitiated: true);
+        await pass.Transfers.WaitAsync(Timeout);
+        await pass.Drills.WaitAsync(Timeout);
+        var set = runtime.Configuration.BackupSets.Single();
+        var archive = await runtime.ArchiveForAsync(set, Timeout);
+        var limiter = runtime.Pacing.ForCpu(runtime.Configuration)!;
+        var replica = Assert.ContainsSingle(Directory.GetDirectories(Vault));
+        var key = Path.GetRelativePath(
+                replica,
+                Directory.GetFiles(Path.Combine(replica, "blobs", "data"), "*", SearchOption.AllDirectories)
+                    .Order(StringComparer.Ordinal).First())
+            .Replace(Path.DirectorySeparatorChar, '/');
+
+        await using (var person = new SetCopies(
+            runtime, set, archive, excluding: null, includeStaging: false, userInitiated: true))
+        {
+            Assert.IsGreaterThan(0L, await ReadThroughAsync(person, key), "the control: the copy holds the blob");
+        }
+
+        Assert.AreEqual(TimeSpan.Zero, limiter.ProcessorTimeCharged, "a person's copy is not looked at");
+
+        await using (var background = new SetCopies(
+            runtime, set, archive, excluding: null, includeStaging: false, userInitiated: false))
+        {
+            await ReadThroughAsync(background, key);
+        }
+
+        Assert.IsGreaterThan(TimeSpan.Zero, limiter.ProcessorTimeCharged, "a background repair's copy was read unlooked");
+    }
+
+    [TestMethod]
     public async Task StoppingTheService_WhileAScheduledCaptureWaitsOnTheCpuLimit_EndsIt()
     {
         await using var runtime = await StartAsync(cpuLimit: Limit, clock: _holding.Clock);
@@ -305,6 +343,18 @@ public sealed class BackgroundCpuLimitTests : IDisposable
         Assert.IsGreaterThan(TimeSpan.Zero, owed, "the fixture must cost more than one second's share");
         Assert.IsGreaterThanOrEqualTo(
             owed - TimeSpan.FromMilliseconds(100), _pacing.Waited, $"{charged} of processor time at {Limit} was not paced");
+    }
+
+    /// <summary>Reads one blob whole through the set's one copy, and says how many bytes it was.</summary>
+    private async Task<long> ReadThroughAsync(SetCopies copies, string key)
+    {
+        var store = await Assert.ContainsSingle(copies.Sources).OpenAsync(Timeout);
+        Assert.IsNotNull(store, "the vault is a copy the fixture holds");
+        var opened = await store.OpenReadAsync(FallbackPlan.Storage.Abstractions.ObjectKey.Parse(key), null, Timeout);
+        await using var content = opened.Content ?? throw new AssertFailedException($"the copy did not serve {key}");
+        using var sink = new MemoryStream();
+        await content.CopyToAsync(sink, Timeout);
+        return sink.Length;
     }
 
     private static DestinationConfiguration VaultIn(ServiceRuntime runtime) =>
