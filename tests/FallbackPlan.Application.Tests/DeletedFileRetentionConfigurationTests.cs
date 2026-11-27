@@ -125,6 +125,6 @@ public sealed class DeletedFileRetentionConfigurationTests
         // Unknown fields are refused, so a file carrying the duration is a
         // compatibility event for any build that cannot read it, and the
         // version has to say so.
-        Assert.AreEqual(11, ClientConfiguration.CurrentSchemaVersion);
+        Assert.IsGreaterThanOrEqualTo(11, ClientConfiguration.CurrentSchemaVersion);
     }
 }

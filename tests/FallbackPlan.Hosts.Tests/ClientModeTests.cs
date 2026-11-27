@@ -197,6 +197,7 @@ public sealed class ClientModeTests : IDisposable
         (loaded with
         {
             BackgroundReadLimit = "40 MiB/s",
+            BackgroundCpuLimit = "25%",
             Destinations = [.. loaded.Destinations.Select(destination => destination with { TransferLimit = "2 MiB/s" })],
         }).Save(configuration);
 
@@ -212,6 +213,10 @@ public sealed class ClientModeTests : IDisposable
         Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.Contains("background reads limited to 40 MiB/s", result.All, StringComparison.Ordinal);
         Assert.Contains("background transfers to 'vault' limited to 2 MiB/s", result.All, StringComparison.Ordinal);
+
+        // The CPU limit is the machine's, so its line says of what (ADR-0200).
+        Assert.Contains(
+            "background work limited to 25% of this machine's processors", result.All, StringComparison.Ordinal);
     }
 
     [TestMethod]

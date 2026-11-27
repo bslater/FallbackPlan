@@ -44,9 +44,11 @@ namespace FallbackPlan.Api.Tests;
 /// 1.94's share of a new backup's blobs one pass proves at a destination, the
 /// wire half of FR-VER-002's amendment by ADR-0199 Amendment 13; 1.95's
 /// passes a proof under way still needs, the wire half of FR-VER-003's
-/// amendment by ADR-0199 Amendment 14; and 1.96's rotating sample a pass
+/// amendment by ADR-0199 Amendment 14; 1.96's rotating sample a pass
 /// draws at a destination, the wire half of FR-VER-002's amendment by
-/// ADR-0035 Amendment 4.
+/// ADR-0035 Amendment 4; and 1.97's share of the machine's processors
+/// background work is held to, the wire half of NFR-PERF-013's CPU limit
+/// (ADR-0200).
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -932,6 +934,33 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var result = JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions);
         Assert.IsInstanceOfType<StatusResult>(result, out var status);
         Assert.IsNull(status.BackgroundLimits);
+    }
+
+    [TestMethod]
+    public void TheBackgroundCpuLimit_WireNameAndPre197Default()
+    {
+        // Contract 1.97 (NFR-PERF-013, ADR-0200): the limits status reports
+        // gain the CPU share background work is held to, as the configured
+        // text and as the whole percentage of the machine's processors.
+        var json = JsonSerializer.Serialize<ServiceResult>(
+            new StatusResult(
+                "hub", [], 10_000, [],
+                BackgroundLimits: new BackgroundLimitsDescriptor(null, [], new CpuShareDescriptor("25%", 25))),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"cpu_limit\":{\"text\":\"25%\",\"percent\":25}", json, StringComparison.Ordinal);
+
+        // A pre-1.97 service never mentions it: its limits are the byte rates
+        // alone, and the old frame is the modern one with the field stripped.
+        var start = json.IndexOf(",\"cpu_limit\":", StringComparison.Ordinal);
+        Assert.IsGreaterThanOrEqualTo(0, start, "the modern frame must carry the field");
+        Assert.IsTrue(json.EndsWith("}}}", StringComparison.Ordinal), "the field must be the descriptor's last");
+        var old = json[..start] + "}}";
+
+        var result = JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<StatusResult>(result, out var status);
+        Assert.IsNotNull(status.BackgroundLimits);
+        Assert.IsNull(status.BackgroundLimits.CpuLimit);
     }
 
     [TestMethod]
