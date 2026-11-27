@@ -364,7 +364,7 @@ public sealed class DestinationShipSink : IObjectStore
                     .ConfigureAwait(false);
                 inScope.Add(new Shipment(
                     destination.Name,
-                    PacedObjectStore.Over(opened, userInitiated ? null : _runtime.Pacing.ForDestination(destination)),
+                    PacedObjectStore.Over(opened, userInitiated ? null : _runtime.Pacing.PaceFor(_runtime.Configuration, destination)),
                     SetDestinationReference.EffectivePriority(reference, destination),
                     Direct: destination.Kind != DestinationKind.Peer)
                 {
@@ -497,7 +497,7 @@ public sealed class DestinationShipSink : IObjectStore
 
             started.Add(StoreWriteBehind.Start(
                 destination.Name,
-                PacedObjectStore.Over(store, userInitiated ? null : _runtime.Pacing.ForDestination(destination)),
+                PacedObjectStore.Over(store, userInitiated ? null : _runtime.Pacing.PaceFor(_runtime.Configuration, destination)),
                 sources,
                 _log,
                 room is null ? null : room.SentAsync));

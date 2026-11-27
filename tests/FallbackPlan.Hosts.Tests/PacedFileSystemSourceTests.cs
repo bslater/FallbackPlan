@@ -18,7 +18,7 @@ public sealed class PacedFileSystemSourceTests
     {
         Assert.IsTrue(ByteRate.TryParse("64 KiB/s", out var rate, out var defect), defect);
         var inner = new FreeingSource();
-        var paced = PacedFileSystemSource.Over(inner, new ByteRateLimiter(rate!, PacingClock.System));
+        var paced = PacedFileSystemSource.Over(inner, new BackgroundPace(new ByteRateLimiter(rate!, PacingClock.System), null));
         Assert.AreNotSame(inner, paced, "the premise: a rate gives a pacing source");
 
         var entry = new ScanEntry

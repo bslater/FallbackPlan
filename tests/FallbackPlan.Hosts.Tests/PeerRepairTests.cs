@@ -285,7 +285,7 @@ public sealed class PeerRepairTests : IDisposable
 
     private Task<PeerRepairClient> DialAsync(ServiceRuntime runtime, ReadOnlyMemory<byte> repositoryId) =>
         PeerRepairClient.DialAsync(
-            runtime, runtime.Configuration.FindDestination("friend")!, repositoryId, limiter: null, Timeout);
+            runtime, runtime.Configuration.FindDestination("friend")!, repositoryId, pace: null, Timeout);
 
     private async Task<RepairVerdictCode> SendAsync(PeerRepairClient repair, string key, byte[] bytes)
     {

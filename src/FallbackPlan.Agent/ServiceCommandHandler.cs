@@ -3587,12 +3587,14 @@ public sealed partial class ServiceCommandHandler(
                 configured.Text, open, (ulong)changes.ToUnixTimeMilliseconds());
         }
 
-        // The byte-rate limits in force (contract 1.43, ADR-0074), from the
-        // parsed limits as the window is from the parsed window. Null rather
-        // than an empty descriptor when nothing is limited: a client draws no
-        // line either way, and null is what an older service says too.
+        // The limits in force (contract 1.43, ADR-0074; the CPU share since
+        // 1.97, ADR-0200), from the parsed limits as the window is from the
+        // parsed window. Null rather than an empty descriptor when nothing is
+        // limited: a client draws no line either way, and null is what an
+        // older service says too.
         BackgroundLimitsDescriptor? limits = null;
         var readLimit = configuration.EffectiveBackgroundReadLimit;
+        var cpuLimit = configuration.EffectiveBackgroundCpuLimit;
         List<DestinationTransferLimitDescriptor> transferLimits =
         [
             .. configuration.Destinations
@@ -3601,11 +3603,12 @@ public sealed partial class ServiceCommandHandler(
                 .Select(limited => new DestinationTransferLimitDescriptor(
                     limited.Name, limited.Rate!.Text, limited.Rate.BytesPerSecond)),
         ];
-        if (readLimit is not null || transferLimits.Count > 0)
+        if (readLimit is not null || transferLimits.Count > 0 || cpuLimit is not null)
         {
             limits = new BackgroundLimitsDescriptor(
                 readLimit is null ? null : new ByteRateDescriptor(readLimit.Text, readLimit.BytesPerSecond),
-                transferLimits);
+                transferLimits,
+                cpuLimit is null ? null : new CpuShareDescriptor(cpuLimit.Text, cpuLimit.Percent));
         }
 
         return new StatusResult(

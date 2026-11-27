@@ -291,7 +291,7 @@ internal static class ReplicaSweepJob
             return Nothing;
         }
 
-        var limiter = userInitiated ? null : runtime.Pacing.ForDestination(destination);
+        var pace = userInitiated ? null : runtime.Pacing.PaceFor(runtime.Configuration, destination);
         PeerRetrievalClient? session = null;
         IObjectStore replica;
         if (destination.Kind == DestinationKind.LocalPath)
@@ -307,7 +307,7 @@ internal static class ReplicaSweepJob
                 return Nothing with { Unreadable = "its replica directory is not there" };
             }
 
-            replica = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), limiter);
+            replica = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), pace);
         }
         else if (destination.Kind.IsObjectStore())
         {
@@ -369,7 +369,7 @@ internal static class ReplicaSweepJob
                 return StalledUnread(runtime, set, destination.Name, refused.Message, nowMs);
             }
 
-            replica = PacedObjectStore.Over(store, limiter);
+            replica = PacedObjectStore.Over(store, pace);
         }
         else
         {
@@ -404,7 +404,7 @@ internal static class ReplicaSweepJob
                 return Nothing with { Unreadable = exception.Message };
             }
 
-            replica = PacedObjectStore.Over(new PeerRetrievalObjectStore(session), limiter);
+            replica = PacedObjectStore.Over(new PeerRetrievalObjectStore(session), pace);
         }
 
         if (ReplicaDecorator is { } decorate)
@@ -416,7 +416,7 @@ internal static class ReplicaSweepJob
         // offered a copy proven sound here, and the copy proven again where
         // it lands over the session the segment reads through (ADR-0100).
         await using var peerRepair = session is { SupportsReplicaRepair: true }
-            ? new PeerRepairTarget(runtime, destination, archive.Repository.RepositoryId.ToArray(), limiter, replica)
+            ? new PeerRepairTarget(runtime, destination, archive.Repository.RepositoryId.ToArray(), pace, replica)
             : null;
 
         await using (session)
@@ -428,7 +428,7 @@ internal static class ReplicaSweepJob
             try
             {
                 return await SegmentAsync(
-                    runtime, set, destination, archive, replica, limiter, nowMs, userInitiated, peerRepair,
+                    runtime, set, destination, archive, replica, pace, nowMs, userInitiated, peerRepair,
                     cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -454,7 +454,7 @@ internal static class ReplicaSweepJob
         DestinationConfiguration destination,
         ArchiveHandle archive,
         IObjectStore replica,
-        Application.ByteRateLimiter? limiter,
+        Application.BackgroundPace? pace,
         ulong nowMs,
         bool userInitiated,
         PeerRepairTarget? peerRepair,
@@ -482,7 +482,7 @@ internal static class ReplicaSweepJob
                 archive.Store,
                 previous?.SweepCursor,
                 SegmentBudget,
-                SegmentByteBudget(destination.Kind, limiter?.Rate.BytesPerSecond),
+                SegmentByteBudget(destination.Kind, pace?.Bytes?.Rate.BytesPerSecond),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (

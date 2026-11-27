@@ -197,6 +197,13 @@ public sealed record ServiceOptions
     internal PacingClock? PacingClock { get; init; }
 
     /// <summary>
+    /// What the CPU limit measures (NFR-PERF-013, ADR-0200) — a test harness's
+    /// way to state the processor time spent rather than spend it. Null, the
+    /// production value, reads this process on this machine.
+    /// </summary>
+    internal CpuMeter? CpuMeter { get; init; }
+
+    /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
     /// which is what a test wants and what a host must not leave as its
     /// default.
@@ -294,7 +301,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         DestinationCredentials = new DestinationCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
         ReplicaOwners = ReplicaOwnerStore.Open(options.StateDirectory);
-        Pacing = new BackgroundPacing(options.PacingClock ?? PacingClock.System);
+        Pacing = new BackgroundPacing(options.PacingClock ?? PacingClock.System, options.CpuMeter ?? CpuMeter.System);
         Drills = new DrillFlights(options.DrillJoined);
         Stopping = _stopping.Token;
     }

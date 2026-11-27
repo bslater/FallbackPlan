@@ -928,7 +928,9 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
             FrameCodec.SerializerOptions);
         var start = modern.IndexOf(",\"background_limits\":", StringComparison.Ordinal);
         Assert.IsGreaterThanOrEqualTo(0, start, "the modern frame must carry the field");
-        Assert.IsTrue(modern.EndsWith("]}}", StringComparison.Ordinal), "the field must be the frame's last");
+        Assert.IsTrue(
+            modern.EndsWith("],\"cpu_limit\":null}}", StringComparison.Ordinal),
+            "the field must be the frame's last (its own last, since 1.97, the CPU limit)");
         var old = modern[..start] + "}";
 
         var result = JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions);

@@ -38,7 +38,7 @@ internal sealed class PeerRepairClient : IAsyncDisposable
     /// <param name="runtime">The service.</param>
     /// <param name="destination">The peer.</param>
     /// <param name="repositoryId">The replica's repository.</param>
-    /// <param name="limiter">The peer's transfer limit, which a replacement's bytes cross; null for none.</param>
+    /// <param name="pace">What a replacement's bytes crossing to the peer are paced by — its transfer limit and the CPU limit — or null for none.</param>
     /// <param name="cancellationToken">Cancels the dial.</param>
     /// <exception cref="PeerProtocolException">The peer refused — not paired, or the feature is absent.</exception>
     /// <exception cref="IOException">The peer is unreachable.</exception>
@@ -46,7 +46,7 @@ internal sealed class PeerRepairClient : IAsyncDisposable
         ServiceRuntime runtime,
         DestinationConfiguration destination,
         ReadOnlyMemory<byte> repositoryId,
-        ByteRateLimiter? limiter,
+        BackgroundPace? pace,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(runtime);
@@ -72,7 +72,7 @@ internal sealed class PeerRepairClient : IAsyncDisposable
             // The session outlives the wrapper, so it is left open.
             return new PeerRepairClient(
                 keypair, connection, session.Stream,
-                limiter is null ? null : new PacedStream(session.Stream, limiter, leaveOpen: true),
+                pace is null ? null : new PacedStream(session.Stream, pace, leaveOpen: true),
                 repositoryId);
         }
         catch

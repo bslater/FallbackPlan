@@ -267,7 +267,7 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 11;
+    public const int CurrentSchemaVersion = 12;
 
     /// <summary>
     /// The clock skew margin, in hours, a configuration that states none
@@ -372,6 +372,30 @@ public sealed record ClientConfiguration
     [JsonIgnore]
     public ByteRate? EffectiveBackgroundReadLimit =>
         BackgroundReadLimit is { } text && ByteRate.TryParse(text, out var rate, out _) ? rate : null;
+
+    /// <summary>
+    /// The share of this machine's processors background work is held to —
+    /// the CPU limit of NFR-PERF-013 (ADR-0200), a whole percentage of every
+    /// processor together, e.g. <c>25%</c>. **Absent means unlimited**, which
+    /// is what every file written before schema 12 says by not mentioning it.
+    /// </summary>
+    /// <remarks>
+    /// Installation-wide, because what it measures is the whole service's
+    /// processor time. Read afresh by each background job as the byte limits
+    /// are, and never applied to work a person started.
+    /// </remarks>
+    [JsonPropertyName("background_cpu_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BackgroundCpuLimit { get; init; }
+
+    /// <summary>
+    /// The parsed CPU limit, or null for none. Validation has already refused
+    /// a defective one, so a null here from a non-null
+    /// <see cref="BackgroundCpuLimit"/> cannot arise on a loaded configuration.
+    /// </summary>
+    [JsonIgnore]
+    public CpuShare? EffectiveBackgroundCpuLimit =>
+        BackgroundCpuLimit is { } text && CpuShare.TryParse(text, out var share, out _) ? share : null;
 
     /// <summary>
     /// How far, in hours, a collector allows its clock to disagree with the
@@ -498,10 +522,14 @@ public sealed record ClientConfiguration
     /// override of it, gain an optional <c>keep_deleted_days</c>. Nothing
     /// moves — absent keeps no deleted file longer than the other rules do.
     /// </para>
+    /// <para>
+    /// <b>11 → 12</b> (ADR-0200): the file gains an optional
+    /// <c>background_cpu_limit</c>. Nothing moves — absent means unlimited.
+    /// </para>
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 10 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 10 or 11 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -586,6 +614,12 @@ public sealed record ClientConfiguration
         {
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_BackgroundReadLimitInvalid(path, readDefect!));
+        }
+
+        if (BackgroundCpuLimit is { } cpuLimit && !CpuShare.TryParse(cpuLimit, out _, out var cpuDefect))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_BackgroundCpuLimitInvalid(path, cpuDefect!));
         }
 
         // An hour to a year. Zero is the assumption that every clock agrees,

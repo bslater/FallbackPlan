@@ -348,8 +348,8 @@ public sealed partial class ServiceCommandHandler
     /// </summary>
     internal bool RestoresForADrill { get; init; }
 
-    private Application.ByteRateLimiter? SourcePacing(Application.DestinationConfiguration destination) =>
-        PacesRestoreSources ? runtime.Pacing.ForDestination(destination) : null;
+    private Application.BackgroundPace? SourcePacing(Application.DestinationConfiguration destination) =>
+        PacesRestoreSources ? runtime.Pacing.PaceFor(runtime.Configuration, destination) : null;
 
     private async ValueTask<(OpenRestoreSourceHandle? Handle, ServiceError? Refusal)> OpenReplicaSourceAsync(
         string sourceId,

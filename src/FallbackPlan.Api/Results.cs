@@ -1746,17 +1746,27 @@ public sealed record ByteRateDescriptor(string Text, long BytesPerSecond);
 /// <param name="BytesPerSecond">The same rate in bytes a second.</param>
 public sealed record DestinationTransferLimitDescriptor(string DestinationName, string Text, long BytesPerSecond);
 
+/// <summary>A share of the machine's processors as configured (contract 1.97, NFR-PERF-013).</summary>
+/// <param name="Text">The configured text, e.g. <c>25%</c> — what a person wrote, for display.</param>
+/// <param name="Percent">The same share as a whole percentage of every processor together, 1 to 99.</param>
+public sealed record CpuShareDescriptor(string Text, int Percent);
+
 /// <summary>
-/// The byte-rate limits background work is held to (contract 1.43, ADR-0074,
-/// NFR-PERF-013): the read limit on background captures and each limited
-/// destination's transfer limit. Reporting only, as the window is: both are
-/// edited in the configuration file. A person's work is never held to either.
+/// The limits background work is held to (contract 1.43, ADR-0074,
+/// NFR-PERF-013): the read limit on background captures, each limited
+/// destination's transfer limit and, since 1.97, the share of the machine's
+/// processors (ADR-0200). A person's work is never held to any of them.
 /// </summary>
 /// <param name="ReadLimit">The rate background captures read their sources at, or null for none.</param>
 /// <param name="TransferLimits">Each limited destination's rate, in declaration order; empty when none is limited.</param>
+/// <param name="CpuLimit">
+/// The share of the machine's processors background work is held to, or null
+/// for none — which is also what a pre-1.97 service says.
+/// </param>
 public sealed record BackgroundLimitsDescriptor(
     ByteRateDescriptor? ReadLimit,
-    IReadOnlyList<DestinationTransferLimitDescriptor> TransferLimits);
+    IReadOnlyList<DestinationTransferLimitDescriptor> TransferLimits,
+    CpuShareDescriptor? CpuLimit = null);
 
 /// <summary>
 /// One machine's status. Always the per-set detail: a summary is derived from
@@ -1776,8 +1786,8 @@ public sealed record BackgroundLimitsDescriptor(
 /// open.
 /// </param>
 /// <param name="BackgroundLimits">
-/// The byte-rate limits in force, or null when nothing is limited (contract
-/// 1.43, ADR-0074). Null from a service with no limit configured and from one
+/// The limits in force, or null when nothing is limited (contract 1.43,
+/// ADR-0074; the CPU limit since 1.97, ADR-0200). Null from a service with no limit configured and from one
 /// older than 1.43 alike, for the window's reason: both mean draw no line, and
 /// an absent limit has always meant unlimited.
 /// </param>

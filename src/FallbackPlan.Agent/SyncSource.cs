@@ -138,7 +138,7 @@ internal sealed class SyncSource : IAsyncDisposable
             var log = runtime.LoggerFor<SyncSource>();
             Log.SyncReadsFromPeer(log, new LogLabel(set.Name), new LogLabel(destination.Name), new LogLabel(peer.Name));
             var read = PacedObjectStore.Over(
-                new PeerRetrievalObjectStore(client), userInitiated ? null : runtime.Pacing.ForDestination(peer));
+                new PeerRetrievalObjectStore(client), userInitiated ? null : runtime.Pacing.PaceFor(runtime.Configuration, peer));
             return new SyncSource(new PeerFilledObjectStore(archive.Store, read, peer.Name), refusal: null, client);
         }
 

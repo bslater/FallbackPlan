@@ -209,7 +209,7 @@ public static class BackupRunner
                     // person's run reads through none.
                     Source = PacedFileSystemSource.Over(
                         WrapSource(runtime, new LocalFileSystemSource(runtime.LoggerFor<LocalFileSystemSource>())),
-                        userInitiated ? null : runtime.Pacing.ForSourceReads(runtime.Configuration)),
+                        userInitiated ? null : runtime.Pacing.PaceForSourceReads(runtime.Configuration)),
                     Roots = SetChangeScan.ScanRootsOf(set),
                     IncludeRules = set.IncludeRules,
                     ExcludeRules = set.ExcludeRules,

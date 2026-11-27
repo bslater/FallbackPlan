@@ -6,32 +6,33 @@ namespace FallbackPlan.Agent;
 
 /// <summary>
 /// A store whose content reads and writes are paced through a destination's
-/// transfer limit (NFR-PERF-013, ADR-0074): what <see cref="OpenReadAsync"/>
-/// hands back and what <see cref="PutAsync"/> reads out of its content factory
-/// are charged as they stream. Listings, metadata and deletes pass through
-/// untouched — they move no content.
+/// transfer limit and the installation's CPU limit (NFR-PERF-013, ADR-0074,
+/// ADR-0200): what <see cref="OpenReadAsync"/> hands back and what
+/// <see cref="PutAsync"/> reads out of its content factory are charged as
+/// they stream. Listings, metadata and deletes pass through untouched — they
+/// move no content.
 /// </summary>
 /// <remarks>
 /// Built only for background work, and only where a limit is declared; a
 /// person's work is given the store itself, which is what
-/// <see cref="Over"/> returns when there is no limiter.
+/// <see cref="Over"/> returns when there is no pace.
 /// </remarks>
 internal sealed class PacedObjectStore : IObjectStore
 {
     private readonly IObjectStore _inner;
-    private readonly ByteRateLimiter _limiter;
+    private readonly BackgroundPace _pace;
 
-    private PacedObjectStore(IObjectStore inner, ByteRateLimiter limiter)
+    private PacedObjectStore(IObjectStore inner, BackgroundPace pace)
     {
         _inner = inner;
-        _limiter = limiter;
+        _pace = pace;
     }
 
-    /// <summary><paramref name="store"/> paced through <paramref name="limiter"/>, or itself when there is none.</summary>
-    public static IObjectStore Over(IObjectStore store, ByteRateLimiter? limiter)
+    /// <summary><paramref name="store"/> paced through <paramref name="pace"/>, or itself when there is none.</summary>
+    public static IObjectStore Over(IObjectStore store, BackgroundPace? pace)
     {
         ThrowHelper.ThrowIfNull(store);
-        return limiter is null ? store : new PacedObjectStore(store, limiter);
+        return pace is null ? store : new PacedObjectStore(store, pace);
     }
 
     /// <inheritdoc />
@@ -47,7 +48,7 @@ internal sealed class PacedObjectStore : IObjectStore
     {
         var result = await _inner.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
         return result is { Outcome: OpenReadOutcome.Found, Content: { } content }
-            ? new OpenReadResult(new PacedStream(content, _limiter))
+            ? new OpenReadResult(new PacedStream(content, _pace))
             : result;
     }
 
@@ -61,7 +62,7 @@ internal sealed class PacedObjectStore : IObjectStore
         ThrowHelper.ThrowIfNull(openContent);
         return _inner.PutAsync(
             key,
-            async token => new PacedStream(await openContent(token).ConfigureAwait(false), _limiter),
+            async token => new PacedStream(await openContent(token).ConfigureAwait(false), _pace),
             conditions,
             cancellationToken);
     }
