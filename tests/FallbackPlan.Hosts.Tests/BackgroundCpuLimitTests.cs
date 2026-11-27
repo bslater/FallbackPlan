@@ -7,8 +7,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// The CPU limit of NFR-PERF-013 in a running service (ADR-0200):
 /// <c>background_cpu_limit</c> paces every background job at the seams the
-/// byte limits already pace — a capture's source reads, a sync's transfers and
-/// a drill's reads — whether or not any byte limit is set, and never a
+/// byte limits already pace — a capture's source reads, a sync's transfers, a
+/// sweep's reads and a drill's — whether or not any byte limit is set, and never a
 /// person's work. A job waiting on it does not hold the service's stop
 /// (FR-SVC-017).
 /// </summary>
@@ -24,9 +24,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// <para>
 /// What it cannot prove is a figure measured on a real machine, which is the
-/// one thing a container's processor time does not settle: the ≥ 25% case
-/// NFR-PERF-013's acceptance names stays measured nowhere, as
-/// NFR-PERF-007's throughput does.
+/// one thing a container's processor time does not settle: measured agent
+/// CPU at or under 30% over sixty seconds under a 25% limit stays measured
+/// nowhere. That is the caveat throughput carries too, and this suite
+/// does not establish NFR-PERF-007.
 /// </para>
 /// <para>
 /// Does not establish FR-DRL-002 — the drill is observed as a background
@@ -142,6 +143,28 @@ public sealed class BackgroundCpuLimitTests : IDisposable
 
         var scheduled = await RecoveryDrillJob.RunAsync(runtime, set, "vault", nowMs, userInitiated: false, Timeout);
         Assert.IsNull(scheduled.Failure, scheduled.Failure);
+        AssertPaced(limiter);
+    }
+
+    [TestMethod]
+    public async Task ASweepUnderTheCpuLimit_IsPaced_AndAPersonsIsNot()
+    {
+        // The sweep reads and hashes every blob of a replica, which is as
+        // CPU-bound as background work gets after the capture itself.
+        await using var runtime = await StartAsync(cpuLimit: Limit);
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout, userInitiated: true);
+        await pass.Transfers.WaitAsync(Timeout);
+        await pass.Drills.WaitAsync(Timeout);
+        var limiter = runtime.Pacing.ForCpu(runtime.Configuration)!;
+        var set = runtime.Configuration.BackupSets.Single();
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var person = await ReplicaSweepJob.RunAsync(runtime, set, "vault", nowMs, userInitiated: true, Timeout);
+        Assert.IsGreaterThan(0, person.Examined, "the control: the sweep had objects to read");
+        Assert.AreEqual(TimeSpan.Zero, limiter.ProcessorTimeCharged, "a person's deep verification is not looked at");
+
+        var scheduled = await ReplicaSweepJob.RunAsync(runtime, set, "vault", nowMs, userInitiated: false, Timeout);
+        Assert.IsGreaterThan(0, scheduled.Examined);
         AssertPaced(limiter);
     }
 
