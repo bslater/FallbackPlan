@@ -27,7 +27,7 @@ public sealed class SettingsRelayNamesTests
     {
         await using var harness = await ConsoleHarness.StartAsync();
         harness.Clients.Client.Respond = _ =>
-            new ServiceSettingsResult("22:00-06:00", "40 MiB/s", 3, EffectiveMaxConcurrentBackups: 2);
+            new ServiceSettingsResult("22:00-06:00", "40 MiB/s", 3, EffectiveMaxConcurrentBackups: 2, BackgroundCpuLimit: "25%");
 
         using var request = harness.Command("""{"command":"get_service_settings"}""");
         using var response = await harness.Http.SendAsync(request);
@@ -39,6 +39,7 @@ public sealed class SettingsRelayNamesTests
         Assert.AreEqual("40 MiB/s", root.GetProperty("backgroundReadLimit").GetString());
         Assert.AreEqual(3, root.GetProperty("maxConcurrentBackups").GetInt32());
         Assert.AreEqual(2, root.GetProperty("effectiveMaxConcurrentBackups").GetInt32());
+        Assert.AreEqual("25%", root.GetProperty("backgroundCpuLimit").GetString());
     }
 
     [TestMethod]
@@ -51,7 +52,7 @@ public sealed class SettingsRelayNamesTests
         harness.Clients.Client.Respond = _ => new ConfigurationChangeResult(["done"]);
 
         using var request = harness.Command(
-            """{"command":"update_service_settings","backgroundWindow":"22:00-06:00","backgroundReadLimit":"","maxConcurrentBackups":0}""");
+            """{"command":"update_service_settings","backgroundWindow":"22:00-06:00","backgroundReadLimit":"","maxConcurrentBackups":0,"backgroundCpuLimit":""}""");
         using var response = await harness.Http.SendAsync(request);
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
 
@@ -60,6 +61,7 @@ public sealed class SettingsRelayNamesTests
         Assert.AreEqual("22:00-06:00", command.BackgroundWindow);
         Assert.AreEqual("", command.BackgroundReadLimit);
         Assert.AreEqual(0, command.MaxConcurrentBackups);
+        Assert.AreEqual("", command.BackgroundCpuLimit, "an emptied CPU limit must arrive empty, which clears it");
     }
 
     [TestMethod]

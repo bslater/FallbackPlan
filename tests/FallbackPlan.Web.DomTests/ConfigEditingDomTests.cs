@@ -583,12 +583,14 @@ public sealed class ConfigEditingDomTests
         await page.FillAsync("#svc-window", "22:00-06:00");
         await page.FillAsync("#svc-read-limit", "40 MiB/s");
         await page.FillAsync("#svc-max-backups", "3");
+        await page.FillAsync("#svc-cpu-limit", "25%");
         await page.ClickAsync("[data-action=\"svc-settings-save\"]");
 
         var update = await harness.ReceivedAsync<UpdateServiceSettingsCommand>();
         Assert.AreEqual("22:00-06:00", update.BackgroundWindow);
         Assert.AreEqual("40 MiB/s", update.BackgroundReadLimit);
         Assert.AreEqual(3, update.MaxConcurrentBackups);
+        Assert.AreEqual("25%", update.BackgroundCpuLimit);
 
         await Expect(page.GetByText("Background window set to 22:00-06:00; it applies from the next pass."))
             .ToBeVisibleAsync();

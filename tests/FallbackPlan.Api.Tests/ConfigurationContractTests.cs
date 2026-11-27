@@ -38,7 +38,7 @@ public sealed class ConfigurationContractTests : IDisposable
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.97", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.98", ContractVersion.Current.ToString());
     }
 
     [TestMethod]
@@ -856,6 +856,36 @@ public sealed class ConfigurationContractTests : IDisposable
         Assert.Contains("\"background_read_limit\":null", answer, StringComparison.Ordinal);
         Assert.Contains("\"max_concurrent_backups\":3", answer, StringComparison.Ordinal);
         Assert.Contains("\"effective_max_concurrent_backups\":2", answer, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void ServiceSettings_TheCpuLimit_CrossesUnderItsWireName_AndAPre198FrameKeepsIt()
+    {
+        // Contract 1.98 (ADR-0200 Amendment 1): the CPU limit is set and
+        // read with the other settings.
+        var update = JsonSerializer.Serialize<ServiceCommand>(
+            new UpdateServiceSettingsCommand(null, null, null, BackgroundCpuLimit: "25%"), FrameCodec.SerializerOptions);
+        Assert.Contains("\"background_cpu_limit\":\"25%\"", update, StringComparison.Ordinal);
+
+        var answer = JsonSerializer.Serialize<ServiceResult>(
+            new ServiceSettingsResult(null, null, null, EffectiveMaxConcurrentBackups: 2, BackgroundCpuLimit: "25%"),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"background_cpu_limit\":\"25%\"", answer, StringComparison.Ordinal);
+
+        // A pre-1.98 client's request never names the field, which reads as
+        // null, which keeps what the file says; a pre-1.98 service's answer
+        // reads as no limit stated.
+        var old = JsonSerializer.Deserialize<ServiceCommand>(
+            """{"command":"update_service_settings","background_window":"22:00-06:00","background_read_limit":null,"max_concurrent_backups":null}""",
+            FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<UpdateServiceSettingsCommand>(old, out var parsed);
+        Assert.IsNull(parsed.BackgroundCpuLimit);
+
+        var older = JsonSerializer.Deserialize<ServiceResult>(
+            """{"result":"service_settings","background_window":null,"background_read_limit":null,"max_concurrent_backups":null,"effective_max_concurrent_backups":2}""",
+            FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<ServiceSettingsResult>(older, out var settings);
+        Assert.IsNull(settings.BackgroundCpuLimit);
     }
 
     [TestMethod]
