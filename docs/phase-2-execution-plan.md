@@ -540,7 +540,11 @@ The lesson is the one the watch list exists for: a plausible mechanism that
 explains a flake is not proof it is the only one. The eager-subscription fix was
 right and necessary, and stopping there was the error.
 
-#### Open
+#### Open in August, closed in November
+
+> **Closed 2026-11.** The entry below stood as written for three months after
+> the change that closed it; what closed it, and the test that now holds it,
+> follow the entry.
 
 `Repository.Tests/EndToEnd/AgentPassTests.A_missing_root_is_a_recoverable_failure_and_a_bad_schedule_is_permanent`
 fails roughly one run in twelve under four-way parallel full-suite load, on
@@ -555,6 +559,42 @@ rather than chased, with the shape of the suspicion written down this time: it
 looks like the same class of defect as the progress flake, an assertion reading
 state that a writer has not finished publishing, rather than anything about
 scheduling.
+
+**What closed it.** The suspicion was the right class and the wrong writer: the
+state had been published, and the disk had lost it. The day after this entry
+was written, a change put every job-journal mutation and its write under one
+lock, and named this assertion on this test as the race it closed. The pass
+settles the set it cannot schedule on the scheduler's thread while a queue
+worker settles the set whose root is missing, and each write replaces
+`jobs.json` with the whole list. Two writes could reach the disk in the
+opposite order to the changes they carried, which left the older list as the
+file, so the permanent failure that had happened in memory read back from disk
+as Pending. The assertion opens the journal from disk, so it saw exactly that.
+The change was found by inspection, touched only the store, added no test, and
+did not come back here.
+
+The test has been renamed since, to
+`AgentPass_AMissingRootAndABadSchedule_AreClassifiedRecoverableAndPermanent`.
+Forty runs of its class, four at a time, are clean. The four-full-suite load it
+was measured under was not repeated. Instead, the store's write was moved back
+outside its lock, and twenty-four runs of the same class, four at a time, failed
+three times. Every failure was this test and no other: once on the very
+assertion above, and twice on its sibling, when the recoverable row was the one
+lost.
+
+The mechanism is now held directly. `Application.Tests/JobStateStoreTests` has
+eight writers that take each step together, three rounds over: begin a job, then walk it through three
+transitions. After every step, with each writer stopped, the test reads the
+journal back from disk and expects every row at that step. Each of three
+mutants failed all twenty of its runs: the lock taken out of `Begin`, taken out
+of `Transition`, or kept for the snapshot but not the write. Failing on every
+run is not guaranteed by construction, because nothing in the store can hold a
+write between its snapshot and its rename. One round of the same test caught
+the unlocked `Begin` in eleven runs of twenty, which is why it runs three.
+
+The lesson is the same one again, from the other side: an entry is closed by the
+change that closes it, or it goes on describing a defect that is no longer
+there.
 
 ---
 
