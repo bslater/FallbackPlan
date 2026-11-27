@@ -222,15 +222,17 @@ function windowNote() {
     : ` Background window ${esc(w.text)} — <strong>shut</strong>, opens ${esc(until(w.changesAt))}.`;
 }
 
-// The byte-rate limits in force (contract 1.43, ADR-0074), beside the window:
-// a paced transfer reads as a slow one, and this says why. Nothing at all when
-// nothing is limited, which is also what a pre-1.43 service says.
+// The limits in force (contract 1.43, ADR-0074; the CPU share since 1.97,
+// ADR-0200), beside the window: a paced transfer reads as a slow one, and this
+// says why. Nothing at all when nothing is limited, which is also what a
+// pre-1.43 service says. The CPU share is of the whole machine, and says so.
 function limitsNote() {
   const l = S.status?.backgroundLimits;
   if (!l) return "";
   const parts = [];
   if (l.readLimit) parts.push(`reads to ${esc(l.readLimit.text)}`);
   for (const t of l.transferLimits ?? []) parts.push(`transfers to '${esc(t.destinationName)}' to ${esc(t.text)}`);
+  if (l.cpuLimit) parts.push(`CPU to ${esc(l.cpuLimit.text)} of this machine's processors`);
   return parts.length ? ` Background work is limited — ${parts.join(", ")}.` : "";
 }
 

@@ -233,7 +233,7 @@ public static class FanOut
     /// <param name="outcome">The push that just finished, for what the spoke declared holding.</param>
     /// <param name="newestSnapshot">The newest backup's record key the push carried, whose blobs are proven beside the rotation.</param>
     /// <param name="nowMs">The clock.</param>
-    /// <param name="limiter">The destination's transfer limit for a background sync, or null.</param>
+    /// <param name="pace">What a background sync to the destination is paced by — its transfer limit and the CPU limit — or null.</param>
     /// <param name="cancellationToken">Cancels the read-back.</param>
     /// <param name="convergedAt">Where the push converged the peer while a deletion was pending, or null (FR-GC-013).</param>
     /// <returns>Whether this recorded the pair's outcome.</returns>
@@ -245,7 +245,7 @@ public static class FanOut
         ReplicationInitiator.PushOutcome outcome,
         string? newestSnapshot,
         ulong nowMs,
-        Application.ByteRateLimiter? limiter,
+        Application.BackgroundPace? pace,
         CancellationToken cancellationToken,
         ulong? convergedAt = null)
     {
@@ -304,7 +304,7 @@ public static class FanOut
             // refuses. A peer that does not offer the feature falls to the
             // whole-blob read, which costs it more and proves no less.
             verification = await Replication.ReplicaVerifier.ProveSealedAsync(
-                PacedObjectStore.Over(new PeerRetrievalObjectStore(client), limiter), sample, archive.Repository,
+                PacedObjectStore.Over(new PeerRetrievalObjectStore(client), pace), sample, archive.Repository,
                 cancellationToken,
                 commitments.SignedDigestOf, Replication.ReplicaVerifier.PeerDigestByteBudget,
                 commitments.SignedMerkleRootOf,
@@ -447,25 +447,25 @@ public static class FanOut
         {
             // A background sync moves through the destination's transfer limit
             // (NFR-PERF-013, ADR-0074), both ways; a person's never does.
-            var limiter = userInitiated ? null : runtime.Pacing.ForDestination(destination);
+            var pace = userInitiated ? null : runtime.Pacing.PaceFor(runtime.Configuration, destination);
             switch (destination.Kind)
             {
                 case DestinationKind.LocalPath:
                     await CopyToLocalPathAsync(
-                            runtime, set, destination, archive, nowMs, limiter, userInitiated, cancellationToken)
+                            runtime, set, destination, archive, nowMs, pace, userInitiated, cancellationToken)
                         .ConfigureAwait(false);
                     return;
 
                 case DestinationKind.Peer:
                     await PushToPeerAsync(
-                            runtime, set, destination, archive, nowMs, cancellationToken, limiter: limiter,
+                            runtime, set, destination, archive, nowMs, cancellationToken, pace: pace,
                             userInitiated: userInitiated)
                         .ConfigureAwait(false);
                     return;
 
                 case DestinationKind.S3 or DestinationKind.AzureBlob:
                     await CopyToObjectStoreAsync(
-                            runtime, set, destination, archive, nowMs, limiter, userInitiated, cancellationToken)
+                            runtime, set, destination, archive, nowMs, pace, userInitiated, cancellationToken)
                         .ConfigureAwait(false);
                     return;
 
@@ -496,7 +496,7 @@ public static class FanOut
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
         ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken,
         Func<byte[], byte[]>? grantedSigner = null, ReceiptFate? receiptFate = null,
-        Application.ByteRateLimiter? limiter = null, bool userInitiated = false,
+        Application.BackgroundPace? pace = null, bool userInitiated = false,
         IReadOnlyCollection<string>? retire = null)
     {
         var ledger = runtime.DestinationSync;
@@ -739,9 +739,9 @@ public static class FanOut
             // The wire is what the limit governs: every byte of the push and
             // the challenge crosses the peer's link, and nothing else here
             // does. The session outlives the wrapper, so it is left open.
-            await using var wire = limiter is null
+            await using var wire = pace is null
                 ? null
-                : new Application.PacedStream(session.Stream, limiter, leaveOpen: true);
+                : new Application.PacedStream(session.Stream, pace, leaveOpen: true);
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 readFrom, archive.Repository.RepositoryId.ToArray(), (Stream?)wire ?? session.Stream, keeps,
                 cancellationToken,
@@ -776,7 +776,7 @@ public static class FanOut
             if (attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
                     .ConfigureAwait(false))
             {
-                heal = await HealFromPeerAsync(runtime, set, destination, archive, limiter, cancellationToken)
+                heal = await HealFromPeerAsync(runtime, set, destination, archive, pace, cancellationToken)
                     .ConfigureAwait(false);
                 LogHeal(runtime, set, destination, archive, heal);
             }
@@ -829,7 +829,7 @@ public static class FanOut
             {
                 await using var repairer = ReplicaRepairer.ForPeer(runtime, set, destination.Name, archive, userInitiated);
                 await using var target = new PeerRepairTarget(
-                    runtime, destination, archive.Repository.RepositoryId.ToArray(), limiter, landed: null);
+                    runtime, destination, archive.Repository.RepositoryId.ToArray(), pace, landed: null);
                 var repairs = await repairer.RepairAsync(target, stillHeld, cancellationToken).ConfigureAwait(false);
                 var resolved = repairs.Where(repair => repair.Repaired || repair.Gone).Select(repair => repair.Key).ToList();
                 if (resolved.Count > 0)
@@ -888,7 +888,7 @@ public static class FanOut
             {
                 if (session.Supports(Protocol.PeerSessionNegotiation.RetrievalFeature)
                     && await ReadBackAsync(
-                            runtime, set, destination, archive, outcome, newestSnapshot, nowMs, limiter, cancellationToken,
+                            runtime, set, destination, archive, outcome, newestSnapshot, nowMs, pace, cancellationToken,
                             convergedAt)
                         .ConfigureAwait(false))
                 {
@@ -1114,7 +1114,7 @@ public static class FanOut
 
     private static async ValueTask CopyToLocalPathAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
-        ArchiveHandle archive, ulong nowMs, Application.ByteRateLimiter? limiter, bool userInitiated,
+        ArchiveHandle archive, ulong nowMs, Application.BackgroundPace? pace, bool userInitiated,
         CancellationToken cancellationToken)
     {
         var ledger = runtime.DestinationSync;
@@ -1162,7 +1162,7 @@ public static class FanOut
             replica = runtime.Options.ReplicaStoreDecorator?.Invoke(destination.Name, replica) ?? replica;
             await CopyToReplicaAsync(
                     runtime, set, destination, archive,
-                    PacedObjectStore.Over(replica, limiter),
+                    PacedObjectStore.Over(replica, pace),
                     replicaRootMissing,
                     () => DestinationCapacity.FloorShortfall(replicaRoot, AvailableBytesOn(replicaRoot)),
                     nowMs, userInitiated, cancellationToken)
@@ -1202,7 +1202,7 @@ public static class FanOut
     /// </remarks>
     private static async ValueTask CopyToObjectStoreAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
-        ArchiveHandle archive, ulong nowMs, Application.ByteRateLimiter? limiter, bool userInitiated,
+        ArchiveHandle archive, ulong nowMs, Application.BackgroundPace? pace, bool userInitiated,
         CancellationToken cancellationToken)
     {
         var ledger = runtime.DestinationSync;
@@ -1231,7 +1231,7 @@ public static class FanOut
         {
             var replicaRootMissing = !await HoldsAnyAsync(store, string.Empty, cancellationToken).ConfigureAwait(false);
             await CopyToReplicaAsync(
-                    runtime, set, destination, archive, PacedObjectStore.Over(store, limiter), replicaRootMissing,
+                    runtime, set, destination, archive, PacedObjectStore.Over(store, pace), replicaRootMissing,
                     shortOfSpace: null, nowMs, userInitiated, cancellationToken)
                 .ConfigureAwait(false);
             await LookAtMetadataAsync(runtime, set, destination.Name, store, nowMs, cancellationToken).ConfigureAwait(false);
@@ -2227,7 +2227,7 @@ public static class FanOut
     /// </summary>
     private static async ValueTask<ServiceRuntime.HealOutcome> HealFromPeerAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
-        ArchiveHandle archive, Application.ByteRateLimiter? limiter, CancellationToken cancellationToken)
+        ArchiveHandle archive, Application.BackgroundPace? pace, CancellationToken cancellationToken)
     {
         try
         {
@@ -2235,7 +2235,7 @@ public static class FanOut
                 runtime, destination, archive.Repository.RepositoryId.ToArray(), cancellationToken)
                 .ConfigureAwait(false);
             return await runtime.HealFromDestinationAsync(
-                set.Id, archive, PacedObjectStore.Over(new PeerRetrievalObjectStore(client), limiter), cancellationToken)
+                set.Id, archive, PacedObjectStore.Over(new PeerRetrievalObjectStore(client), pace), cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException or Protocol.PeerProtocolException)
@@ -2583,7 +2583,7 @@ public static class FanOut
                 case { Kind: DestinationKind.LocalPath } local:
                     // A person is waiting, so the copy is not paced.
                     await CopyToLocalPathAsync(
-                            runtime, set, local, archive, nowMs, limiter: null, userInitiated: true, cancellationToken)
+                            runtime, set, local, archive, nowMs, pace: null, userInitiated: true, cancellationToken)
                         .ConfigureAwait(false);
                     var row = runtime.DestinationSync.Find(set.Id, local.Name);
                     lines.Add(row is { State: DestinationSyncState.InSync }

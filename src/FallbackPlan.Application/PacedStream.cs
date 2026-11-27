@@ -3,9 +3,10 @@ using Bodu;
 namespace FallbackPlan.Application;
 
 /// <summary>
-/// A stream whose reads and writes are paced through a <see cref="ByteRateLimiter"/>
-/// (ADR-0074): what passes is charged, in chunks, and nothing else changes —
-/// not a byte, not a position, not a length.
+/// A stream whose reads and writes are paced through a <see cref="BackgroundPace"/>
+/// (ADR-0074, ADR-0200): what passes is charged, in chunks, to the byte rate
+/// and looked at by the CPU limit, and nothing else changes — not a byte, not
+/// a position, not a length.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,20 +28,29 @@ public sealed class PacedStream : Stream
     public const int ChunkBytes = 64 * 1024;
 
     private readonly Stream _inner;
-    private readonly ByteRateLimiter _limiter;
+    private readonly BackgroundPace _pace;
     private readonly bool _leaveOpen;
     private bool _innerDisposed;
 
-    /// <summary>Paces <paramref name="inner"/> through <paramref name="limiter"/>.</summary>
+    /// <summary>Paces <paramref name="inner"/> through <paramref name="limiter"/> alone.</summary>
     /// <param name="inner">The stream the bytes really move through.</param>
     /// <param name="limiter">The limit they are charged to.</param>
     /// <param name="leaveOpen">Leave <paramref name="inner"/> open on dispose — a live session's stream outlives one exchange.</param>
     public PacedStream(Stream inner, ByteRateLimiter limiter, bool leaveOpen = false)
+        : this(inner, new BackgroundPace(limiter, null), leaveOpen)
+    {
+    }
+
+    /// <summary>Paces <paramref name="inner"/> through <paramref name="pace"/>.</summary>
+    /// <param name="inner">The stream the bytes really move through.</param>
+    /// <param name="pace">The limits they are charged to.</param>
+    /// <param name="leaveOpen">Leave <paramref name="inner"/> open on dispose — a live session's stream outlives one exchange.</param>
+    public PacedStream(Stream inner, BackgroundPace pace, bool leaveOpen = false)
     {
         ThrowHelper.ThrowIfNull(inner);
-        ThrowHelper.ThrowIfNull(limiter);
+        ThrowHelper.ThrowIfNull(pace);
         _inner = inner;
-        _limiter = limiter;
+        _pace = pace;
         _leaveOpen = leaveOpen;
     }
 
@@ -70,7 +80,7 @@ public sealed class PacedStream : Stream
     public override int Read(Span<byte> buffer)
     {
         var read = _inner.Read(buffer[..Math.Min(buffer.Length, ChunkBytes)]);
-        _limiter.AcquireAsync(read, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        _pace.AcquireAsync(read, CancellationToken.None).AsTask().GetAwaiter().GetResult();
         return read;
     }
 
@@ -83,7 +93,7 @@ public sealed class PacedStream : Stream
     {
         var read = await _inner.ReadAsync(buffer[..Math.Min(buffer.Length, ChunkBytes)], cancellationToken)
             .ConfigureAwait(false);
-        await _limiter.AcquireAsync(read, cancellationToken).ConfigureAwait(false);
+        await _pace.AcquireAsync(read, cancellationToken).ConfigureAwait(false);
         return read;
     }
 
@@ -96,7 +106,7 @@ public sealed class PacedStream : Stream
         while (!buffer.IsEmpty)
         {
             var chunk = buffer[..Math.Min(buffer.Length, ChunkBytes)];
-            _limiter.AcquireAsync(chunk.Length, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            _pace.AcquireAsync(chunk.Length, CancellationToken.None).AsTask().GetAwaiter().GetResult();
             _inner.Write(chunk);
             buffer = buffer[chunk.Length..];
         }
@@ -112,7 +122,7 @@ public sealed class PacedStream : Stream
         while (!buffer.IsEmpty)
         {
             var chunk = buffer[..Math.Min(buffer.Length, ChunkBytes)];
-            await _limiter.AcquireAsync(chunk.Length, cancellationToken).ConfigureAwait(false);
+            await _pace.AcquireAsync(chunk.Length, cancellationToken).ConfigureAwait(false);
             await _inner.WriteAsync(chunk, cancellationToken).ConfigureAwait(false);
             buffer = buffer[chunk.Length..];
         }

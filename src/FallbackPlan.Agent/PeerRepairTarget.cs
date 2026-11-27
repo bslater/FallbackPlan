@@ -24,7 +24,7 @@ internal sealed class PeerRepairTarget : IRepairTarget, IAsyncDisposable
     private readonly ServiceRuntime _runtime;
     private readonly DestinationConfiguration _peer;
     private readonly ReadOnlyMemory<byte> _repositoryId;
-    private readonly ByteRateLimiter? _limiter;
+    private readonly BackgroundPace? _pace;
     private PeerRepairClient? _repair;
     private PeerRetrievalClient? _retrieval;
     private IObjectStore? _landed;
@@ -33,19 +33,19 @@ internal sealed class PeerRepairTarget : IRepairTarget, IAsyncDisposable
     /// <param name="runtime">The service.</param>
     /// <param name="peer">The peer holding the damage.</param>
     /// <param name="repositoryId">The replica's repository.</param>
-    /// <param name="limiter">The peer's transfer limit, which both sessions cross; null for none.</param>
+    /// <param name="pace">What both sessions to the peer are paced by — its transfer limit and the CPU limit — or null for none.</param>
     /// <param name="landed">
     /// A retrieval session's store already open on the replica, to prove
     /// what lands there; null to dial one when the first copy is taken.
     /// </param>
     public PeerRepairTarget(
         ServiceRuntime runtime, DestinationConfiguration peer, ReadOnlyMemory<byte> repositoryId,
-        ByteRateLimiter? limiter, IObjectStore? landed)
+        BackgroundPace? pace, IObjectStore? landed)
     {
         _runtime = runtime;
         _peer = peer;
         _repositoryId = repositoryId;
-        _limiter = limiter;
+        _pace = pace;
         _landed = landed;
     }
 
@@ -60,7 +60,7 @@ internal sealed class PeerRepairTarget : IRepairTarget, IAsyncDisposable
         RepairVerdictCode verdict;
         try
         {
-            _repair ??= await PeerRepairClient.DialAsync(_runtime, _peer, _repositoryId, _limiter, cancellationToken)
+            _repair ??= await PeerRepairClient.DialAsync(_runtime, _peer, _repositoryId, _pace, cancellationToken)
                 .ConfigureAwait(false);
             verdict = await _repair.OfferAsync(key.Value, length, cancellationToken).ConfigureAwait(false);
             if (verdict == RepairVerdictCode.Send)
@@ -109,7 +109,7 @@ internal sealed class PeerRepairTarget : IRepairTarget, IAsyncDisposable
         {
             _retrieval = await PeerRetrievalClient.DialAsync(_runtime, _peer, _repositoryId, cancellationToken)
                 .ConfigureAwait(false);
-            _landed = PacedObjectStore.Over(new PeerRetrievalObjectStore(_retrieval), _limiter);
+            _landed = PacedObjectStore.Over(new PeerRetrievalObjectStore(_retrieval), _pace);
         }
 
         return _landed;

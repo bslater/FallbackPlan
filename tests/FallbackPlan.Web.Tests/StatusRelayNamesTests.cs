@@ -295,7 +295,8 @@ public sealed class StatusRelayNamesTests
             Notices: [],
             BackgroundLimits: new BackgroundLimitsDescriptor(
                 new ByteRateDescriptor("40 MiB/s", 41_943_040),
-                [new DestinationTransferLimitDescriptor("friend", "2 MiB/s", 2_097_152)]));
+                [new DestinationTransferLimitDescriptor("friend", "2 MiB/s", 2_097_152)],
+                new CpuShareDescriptor("25%", 25)));
 
         using var request = harness.Command("""{"command":"get_status"}""");
         using var response = await harness.Http.SendAsync(request);
@@ -309,6 +310,10 @@ public sealed class StatusRelayNamesTests
         Assert.AreEqual("friend", friend.GetProperty("destinationName").GetString());
         Assert.AreEqual("2 MiB/s", friend.GetProperty("text").GetString());
         Assert.AreEqual(2_097_152, friend.GetProperty("bytesPerSecond").GetInt64());
+
+        // Contract 1.97 (ADR-0200): the CPU share, by the names the clause reads.
+        Assert.AreEqual("25%", limits.GetProperty("cpuLimit").GetProperty("text").GetString());
+        Assert.AreEqual(25, limits.GetProperty("cpuLimit").GetProperty("percent").GetInt32());
     }
 
     [TestMethod]

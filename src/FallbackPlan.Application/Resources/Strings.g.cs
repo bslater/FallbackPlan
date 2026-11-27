@@ -413,6 +413,22 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackgroundReadLimitInvalid, arg0, arg1);
 
     /// <summary>
+    /// '{0}' declares a background_cpu_limit this build cannot read: {1}
+    /// </summary>
+    private static string ClientConfiguration_BackgroundCpuLimitInvalid => Get(nameof(ClientConfiguration_BackgroundCpuLimitInvalid));
+
+    /// <summary>
+    /// '{0}' declares a background_cpu_limit this build cannot read: {1}
+    /// </summary>
+    internal static string FormatClientConfiguration_BackgroundCpuLimitInvalid(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackgroundCpuLimitInvalid, arg0, arg1);
+
+    /// <summary>
+    /// A pace needs a byte rate, a CPU limit or both; a seam with neither has no pace.
+    /// </summary>
+    internal static string BackgroundPace_NeedsALimit => Get(nameof(BackgroundPace_NeedsALimit));
+
+    /// <summary>
     /// '{0}' declares clock_skew_margin_hours {1}; the margin takes 1 to 8760 hours, an hour to a year (ADR-0009).
     /// </summary>
     private static string ClientConfiguration_ClockSkewMarginOutOfRange => Get(nameof(ClientConfiguration_ClockSkewMarginOutOfRange));

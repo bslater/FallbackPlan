@@ -492,6 +492,16 @@ Repository-level multi-writer semantics are unaffected.
 > CPU, and `CapturePolicy.Concurrency` still bounds parallel work rather than
 > CPU.
 
+> **2026-11, scoped to this amendment ([ADR-0200](0200-the-background-cpu-limit.md)).**
+> The last exists: the **CPU limit**, a share of the machine's processors held
+> against the service's own processor time. The paragraph above is still right
+> that its acceptance is machine-dependent; what changed is that the limit was
+> separated from that measurement. The meter is injected and the arithmetic
+> over it is proved, while the real-machine figure stays unmeasured, as
+> NFR-PERF-007's is. So the sentence below names none of the four as missing.
+> `CapturePolicy.Concurrency` still bounds parallel work, and the CPU limit is
+> what bounds CPU.
+
 §3's default was chosen to satisfy **NFR-OPS-004** and **NFR-PERF-013**, and
 the 2026-08 amendment above ends by saying that "NFR-PERF-013's CPU cap
 should be measured against that rather than assumed from the number".
@@ -630,3 +640,4 @@ cost is no longer a question worth asking.
 | 2026-11 | Accepted (related) | [ADR-0049 Amendment 2](0049-service-lifecycle-hygiene.md#amendment-2-2026-11--nothing-started-beside-the-queue-outlives-a-stop): a command waiting on a job in the reader or writer lane is answered cancelled once the queue stops, since the queue still runs nothing it had not started by then. `Agent/ServiceCommandHandler`; `Hosts.Tests/BackgroundWorkAtStopTests` |
 | 2026-11 | Accepted (amended) | Amendment 7: a stopping queue answers each job it never started through its callback once its workers have ended; a backup's waiter is answered cancelled ("the service stopped before it started") and its row is left to ADR-0049's sweep; a pass the stop has answered starts no phase; a backup asked of a stopped queue is answered cancelled, not as already running. `Agent/JobScheduler`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests`, `Hosts.Tests/BackgroundWorkAtStopTests` |
 | 2026-11 | Accepted (amended) | Amendment 8: a queued job may carry a callback for the stop alone, which the stopping queue calls in place of the cancel-before-start record and a cancel command never calls; fan-out's answers a person's sync the stop never started cancelled, a stopped queue's refusal of a sync is no longer read as one already under way, and the backup's stop branch moved into its own. `Agent/JobScheduler`, `Agent/FanOut`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests`, `Hosts.Tests/BackgroundWorkAtStopTests` |
+| 2026-11 | Accepted (amended) | The last of the four is built: the **CPU limit** ([ADR-0200](0200-the-background-cpu-limit.md)), a share of the machine's processors held against the service's own processor time at the seams the byte limits pace, never a person; the arithmetic is proved over an injected meter and the real-machine figure stays unmeasured |

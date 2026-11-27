@@ -204,6 +204,12 @@ one instant to `IsOpen` in two offsets and gets two answers.
   > of them are built: a destination's transfer limit and the source-read
   > limit, which pace what this window already governs and, like it, never a
   > person. CPU remains unbuilt, for the reason this record gives.
+  >
+  > > **Amended 2026-11 ([ADR-0200](0200-the-background-cpu-limit.md)).** CPU
+  > > is built too, the last of the four. The reason given here was about the
+  > > measurement rather than the limit, so ADR-0200 takes the measurement as
+  > > an argument and proves the arithmetic over it; the real-machine figure
+  > > stays unmeasured, and says so.
 
 **Neutral**
 
@@ -242,3 +248,4 @@ outcome row is already written, which is the pass.
 | 2026-09 | Accepted | The time window built over four commits, the first of NFR-PERF-013's four named limits to exist; the suspension reused whole from [ADR-0047](0047-backup-pool-and-priorities.md) Amendment 1, with a standing pool hold added so a freed worker cannot undo the park |
 | 2026-09 | Accepted (related) | The disk and network limits arrive as [ADR-0074](0074-background-byte-rate-limits.md), governing the same `userInitiated: false` work this window does; three of the four limits now exist, and CPU stays unbuilt |
 | 2026-09 | Accepted (related) | The console control §8 named as owed is built, as ADR-0037 Amendment 1: contract 1.44 sets the window through the service, the CLI and the console |
+| 2026-11 | Accepted (related) | The CPU limit arrives as [ADR-0200](0200-the-background-cpu-limit.md), governing the same `userInitiated: false` work this window does; all four of NFR-PERF-013's limits now exist |

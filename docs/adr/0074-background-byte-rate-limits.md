@@ -51,6 +51,12 @@ waits a limiter asks for without sleeping through any of them. That makes two
 of the three remaining limits buildable and provable here: the network and the
 disk. CPU stays named and unbuilt.
 
+> **2026-11 ([ADR-0200](0200-the-background-cpu-limit.md)).** CPU is built,
+> on this record's seams: each now takes a pace carrying its byte rate and the
+> installation's CPU limit, either or both, through the same `PacedStream`.
+> The meter is injected as the clock is, which is what made the limit
+> provable here.
+
 The ask behind them is concrete. A peer's link is somebody else's, which is
 why a peer is never drilled unless its operator states a cadence
 ([ADR-0054](0054-scheduled-restore-drills.md) Amendment 3), and why a peer
@@ -266,3 +272,4 @@ as container measurement.
 | 2026-09 | Accepted | The disk and network limits built together, the second and third of NFR-PERF-013's four; red tests first, then the limiter, the seams and contract 1.43, with each seam's removal confirmed to turn its test red. CPU remains unbuilt and named |
 | 2026-09 | Accepted (related) | The control §7 left owed is built, as ADR-0037 Amendment 1: contract 1.44 sets the read limit and a destination's transfer limit through the service, the CLI and the console |
 | 2026-11 | Accepted (related) | [ADR-0196 Amendment 6](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-6-2026-11--a-run-sends-its-blobs-on-to-a-store-beside-a-local-path): a direct-ship run's uploads to a store beside a local path, made as it goes, are paced at the store's limit; held by a test since [Amendment 7](0196-a-set-whose-only-destinations-are-stores-ships-straight-to-them.md#amendment-7-2026-11--the-console-says-a-store-beside-a-local-path-is-sent-data-as-each-backup-runs) |
+| 2026-11 | Accepted (related) | [ADR-0200](0200-the-background-cpu-limit.md): the CPU limit rides every seam §5 names. `Application/PacedStream` charges an `Application/BackgroundPace`, its byte rate and the CPU limiter either or both, and `Agent/BackgroundPacing` hands each seam its pace; the byte arithmetic is unchanged |

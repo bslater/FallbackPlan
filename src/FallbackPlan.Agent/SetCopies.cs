@@ -131,7 +131,7 @@ internal sealed class SetCopies : IAsyncDisposable
         var root = Path.Combine(destination.Path!, _archive.Repository.RepositoryId.ToString());
         return ValueTask.FromResult<IObjectStore?>(
             Directory.Exists(root)
-                ? PacedObjectStore.Over(new LocalFileSystemObjectStore(root), Limiter(destination))
+                ? PacedObjectStore.Over(new LocalFileSystemObjectStore(root), Pace(destination))
                 : null);
     }
 
@@ -152,7 +152,7 @@ internal sealed class SetCopies : IAsyncDisposable
         }
 
         return ValueTask.FromResult<IObjectStore?>(
-            store is null ? null : PacedObjectStore.Over(store, Limiter(destination)));
+            store is null ? null : PacedObjectStore.Over(store, Pace(destination)));
     }
 
     private async ValueTask<IObjectStore?> DialAsync(DestinationConfiguration destination, CancellationToken cancellationToken)
@@ -161,9 +161,9 @@ internal sealed class SetCopies : IAsyncDisposable
             _runtime, destination, _archive.Repository.RepositoryId.ToArray(), cancellationToken)
             .ConfigureAwait(false);
         _sessions.Add(client);
-        return PacedObjectStore.Over(new PeerRetrievalObjectStore(client), Limiter(destination));
+        return PacedObjectStore.Over(new PeerRetrievalObjectStore(client), Pace(destination));
     }
 
-    private ByteRateLimiter? Limiter(DestinationConfiguration destination) =>
-        _userInitiated ? null : _runtime.Pacing.ForDestination(destination);
+    private BackgroundPace? Pace(DestinationConfiguration destination) =>
+        _userInitiated ? null : _runtime.Pacing.PaceFor(_runtime.Configuration, destination);
 }

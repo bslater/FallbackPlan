@@ -3768,6 +3768,13 @@ public static class CliApplication
                             output.WriteLine(
                                 $"background transfers to '{transfer.DestinationName}' limited to {transfer.Text}");
                         }
+
+                        // A share of the whole machine, said so (ADR-0200):
+                        // a per-core reader takes "25%" for a quarter core.
+                        if (limits.CpuLimit is { } cpu)
+                        {
+                            output.WriteLine($"background work limited to {cpu.Text} of this machine's processors");
+                        }
                     }
 
                     foreach (var notice in result.Notices)

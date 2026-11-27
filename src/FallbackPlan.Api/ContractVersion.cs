@@ -934,8 +934,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// it. Additive: a pre-1.96 client's save keeps the sample the file
     /// states, and a pre-1.96 service's listing reads as none stated.
     /// </para>
+    /// <para>
+    /// 1.97 reports the CPU limit background work is held to (NFR-PERF-013,
+    /// ADR-0200). `background_limits` gains `cpu_limit`: the configured `text`
+    /// and the `percent` of the machine's processors together it is. A CPU
+    /// limit alone is a limit in force, so `background_limits` is sent with
+    /// no byte limit beside it. Reporting only: the limit is edited in the
+    /// configuration file. Additive with a null default: a pre-1.97 service
+    /// never sends it, which a client reads as no CPU limit.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 96);
+    public static ContractVersion Current { get; } = new(1, 97);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

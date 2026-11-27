@@ -4,8 +4,9 @@ namespace FallbackPlan.Web.Tests;
 /// The console's background-limits clause, pinned structurally (contract
 /// 1.43, NFR-PERF-013): the overview says which byte rates background work is
 /// held to — the source-read limit and each destination's transfer limit —
-/// drawn from the status result the view already holds, and says nothing at
-/// all when nothing is limited.
+/// and, since 1.97, the share of the machine's processors it is held to
+/// (ADR-0200), drawn from the status result the view already holds, and says
+/// nothing at all when nothing is limited.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -64,6 +65,18 @@ public sealed class ConsoleBackgroundLimitsScriptTests
             LimitsNoteBody(),
             StringComparison.Ordinal,
             "no limits must render nothing — not 'undefined', and not an empty clause");
+    }
+
+    [TestMethod]
+    public void TheClause_SaysTheCpuLimitIsAShareOfTheMachine()
+    {
+        // Contract 1.97 (ADR-0200). "25%" alone reads as one core's quarter
+        // to anyone used to a per-core figure, so the clause says of what.
+        var body = LimitsNoteBody();
+
+        Assert.Contains("l.cpuLimit", body, StringComparison.Ordinal);
+        Assert.Contains("of this machine's processors", body, StringComparison.Ordinal);
+        Assert.Contains("esc(l.cpuLimit.text)", body, StringComparison.Ordinal);
     }
 
     [TestMethod]
