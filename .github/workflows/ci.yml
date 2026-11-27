@@ -276,13 +276,14 @@ jobs:
   # FR-ARCH-002 and NFR-PERF-001: one synthetic file far larger than any of
   # the pipeline's buffers, never materialised, through the real archive
   # pipeline. Memory must not grow with the input: the live set within
-  # NFR-PERF-001's bound and steady from the input's second quarter to its
+  # NFR-PERF-001's bound and steady from the input's third quarter to its
   # last, the working set no larger over its second half than its first, and
   # nothing near a regression over idle. The 2 TiB the requirement names is
-  # out of reach; eight GiB is enough for a run that kept one segment in
-  # sixty-four to fail. What processing adds over idle is printed and judged
-  # only against a regression, because a container's figure for it lies
-  # within the collector's spread of the requirement's.
+  # out of reach; eight GiB is the least at which a run that kept one segment
+  # in thirty-two failed, and one that kept one in a hundred and twenty-eight
+  # fails too. What processing adds over idle is judged only against twice
+  # the requirement: it measures above the requirement today, mostly in
+  # garbage the collector has not yet taken.
   memory-bound:
     name: Memory stays bounded over an 8 GiB file
     runs-on: ubuntu-latest
