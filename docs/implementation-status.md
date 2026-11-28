@@ -6748,12 +6748,13 @@ bytes are, and the files' references.
 > **2026-11 ([Amendment 2](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool)).**
 > The files' references are built, and with them every decision. Once a tree
 > snapshot has written a captured file's manifest, `Repository/ArchiveSession`
-> writes the file's references and content ids to the same spill, and
+> writes the file's references to the same spill and lets its content ids go,
+> since nothing reads them again, and
 > `Repository/SnapshotPublication` keeps the file's result with them there.
 > The catalogue reads them back as it records each file, and
 > `Repository.Tests/SpilledReferenceTests` holds that damage to the content
 > still reaches every file. Afterwards a file's references say to read its
-> manifest. A tree snapshot now keeps 3.9 bytes per referenced segment where
+> manifest. A tree snapshot now keeps 3.8 bytes per referenced segment where
 > it kept 84.0, against a bound of 16. What still grows is outside the
 > decisions and stays with Q24: a file's own references while it is archived,
 > about 80 bytes a segment of that file, and each captured file's result, about

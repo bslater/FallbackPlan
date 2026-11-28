@@ -11,13 +11,14 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// A tree snapshot's files' segment references and content identifiers wait
-/// in its session's spool once each file's manifest is written, rather than
-/// in memory until the snapshot publishes (ADR-0201; NFR-PERF-001). The
-/// catalogue still learns from them what each version is made of, so damage
-/// to a content blob reaches every file that needs it (FR-VER-005). Once the
-/// session has ended, a file's references say to read its manifest, and its
-/// content identifiers say they were never kept anywhere durable.
+/// A tree snapshot's files' segment references wait in its session's spool
+/// once each file's manifest is written, rather than in memory until the
+/// snapshot publishes, and their content identifiers are let go (ADR-0201;
+/// NFR-PERF-001). The catalogue still learns from the references what each
+/// version is made of, so damage to a content blob reaches every file that
+/// needs it (FR-VER-005). Once the session has ended, a file's references say
+/// to read its manifest, and its content identifiers say they were never
+/// written anywhere durable.
 /// </summary>
 [TestClass]
 public sealed class SpilledReferenceTests : ArchiveTestHarness

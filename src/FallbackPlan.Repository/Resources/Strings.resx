@@ -136,8 +136,8 @@
   <data name="RecordTableSpill_ReferencesSessionHasEnded" xml:space="preserve">
     <value>This file's segment references were kept in the spool of the session that archived it, and that session has ended, which deletes them. Read the file's manifest instead: it declares the same references.</value>
   </data>
-  <data name="RecordTableSpill_ContentIdsSessionHasEnded" xml:space="preserve">
-    <value>This file's content identifiers were kept in the spool of the session that archived it, and that session has ended, which deletes them. Content identifiers are never written anywhere durable, so nothing else holds them.</value>
+  <data name="ArchiveSession_ContentIdsNotKept" xml:space="preserve">
+    <value>This file's content identifiers were let go once its manifest was written, because a tree snapshot has no use for them after that. Content identifiers are never written anywhere durable, so nothing else holds them.</value>
   </data>
   <data name="IndexDeltaBudget_BlobExceedsDeltaBudget" xml:space="preserve">
     <value>Blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound would be refused on every read, so it is refused here instead.</value>

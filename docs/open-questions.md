@@ -197,8 +197,9 @@ Until this is settled, a v2 set's replica is registered only if the passphrase h
 
 > **2026-11: the files' references are built** ([Amendment 2](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool)).
 > Once a tree snapshot has written a captured file's manifest, the file's
-> references and content ids wait in the same spill, and the catalogue reads
-> them back at the end: 3.9 bytes kept per referenced segment, where it was 84.
+> references wait in the same spill and its content ids are let go, and the
+> catalogue reads the references back at the end: 3.8 bytes kept per
+> referenced segment, where it was 84.
 > Every decision of ADR-0201 is built, and the question stays open for two
 > costs outside them. A file holds its own references and content ids while it
 > is archived, about 80 bytes a segment, so a single 2 TiB file still holds

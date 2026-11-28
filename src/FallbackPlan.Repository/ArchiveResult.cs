@@ -36,10 +36,11 @@ public sealed record ArchivedBlob(
 /// catalogue-domain data.
 /// </summary>
 /// <remarks>
-/// A tree snapshot's files keep their references and content identifiers in
-/// the session's spool once each file's manifest is written, readable while
-/// the session runs (ADR-0201); their counts, and everything else here, stay
-/// in memory. A single file's result carries them in memory.
+/// Once a tree snapshot has written a file's manifest, the file keeps its
+/// references in the session's spool, readable while the session runs, and
+/// its content identifiers not at all, since nothing reads them again
+/// (ADR-0201). Their counts, and everything else here, stay in memory. A
+/// single file's result carries both in memory.
 /// </remarks>
 public sealed class ArchiveResult
 {

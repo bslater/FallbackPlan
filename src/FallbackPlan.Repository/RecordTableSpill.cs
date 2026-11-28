@@ -41,8 +41,7 @@ internal sealed class RecordTableSpill : IDisposable
     // two profiles and the object type, little-endian.
     private const int EntryBytes = ObjectId.Size + 4 + 8 + 4 + 8 + 2 + 2 + 1;
 
-    // ObjectId, logical offset and logical length, little-endian. A file's
-    // content identifiers follow its references, ContentId.Size each.
+    // ObjectId, logical offset and logical length, little-endian.
     private const int ReferenceBytes = ObjectId.Size + 8 + 8;
 
     private const string WrittenSetExtension = ".written";
@@ -95,33 +94,19 @@ internal sealed class RecordTableSpill : IDisposable
             this, Write(bytes), table.Count, EntryBytes, Decode, Strings.RecordTableSpill_SessionHasEnded);
     }
 
-    /// <summary>
-    /// Writes a file's segment references, and the content identifier of each,
-    /// to the spill and returns both as read back from there.
-    /// </summary>
-    public (IReadOnlyList<SegmentReference> References, IReadOnlyList<ContentId> ContentIds) AppendSegments(
-        IReadOnlyList<SegmentReference> references, IReadOnlyList<ContentId> contentIds)
+    /// <summary>Writes a file's segment references to the spill and returns them as read back from there.</summary>
+    public IReadOnlyList<SegmentReference> AppendReferences(IReadOnlyList<SegmentReference> references)
     {
         ArgumentNullException.ThrowIfNull(references);
-        ArgumentNullException.ThrowIfNull(contentIds);
-        ArgumentOutOfRangeException.ThrowIfNotEqual(contentIds.Count, references.Count);
-
-        var contentIdsAt = references.Count * ReferenceBytes;
-        var bytes = new byte[contentIdsAt + (contentIds.Count * ContentId.Size)];
+        var bytes = new byte[references.Count * ReferenceBytes];
         for (var index = 0; index < references.Count; index++)
         {
             EncodeReference(references[index], bytes.AsSpan(index * ReferenceBytes, ReferenceBytes));
-            contentIds[index].CopyTo(bytes.AsSpan(contentIdsAt + (index * ContentId.Size), ContentId.Size));
         }
 
-        var offset = Write(bytes);
-        return (
-            new Spilled<SegmentReference>(
-                this, offset, references.Count, ReferenceBytes, DecodeReference,
-                Strings.RecordTableSpill_ReferencesSessionHasEnded),
-            new Spilled<ContentId>(
-                this, offset + contentIdsAt, contentIds.Count, ContentId.Size, static source => ContentId.FromBytes(source),
-                Strings.RecordTableSpill_ContentIdsSessionHasEnded));
+        return new Spilled<SegmentReference>(
+            this, Write(bytes), references.Count, ReferenceBytes, DecodeReference,
+            Strings.RecordTableSpill_ReferencesSessionHasEnded);
     }
 
     /// <inheritdoc />
@@ -257,11 +242,10 @@ internal sealed class RecordTableSpill : IDisposable
     }
 
     /// <summary>
-    /// One blob's table, or one file's references or content identifiers,
-    /// read back from the spill each time it is read, so that holding it holds
-    /// a position and a count. Readable while its session runs; once the
-    /// session has ended, its spill is gone, and reading says where else to
-    /// look, if anywhere.
+    /// One blob's table, or one file's references, read back from the spill
+    /// each time it is read, so that holding it holds a position and a count.
+    /// Readable while its session runs; once the session has ended, its spill
+    /// is gone, and reading says where else to look.
     /// </summary>
     private sealed class Spilled<T>(
         RecordTableSpill spill, long offset, int count, int width, Decoder<T> decode, string sessionHasEnded)
