@@ -7,10 +7,15 @@ using FallbackPlan.Storage.Abstractions;
 namespace FallbackPlan.Repository;
 
 /// <summary>
-/// One blob the archiver sealed and uploaded — including its record table,
-/// in memory, which is what index-delta publication projects entries from
-/// (specification 07 §10: every index-entry field is present in the footer).
+/// One blob the archiver sealed and uploaded, with its record table, which is
+/// what index-delta publication projects entries from (specification 07 §10:
+/// every index-entry field is present in the footer).
 /// </summary>
+/// <remarks>
+/// A session's blobs keep their tables in its spool rather than in memory,
+/// readable while the session runs (ADR-0201); a single-file archive's result
+/// carries them in memory, read back before its session ended.
+/// </remarks>
 public sealed record ArchivedBlob(
     BlobId BlobId,
     StoreBlobKey StoreBlobKey,

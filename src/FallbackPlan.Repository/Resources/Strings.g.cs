@@ -244,6 +244,11 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, BlobCompactor_SourceRecordRefused, arg0, arg1, arg2);
 
     /// <summary>
+    /// This blob's record table was kept in the spool of the session that wrote it, and that session has ended, which deletes it. Read the blob's footer instead: it declares the same table.
+    /// </summary>
+    internal static string RecordTableSpill_SessionHasEnded => Get(nameof(RecordTableSpill_SessionHasEnded));
+
+    /// <summary>
     /// Blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound would be refused on every read, so it is refused here instead.
     /// </summary>
     private static string IndexDeltaBudget_BlobExceedsDeltaBudget => Get(nameof(IndexDeltaBudget_BlobExceedsDeltaBudget));

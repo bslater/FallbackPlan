@@ -186,6 +186,13 @@ Until this is settled, a v2 set's replica is registered only if the passphrase h
 
 ## Q24 — What a snapshot holds per object it stores
 
+> **2026-11: direction chosen — (b), spill what must wait** ([ADR-0201](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md)).
+> The record tables are built: each uploaded blob's table waits in the
+> session's spool, and publication reads them back one blob at a time as it
+> cuts its deltas. What a session keeps per stored record fell from 160.6
+> bytes to 78. The written set and the files' references are still in
+> memory, and the question stays open until they are not.
+
 **Owner:** maintainer · **Blocks:** FR-ARCH-002's 2 TiB acceptance, and NFR-PERF-001 for any snapshot that stores more than a few hundred gigabytes
 
 A snapshot keeps a little memory for every record it stores and every segment it reads, for as long as it runs. Over 32 GiB of unique content (2026-11, `PerformanceTests/MemoryBoundProof`), the live set grows by about 0.4 to 0.6 MiB per GiB, some 500 to 700 bytes per stored segment. Three things hold it:
