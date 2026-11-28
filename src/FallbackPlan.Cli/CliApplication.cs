@@ -746,8 +746,23 @@ public static class CliApplication
                         var fileVersion = FileVersionManifestCodec.Decode(read.Plaintext!);
                         output.WriteLine($"name           {System.Text.Encoding.UTF8.GetString(fileVersion.Name.Span)}");
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"length         {fileVersion.LogicalLength}"));
-                        output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                            $"segments       {fileVersion.SegmentReferences.Count} (+{fileVersion.SparseExtents.Count} sparse extents)"));
+                        // A large file's references and holes are in the runs
+                        // its manifest lists, not in the manifest (ADR-0202).
+                        if (fileVersion.ReferenceRuns.Count > 0)
+                        {
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"reference runs {fileVersion.ReferenceRuns.Count}"));
+                            foreach (var listed in fileVersion.ReferenceRuns)
+                            {
+                                output.WriteLine($"run            {listed}");
+                            }
+                        }
+                        else
+                        {
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"segments       {fileVersion.SegmentReferences.Count} (+{fileVersion.SparseExtents.Count} sparse extents)"));
+                        }
+
                         output.WriteLine($"whole-file     sha256:{Hex(fileVersion.WholeFileHash)}");
                         foreach (var diagnostic in fileVersion.CaptureDiagnostics)
                         {
@@ -790,6 +805,14 @@ public static class CliApplication
                             $"segmentation   0x{policy.SegmentationProfile:x4} (size/target {policy.SegmentSizeOrTarget})"));
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                             $"blob targets   {policy.BlobTargetSize}/{policy.BlobMaxSize} (max {policy.BlobMaxRecordCount} records)"));
+                        break;
+
+                    case ObjectType.ReferenceRun:
+                        var run = ReferenceRunCodec.Decode(read.Plaintext!);
+                        output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                            $"stretch        {run.Start} to {run.Start + run.Length}"));
+                        output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                            $"segments       {run.SegmentReferences.Count} (+{run.SparseExtents.Count} sparse extents)"));
                         break;
 
                     case ObjectType.ErrorManifest:
