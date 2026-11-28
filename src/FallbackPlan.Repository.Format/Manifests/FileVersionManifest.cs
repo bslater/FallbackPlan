@@ -60,6 +60,15 @@ public sealed record FileVersionManifest
     public LinkForm LinkForm { get; init; }
 
     /// <summary>
+    /// The object identifiers of the reference runs that hold this file's
+    /// references and holes, in file order (key 15; ADR-0202), when it has too
+    /// many for one manifest: past <see cref="ReferenceRunCodec.MaxPieces"/>
+    /// pieces. A manifest listing runs holds no references or holes of its
+    /// own. Empty for every other version; only a format-8 writer lists any.
+    /// </summary>
+    public IReadOnlyList<ObjectId> ReferenceRuns { get; init; } = [];
+
+    /// <summary>
     /// Every content object restoring this version reads: its segments in
     /// order, then each alternate stream's content — what a damaged object is
     /// traced back to the version through (FR-VER-005).

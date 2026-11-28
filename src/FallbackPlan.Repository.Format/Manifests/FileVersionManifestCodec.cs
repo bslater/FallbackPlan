@@ -34,7 +34,8 @@ public static class FileVersionManifestCodec
             + (manifest.LinkTarget is not null ? 1 : 0)
             + (manifest.HardlinkGroup is not null ? 1 : 0)
             + (manifest.CaptureDiagnostics.Count > 0 ? 1 : 0)
-            + (manifest.LinkForm != LinkForm.SymbolicLink ? 1 : 0);
+            + (manifest.LinkForm != LinkForm.SymbolicLink ? 1 : 0)
+            + (manifest.ReferenceRuns.Count > 0 ? 1 : 0);
 
         writer.WriteStartMap(keyCount);
         writer.WriteKey(1);
@@ -113,6 +114,18 @@ public static class FileVersionManifestCodec
             writer.WriteUnsignedInteger((uint)manifest.LinkForm);
         }
 
+        if (manifest.ReferenceRuns.Count > 0)
+        {
+            writer.WriteKey(15);
+            writer.WriteStartArray(manifest.ReferenceRuns.Count);
+            foreach (var run in manifest.ReferenceRuns)
+            {
+                writer.WriteByteString(run.ToArray());
+            }
+
+            writer.WriteEndArray();
+        }
+
         writer.WriteEndMap();
 
         var encoded = writer.Encode();
@@ -159,6 +172,7 @@ public static class FileVersionManifestCodec
         byte[]? hardlinkGroup = null;
         List<string> diagnostics = [];
         var linkForm = LinkForm.SymbolicLink;
+        List<ObjectId> runs = [];
 
         for (var i = 0; i < count; i++)
         {
@@ -222,6 +236,9 @@ public static class FileVersionManifestCodec
                         ? LinkForm.MountPoint
                         : throw new ManifestValidationException(Strings.FileVersionManifestCodec_LinkFormUnassigned);
                     break;
+                case 15:
+                    runs = ReadReferenceRuns(reader);
+                    break;
                 default:
                     // 06 §3.1's enforcement point: an unknown key is exactly
                     // where a physical-location field would hide.
@@ -256,6 +273,7 @@ public static class FileVersionManifestCodec
             HardlinkGroup = hardlinkGroup is null ? null : (ReadOnlyMemory<byte>?)hardlinkGroup,
             CaptureDiagnostics = diagnostics,
             LinkForm = linkForm,
+            ReferenceRuns = runs,
         };
 
         Validate(manifest);
@@ -278,6 +296,12 @@ public static class FileVersionManifestCodec
             && (manifest.EntryKind != EntryKind.Symlink || manifest.LinkTarget is null))
         {
             throw new ManifestValidationException(Strings.FileVersionManifestCodec_LinkFormOnlyOnALink);
+        }
+
+        if (manifest.ReferenceRuns.Count > 0)
+        {
+            ValidateListingRuns(manifest);
+            return;
         }
 
         if (manifest.SegmentReferences.Count > MaxSegmentReferences)
@@ -340,7 +364,51 @@ public static class FileVersionManifestCodec
         }
     }
 
-    private static void WriteSegmentReference(CanonicalCborWriter writer, SegmentReference reference)
+    /// <summary>
+    /// A manifest listing reference runs (ADR-0202): a file's, with at least
+    /// two, since one run holds no more than one manifest may, and with no
+    /// references or holes of its own, since its runs hold them. That the runs
+    /// cover the file is checked with the runs (<see cref="ReferenceRunCodec.ValidateSequence"/>).
+    /// </summary>
+    private static void ValidateListingRuns(FileVersionManifest manifest)
+    {
+        if (manifest.EntryKind != EntryKind.File)
+        {
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_ReferenceRunsOnlyForAFile);
+        }
+
+        if (manifest.ReferenceRuns.Count < 2)
+        {
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_ReferenceRunsAtLeastTwo);
+        }
+
+        if (manifest.SegmentReferences.Count > 0 || manifest.SparseExtents.Count > 0)
+        {
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_ReferenceRunsHoldTheReferences);
+        }
+
+        if (manifest.WholeFileHash.Length != 32)
+        {
+            throw new ManifestValidationException(Strings.FileVersionManifestCodec_WholeFileHashExactlyBytes);
+        }
+    }
+
+    private static List<ObjectId> ReadReferenceRuns(CanonicalCborReader reader)
+    {
+        // At most what 16 MiB of identifiers holds, which is what a manifest
+        // may be in all.
+        var count = reader.ReadStartArray(FormatLimits.MaxMetadataObjectSize / ObjectId.Size);
+        var runs = new List<ObjectId>(count);
+        for (var i = 0; i < count; i++)
+        {
+            runs.Add(ObjectId.FromBytes(reader.ReadFixedByteString(ObjectId.Size)));
+        }
+
+        reader.ReadEndArray();
+        return runs;
+    }
+
+    internal static void WriteSegmentReference(CanonicalCborWriter writer, SegmentReference reference)
     {
         // An array of exactly three elements, never a map — and never a blob
         // identifier, physical offset, or stored length (06 §3, §3.1).
@@ -351,7 +419,7 @@ public static class FileVersionManifestCodec
         writer.WriteEndArray();
     }
 
-    private static List<SegmentReference> ReadSegmentReferences(CanonicalCborReader reader)
+    internal static List<SegmentReference> ReadSegmentReferences(CanonicalCborReader reader)
     {
         var count = reader.ReadStartArray(MaxSegmentReferences);
         var references = new List<SegmentReference>(count);
@@ -376,7 +444,7 @@ public static class FileVersionManifestCodec
         return references;
     }
 
-    private static List<SparseExtent> ReadSparseExtents(CanonicalCborReader reader)
+    internal static List<SparseExtent> ReadSparseExtents(CanonicalCborReader reader)
     {
         var count = reader.ReadStartArray(MaxSegmentReferences);
         var extents = new List<SparseExtent>(count);

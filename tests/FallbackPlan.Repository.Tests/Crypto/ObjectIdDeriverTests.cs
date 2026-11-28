@@ -27,7 +27,7 @@ public sealed class ObjectIdDeriverTests
     [DataRow((byte)0x00)]
     [DataRow((byte)0x07)] // reserved store-key domain separator
     [DataRow((byte)0x10)] // reserved: withdrawn with the set-configuration object (ADR-0071)
-    [DataRow((byte)0x12)] // the first value above the assigned range
+    [DataRow((byte)0x13)] // the first value above the assigned range; 0x12 is the reference run (ADR-0202)
     public void Derive_WhenTheObjectTypeIsUnassigned_ShouldThrow(byte value)
     {
         using var deriver = new ObjectIdDeriver(new byte[32]);

@@ -60,6 +60,13 @@ public enum ObjectType : byte
     /// cost a request per backup rather than one per file version it created.
     /// </summary>
     SourceIdentityPack = 0x11,
+
+    /// <summary>
+    /// A reference run (ADR-0202): one contiguous stretch of a large file's
+    /// segment references and holes, which the file's version manifest lists
+    /// in order rather than holding them itself. Format 8 and later.
+    /// </summary>
+    ReferenceRun = 0x12,
 }
 
 /// <summary>
@@ -72,11 +79,11 @@ public static class ObjectTypes
     /// Rejects zero, the reserved store-key domain separator <c>0x07</c> —
     /// which stays reserved forever (specification 02 §3.1) — the reserved
     /// <c>0x10</c>, withdrawn with a design no build wrote, and everything
-    /// unassigned above <c>0x11</c>: an unknown type in an object the reader
+    /// unassigned above <c>0x12</c>: an unknown type in an object the reader
     /// must interpret is refused, never guessed (specification 00 §3).
     /// </summary>
     public static bool IsValid(byte value) =>
-        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x0F) or 0x11;
+        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x0F) or 0x11 or 0x12;
 
     /// <summary>
     /// Converts a byte read from untrusted input into an

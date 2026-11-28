@@ -93,6 +93,8 @@ The collector's three objects are assigned the same way: **lease** `0x0D`, **tom
 
 The **source-identity pack** is `0x11` ([06 §11.5](06-manifests.md#115-the-pack), [ADR-0090](../../docs/adr/0090-a-backups-hints-are-one-pack.md)): a publication's source-identity hints in one object. It is advisory as the hints are.
 
+The **reference run** is `0x12` ([06 §4.4](06-manifests.md#44-reference-runs), [ADR-0202](../../docs/adr/0202-format-8-a-large-files-references-are-written-in-runs.md)): one stretch of a large file's segment references and holes, which its version manifest lists. Format 8 and later.
+
 ### 3.2 What this does and does not protect
 
 Keying defends against the **store**. It does not defend against a **repository member**, because members hold the key.

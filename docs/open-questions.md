@@ -238,6 +238,9 @@ Until this is settled, the memory gate's growth allowances absorb the growth at 
 > chose a chain, as a tree has, written link by link as the file is archived.
 > Until it is built, a file too large for one manifest is recorded as too large
 > and the rest of its snapshot is backed up, where before it ended the run.
+> [ADR-0202](adr/0202-format-8-a-large-files-references-are-written-in-runs.md) records the design: format 8's reference
+> runs, which the manifest lists so that they can be written first. Its wire is
+> built; its readers and writer are not.
 
 **Owner:** maintainer · **Blocks:** FR-ARCH-002's 2 TiB acceptance, and backing up any file of more than about 343,000 segments
 

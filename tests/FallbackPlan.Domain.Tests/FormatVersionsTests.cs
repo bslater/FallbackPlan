@@ -109,6 +109,19 @@ public sealed class FormatVersionsTests
     }
 
     [TestMethod]
+    public void FormatEight_HasReferenceRuns_AndNoEarlierFormatDoes()
+    {
+        // ADR-0202. Defined, and not yet a format this build reads or
+        // writes: its readers follow a file's runs first.
+        Assert.AreEqual((ushort)8, FormatVersions.ReferenceRuns);
+        Assert.IsTrue(FormatVersions.HasReferenceRuns(FormatVersions.ReferenceRuns));
+        Assert.IsFalse(FormatVersions.HasReferenceRuns(FormatVersions.StandInFailures));
+        Assert.IsFalse(FormatVersions.HasReferenceRuns(FormatVersions.RelocatableRecords));
+        Assert.IsFalse(FormatVersions.IsReadable(FormatVersions.ReferenceRuns));
+        Assert.IsFalse(FormatVersions.IsWritable(FormatVersions.ReferenceRuns));
+    }
+
+    [TestMethod]
     public void ThisBuild_ReadsFormatsTwoToSeven_AndNothingAfter()
     {
         Assert.IsFalse(FormatVersions.IsReadable(1));

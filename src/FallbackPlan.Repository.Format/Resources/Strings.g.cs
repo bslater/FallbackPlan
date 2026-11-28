@@ -214,6 +214,124 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, FileVersionManifestCodec_CoverageBreaksOffsetNextPiece, arg0, arg1);
 
     /// <summary>
+    /// Only a file's manifest lists reference runs (specification 06 §4 key 15; ADR-0202).
+    /// </summary>
+    internal static string FileVersionManifestCodec_ReferenceRunsOnlyForAFile => Get(nameof(FileVersionManifestCodec_ReferenceRunsOnlyForAFile));
+
+    /// <summary>
+    /// A manifest lists reference runs only when its file needs two or more: one run holds no more than one manifest may (ADR-0202).
+    /// </summary>
+    internal static string FileVersionManifestCodec_ReferenceRunsAtLeastTwo => Get(nameof(FileVersionManifestCodec_ReferenceRunsAtLeastTwo));
+
+    /// <summary>
+    /// A manifest listing reference runs holds no segment references or sparse extents of its own; its runs hold them (ADR-0202).
+    /// </summary>
+    internal static string FileVersionManifestCodec_ReferenceRunsHoldTheReferences => Get(nameof(FileVersionManifestCodec_ReferenceRunsHoldTheReferences));
+
+    /// <summary>
+    /// The reference run is not canonical CBOR: {0}
+    /// </summary>
+    private static string ReferenceRunCodec_NotCanonicalCbor => Get(nameof(ReferenceRunCodec_NotCanonicalCbor));
+
+    /// <summary>
+    /// The reference run is not canonical CBOR: {0}
+    /// </summary>
+    internal static string FormatReferenceRunCodec_NotCanonicalCbor(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_NotCanonicalCbor, arg0);
+
+    /// <summary>
+    /// The reference run carries an unknown key, and is refused rather than skipped (ADR-0202).
+    /// </summary>
+    internal static string ReferenceRunCodec_UnknownKey => Get(nameof(ReferenceRunCodec_UnknownKey));
+
+    /// <summary>
+    /// The reference run omits its start, its length or its segment references (ADR-0202).
+    /// </summary>
+    internal static string ReferenceRunCodec_OmitsMandatoryKey => Get(nameof(ReferenceRunCodec_OmitsMandatoryKey));
+
+    /// <summary>
+    /// The reference run holds no reference and no hole; a run holds at least one (ADR-0202).
+    /// </summary>
+    internal static string ReferenceRunCodec_Empty => Get(nameof(ReferenceRunCodec_Empty));
+
+    /// <summary>
+    /// The reference run holds {0} references and holes; a run holds at most 262,144 (ADR-0202).
+    /// </summary>
+    private static string ReferenceRunCodec_TooManyPieces => Get(nameof(ReferenceRunCodec_TooManyPieces));
+
+    /// <summary>
+    /// The reference run holds {0} references and holes; a run holds at most 262,144 (ADR-0202).
+    /// </summary>
+    internal static string FormatReferenceRunCodec_TooManyPieces(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_TooManyPieces, arg0);
+
+    /// <summary>
+    /// The run's coverage breaks at offset {0}: its next piece starts at {1}. A run's references and holes MUST cover its stretch exactly (ADR-0202).
+    /// </summary>
+    private static string ReferenceRunCodec_CoverageBreaks => Get(nameof(ReferenceRunCodec_CoverageBreaks));
+
+    /// <summary>
+    /// The run's coverage breaks at offset {0}: its next piece starts at {1}. A run's references and holes MUST cover its stretch exactly (ADR-0202).
+    /// </summary>
+    internal static string FormatReferenceRunCodec_CoverageBreaks(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_CoverageBreaks, arg0, arg1);
+
+    /// <summary>
+    /// The run's references and holes end at {0}, but its stretch ends at {1} (ADR-0202).
+    /// </summary>
+    private static string ReferenceRunCodec_CoverageShort => Get(nameof(ReferenceRunCodec_CoverageShort));
+
+    /// <summary>
+    /// The run's references and holes end at {0}, but its stretch ends at {1} (ADR-0202).
+    /// </summary>
+    internal static string FormatReferenceRunCodec_CoverageShort(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_CoverageShort, arg0, arg1);
+
+    /// <summary>
+    /// The manifest lists {0} reference run(s), but {1} were read (ADR-0202).
+    /// </summary>
+    private static string ReferenceRunCodec_SequenceCount => Get(nameof(ReferenceRunCodec_SequenceCount));
+
+    /// <summary>
+    /// The manifest lists {0} reference run(s), but {1} were read (ADR-0202).
+    /// </summary>
+    internal static string FormatReferenceRunCodec_SequenceCount(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_SequenceCount, arg0, arg1);
+
+    /// <summary>
+    /// Reference run {0} starts at {1}, but the one before it ended at {2}: a file's runs MUST follow one another from 0 (ADR-0202).
+    /// </summary>
+    private static string ReferenceRunCodec_SequenceBreaks => Get(nameof(ReferenceRunCodec_SequenceBreaks));
+
+    /// <summary>
+    /// Reference run {0} starts at {1}, but the one before it ended at {2}: a file's runs MUST follow one another from 0 (ADR-0202).
+    /// </summary>
+    internal static string FormatReferenceRunCodec_SequenceBreaks(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_SequenceBreaks, arg0, arg1, arg2);
+
+    /// <summary>
+    /// Reference run {0} holds {1} references and holes; every run but a file's last holds exactly 262,144 (ADR-0202).
+    /// </summary>
+    private static string ReferenceRunCodec_SequenceNotFull => Get(nameof(ReferenceRunCodec_SequenceNotFull));
+
+    /// <summary>
+    /// Reference run {0} holds {1} references and holes; every run but a file's last holds exactly 262,144 (ADR-0202).
+    /// </summary>
+    internal static string FormatReferenceRunCodec_SequenceNotFull(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_SequenceNotFull, arg0, arg1);
+
+    /// <summary>
+    /// A file's reference runs end at {0}, but the file is {1} bytes (ADR-0202).
+    /// </summary>
+    private static string ReferenceRunCodec_SequenceShort => Get(nameof(ReferenceRunCodec_SequenceShort));
+
+    /// <summary>
+    /// A file's reference runs end at {0}, but the file is {1} bytes (ADR-0202).
+    /// </summary>
+    internal static string FormatReferenceRunCodec_SequenceShort(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_SequenceShort, arg0, arg1);
+
+    /// <summary>
     /// The encoded manifest is {0} bytes; the metadata limit is 16 MiB (specification 00 §8).
     /// </summary>
     private static string FileVersionManifestCodec_EncodedManifestBytesMetadataLimit => Get(nameof(FileVersionManifestCodec_EncodedManifestBytesMetadataLimit));
