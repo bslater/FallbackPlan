@@ -464,17 +464,63 @@ public sealed class RepositoryDescriptorCodecTests
         Assert.Contains("must not list", violation.Message, StringComparison.Ordinal);
     }
 
+    private static RepositoryDescriptor SampleV8() => Sample() with
+    {
+        FormatVersion = FallbackPlan.Domain.FormatVersions.ReferenceRuns,
+        RequiredFeatures = [.. SampleV7().RequiredFeatures, RepositoryDescriptorCodec.FeatureReferenceRuns],
+    };
+
+    [TestMethod]
+    public void RepositoryDescriptorV8_EncodedAndDecoded_RoundTrips()
+    {
+        // A format-8 descriptor (ADR-0202): format 8 keeps format 7's objects
+        // and adds a large file's reference runs, so it lists all six.
+        Assert.AreEqual((ushort)0x0008, RepositoryDescriptorCodec.FeatureReferenceRuns);
+        var bytes = RepositoryDescriptorCodec.Serialize(SampleV8());
+
+        Assert.IsInstanceOfType<DescriptorParseResult.Ok>(RepositoryDescriptorCodec.Parse(bytes), out var ok);
+        Assert.AreEqual(FallbackPlan.Domain.FormatVersions.ReferenceRuns, ok.Descriptor.FormatVersion);
+        SequenceAssert.AreEqual(SampleV8().RequiredFeatures, ok.Descriptor.RequiredFeatures);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV8_WithoutTheReferenceRunsFeature_IsAFormatViolation()
+    {
+        // 01 §3.2: a format-8 descriptor MUST list 0x0008, so a reader that
+        // predates format 8 refuses the repository by that name rather than
+        // reading a large file's manifest as a file of nothing.
+        Assert.ThrowsExactly<ArgumentException>(
+            () => RepositoryDescriptorCodec.Serialize(SampleV8() with { RequiredFeatures = SampleV7().RequiredFeatures }));
+
+        var bytes = Restamped(SampleV7(), version: 8);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("0x0008", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("must list", violation.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV7_NamingTheReferenceRunsFeature_IsAFormatViolation()
+    {
+        Assert.ThrowsExactly<ArgumentException>(
+            () => RepositoryDescriptorCodec.Serialize(SampleV7() with { RequiredFeatures = SampleV8().RequiredFeatures }));
+
+        var bytes = Restamped(SampleV8(), version: 7);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("0x0008", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("must not list", violation.Message, StringComparison.Ordinal);
+    }
+
     [TestMethod]
     public void RepositoryDescriptor_AFormatNewerThanThisBuildReads_IsRefusedNamingTheRange()
     {
         // A version above the newest this build reads is the earlier fact
         // and is named first — before any feature it might also list — with
         // the remedy: update, not re-seed, because nothing is withdrawn.
-        var bytes = Restamped(SampleV7(), version: 8);
+        var bytes = Restamped(SampleV8(), version: 9);
 
         Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
-        Assert.Contains("format 8", violation.Message, StringComparison.Ordinal);
-        Assert.Contains("2 to 7", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("format 9", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("2 to 8", violation.Message, StringComparison.Ordinal);
         Assert.Contains("Update", violation.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("withdrawn", violation.Message, StringComparison.Ordinal);
     }

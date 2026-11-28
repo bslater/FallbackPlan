@@ -41,10 +41,11 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Repository_CreatedWithTheDefaultSettings_IsFormat7AndDeclaresEveryFeature()
+    public async Task Repository_CreatedWithTheDefaultSettings_IsFormat8AndDeclaresEveryFeature()
     {
         // The creation default moved to format 3, then to 4 (ADR-0096), then
-        // to 5 (ADR-0097), then to 6 (ADR-0184), and then to 7 (ADR-0197). It stayed at 2 while format 3 was new and
+        // to 5 (ADR-0097), then to 6 (ADR-0184), then to 7 (ADR-0197), and
+        // then to 8 (ADR-0202). It stayed at 2 while format 3 was new and
         // untried, which was right
         // then and meant that nothing a person installed ever wrote a
         // relocatable record or a Merkle commitment — a format reachable
@@ -57,22 +58,51 @@ public sealed class RepositoryLifecycleTests : IDisposable
         using (reopened)
         using (authority)
         {
-            Assert.AreEqual(FormatVersions.StandInFailures, reopened.Descriptor.FormatVersion);
+            Assert.AreEqual(FormatVersions.ReferenceRuns, reopened.Descriptor.FormatVersion);
             Assert.IsTrue(
                 reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords),
-                "a format-7 descriptor must list relocatable-records (01 §3.2)");
+                "a format-8 descriptor must list relocatable-records (01 §3.2)");
             Assert.IsTrue(
                 reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureIndexGenerations),
-                "a format-7 descriptor must list index-generations (01 §3.2)");
+                "a format-8 descriptor must list index-generations (01 §3.2)");
             Assert.IsTrue(
                 reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureDeltaCheckpoints),
-                "a format-7 descriptor must list delta-checkpoints (01 §3.2)");
+                "a format-8 descriptor must list delta-checkpoints (01 §3.2)");
             Assert.IsTrue(
                 reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureFileFlagsAndLinkForms),
-                "a format-7 descriptor must list file-flags-and-link-forms (01 §3.2)");
+                "a format-8 descriptor must list file-flags-and-link-forms (01 §3.2)");
             Assert.IsTrue(
                 reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureStandInFailures),
-                "a format-7 descriptor must list stand-in-failures (01 §3.2)");
+                "a format-8 descriptor must list stand-in-failures (01 §3.2)");
+            Assert.IsTrue(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureReferenceRuns),
+                "a format-8 descriptor must list reference-runs (01 §3.2)");
+        }
+    }
+
+    [TestMethod]
+    public async Task Repository_CreatedAsFormat7_DeclaresStandInFailuresAndNotReferenceRuns()
+    {
+        // Format 7 stays creatable after format 8 (ADR-0202), and a format-7
+        // descriptor never lists a feature a format-7 reader would refuse.
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        var (repository, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, Settings with { FormatVersion = FormatVersions.StandInFailures },
+            createdAtUnixMilliseconds: 1, CancellationToken.None);
+        repository.Dispose();
+        createdAuthority.Dispose();
+
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+        using (reopened)
+        using (authority)
+        {
+            Assert.AreEqual(FormatVersions.StandInFailures, reopened.Descriptor.FormatVersion);
+            Assert.IsTrue(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureStandInFailures));
+            Assert.IsFalse(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureReferenceRuns),
+                "a format-7 descriptor must not list reference-runs (01 §3.2)");
         }
     }
 
@@ -346,7 +376,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         var descriptorPath = Path.Combine(_root, "store", "repository-format");
         var bytes = await File.ReadAllBytesAsync(descriptorPath);
         Assert.AreEqual(
-            FormatVersions.StandInFailures, bytes[9],
+            FormatVersions.ReferenceRuns, bytes[9],
             "the framing carries the created version as u16 at offset 8");
         bytes[9] = 1;
         // The body repeats the version under CBOR key 2: after the 16-byte
@@ -355,7 +385,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         const int bodyVersion = RepositoryDescriptorCodec.HeaderLength + 1 + 1 + 1 + 16 + 1;
         Assert.AreEqual(0x02, bytes[bodyVersion - 1], "key 2");
         Assert.AreEqual(
-            FormatVersions.StandInFailures, bytes[bodyVersion], "the body repeats the created format_version");
+            FormatVersions.ReferenceRuns, bytes[bodyVersion], "the body repeats the created format_version");
         bytes[bodyVersion] = 0x01;
         // Re-stamp the trailing digest so the refusal is the version's, not the digest's.
         System.Security.Cryptography.SHA256.HashData(bytes.AsSpan(0, bytes.Length - 32), bytes.AsSpan(bytes.Length - 32));

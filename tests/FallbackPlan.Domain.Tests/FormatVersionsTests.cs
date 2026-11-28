@@ -9,7 +9,9 @@ namespace FallbackPlan.Domain.Tests;
 /// adds two manifest keys, a file's flags and a link's form, and keeps
 /// format 5's index and format 3's blobs (ADR-0184). Format 7 adds a key
 /// to a capture failure, saying what stands in its place, and keeps format
-/// 6's manifests, format 5's index and format 3's blobs (ADR-0197). A
+/// 6's manifests, format 5's index and format 3's blobs (ADR-0197). Format 8
+/// adds a large file's reference runs, an object and a manifest key, and keeps
+/// everything format 7 wrote (ADR-0202). A
 /// version above the newest this build knows is never written (NFR-COMP-003;
 /// specification 11 §5.3): what such a repository's objects must carry is the
 /// newer build's to say.
@@ -111,18 +113,30 @@ public sealed class FormatVersionsTests
     [TestMethod]
     public void FormatEight_HasReferenceRuns_AndNoEarlierFormatDoes()
     {
-        // ADR-0202. Defined, and not yet a format this build reads or
-        // writes: its readers follow a file's runs first.
         Assert.AreEqual((ushort)8, FormatVersions.ReferenceRuns);
         Assert.IsTrue(FormatVersions.HasReferenceRuns(FormatVersions.ReferenceRuns));
         Assert.IsFalse(FormatVersions.HasReferenceRuns(FormatVersions.StandInFailures));
         Assert.IsFalse(FormatVersions.HasReferenceRuns(FormatVersions.RelocatableRecords));
-        Assert.IsFalse(FormatVersions.IsReadable(FormatVersions.ReferenceRuns));
-        Assert.IsFalse(FormatVersions.IsWritable(FormatVersions.ReferenceRuns));
     }
 
     [TestMethod]
-    public void ThisBuild_ReadsFormatsTwoToSeven_AndNothingAfter()
+    public void FormatEight_KeepsFormatSevensFailuresFormatSixsManifestsFormatFivesIndexAndFormatThreesBlobs()
+    {
+        // Format 8 adds an object and a manifest key, a large file's runs
+        // (ADR-0202), and changes nothing an earlier format wrote.
+        Assert.IsTrue(FormatVersions.HasStandInFailures(FormatVersions.ReferenceRuns));
+        Assert.IsTrue(FormatVersions.HasFileFlagsAndLinkForms(FormatVersions.ReferenceRuns));
+        Assert.IsTrue(FormatVersions.HasDeltaCheckpoints(FormatVersions.ReferenceRuns));
+        Assert.IsTrue(FormatVersions.HasIndexGenerations(FormatVersions.ReferenceRuns));
+        Assert.IsTrue(FormatVersions.HasRelocatableRecords(FormatVersions.ReferenceRuns));
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, FormatVersions.ContainerVersion(FormatVersions.ReferenceRuns, dataClass: true));
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, FormatVersions.ContainerVersion(FormatVersions.ReferenceRuns, dataClass: false));
+    }
+
+    [TestMethod]
+    public void ThisBuild_ReadsFormatsTwoToEight_AndNothingAfter()
     {
         Assert.IsFalse(FormatVersions.IsReadable(1));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.SealedDataPlane));
@@ -131,13 +145,14 @@ public sealed class FormatVersionsTests
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.DeltaCheckpoints));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.FileFlagsAndLinkForms));
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.StandInFailures));
-        Assert.IsFalse(FormatVersions.IsReadable(8));
-        Assert.AreEqual((ushort)7, FormatLimits.LatestFormatVersion);
-        Assert.AreEqual((ushort)7, FormatLimits.FormatVersion);
+        Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.ReferenceRuns));
+        Assert.IsFalse(FormatVersions.IsReadable(9));
+        Assert.AreEqual((ushort)8, FormatLimits.LatestFormatVersion);
+        Assert.AreEqual((ushort)8, FormatLimits.FormatVersion);
     }
 
     [TestMethod]
-    public void ThisBuild_WritesFormatsTwoToSeven_AndNothingAfter()
+    public void ThisBuild_WritesFormatsTwoToEight_AndNothingAfter()
     {
         Assert.IsFalse(FormatVersions.IsWritable(FormatVersions.Symmetric));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.SealedDataPlane));
@@ -145,6 +160,8 @@ public sealed class FormatVersionsTests
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.IndexGenerations));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.DeltaCheckpoints));
         Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.FileFlagsAndLinkForms));
+        Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.StandInFailures));
+        Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.ReferenceRuns));
         Assert.IsTrue(FormatVersions.IsWritable(FormatLimits.LatestFormatVersion));
         Assert.IsFalse(FormatVersions.IsWritable(FormatLimits.LatestFormatVersion + 1));
     }

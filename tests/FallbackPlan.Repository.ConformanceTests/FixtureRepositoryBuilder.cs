@@ -85,6 +85,25 @@ internal static class FixtureRepositoryBuilder
 
     internal const ulong CreatedAt = 1_722_600_000_000;
 
+    /// <summary>The format-8 fixture's file of two reference runs.</summary>
+    internal const string RunsFileName = "fixture-runs.bin";
+
+    /// <summary>The one-byte holes between the runs file's two segments: the first run, with its segment, full.</summary>
+    internal const int RunsFileHoles = ReferenceRunCodec.MaxPieces - 1;
+
+    /// <summary>The fixture's segment size, which the runs file's two segments are.</summary>
+    internal const int SegmentBytes = 64 * 1024;
+
+    /// <summary>
+    /// The format-8 fixture's runs file: <see cref="FileContent"/>'s first
+    /// segment, <see cref="RunsFileHoles"/> zeroes, and its second segment.
+    /// </summary>
+    internal static byte[] RunsFileContent()
+    {
+        var content = FileContent();
+        return [.. content.AsSpan(0, SegmentBytes), .. new byte[RunsFileHoles], .. content.AsSpan(SegmentBytes, SegmentBytes)];
+    }
+
     /// <summary>Where the format-6 fixture's junction leads.</summary>
     internal const string JunctionTarget = "C:\\FixtureFolder";
 
@@ -125,6 +144,11 @@ internal static class FixtureRepositoryBuilder
         if (FormatVersions.HasStandInFailures(formatVersion))
         {
             features.Add(RepositoryDescriptorCodec.FeatureStandInFailures);
+        }
+
+        if (FormatVersions.HasReferenceRuns(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureReferenceRuns);
         }
 
         return [.. features];
@@ -251,6 +275,59 @@ internal static class FixtureRepositoryBuilder
                     FileVersionManifestCodec.Encode(junction), cancellationToken).ConfigureAwait(false);
                 treeEntries.Insert(0, new TreeEntry("fixture-junction"u8.ToArray(), junctionId, EntryKind.Symlink));
             }
+
+            // A large file's references in reference runs ride only at format
+            // 8 (ADR-0202): a reader that predates them refuses the repository
+            // by its feature. The file reuses the first two segments, so the
+            // runs are all it adds: the first is the first segment and every
+            // hole, full, and the second is the second segment.
+            if (FormatVersions.HasReferenceRuns(identity.FormatVersion))
+            {
+                var secondStart = (ulong)SegmentBytes + RunsFileHoles;
+                ReferenceRun[] runs =
+                [
+                    new ReferenceRun
+                    {
+                        Start = 0,
+                        Length = secondStart,
+                        SegmentReferences = [references[0]],
+                        SparseExtents = [.. Enumerable.Range(0, RunsFileHoles).Select(hole => new SparseExtent((ulong)SegmentBytes + (ulong)hole, 1))],
+                    },
+                    new ReferenceRun
+                    {
+                        Start = secondStart,
+                        Length = SegmentBytes,
+                        SegmentReferences = [new SegmentReference((long)secondStart, SegmentBytes, references[1].ObjectId)],
+                    },
+                ];
+                List<ObjectId> runIds = [];
+                foreach (var run in runs)
+                {
+                    runIds.Add(await AppendManifestAsync(
+                        metaWriter, objectIds, ObjectType.ReferenceRun, ReferenceRunCodec.Encode(run), cancellationToken)
+                        .ConfigureAwait(false));
+                }
+
+                var runsFile = new FileVersionManifest
+                {
+                    EntryKind = EntryKind.File,
+                    Name = System.Text.Encoding.UTF8.GetBytes(RunsFileName),
+                    NameNormalisation = NameNormalisation.Nfc,
+                    LogicalLength = secondStart + SegmentBytes,
+                    SegmentReferences = [],
+                    ReferenceRuns = runIds,
+                    WholeFileHash = SHA256.HashData(RunsFileContent()),
+                    SegmentationProfile = SegmentationProfile.FixedV1.Value,
+                    Metadata = new EntryMetadata { ModifiedAt = CreatedAt },
+                };
+                var runsFileId = await AppendManifestAsync(
+                    metaWriter, objectIds, ObjectType.FileVersionManifest,
+                    FileVersionManifestCodec.Encode(runsFile), cancellationToken).ConfigureAwait(false);
+                treeEntries.Add(new TreeEntry(runsFile.Name, runsFileId, EntryKind.File));
+            }
+
+            // A tree's entries are in the raw bytes of their names (06 §5).
+            treeEntries.Sort(static (left, right) => left.Name.Span.SequenceCompareTo(right.Name.Span));
 
             var tree = new TreeManifest
             {

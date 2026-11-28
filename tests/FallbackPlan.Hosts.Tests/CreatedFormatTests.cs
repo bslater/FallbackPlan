@@ -16,7 +16,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// opt-in was the CLI's <c>--format-version</c>, and the service created at
 /// format 2, so no installation published a Merkle commitment and no peer
 /// could be challenged by chunk. A product that can read a format creates at
-/// it, and that is format 7 now.
+/// it, and that is format 8 now.
 /// </summary>
 /// <remarks>
 /// These assert the <b>literal</b> version rather than
@@ -42,8 +42,8 @@ public sealed class CreatedFormatTests : IDisposable
             new LocalFileSystemObjectStore(_harness.RepositoryPath), _timeout.Token);
 
         Assert.AreEqual(
-            FormatVersions.StandInFailures, descriptor.FormatVersion,
-            "a set created today is a format-7 repository, or its failures have nowhere to say what stands in their place");
+            FormatVersions.ReferenceRuns, descriptor.FormatVersion,
+            "a set created today is a format-8 repository, or a file too large for one manifest has nowhere to be backed up");
         Assert.Contains(
             RepositoryDescriptorCodec.FeatureRelocatableRecords,
             descriptor.RequiredFeatures,
@@ -64,6 +64,10 @@ public sealed class CreatedFormatTests : IDisposable
             RepositoryDescriptorCodec.FeatureStandInFailures,
             descriptor.RequiredFeatures,
             "and this one makes a reader that cannot read what stands in a failure's place refuse by name (ADR-0197)");
+        Assert.Contains(
+            RepositoryDescriptorCodec.FeatureReferenceRuns,
+            descriptor.RequiredFeatures,
+            "and this one makes a reader that cannot follow a large file's reference runs refuse by name (ADR-0202)");
     }
 
     [TestMethod]
