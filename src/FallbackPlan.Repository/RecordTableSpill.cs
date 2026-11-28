@@ -9,10 +9,12 @@ using Microsoft.Win32.SafeHandles;
 namespace FallbackPlan.Repository;
 
 /// <summary>
-/// The record tables of the blobs a session has uploaded, kept in a file in
-/// its spool rather than in memory until the session publishes them
-/// (ADR-0201). A snapshot can store millions of records, and every one of
-/// them waits here for index-delta publication.
+/// The record tables of the blobs a session has uploaded, and the segment
+/// references of the files a tree snapshot has captured, kept in a file in its
+/// spool rather than in memory until the session publishes them (ADR-0201). A
+/// snapshot can store millions of records and reference millions of segments,
+/// and every one of them waits here for index-delta publication or for the
+/// catalogue.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,9 +26,10 @@ namespace FallbackPlan.Repository;
 /// revealing it.
 /// </para>
 /// <para>
-/// Entries are fixed-width and a blob's table is written once, whole, so a
-/// table is a position and a count, and reading one back is one positional
-/// read. Appends and reads may come from several upload workers at once.
+/// Entries are fixed-width and a blob's table, or a file's references, is
+/// written once, whole, so either is a position and a count, and reading one
+/// back is one positional read. Appends and reads may come from several upload
+/// workers and the walk at once.
 /// </para>
 /// </remarks>
 internal sealed class RecordTableSpill : IDisposable
@@ -37,6 +40,9 @@ internal sealed class RecordTableSpill : IDisposable
     // ObjectId, ordinal, physical offset, stored length, logical length, the
     // two profiles and the object type, little-endian.
     private const int EntryBytes = ObjectId.Size + 4 + 8 + 4 + 8 + 2 + 2 + 1;
+
+    // ObjectId, logical offset and logical length, little-endian.
+    private const int ReferenceBytes = ObjectId.Size + 8 + 8;
 
     private const string WrittenSetExtension = ".written";
 
@@ -72,6 +78,8 @@ internal sealed class RecordTableSpill : IDisposable
             path);
     }
 
+    private delegate T Decoder<out T>(ReadOnlySpan<byte> source);
+
     /// <summary>Writes <paramref name="table"/> to the spill and returns it as read back from there.</summary>
     public IReadOnlyList<RecordTableEntry> Append(IReadOnlyList<RecordTableEntry> table)
     {
@@ -82,6 +90,30 @@ internal sealed class RecordTableSpill : IDisposable
             Encode(table[index], bytes.AsSpan(index * EntryBytes, EntryBytes));
         }
 
+        return new Spilled<RecordTableEntry>(
+            this, Write(bytes), table.Count, EntryBytes, Decode, Strings.RecordTableSpill_SessionHasEnded);
+    }
+
+    /// <summary>Writes a file's segment references to the spill and returns them as read back from there.</summary>
+    public IReadOnlyList<SegmentReference> AppendReferences(IReadOnlyList<SegmentReference> references)
+    {
+        ArgumentNullException.ThrowIfNull(references);
+        var bytes = new byte[references.Count * ReferenceBytes];
+        for (var index = 0; index < references.Count; index++)
+        {
+            EncodeReference(references[index], bytes.AsSpan(index * ReferenceBytes, ReferenceBytes));
+        }
+
+        return new Spilled<SegmentReference>(
+            this, Write(bytes), references.Count, ReferenceBytes, DecodeReference,
+            Strings.RecordTableSpill_ReferencesSessionHasEnded);
+    }
+
+    /// <inheritdoc />
+    public void Dispose() => _handle.Dispose();
+
+    private long Write(byte[] bytes)
+    {
         long offset;
         lock (_gate)
         {
@@ -90,20 +122,17 @@ internal sealed class RecordTableSpill : IDisposable
         }
 
         RandomAccess.Write(_handle, bytes, offset);
-        return new SpilledTable(this, offset, table.Count);
+        return offset;
     }
 
-    /// <inheritdoc />
-    public void Dispose() => _handle.Dispose();
-
-    private RecordTableEntry[] Read(long offset, int count)
+    private T[] Read<T>(long offset, int count, int width, Decoder<T> decode, string sessionHasEnded)
     {
         if (_handle.IsClosed)
         {
-            throw new InvalidOperationException(Strings.RecordTableSpill_SessionHasEnded);
+            throw new InvalidOperationException(sessionHasEnded);
         }
 
-        var bytes = new byte[count * EntryBytes];
+        var bytes = new byte[count * width];
         var read = 0;
         while (read < bytes.Length)
         {
@@ -116,13 +145,13 @@ internal sealed class RecordTableSpill : IDisposable
             read += got;
         }
 
-        var entries = new RecordTableEntry[count];
+        var items = new T[count];
         for (var index = 0; index < count; index++)
         {
-            entries[index] = Decode(bytes.AsSpan(index * EntryBytes, EntryBytes));
+            items[index] = decode(bytes.AsSpan(index * width, width));
         }
 
-        return entries;
+        return items;
     }
 
     private static void RemoveAbandoned(string spoolDirectory)
@@ -185,6 +214,19 @@ internal sealed class RecordTableSpill : IDisposable
         rest[28] = (byte)entry.ObjectType;
     }
 
+    private static void EncodeReference(in SegmentReference reference, Span<byte> destination)
+    {
+        reference.ObjectId.CopyTo(destination);
+        BinaryPrimitives.WriteInt64LittleEndian(destination[ObjectId.Size..], reference.LogicalOffset);
+        BinaryPrimitives.WriteInt64LittleEndian(destination[(ObjectId.Size + 8)..], reference.LogicalLength);
+    }
+
+    private static SegmentReference DecodeReference(ReadOnlySpan<byte> source) =>
+        new(
+            BinaryPrimitives.ReadInt64LittleEndian(source[ObjectId.Size..]),
+            BinaryPrimitives.ReadInt64LittleEndian(source[(ObjectId.Size + 8)..]),
+            ObjectId.FromBytes(source[..ObjectId.Size]));
+
     private static RecordTableEntry Decode(ReadOnlySpan<byte> source)
     {
         var rest = source[ObjectId.Size..];
@@ -200,26 +242,29 @@ internal sealed class RecordTableSpill : IDisposable
     }
 
     /// <summary>
-    /// One blob's table, read back from the spill each time it is read, so
-    /// that holding it holds a position and a count. Readable while its
-    /// session runs; once the session has ended, its spill is gone.
+    /// One blob's table, or one file's references, read back from the spill
+    /// each time it is read, so that holding it holds a position and a count.
+    /// Readable while its session runs; once the session has ended, its spill
+    /// is gone, and reading says where else to look.
     /// </summary>
-    private sealed class SpilledTable(RecordTableSpill spill, long offset, int count) : IReadOnlyList<RecordTableEntry>
+    private sealed class Spilled<T>(
+        RecordTableSpill spill, long offset, int count, int width, Decoder<T> decode, string sessionHasEnded)
+        : IReadOnlyList<T>
     {
         public int Count => count;
 
-        public RecordTableEntry this[int index]
+        public T this[int index]
         {
             get
             {
                 ArgumentOutOfRangeException.ThrowIfNegative(index);
                 ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, count);
-                return spill.Read(offset + ((long)index * EntryBytes), 1)[0];
+                return spill.Read(offset + ((long)index * width), 1, width, decode, sessionHasEnded)[0];
             }
         }
 
-        public IEnumerator<RecordTableEntry> GetEnumerator() =>
-            ((IEnumerable<RecordTableEntry>)spill.Read(offset, count)).GetEnumerator();
+        public IEnumerator<T> GetEnumerator() =>
+            ((IEnumerable<T>)spill.Read(offset, count, width, decode, sessionHasEnded)).GetEnumerator();
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }

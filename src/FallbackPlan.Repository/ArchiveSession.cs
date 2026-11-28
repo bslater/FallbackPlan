@@ -1,5 +1,6 @@
 using Bodu;
 using System.Buffers;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Threading.Channels;
@@ -609,6 +610,48 @@ public sealed class ArchiveSession : IAsyncDisposable
     /// <summary>Whether another segment of this run claimed the record and has not yet appended it.</summary>
     private bool ClaimantPending(ObjectId objectId) => _written.ClaimantPending(objectId);
 
+    /// <summary>
+    /// <paramref name="archived"/>, its segment references waiting in this
+    /// session's spill rather than in memory, and its content identifiers not
+    /// kept at all (ADR-0201). A tree snapshot keeps every file it captures
+    /// until it publishes. Once a file's manifest is written, the catalogue
+    /// reading its references back at the end is all that needs them, and
+    /// nothing needs its content identifiers again.
+    /// </summary>
+    internal ArchiveResult SpillSegments(ArchiveResult archived)
+    {
+        ArgumentNullException.ThrowIfNull(archived);
+        if (archived.SegmentReferences.Count == 0)
+        {
+            return archived;
+        }
+
+        return archived.WithSegments(
+            Spill().AppendReferences(archived.SegmentReferences),
+            new ContentIdsNotKept(archived.SegmentContentIds.Count));
+    }
+
+    private RecordTableSpill Spill()
+    {
+        lock (_blobGate)
+        {
+            return _recordTables ??= RecordTableSpill.Create(_spoolDirectory);
+        }
+    }
+
+    /// <summary>How many content identifiers a file had, once they are no longer kept.</summary>
+    private sealed class ContentIdsNotKept(int count) : IReadOnlyList<ContentId>
+    {
+        public int Count => count;
+
+        public ContentId this[int index] => throw new InvalidOperationException(Strings.ArchiveSession_ContentIdsNotKept);
+
+        public IEnumerator<ContentId> GetEnumerator() =>
+            throw new InvalidOperationException(Strings.ArchiveSession_ContentIdsNotKept);
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     /// <summary>A buffer big enough for any segment this policy can produce.</summary>
     private byte[] RentBuffer() =>
         _buffers.TryTake(out var buffer) ? buffer : new byte[_policy.MaximumSegmentBytes];
@@ -907,12 +950,7 @@ public sealed class ArchiveSession : IAsyncDisposable
             EngineDiagnostics.BlobFillFraction.Record(
                 sealedBlob.Length / (double)_policy.BlobWriteProfile.TargetSizeBytes);
 
-            RecordTableSpill recordTables;
-            lock (_blobGate)
-            {
-                recordTables = _recordTables ??= RecordTableSpill.Create(_spoolDirectory);
-            }
-
+            var recordTables = Spill();
             var archived = new ArchivedBlob(
                 sealedBlob.BlobId,
                 storeBlobKey,

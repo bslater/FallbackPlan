@@ -249,6 +249,16 @@ internal static class Strings
     internal static string RecordTableSpill_SessionHasEnded => Get(nameof(RecordTableSpill_SessionHasEnded));
 
     /// <summary>
+    /// This file's segment references were kept in the spool of the session that archived it, and that session has ended, which deletes them. Read the file's manifest instead: it declares the same references.
+    /// </summary>
+    internal static string RecordTableSpill_ReferencesSessionHasEnded => Get(nameof(RecordTableSpill_ReferencesSessionHasEnded));
+
+    /// <summary>
+    /// This file's content identifiers were let go once its manifest was written, because a tree snapshot has no use for them after that. Content identifiers are never written anywhere durable, so nothing else holds them.
+    /// </summary>
+    internal static string ArchiveSession_ContentIdsNotKept => Get(nameof(ArchiveSession_ContentIdsNotKept));
+
+    /// <summary>
     /// Blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound would be refused on every read, so it is refused here instead.
     /// </summary>
     private static string IndexDeltaBudget_BlobExceedsDeltaBudget => Get(nameof(IndexDeltaBudget_BlobExceedsDeltaBudget));

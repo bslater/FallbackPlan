@@ -2,6 +2,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Local;
@@ -133,6 +134,19 @@ public abstract class ArchiveTestHarness : IDisposable
         }
 
         return entries;
+    }
+
+    /// <summary>
+    /// The segment references a tree snapshot's file version declares, read
+    /// from its manifest. Once the snapshot's session has ended that is where
+    /// they are: the published result's copy waited in the session's spool
+    /// and went with it (ADR-0201).
+    /// </summary>
+    protected static async Task<IReadOnlyList<SegmentReference>> ReferencesOfAsync(RepositoryReader reader, ObjectId versionId)
+    {
+        var read = await reader.ReadSegmentAsync(versionId, CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        return FileVersionManifestCodec.Decode(read.Plaintext!).SegmentReferences;
     }
 
     /// <summary>

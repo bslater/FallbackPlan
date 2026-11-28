@@ -170,11 +170,12 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
             written,
             "the unchanged prefix should have been located, not re-stored");
 
+        // It restores from the references its manifest declares.
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         using var restored = new MemoryStream();
         var outcome = await reader.RestoreAsync(
-            secondFile.Archive.SegmentReferences, restored, CancellationToken.None);
+            await ReferencesOfAsync(reader, secondFile.ObjectId), restored, CancellationToken.None);
 
         Assert.IsTrue(outcome.Success, outcome.FailureDetail);
         SequenceAssert.AreEqual(versions[1], restored.ToArray());

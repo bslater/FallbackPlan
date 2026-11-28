@@ -195,6 +195,19 @@ Until this is settled, a v2 set's replica is registered only if the passphrase h
 > 1.7. The files' references are still in memory, and the question stays
 > open until they are not.
 
+> **2026-11: the files' references are built** ([Amendment 2](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool)).
+> Once a tree snapshot has written a captured file's manifest, the file's
+> references wait in the same spill and its content ids are let go, and the
+> catalogue reads the references back at the end: 3.8 bytes kept per
+> referenced segment, where it was 84.
+> Every decision of ADR-0201 is built, and the question stays open for two
+> costs outside them. A file holds its own references and content ids while it
+> is archived, about 80 bytes a segment, so a single 2 TiB file still holds
+> about 160 MB of them at 1 MiB segments until its manifest is written. And
+> each captured file's result stays in memory until the snapshot publishes,
+> about 1.2 KB a file measured over 20,000 small ones, which grows with how
+> many files a snapshot captures: around 1.2 GB at a million.
+
 **Owner:** maintainer · **Blocks:** FR-ARCH-002's 2 TiB acceptance, and NFR-PERF-001 for any snapshot that stores more than a few hundred gigabytes
 
 A snapshot keeps a little memory for every record it stores and every segment it reads, for as long as it runs. Over 32 GiB of unique content (2026-11, `PerformanceTests/MemoryBoundProof`), the live set grows by about 0.4 to 0.6 MiB per GiB, some 500 to 700 bytes per stored segment. Three things hold it:

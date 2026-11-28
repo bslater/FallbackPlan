@@ -1272,8 +1272,11 @@ public sealed partial class PublicationOrchestrator
                     logger, new LogPath(entry.RelativePath), entry.Length,
                     LastArchive?.SegmentReferences.Count ?? 0, LastArchive?.RecordsWritten ?? 0);
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, manifest.EntryKind));
+                // Its manifest is written, so its references and content
+                // identifiers wait in the spool until the catalogue reads them.
                 _files.Add(new PublishedFileVersion(
-                    entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
+                    entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind,
+                    LastArchive is { } archived ? session.SpillSegments(archived) : null,
                     entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId,
                     HasAlternateStreams: withParent.Metadata.AlternateStreams.Count > 0,
                     MetadataDigest: FileVersionManifestCodec.MetadataDigest(withParent.Metadata, MetadataRules.FileFlagsOf(withParent.CaptureDiagnostics)),

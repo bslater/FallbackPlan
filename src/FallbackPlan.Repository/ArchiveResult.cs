@@ -35,6 +35,13 @@ public sealed record ArchivedBlob(
 /// reach a durable object (specification 02 §2); this type is
 /// catalogue-domain data.
 /// </summary>
+/// <remarks>
+/// Once a tree snapshot has written a file's manifest, the file keeps its
+/// references in the session's spool, readable while the session runs, and
+/// its content identifiers not at all, since nothing reads them again
+/// (ADR-0201). Their counts, and everything else here, stay in memory. A
+/// single file's result carries both in memory.
+/// </remarks>
 public sealed class ArchiveResult
 {
     internal ArchiveResult(
@@ -86,4 +93,8 @@ public sealed class ArchiveResult
 
     /// <summary>The number of records this archive run wrote.</summary>
     public int RecordsWritten => Blobs.Sum(blob => blob.RecordCount);
+
+    /// <summary>The same result, its references and content identifiers those given.</summary>
+    internal ArchiveResult WithSegments(IReadOnlyList<SegmentReference> references, IReadOnlyList<ContentId> contentIds) =>
+        new(references, contentIds, Blobs, LogicalLength, WholeFileHash, SegmentationProfile, SegmentSize, CdcParameters);
 }

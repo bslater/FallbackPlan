@@ -99,6 +99,8 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         // in ConcurrentUploadTests covers one file; this is the multi-file case,
         // which is the one where a session's blob continuity, its dedup set and
         // its ordinal sequence are all shared across files rather than reset.
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
         foreach (var file in published.Files)
         {
             var archive = file.Archive;
@@ -110,9 +112,15 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 
             // 06 §3.2: the encoded references must ascend by logical offset and
             // tile the file exactly. Producing segments concurrently is allowed;
-            // emitting them out of order is not.
+            // emitting them out of order is not. They are read from the
+            // manifest that encodes them.
+            var manifestRead = await reader.ReadSegmentAsync(file.ObjectId, CancellationToken.None);
+            Assert.AreEqual(RecordReadOutcome.Ok, manifestRead.Outcome);
+            var references = FileVersionManifestCodec.Decode(manifestRead.Plaintext!).SegmentReferences;
+            Assert.HasCount(archive.SegmentReferences.Count, references);
+
             long expectedOffset = 0;
-            foreach (var reference in archive.SegmentReferences)
+            foreach (var reference in references)
             {
                 Assert.AreEqual(expectedOffset, reference.LogicalOffset);
                 expectedOffset += reference.LogicalLength;
