@@ -21,9 +21,13 @@
   `Repository.Tests/IndexDeltaBudgetTests`, with
   `Repository.Tests/DeltaSplitPublicationTests` reading a tree's tables from
   its blobs' footers.
+- The written set ([Amendment 1](#amendment-1-2026-11--the-written-set-waits-in-the-spool)):
+  `Repository/WrittenSet`, which keeps the claims and the records of blobs not
+  yet uploaded in memory and the rest in `Repository.Catalogue/SpooledObjectSet`,
+  an SQLite table beside the spill; held by `Repository.Tests/WrittenSetTests`
+  and `Repository.Tests/SessionRetentionTests`.
 
-**Not yet built:** decision 3, the written set; decision 4, the files'
-references.
+**Not yet built:** decision 4, the files' references.
 
 ## Context
 
@@ -73,7 +77,12 @@ from its table as the cut reaches it. So publication holds one delta's
 entries and one blob's table at a time, rather than the snapshot's. The cut
 is the same one: `Split` is `SplitAsItGoes` taken whole.
 
-### 3. The written set keeps only what is in flight *(not yet built)*
+### 3. The written set keeps only what is in flight
+
+> **Amended 2026-11 ([Amendment 1](#amendment-1-2026-11--the-written-set-waits-in-the-spool)).** Built, and without the
+> in-memory filter this decision proposed: a lookup in the spooled set costs
+> microseconds, so a filter in front of it would save nothing a segment
+> notices.
 
 The written set settles which of two concurrent duplicates is written
 (ADR-0029 §1), and remembers every record the session has stored so that a
@@ -113,6 +122,8 @@ without revealing it, so one left until the next session leaks nothing.
   78.5, measured by `SessionRetentionTests` over a hundred thousand
   one-record files. The rest is the written set's, which decision 3
   addresses.
+  > **Amended 2026-11 ([Amendment 1](#amendment-1-2026-11--the-written-set-waits-in-the-spool)).** With decision 3
+  > built it is 1.7 bytes.
 - Publication reads the spill once, sequentially, in the order the blobs were
   uploaded. The disk traffic is 61 bytes a record written once and read once.
 - The format is unchanged. Nothing durable is written differently, and a
@@ -131,8 +142,51 @@ without revealing it, so one left until the next session leaks nothing.
 - **Trim the in-memory tables.** A table's array is about 45% list headroom,
   and trimming it would halve what decision 1 removes entirely.
 
+## Amendment 1 (2026-11) — the written set waits in the spool
+
+Decision 3 is built. `Repository/WrittenSet` is the session's written set. It
+keeps in memory the claims still in flight and the records whose blob has not
+yet uploaded. When a blob uploads, its records go into
+`Repository.Catalogue/SpooledObjectSet` and leave memory. That is one SQLite
+table, keyed by object identifier, in a file beside the session's spill and
+named for it: `record-tables-<id>.written`.
+
+**No filter.** The decision proposed an in-memory filter in front of the
+spooled set, so that a lookup which misses would skip the disk. A lookup is a
+point read of an SQLite key through a fixed page cache, which costs
+microseconds, while a segment takes milliseconds to prepare. So a filter would
+cost memory, about a byte per record, to save time nobody would see.
+`Repository.Tests/SessionRetentionTests` runs a hundred thousand files, a claim
+and a lookup each, in the same five seconds with the set spooled as with it in
+memory.
+
+**The race.** A record leaves memory only once it is in the spooled set, and a
+claim looks in the spooled set again after taking its place in memory. A claim
+can find the record in neither place, because the record moved between its two
+looks. That claim takes the place the record left, sees the record in the
+spooled set on its second look, and is undone rather than written. Only a
+concurrent run reaches this. The tests hold the common case: a duplicate of a
+record whose blob has uploaded is reused, not written again
+(`Repository.Tests/WrittenSetTests`).
+
+**What it is on disk.** The spooled set keeps no journal and never waits on a
+flush, because nothing in it outlives its session. It holds its lock
+exclusively for as long as it is open. The session creates it after its spill
+and deletes it first, so a set beside a spill belongs to the spill's session.
+A set with no spill beside it belongs to a session that is gone, and the first
+spill each session makes removes both.
+
+**What it costs.** What a session keeps per stored record fell from 78 bytes
+to 1.7, measured by `Repository.Tests/SessionRetentionTests`, whose bound is
+now 16. The rest is each blob's own identity, shared by every record in it.
+The spooled set's pages, a mebibyte of them at most, are native memory. The
+heap measurement does not see them, and they do not grow with the set. On
+disk the set is about 32 bytes a record plus its B-tree, beside the spill's
+61.
+
 ## Status history
 
 | Date | Status | Note |
 |---|---|---|
 | 2026-11 | Accepted | Decisions 1, 2 and 5 built, tests first: `Repository/RecordTableSpill`, `Repository/ArchiveSession`, `Repository/FileArchiver`, `Repository/IndexDeltaBudget` and `Repository/PublicationOrchestrator`, held by `Repository.Tests/SessionRetentionTests`, `Repository.Tests/SpilledRecordTableTests` and `Repository.Tests/IndexDeltaBudgetTests`. Decisions 3 and 4 are not yet built. |
+| 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-written-set-waits-in-the-spool): decision 3 built, without the filter it proposed. `Repository/WrittenSet` keeps claims and records of blobs not yet uploaded in memory and the rest in `Repository.Catalogue/SpooledObjectSet`, beside the spill. A session keeps 1.7 bytes per stored record where it kept 78. Held by `Repository.Tests/WrittenSetTests` and `Repository.Tests/SessionRetentionTests`. Decision 4 is not yet built. |

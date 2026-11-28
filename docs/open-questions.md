@@ -189,9 +189,11 @@ Until this is settled, a v2 set's replica is registered only if the passphrase h
 > **2026-11: direction chosen — (b), spill what must wait** ([ADR-0201](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md)).
 > The record tables are built: each uploaded blob's table waits in the
 > session's spool, and publication reads them back one blob at a time as it
-> cuts its deltas. What a session keeps per stored record fell from 160.6
-> bytes to 78. The written set and the files' references are still in
-> memory, and the question stays open until they are not.
+> cuts its deltas. So is the written set ([Amendment 1](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md#amendment-1-2026-11--the-written-set-waits-in-the-spool)):
+> an uploaded blob's records leave memory for an SQLite table beside the
+> spill. What a session keeps per stored record fell from 160.6 bytes to
+> 1.7. The files' references are still in memory, and the question stays
+> open until they are not.
 
 **Owner:** maintainer · **Blocks:** FR-ARCH-002's 2 TiB acceptance, and NFR-PERF-001 for any snapshot that stores more than a few hundred gigabytes
 
