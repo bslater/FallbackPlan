@@ -85,6 +85,14 @@ public sealed class SpilledRecordTableTests : ArchiveTestHarness
         var left = Path.Combine(SpoolDirectory, $"record-tables-{Guid.NewGuid():N}.spill");
         await File.WriteAllBytesAsync(left, new byte[4096]);
 
+        // The written set it kept beside the tables, and one whose tables the
+        // system deleted when its session died, as Windows does with a file
+        // opened to be deleted on close.
+        var leftWritten = Path.ChangeExtension(left, ".written");
+        await File.WriteAllBytesAsync(leftWritten, new byte[4096]);
+        var orphanWritten = Path.Combine(SpoolDirectory, $"record-tables-{Guid.NewGuid():N}.written");
+        await File.WriteAllBytesAsync(orphanWritten, new byte[4096]);
+
         var store = CreateStore();
         using var keys = CreateKeys();
         var archiver = CreateArchiver(store, keys);
@@ -96,6 +104,8 @@ public sealed class SpilledRecordTableTests : ArchiveTestHarness
             await session.FlushAsync(CancellationToken.None);
 
             Assert.IsFalse(File.Exists(left), "the next session that spilled should have removed the crashed one's tables");
+            Assert.IsFalse(File.Exists(leftWritten), "and the written set beside them");
+            Assert.IsFalse(File.Exists(orphanWritten), "and a written set with no tables beside it");
         }
     }
 
@@ -122,6 +132,7 @@ public sealed class SpilledRecordTableTests : ArchiveTestHarness
             }
 
             Assert.HasCount(2, Directory.GetFiles(SpoolDirectory, "record-tables-*.spill"));
+            Assert.HasCount(2, Directory.GetFiles(SpoolDirectory, "record-tables-*.written"), "nor its written set");
             await AssertTablesMatchFootersAsync(store, keys, first.Blobs);
             await AssertTablesMatchFootersAsync(store, keys, second.Blobs);
         }

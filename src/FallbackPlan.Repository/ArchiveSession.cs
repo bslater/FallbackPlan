@@ -87,14 +87,9 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly Lock _blobGate = new();
     private readonly ReusePredicate? _mayReuseSegment;
 
-    // A reservation set, not a record of what was written. The concurrent stage
-    // claims an object id before compressing it, so a duplicate segment loses
-    // the race and is treated as reused rather than compressed and appended a
-    // second time. ADR-0029 §1 frees which duplicate wins, but not how many
-    // records get written, and the reuse suites assert exact record counts.
-    private readonly ConcurrentDictionary<ObjectId, byte> _writtenThisSession = [];
-    private const byte Claimed = 0;
-    private const byte Appended = 1;
+    // Every record this session has written, in memory until its blob is
+    // uploaded and in the spool after (ADR-0201).
+    private readonly WrittenSet _written = new();
     private BlobWriter? _writer;
     private bool _resumeAttempted;
 
@@ -428,7 +423,7 @@ public sealed class ArchiveSession : IAsyncDisposable
             // before compressing is what keeps the record count deterministic
             // when two identical segments are in flight at once.
             if (await MayReuseSegmentAsync(objectId, cancellationToken).ConfigureAwait(false) ||
-                !_writtenThisSession.TryAdd(objectId, Claimed))
+                !_written.TryClaim(objectId))
             {
                 return Reused(segment, plaintext, contentId, objectId);
             }
@@ -592,7 +587,7 @@ public sealed class ArchiveSession : IAsyncDisposable
                 payload,
                 cancellationToken).ConfigureAwait(false);
 
-            _writtenThisSession[segment.ObjectId] = Appended;
+            _written.MarkAppended(segment.ObjectId);
             BackedUp.RecordAppended(segment.ObjectId, segment.Length);
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "false"));
             EngineDiagnostics.ArchiveBytesStored.Add(payload.Length);
@@ -612,8 +607,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     }
 
     /// <summary>Whether another segment of this run claimed the record and has not yet appended it.</summary>
-    private bool ClaimantPending(ObjectId objectId) =>
-        _writtenThisSession.TryGetValue(objectId, out var state) && state == Claimed;
+    private bool ClaimantPending(ObjectId objectId) => _written.ClaimantPending(objectId);
 
     /// <summary>A buffer big enough for any segment this policy can produce.</summary>
     private byte[] RentBuffer() =>
@@ -929,6 +923,10 @@ public sealed class ArchiveSession : IAsyncDisposable
                 sealedBlob.Length,
                 recordTables.Append(sealedBlob.RecordTable));
 
+            // The blob is durable, so its records can leave memory for the
+            // spool; a later duplicate finds them there.
+            _written.Retire(sealedBlob.RecordTable, recordTables.WrittenSetPath);
+
             lock (_blobGate)
             {
                 // Order here is incidental (ADR-0029 §1): the index entry list
@@ -958,7 +956,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         // claimed — needs no new record. Keyed on the object id so the test
         // survives a catalogue rebuild.
         if (await MayReuseSegmentAsync(objectId, cancellationToken).ConfigureAwait(false) ||
-            !_writtenThisSession.TryAdd(objectId, Claimed))
+            !_written.TryClaim(objectId))
         {
             BackedUp.SegmentReused(objectId, plannedLength, ClaimantPending(objectId));
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
@@ -1006,7 +1004,7 @@ public sealed class ArchiveSession : IAsyncDisposable
                 payload,
                 cancellationToken).ConfigureAwait(false);
 
-            _writtenThisSession[objectId] = Appended;
+            _written.MarkAppended(objectId);
             BackedUp.RecordAppended(objectId, plannedLength);
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "false"));
             EngineDiagnostics.ArchiveBytesStored.Add(payload.Length);
@@ -1122,7 +1120,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         // publish two records where the manifest references one.
         foreach (var entry in writer.Entries)
         {
-            _writtenThisSession.TryAdd(entry.ObjectId, Appended);
+            _written.AddResumed(entry.ObjectId);
         }
 
         // Nothing else needs rebuilding: the index entries for these records
@@ -1232,8 +1230,10 @@ public sealed class ArchiveSession : IAsyncDisposable
             codec.Dispose();
         }
 
-        // Last, after the workers that append to it have stopped. Closing the
-        // spill deletes it.
+        // Last, after the workers that append to them have stopped. Closing
+        // each deletes it: the written set first, so that a crash between the
+        // two leaves a spill, which the next session recognises as abandoned.
+        _written.Dispose();
         _recordTables?.Dispose();
     }
 

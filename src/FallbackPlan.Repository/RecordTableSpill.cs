@@ -38,11 +38,24 @@ internal sealed class RecordTableSpill : IDisposable
     // two profiles and the object type, little-endian.
     private const int EntryBytes = ObjectId.Size + 4 + 8 + 4 + 8 + 2 + 2 + 1;
 
+    private const string WrittenSetExtension = ".written";
+
     private readonly SafeFileHandle _handle;
     private readonly Lock _gate = new();
     private long _length;
 
-    private RecordTableSpill(SafeFileHandle handle) => _handle = handle;
+    private RecordTableSpill(SafeFileHandle handle, string path)
+    {
+        _handle = handle;
+        WrittenSetPath = Path.ChangeExtension(path, WrittenSetExtension);
+    }
+
+    /// <summary>
+    /// Where the same session keeps its written set (ADR-0201): beside the
+    /// spill and named for it, so the spill's exclusive hold says whether
+    /// either belongs to a live session.
+    /// </summary>
+    public string WrittenSetPath { get; }
 
     /// <summary>
     /// Opens a new spill in <paramref name="spoolDirectory"/>, first removing
@@ -54,8 +67,9 @@ internal sealed class RecordTableSpill : IDisposable
         RemoveAbandoned(spoolDirectory);
 
         var path = Path.Combine(spoolDirectory, $"{Prefix}{Guid.NewGuid():N}{Extension}");
-        return new RecordTableSpill(File.OpenHandle(
-            path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, FileOptions.DeleteOnClose));
+        return new RecordTableSpill(
+            File.OpenHandle(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, FileOptions.DeleteOnClose),
+            path);
     }
 
     /// <summary>Writes <paramref name="table"/> to the spill and returns it as read back from there.</summary>
@@ -119,8 +133,10 @@ internal sealed class RecordTableSpill : IDisposable
             {
                 // A live session holds its spill exclusively, so an open that
                 // succeeds finds one nobody holds, and closing it deletes it.
-                using var abandoned = File.OpenHandle(
-                    path, FileMode.Open, FileAccess.ReadWrite, FileShare.None, FileOptions.DeleteOnClose);
+                using (File.OpenHandle(
+                    path, FileMode.Open, FileAccess.ReadWrite, FileShare.None, FileOptions.DeleteOnClose))
+                {
+                }
             }
             catch (IOException)
             {
@@ -129,6 +145,29 @@ internal sealed class RecordTableSpill : IDisposable
             catch (UnauthorizedAccessException)
             {
                 // Not this account's to remove.
+            }
+        }
+
+        // A session creates its spill before its written set and deletes it
+        // after, so a written set with no spill beside it belongs to a session
+        // that is gone: one whose spill was just removed, or one that died
+        // where the system deletes a spill when its holder dies, as Windows does.
+        foreach (var path in Directory.EnumerateFiles(spoolDirectory, $"{Prefix}*{WrittenSetExtension}"))
+        {
+            if (File.Exists(Path.ChangeExtension(path, Extension)))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
     }

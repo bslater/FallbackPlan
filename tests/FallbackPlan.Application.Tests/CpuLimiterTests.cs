@@ -237,16 +237,17 @@ public sealed class CpuLimiterTests
     {
         // The one reading nothing here can fake: the process's own processor
         // time grows as it works, and the machine has at least one processor.
+        // Windows counts that time in ticks of its clock, 15.6 ms, charged
+        // only while the process is running, so a machine busy with other
+        // work can give it no tick in any fixed time. It works until the
+        // reading moves, then, and only a reading that never moves fails.
         var before = CpuMeter.System.ProcessorTime();
-        var spin = 0L;
-        var until = Environment.TickCount64 + 50;
-        while (Environment.TickCount64 < until)
+        var deadline = Environment.TickCount64 + 30_000;
+        while (CpuMeter.System.ProcessorTime() <= before)
         {
-            spin++;
+            Assert.IsLessThan(deadline, Environment.TickCount64, "the process's processor time never grew while it worked");
         }
 
-        Assert.IsGreaterThan(0L, spin);
-        Assert.IsGreaterThan(before, CpuMeter.System.ProcessorTime());
         Assert.IsGreaterThanOrEqualTo(1, CpuMeter.System.ProcessorCount);
     }
 
