@@ -240,7 +240,7 @@ public static class StagingMark
         try
         {
             await foreach (var run in ReferenceRunReader.ReadAsync(
-                manifest, (runId, token) => ReadRunAsync(reader, runId, token), cancellationToken).ConfigureAwait(false))
+                manifest, reader.ReadReferenceRunAsync, cancellationToken).ConfigureAwait(false))
             {
                 foreach (var reference in run.SegmentReferences)
                 {
@@ -262,15 +262,6 @@ public static class StagingMark
         // exactly as the snapshot's own ParentSnapshots may name expired
         // snapshots. Deleted-file history keeps whole snapshots, never a
         // version on its own (ADR-0094), so it gives no reason to walk them.
-    }
-
-    private static async ValueTask<ReadOnlyMemory<byte>?> ReadRunAsync(
-        RepositoryReader reader, ObjectId runId, CancellationToken cancellationToken)
-    {
-        var result = await reader.ReadSegmentAsync(runId, cancellationToken).ConfigureAwait(false);
-        return result.Outcome == RecordReadOutcome.Ok && result.Plaintext is { } plaintext
-            ? new ReadOnlyMemory<byte>(plaintext)
-            : default(ReadOnlyMemory<byte>?);
     }
 
     private static async ValueTask<T?> ReadAsync<T>(

@@ -374,6 +374,24 @@ public sealed class RepositoryReader : IDisposable
     }
 
     /// <summary>
+    /// The plaintext of the reference run <paramref name="runId"/>, read and
+    /// verified as any record is, or null when it does not read: what a
+    /// version's runs are read through (ADR-0202).
+    /// </summary>
+    /// <remarks>
+    /// The null is written out rather than left to a conversion: an array
+    /// converts to <see cref="ReadOnlyMemory{T}"/>, the null literal with it,
+    /// and a run that did not read would arrive as an empty one.
+    /// </remarks>
+    public async ValueTask<ReadOnlyMemory<byte>?> ReadReferenceRunAsync(ObjectId runId, CancellationToken cancellationToken)
+    {
+        var read = await ReadSegmentAsync(runId, cancellationToken).ConfigureAwait(false);
+        return read.Outcome == RecordReadOutcome.Ok && read.Plaintext is { } plaintext
+            ? new ReadOnlyMemory<byte>(plaintext)
+            : default(ReadOnlyMemory<byte>?);
+    }
+
+    /// <summary>
     /// What this store says about a record, and what the fast read said on
     /// the way when the footer then had to answer instead.
     /// </summary>
