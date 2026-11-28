@@ -11,8 +11,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// <summary>
 /// A snapshot built by hand whose one file lists two reference runs
 /// (ADR-0202), for the tests that readers follow them: no writer in this build
-/// writes runs. The first run is the file's first segment and 262,143
-/// one-byte holes, which is full, and the second is its second segment. The
+/// writes runs. The first run is the file's first segment and 262,143 holes,
+/// which is full, and the second is its second segment. The holes are one
+/// byte each but the last, which is 32 MiB: twice the shortest hole APFS
+/// keeps, so that whether a restore left them as holes shows in what the file
+/// allocates on every platform (<c>Domain.Tests/SparseFileTests</c>). The
 /// segments are archived as any are, each in a data blob of its own, and the
 /// runs are written to a metadata blob of their own, so that damage to either
 /// is told apart from damage to the tree and the manifest.
@@ -20,6 +23,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 public abstract class ReferenceRunHarness : ArchiveTestHarness
 {
     protected const int Holes = ReferenceRunCodec.MaxPieces - 1;
+
+    /// <summary>The first run's last hole, which APFS keeps.</summary>
+    private const int LastHole = 32 * 1024 * 1024;
+
+    /// <summary>The zeroes the file's holes read as, between its two segments.</summary>
+    protected const int ZeroBytes = Holes - 1 + LastHole;
 
     protected static readonly byte[] SnapshotId = [.. Enumerable.Repeat((byte)0x5A, 16)];
 
@@ -71,7 +80,7 @@ public abstract class ReferenceRunHarness : ArchiveTestHarness
         var firstSegment = Assert.ContainsSingle(firstArchive.SegmentReferences);
         var secondSegment = Assert.ContainsSingle(secondArchive.SegmentReferences);
         var holesStart = (ulong)first.Length;
-        var secondStart = holesStart + Holes;
+        var secondStart = holesStart + ZeroBytes;
         var length = secondStart + (ulong)second.Length;
 
         var firstRun = new ReferenceRun
@@ -79,7 +88,11 @@ public abstract class ReferenceRunHarness : ArchiveTestHarness
             Start = 0,
             Length = secondStart,
             SegmentReferences = [firstSegment],
-            SparseExtents = [.. Enumerable.Range(0, Holes).Select(hole => new SparseExtent(holesStart + (ulong)hole, 1))],
+            SparseExtents =
+            [
+                .. Enumerable.Range(0, Holes - 1).Select(hole => new SparseExtent(holesStart + (ulong)hole, 1)),
+                new SparseExtent(holesStart + Holes - 1, LastHole),
+            ],
         };
         var secondRunStart = gapBeforeSecondRun ? secondStart + 1 : secondStart;
         var secondRun = new ReferenceRun
@@ -91,7 +104,7 @@ public abstract class ReferenceRunHarness : ArchiveTestHarness
 
         using var whole = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         whole.AppendData(first);
-        whole.AppendData(new byte[Holes]);
+        whole.AppendData(new byte[ZeroBytes]);
         whole.AppendData(second);
 
         var builder = new ManifestBuilder(
@@ -148,7 +161,7 @@ public abstract class ReferenceRunHarness : ArchiveTestHarness
             var firstData = Assert.ContainsSingle(firstArchive.Blobs);
             var secondData = Assert.ContainsSingle(secondArchive.Blobs);
             return new Built(
-                snapshot, manifest, [.. first, .. new byte[Holes], .. second], version, firstRunId, secondRunId, firstSegment.ObjectId, secondSegment.ObjectId,
+                snapshot, manifest, [.. first, .. new byte[ZeroBytes], .. second], version, firstRunId, secondRunId, firstSegment.ObjectId, secondSegment.ObjectId,
                 firstData, secondData, builder.Blobs[0], [firstData, secondData, .. builder.Blobs]);
         }
     }

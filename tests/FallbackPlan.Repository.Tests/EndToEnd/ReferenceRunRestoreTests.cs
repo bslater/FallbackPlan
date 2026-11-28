@@ -81,10 +81,11 @@ public sealed class ReferenceRunRestoreTests : ReferenceRunHarness
 
         // The holes are the first run's, so the spool may hold them only if
         // it was made able to before any run was read; a dense copy would
-        // allocate the whole file.
+        // allocate the whole file. Its last hole is two thirds of its length
+        // and one every filesystem keeps.
         var allocated = AllocatedSize.Of(landed);
         Assert.IsLessThan(
-            built.Content.LongLength - (Holes / 4), allocated,
+            built.Content.LongLength / 2, allocated,
             $"{allocated} bytes allocated for a {built.Content.LongLength}-byte file holding 70,000 bytes of data");
     }
 
