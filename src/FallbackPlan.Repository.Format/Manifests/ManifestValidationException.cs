@@ -5,7 +5,7 @@ namespace FallbackPlan.Repository.Format.Manifests;
 /// finding (a conforming writer cannot produce one, 00 §8); on encode it is
 /// a caller bug caught before any byte leaves the process.
 /// </summary>
-public sealed class ManifestValidationException : FormatException
+public class ManifestValidationException : FormatException
 {
     /// <summary>Creates the exception; the message names the violated rule.</summary>
     public ManifestValidationException(string message)

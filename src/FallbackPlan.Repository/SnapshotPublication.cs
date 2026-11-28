@@ -1284,7 +1284,15 @@ public sealed partial class PublicationOrchestrator
                         ? [.. withParent.Metadata.AlternateStreams.Select(stream => stream.ObjectId)]
                         : null));
                 RecordSourceIdentity(entry, objectId);
-                LastArchive = null;
+            }
+            catch (ManifestTooLargeException tooLarge)
+            {
+                // Enough segments and holes need a manifest larger than a
+                // metadata object may be. That is the file's own state, as a
+                // refusal is, and the snapshot goes on without it; what it
+                // stored is referenced by nothing, so a collection takes it.
+                RecordFailure(entry, CaptureFailureReason.TooLarge, Strings.FormatTreeWalkPublisher_ManifestTooLarge(
+                    LastArchive?.SegmentReferences.Count ?? 0, entry.SparseExtents.Count, tooLarge.EncodedBytes));
             }
             catch (Exception exception) when (IsTheFilesOwn(exception))
             {
@@ -1299,6 +1307,13 @@ public sealed partial class PublicationOrchestrator
                 }
 
                 RecordFailure(entry, ClassifyFailure(exception), exception.Message);
+            }
+            finally
+            {
+                // A file's archive belongs to its own entry, whether or not the
+                // entry was published: an entry after it with no content of
+                // its own must not be given it.
+                LastArchive = null;
             }
         }
 

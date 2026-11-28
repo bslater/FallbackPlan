@@ -119,7 +119,8 @@ public static class FileVersionManifestCodec
 
         if (encoded.Length > FormatLimits.MaxMetadataObjectSize)
         {
-            throw new ManifestValidationException(Strings.FormatFileVersionManifestCodec_EncodedManifestBytesMetadataLimit(encoded.Length));
+            throw new ManifestTooLargeException(
+                Strings.FormatFileVersionManifestCodec_EncodedManifestBytesMetadataLimit(encoded.Length), encoded.Length);
         }
 
         return encoded;
