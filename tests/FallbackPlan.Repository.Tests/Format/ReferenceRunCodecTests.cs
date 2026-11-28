@@ -102,6 +102,19 @@ public sealed class ReferenceRunCodecTests
     }
 
     [TestMethod]
+    public void ARunWhoseReferencesAreOutOfOrder_IsRefused_ThoughTheyCoverItsStretch()
+    {
+        var run = new ReferenceRun
+        {
+            Start = 0,
+            Length = 300,
+            SegmentReferences = [new SegmentReference(100, 200, Id(2)), new SegmentReference(0, 100, Id(1))],
+        };
+
+        Assert.ThrowsExactly<ManifestValidationException>(() => ReferenceRunCodec.Encode(run));
+    }
+
+    [TestMethod]
     public void ARunOfMoreThanItsPieces_OrOfNone_IsRefused()
     {
         Assert.AreEqual(262_144, ReferenceRunCodec.MaxPieces);
@@ -173,7 +186,8 @@ public sealed class ReferenceRunCodecTests
     {
         // One run holds at most what one manifest may, so a file of one run
         // is described by one manifest.
-        Assert.ThrowsExactly<ManifestValidationException>(() => FileVersionManifestCodec.Encode(Head(10, Id(-1))));
+        var one = Assert.ThrowsExactly<ManifestValidationException>(() => FileVersionManifestCodec.Encode(Head(10, Id(-1))));
+        Assert.Contains("two or more", one.Message, StringComparison.Ordinal);
 
         var link = Head(0, Id(-1), Id(-2)) with { EntryKind = EntryKind.Symlink, LinkTarget = "elsewhere"u8.ToArray() };
         Assert.ThrowsExactly<ManifestValidationException>(() => FileVersionManifestCodec.Encode(link));
@@ -208,8 +222,13 @@ public sealed class ReferenceRunCodecTests
         Assert.ThrowsExactly<ManifestValidationException>(() =>
             ReferenceRunCodec.ValidateSequence(head, [Run(0, Full - 1), Run(Full - 1, Full), Run((2 * (ulong)Full) - 1, 8)]));
 
-        // As many runs as the manifest lists, no more and no fewer.
+        // A run in the middle that is not full is refused as the first is.
         Assert.ThrowsExactly<ManifestValidationException>(() =>
-            ReferenceRunCodec.ValidateSequence(head, [Run(0, Full), Run(Full, Full)]));
+            ReferenceRunCodec.ValidateSequence(head, [Run(0, Full), Run(Full, Full - 1), Run((2 * (ulong)Full) - 1, 8)]));
+
+        // As many runs as the manifest lists, no more and no fewer, even when
+        // those there are cover the file.
+        Assert.ThrowsExactly<ManifestValidationException>(() =>
+            ReferenceRunCodec.ValidateSequence(head with { LogicalLength = 2 * (ulong)Full }, [Run(0, Full), Run(Full, Full)]));
     }
 }
