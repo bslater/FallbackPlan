@@ -216,6 +216,7 @@ public sealed class CatalogueProjector
                     hasAlternateStreams: version.Metadata.AlternateStreams.Count > 0,
                     metadataDigest: FileVersionManifestCodec.MetadataDigest(version.Metadata, MetadataRules.FileFlagsOf(version.CaptureDiagnostics)));
                 target.RecordVersionContents(child.ObjectId, version.ContentObjects());
+                missing += await ProjectRunsAsync(target, reader, child.ObjectId, version, cancellationToken).ConfigureAwait(false);
                 versions++;
             }
 
@@ -223,6 +224,51 @@ public sealed class CatalogueProjector
         }
 
         return (entries, versions, missing);
+    }
+
+    /// <summary>
+    /// Records what a large file's runs name as content its version needs
+    /// (ADR-0202), one run at a time; a run that will not read, or does not
+    /// follow the one before it, is a finding against it.
+    /// </summary>
+    /// <returns>One when no blob the reader opened carries a run that did not read, else zero.</returns>
+    private static async ValueTask<int> ProjectRunsAsync(
+        Catalogue.Catalogue target,
+        RepositoryReader reader,
+        ObjectId versionId,
+        FileVersionManifest version,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var run in ReferenceRunReader.ReadAsync(
+                version, (runId, token) => ReadRunAsync(reader, runId, token), cancellationToken).ConfigureAwait(false))
+            {
+                target.RecordVersionContents(versionId, run.SegmentReferences.Select(reference => reference.ObjectId));
+            }
+        }
+        catch (ReferenceRunMissingException lost)
+        {
+            target.RecordFinding(new DamageFinding(
+                DamageKind.MissingIndexObject, $"File version {versionId}: {lost.Message}"), lost.RunId);
+            return Unseen(reader, lost.RunId);
+        }
+        catch (ManifestValidationException damaged)
+        {
+            target.RecordFinding(new DamageFinding(
+                DamageKind.CorruptRecord, $"File version {versionId}: {damaged.Message}"), versionId);
+        }
+
+        return 0;
+    }
+
+    private static async ValueTask<ReadOnlyMemory<byte>?> ReadRunAsync(
+        RepositoryReader reader, ObjectId runId, CancellationToken cancellationToken)
+    {
+        var read = await reader.ReadSegmentAsync(runId, cancellationToken).ConfigureAwait(false);
+        return read.Outcome == RecordReadOutcome.Ok && read.Plaintext is { } plaintext
+            ? new ReadOnlyMemory<byte>(plaintext)
+            : default(ReadOnlyMemory<byte>?);
     }
 
     /// <summary>One when no blob the reader opened carries the record, zero when one does and it failed there.</summary>

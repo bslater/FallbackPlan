@@ -172,6 +172,9 @@
   <data name="ReferenceRunCodec_SequenceShort" xml:space="preserve">
     <value>A file's reference runs end at {0}, but the file is {1} bytes (ADR-0202).</value>
   </data>
+  <data name="ReferenceRunReader_RunDidNotRead" xml:space="preserve">
+    <value>Reference run {0}, run {1} of the {2} its file version lists, did not read: the version cannot be read whole (ADR-0202).</value>
+  </data>
   <data name="FileVersionManifestCodec_EncodedManifestBytesMetadataLimit" xml:space="preserve">
     <value>The encoded manifest is {0} bytes; the metadata limit is 16 MiB (specification 00 §8).</value>
   </data>

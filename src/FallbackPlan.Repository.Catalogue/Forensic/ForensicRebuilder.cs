@@ -431,6 +431,9 @@ public sealed class ForensicRebuilder : IDisposable
             {
                 needed.Add(stream.ObjectId);
             }
+
+            await WalkRunsAsync(entry.ObjectId, manifest, indexed, needed, findings, catalogue, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         if (tree.Continuation is { } continuation)
@@ -439,6 +442,53 @@ public sealed class ForensicRebuilder : IDisposable
                 .ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Reads a large file's runs, which are metadata as its manifest is, and
+    /// needs every segment they name as it needs the manifest's own (ADR-0202).
+    /// A run that will not read, or does not follow the one before it, is a
+    /// finding against it.
+    /// </summary>
+    private async ValueTask WalkRunsAsync(
+        ObjectId versionId,
+        FileVersionManifest manifest,
+        Dictionary<ObjectId, BlobId> indexed,
+        HashSet<ObjectId> needed,
+        List<DamageFinding> findings,
+        Catalogue catalogue,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var run in ReferenceRunReader.ReadAsync(
+                manifest, (runId, token) => ReadRunAsync(runId, indexed, token), cancellationToken).ConfigureAwait(false))
+            {
+                catalogue.RecordVersionContents(versionId, run.SegmentReferences.Select(reference => reference.ObjectId));
+                foreach (var reference in run.SegmentReferences)
+                {
+                    needed.Add(reference.ObjectId);
+                }
+            }
+        }
+        catch (ReferenceRunMissingException lost)
+        {
+            var finding = new DamageFinding(DamageKind.MissingIndexObject, $"File version {versionId}: {lost.Message}");
+            findings.Add(finding);
+            catalogue.RecordFinding(finding, lost.RunId);
+        }
+        catch (ManifestValidationException damaged)
+        {
+            var finding = new DamageFinding(DamageKind.CorruptRecord, $"File version {versionId}: {damaged.Message}");
+            findings.Add(finding);
+            catalogue.RecordFinding(finding, versionId);
+        }
+    }
+
+    private async ValueTask<ReadOnlyMemory<byte>?> ReadRunAsync(
+        ObjectId runId, Dictionary<ObjectId, BlobId> indexed, CancellationToken cancellationToken) =>
+        await ReadMetadataRecordAsync(runId, indexed, cancellationToken).ConfigureAwait(false) is { } plaintext
+            ? new ReadOnlyMemory<byte>(plaintext)
+            : default(ReadOnlyMemory<byte>?);
 
     private async ValueTask<byte[]?> ReadMetadataRecordAsync(
         ObjectId objectId,
