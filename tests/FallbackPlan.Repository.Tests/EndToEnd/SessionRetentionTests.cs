@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Globalization;
+using System.Runtime;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.TestSupport;
@@ -14,8 +15,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// hundred thousand small files, one record each.
 /// </summary>
 /// <remarks>
-/// The measurement is a forced-collection live set, net of one taken once the
-/// session has warmed up, and is process-wide, so the class runs alone.
+/// The measurement is the heap after a compacting collection, less what the
+/// collector reports as fragmentation, net of one taken once the session has
+/// warmed up. A collection that only sweeps leaves free space between live
+/// objects, and how much depends on the platform and the moment, so reading
+/// without compacting measured the collector as much as the session. It is
+/// process-wide, so the class runs alone.
 /// </remarks>
 [DoNotParallelize]
 [TestClass]
@@ -48,16 +53,17 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
         await using (session)
         {
             await ArchiveFilesAsync(session, template, 0, WarmUpFiles);
-            var baseline = SettledLiveSet();
+            var baseline = Settled();
 
             await ArchiveFilesAsync(session, template, WarmUpFiles, WarmUpFiles + MeasuredFiles);
-            var perRecord = (SettledLiveSet() - baseline) / (double)MeasuredFiles;
+            var after = Settled();
+            var perRecord = (after.Live - baseline.Live) / (double)MeasuredFiles;
 
             Assert.IsLessThan(
                 BytesPerStoredRecord,
                 perRecord,
                 string.Create(CultureInfo.InvariantCulture,
-                    $"the session kept {perRecord:f1} bytes for each of {MeasuredFiles} stored records"));
+                    $"the session kept {perRecord:f1} bytes for each of {MeasuredFiles} stored records (heap {baseline.Heap} then {after.Heap} bytes, fragmented {baseline.Fragmented} then {after.Fragmented})"));
         }
     }
 
@@ -74,10 +80,16 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
         }
     }
 
-    private static long SettledLiveSet()
+    private static (long Live, long Heap, long Fragmented) Settled()
     {
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        return GC.GetTotalMemory(forceFullCollection: true);
+        for (var pass = 0; pass < 2; pass++)
+        {
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+        }
+
+        var info = GC.GetGCMemoryInfo(GCKind.FullBlocking);
+        return (info.HeapSizeBytes - info.FragmentedBytes, info.HeapSizeBytes, info.FragmentedBytes);
     }
 }
