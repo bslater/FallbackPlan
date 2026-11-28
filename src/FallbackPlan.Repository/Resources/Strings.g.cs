@@ -249,6 +249,11 @@ internal static class Strings
     internal static string RecordTableSpill_SessionHasEnded => Get(nameof(RecordTableSpill_SessionHasEnded));
 
     /// <summary>
+    /// This file's segment content identifiers were kept in the spool of the session that archived it, and that session has ended, which deletes them. Content identifiers are never durable (specification 02 §2): archive the file again to have them.
+    /// </summary>
+    internal static string RecordTableSpill_ContentIdsSessionHasEnded => Get(nameof(RecordTableSpill_ContentIdsSessionHasEnded));
+
+    /// <summary>
     /// This file's segment references were kept in the spool of the session that archived it, and that session has ended, which deletes them. Read the file's manifest instead: it declares the same references.
     /// </summary>
     internal static string RecordTableSpill_ReferencesSessionHasEnded => Get(nameof(RecordTableSpill_ReferencesSessionHasEnded));

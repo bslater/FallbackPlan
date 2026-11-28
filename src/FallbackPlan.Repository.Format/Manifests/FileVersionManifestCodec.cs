@@ -349,13 +349,18 @@ public static class FileVersionManifestCodec
         }
 
         // Ascending order of the references themselves (not just the merged
-        // tiling) is normative for the encoded array.
-        for (var i = 1; i < manifest.SegmentReferences.Count; i++)
+        // tiling) is normative for the encoded array. Walked, not indexed:
+        // a large file's references may wait in a spool, read in order a
+        // chunk at a time.
+        long? previous = null;
+        foreach (var reference in manifest.SegmentReferences)
         {
-            if (manifest.SegmentReferences[i].LogicalOffset <= manifest.SegmentReferences[i - 1].LogicalOffset)
+            if (reference.LogicalOffset <= previous)
             {
                 throw new ManifestValidationException(Strings.FileVersionManifestCodec_SegmentReferencesMUSTOrderedAscending);
             }
+
+            previous = reference.LogicalOffset;
         }
 
         if (manifest.WholeFileHash.Length != 32)

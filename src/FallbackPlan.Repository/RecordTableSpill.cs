@@ -44,6 +44,8 @@ internal sealed class RecordTableSpill : IDisposable
     // ObjectId, logical offset and logical length, little-endian.
     private const int ReferenceBytes = ObjectId.Size + 8 + 8;
 
+    private const int ContentIdBytes = ContentId.Size;
+
     private const string WrittenSetExtension = ".written";
 
     private readonly SafeFileHandle _handle;
@@ -107,6 +109,21 @@ internal sealed class RecordTableSpill : IDisposable
         return new Spilled<SegmentReference>(
             this, Write(bytes), references.Count, ReferenceBytes, DecodeReference,
             Strings.RecordTableSpill_ReferencesSessionHasEnded);
+    }
+
+    /// <summary>Writes a file's segment content identifiers to the spill and returns them as read back from there.</summary>
+    public IReadOnlyList<ContentId> AppendContentIds(IReadOnlyList<ContentId> contentIds)
+    {
+        ArgumentNullException.ThrowIfNull(contentIds);
+        var bytes = new byte[contentIds.Count * ContentIdBytes];
+        for (var index = 0; index < contentIds.Count; index++)
+        {
+            contentIds[index].CopyTo(bytes.AsSpan(index * ContentIdBytes, ContentIdBytes));
+        }
+
+        return new Spilled<ContentId>(
+            this, Write(bytes), contentIds.Count, ContentIdBytes, static source => ContentId.FromBytes(source),
+            Strings.RecordTableSpill_ContentIdsSessionHasEnded);
     }
 
     /// <inheritdoc />

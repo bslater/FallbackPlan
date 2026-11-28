@@ -133,6 +133,9 @@
   <data name="RecordTableSpill_SessionHasEnded" xml:space="preserve">
     <value>This blob's record table was kept in the spool of the session that wrote it, and that session has ended, which deletes it. Read the blob's footer instead: it declares the same table.</value>
   </data>
+  <data name="RecordTableSpill_ContentIdsSessionHasEnded" xml:space="preserve">
+    <value>This file's segment content identifiers were kept in the spool of the session that archived it, and that session has ended, which deletes them. Content identifiers are never durable (specification 02 §2): archive the file again to have them.</value>
+  </data>
   <data name="RecordTableSpill_ReferencesSessionHasEnded" xml:space="preserve">
     <value>This file's segment references were kept in the spool of the session that archived it, and that session has ended, which deletes them. Read the file's manifest instead: it declares the same references.</value>
   </data>

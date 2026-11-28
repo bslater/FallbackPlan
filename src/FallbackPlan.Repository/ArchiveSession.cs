@@ -57,6 +57,14 @@ public sealed class ArchiveSession : IAsyncDisposable
     // allocation. The bag holds at most as many as can be in flight.
     private readonly ConcurrentBag<ZstdSegmentCodec> _codecs = [];
 
+    /// <summary>
+    /// The most of one file's segment references, and as many content
+    /// identifiers, a session holds in memory as it archives the file. Each
+    /// chunk this many fills waits in the session's spool, so a file of any
+    /// size costs a session this much (ADR-0201 Amendment 3).
+    /// </summary>
+    public const int ReferencesHeldPerFile = 65_536;
+
     // Segment buffers, pooled per session rather than through
     // ArrayPool<byte>.Shared. Shared pools arrays this large, but
     // process-wide: what it is lent stays after the session is done, until
@@ -254,8 +262,8 @@ public sealed class ArchiveSession : IAsyncDisposable
             }
         }
 
-        var references = new List<SegmentReference>();
-        var contentIds = new List<ContentId>();
+        var references = NewReferences();
+        var contentIds = NewContentIds();
         var sealedBefore = SealedBlobCount();
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
@@ -512,8 +520,8 @@ public sealed class ArchiveSession : IAsyncDisposable
     /// </remarks>
     private async Task DrainPreparedAsync(
         ChannelReader<Task<PreparedSegment>> reader,
-        List<SegmentReference> references,
-        List<ContentId> contentIds,
+        SpooledList<SegmentReference> references,
+        SpooledList<ContentId> contentIds,
         CancellationToken cancellationToken)
     {
         Exception? failure = null;
@@ -563,8 +571,8 @@ public sealed class ArchiveSession : IAsyncDisposable
 
     private async ValueTask AppendPreparedAsync(
         PreparedSegment segment,
-        List<SegmentReference> references,
-        List<ContentId> contentIds,
+        SpooledList<SegmentReference> references,
+        SpooledList<ContentId> contentIds,
         CancellationToken cancellationToken)
     {
         if (segment.NeedsRecord)
@@ -626,10 +634,26 @@ public sealed class ArchiveSession : IAsyncDisposable
             return archived;
         }
 
+        // A file this session archived already keeps all but its last chunk
+        // in the spool, so only that chunk is written.
+        if (archived.SegmentReferences is SpooledList<SegmentReference> spooled)
+        {
+            spooled.Spill();
+            return archived.WithSegments(spooled, new ContentIdsNotKept(archived.SegmentContentIds.Count));
+        }
+
         return archived.WithSegments(
             Spill().AppendReferences(archived.SegmentReferences),
             new ContentIdsNotKept(archived.SegmentContentIds.Count));
     }
+
+    /// <summary>A file's references as it is archived, a chunk at a time in memory (ADR-0201 Amendment 3).</summary>
+    private SpooledList<SegmentReference> NewReferences() =>
+        new(chunk => Spill().AppendReferences(chunk), ReferencesHeldPerFile);
+
+    /// <summary>A file's content identifiers as it is archived, a chunk at a time in memory.</summary>
+    private SpooledList<ContentId> NewContentIds() =>
+        new(chunk => Spill().AppendContentIds(chunk), ReferencesHeldPerFile);
 
     private RecordTableSpill Spill()
     {
@@ -706,8 +730,8 @@ public sealed class ArchiveSession : IAsyncDisposable
             return dense;
         }
 
-        var references = new List<SegmentReference>();
-        var contentIds = new List<ContentId>();
+        var references = NewReferences();
+        var contentIds = NewContentIds();
         var sealedBefore = SealedBlobCount();
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
