@@ -69,11 +69,12 @@ public sealed class ManifestCodecTests
     [TestMethod]
     public void FileVersionManifest_CarriesAnUnknownKey_IsRejectedRatherThanSkipped()
     {
-        // Hand-build a manifest carrying key 15 — exactly where a physical
-        // hint would smuggle in (06 §3.1; exit criterion 2's teeth).
+        // Hand-build a manifest carrying key 16 — exactly where a physical
+        // hint would smuggle in (06 §3.1; exit criterion 2's teeth). Key 15
+        // is format 8's list of reference runs (ADR-0202).
         var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
         writer.WriteStartMap(1);
-        writer.WriteKey(15);
+        writer.WriteKey(16);
         writer.WriteUnsignedInteger(1);
         writer.WriteEndMap();
 
