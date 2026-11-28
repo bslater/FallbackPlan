@@ -47,34 +47,39 @@ public static class ReferenceRunCodec
     private static IEnumerable<ReferenceRun> CutRuns(
         IReadOnlyList<SegmentReference> references, IReadOnlyList<SparseExtent> holes, ulong logicalLength)
     {
-        var reference = 0;
-        var hole = 0;
+        // Walked, not indexed: pieces that wait in a spool are read in order
+        // a chunk at a time, and read one at a time by index.
+        using var nextReference = references.GetEnumerator();
+        using var nextHole = holes.GetEnumerator();
+        var haveReference = nextReference.MoveNext();
+        var haveHole = nextHole.MoveNext();
         ulong start = 0;
-        while (reference < references.Count || hole < holes.Count)
+        while (haveReference || haveHole)
         {
             List<SegmentReference> runReferences = [];
             List<SparseExtent> runHoles = [];
             ulong end = start;
-            while (runReferences.Count + runHoles.Count < MaxPieces && (reference < references.Count || hole < holes.Count))
+            while (runReferences.Count + runHoles.Count < MaxPieces && (haveReference || haveHole))
             {
-                if (hole == holes.Count ||
-                    (reference < references.Count && (ulong)references[reference].LogicalOffset < holes[hole].Offset))
+                if (!haveHole || (haveReference && (ulong)nextReference.Current.LogicalOffset < nextHole.Current.Offset))
                 {
-                    var next = references[reference++];
+                    var next = nextReference.Current;
                     runReferences.Add(next);
                     end = (ulong)(next.LogicalOffset + next.LogicalLength);
+                    haveReference = nextReference.MoveNext();
                 }
                 else
                 {
-                    var next = holes[hole++];
+                    var next = nextHole.Current;
                     runHoles.Add(next);
                     end = next.Offset + next.Length;
+                    haveHole = nextHole.MoveNext();
                 }
             }
 
             // A manifest that lists runs holds no pieces to be held to its
             // length, so the last run is, before it is given.
-            if (reference == references.Count && hole == holes.Count && end != logicalLength)
+            if (!haveReference && !haveHole && end != logicalLength)
             {
                 throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceShort(end, logicalLength));
             }

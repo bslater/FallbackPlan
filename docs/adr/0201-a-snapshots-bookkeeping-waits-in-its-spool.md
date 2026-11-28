@@ -32,6 +32,13 @@
   ids go, and `Repository/SnapshotPublication` keeps the file's result with
   its references there; held by `Repository.Tests/SpilledReferenceTests` and
   `Repository.Tests/SessionRetentionTests`.
+- A file's references as it is archived ([Amendment 3](#amendment-3-2026-11-28--a-files-references-wait-in-the-spool-as-it-is-archived)):
+  `Repository/SpooledList` holds a chunk of a file's references and content
+  ids in memory and the rest in the spill, which `Repository/RecordTableSpill`
+  now holds content ids in too; `Repository/ArchiveSession` archives every
+  file into it, and `Repository/FileArchiver` copies a single file's lists
+  out. Held by `Repository.Tests/SpooledReferencesTests` and
+  `Repository.Tests/SessionRetentionTests`.
 
 ## Context
 
@@ -257,6 +264,11 @@ stays open for them:
   its manifest is built from them whole. That is about 80 bytes a segment of
   the one file, released when its manifest is written. A single 2 TiB file
   still costs on that order, about 160 MB at 1 MiB segments.
+  > **Amended 2026-11-28 ([Amendment 3](#amendment-3-2026-11-28--a-files-references-wait-in-the-spool-as-it-is-archived)).**
+  > A file's references and content ids now wait in the spool as it is
+  > archived, a chunk at a time, and its manifest, or its reference runs, are
+  > made from them read back in order. A file of any size costs a session one
+  > chunk of them.
 - Each captured file's own result stays in memory until the snapshot
   publishes, for the catalogue: its path and name, its identity, its digests
   and its result, and its manifest's entry in the metadata blobs' tables. Over
@@ -268,6 +280,60 @@ stays open for them:
   > unwound, as above, the published result holds 652 bytes a file, where it
   > held 1,004 before this amendment: around 650 MB at a million files.
 
+## Amendment 3 (2026-11-28) — a file's references wait in the spool as it is archived
+
+Amendment 2 left a file's own references and content ids in memory while it is
+archived, about 80 bytes a segment of that file. That mattered less while a
+file too large for one manifest could not be backed up at all. Since
+[ADR-0202](0202-format-8-a-large-files-references-are-written-in-runs.md)'s
+writer, a file of any size is backed up at format 8, so the file's archive was
+what still grew with it: about 160 MB for a 2 TiB file at 1 MiB segments,
+which FR-ARCH-002's bound on such a file does not allow.
+
+**A chunk in memory, the rest in the spill.** A session now archives each file
+into `Repository/SpooledList`, one for its references and one for its content
+ids, on both the dense and the sparse paths. Each holds at most
+`ArchiveSession.ReferencesHeldPerFile`, 65,536, in memory, about 5 MB for the
+two. Each chunk that fills is appended to the session's spill, the same spill
+as the record tables and Amendment 2's references, and kept as a position and
+a count. A new list is started after each spill rather than the old one
+cleared, since a cleared list keeps its capacity.
+
+**Read back in order.** A list read in order reads the spill a chunk at a time,
+so walking a file of any size holds one chunk. The manifest is encoded from it
+that way. ADR-0202's cut makes reference runs from it that way too, so a large
+file costs one chunk of its references and one run while its runs are written.
+The manifest codec's check that references ascend, and the cut, walk the list
+rather than index it, since an indexed read past the chunk in memory is a read
+of the spill. When the file's manifest is written, Amendment 2's spill writes
+only the chunk still held.
+
+**Content ids are spilled this time.** Amendment 2 let a captured file's content
+ids go once its manifest was written, since nothing reads them after. While
+the file is archived they are still the file's result, and a single file's
+archive returns them for comparing a later version against. So they wait in
+the spill beside the references, 32 bytes each. Once the session has ended,
+reading one says that content ids are never durable, which 02 §2 requires.
+`Repository.Tests/SpooledReferencesTests` reads both back, in order and by
+index, across every chunk's edge.
+
+**A single file's archive.** `Repository/FileArchiver` returns a result that
+outlives its session. It copies the file's references and content ids out of
+the spill before the session ends, as it already copies record tables, so a
+single file holds its own lists as before.
+
+**What it costs.** `Repository.Tests/SessionRetentionTests` archives a file of
+262,244 one-byte segments and measures what its result holds: 0.04 bytes a
+segment, where it was 159.9. That is about 11.7 KB, the hundred entries of the
+chunk still held and the chunks' handles, where it was 42 MB of list arrays.
+On disk it is 80 bytes a segment, written once.
+
+**What it leaves.** A file's holes are still given by the scanner as one list,
+so a file of millions of holes holds them in memory as it is captured. And each
+captured file's own result stays in memory until the snapshot publishes, as
+Amendment 2 says; [Q24](../open-questions.md#q24--what-a-snapshot-holds-per-object-it-stores)
+stays open for both.
+
 ## Status history
 
 | Date | Status | Note |
@@ -276,3 +342,4 @@ stays open for them:
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-written-set-waits-in-the-spool): decision 3 built, without the filter it proposed. `Repository/WrittenSet` keeps claims and records of blobs not yet uploaded in memory and the rest in `Repository.Catalogue/SpooledObjectSet`, beside the spill. A session keeps 1.7 bytes per stored record where it kept 78. Held by `Repository.Tests/WrittenSetTests` and `Repository.Tests/SessionRetentionTests`. Decision 4 is not yet built. |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool): decision 4 built. `Repository/ArchiveSession` writes a captured file's references to `Repository/RecordTableSpill` once `Repository/SnapshotPublication` has written its manifest, and lets its content ids go, which nothing reads again. A tree snapshot keeps 3.8 bytes per referenced segment where it kept 84.0. Held by `Repository.Tests/SpilledReferenceTests` and `Repository.Tests/SessionRetentionTests`. Every decision is built. A file's own references while it is archived, and each captured file's result, still grow with the snapshot (Q24). |
 | 2026-11-28 | Corrected | [Amendment 2](#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool)'s measurements re-read once the publication's own frames have unwound, which `Repository.Tests/SessionRetentionTests` now waits for: 81.0 bytes per referenced segment before it and 1.0 after, where it said 84.0 and 3.8, and 652 bytes per captured file, 1,004 before it, where it said about 1.2 KB. |
+| 2026-11-28 | Amended | [Amendment 3](#amendment-3-2026-11-28--a-files-references-wait-in-the-spool-as-it-is-archived): a file's references and content ids wait in the spill as it is archived, a chunk at a time. `Repository/SpooledList`, `Repository/RecordTableSpill`, `Repository/ArchiveSession` and `Repository/FileArchiver`. A file's archive keeps 0.04 bytes per segment where it kept 159.9. Held by `Repository.Tests/SpooledReferencesTests` and `Repository.Tests/SessionRetentionTests`. |

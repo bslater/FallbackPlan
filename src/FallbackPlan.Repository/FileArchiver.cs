@@ -128,11 +128,12 @@ public sealed class FileArchiver
             // Single-file semantics: the result carries every blob the call
             // produced, exactly as before sessions existed — record tables
             // included, read back out of the spill before the session's end
-            // deletes it (ADR-0201). The result outlives the session, and a
-            // single file's tables are that file's to hold.
+            // deletes it (ADR-0201), and the file's references and content
+            // identifiers too (Amendment 3). The result outlives the session,
+            // and a single file's tables are that file's to hold.
             return new ArchiveResult(
-                result.SegmentReferences,
-                result.SegmentContentIds,
+                [.. result.SegmentReferences],
+                [.. result.SegmentContentIds],
                 [.. session.Blobs.Select(blob => blob with { RecordTable = [.. blob.RecordTable] })],
                 result.LogicalLength,
                 result.WholeFileHash,

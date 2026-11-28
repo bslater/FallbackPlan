@@ -19,7 +19,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// record grows with everything the snapshot stores; this holds what that is,
 /// over a hundred thousand small files, one record each. A tree snapshot holds
 /// each file it captured until it publishes, and this holds what that costs
-/// per segment, over files of a thousand segments each.
+/// per segment, over files of a thousand segments each. A file's archive holds
+/// its references until its manifest is written, and this holds what that
+/// costs per segment over a file of a quarter of a million (FR-ARCH-002).
 /// </summary>
 /// <remarks>
 /// The measurement is the heap after a compacting collection, less what the
@@ -67,6 +69,21 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
     /// keeps it keeps in every release; so the least of them is what it kept.
     /// </summary>
     private const int TreeReleases = 3;
+
+    /// <summary>
+    /// A file of four times as many segments as a session holds of one file
+    /// at once, and a hundred more, so that what stays in memory while it
+    /// is archived is a small part of a chunk however the file falls.
+    /// </summary>
+    private const int ArchivedSegments = (4 * ArchiveSession.ReferencesHeldPerFile) + 100;
+
+    /// <summary>
+    /// What a session may keep per segment of a file it has archived, before
+    /// its manifest is written. A reference kept in memory is 48 bytes and a
+    /// content identifier 32, so either alone exceeds this: past the chunk a
+    /// session holds, a file's references and identifiers wait in its spool.
+    /// </summary>
+    private const double BytesPerArchivedSegment = 16;
 
     /// <summary>The large object heap's place in <see cref="GCMemoryInfo.GenerationInfo"/>.</summary>
     private const int LargeObjectHeap = 3;
@@ -151,6 +168,79 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
             perSegment,
             string.Create(CultureInfo.InvariantCulture,
                 $"the snapshot kept at least {perSegment:f1} bytes for each of {segments} segments its files reference, in every release: {string.Join("; ", releases)}"));
+    }
+
+    [TestMethod]
+    public async Task ASession_KeepsLittleInMemoryForEachSegmentOfAFileItHasArchived()
+    {
+        // One-byte stretches of data with a hole after each: a file of a
+        // quarter of a million segments from half a megabyte. The data
+        // repeats every 251 bytes, so its records are few and what is
+        // measured is the file's references, not what storing costs.
+        var content = new byte[ArchivedSegments * 2];
+        for (var stretch = 0; stretch < ArchivedSegments; stretch++)
+        {
+            content[stretch * 2] = (byte)(1 + (stretch % 251));
+        }
+
+        SparseExtent[] holes = [.. Enumerable.Range(0, ArchivedSegments).Select(hole => new SparseExtent((ulong)((hole * 2) + 1), 1))];
+
+        using var keys = CreateKeys();
+        var archiver = new FileArchiver(
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, new DiscardingObjectStore(),
+            new MonotonicBlobCounterAllocator(1), SpoolDirectory, FormatVersions.SealedDataPlane);
+
+        var session = archiver.OpenSession();
+        await using (session)
+        {
+            List<string> releases = [];
+            var perSegment = double.PositiveInfinity;
+            for (var release = 0; release < TreeReleases && perSegment >= BytesPerArchivedSegment; release++)
+            {
+                var (held, result) = await ArchiveHeldAsync(session, content, holes);
+                for (var attempt = 0; result.IsAlive && attempt < 50; attempt++)
+                {
+                    await Task.Delay(20);
+                    _ = Settled();
+                }
+
+                var after = Settled();
+                Assert.IsFalse(result.IsAlive, "the measurement needs the archive's result to be gone");
+
+                var released = (held.Live - after.Live) / (double)ArchivedSegments;
+                perSegment = Math.Min(perSegment, released);
+                releases.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{released:f1} (heap {held.Heap} then {after.Heap} bytes, large objects {held.LargeObjects} then {after.LargeObjects}, fragmented {held.Fragmented} then {after.Fragmented})"));
+            }
+
+            // The file's content and holes are the caller's, and are in every
+            // reading.
+            GC.KeepAlive(content);
+            GC.KeepAlive(holes);
+
+            Assert.IsLessThan(
+                BytesPerArchivedSegment,
+                perSegment,
+                string.Create(CultureInfo.InvariantCulture,
+                    $"the session kept at least {perSegment:f1} bytes for each of {ArchivedSegments} segments of a file it archived, in every release: {string.Join("; ", releases)}"));
+        }
+    }
+
+    /// <summary>
+    /// Archives the file and reads the heap while its result is held, in a
+    /// method of its own, so that once it returns nothing of the caller's
+    /// refers to the result.
+    /// </summary>
+    private static async Task<((long Live, long Heap, long LargeObjects, long Fragmented) Held, WeakReference Result)> ArchiveHeldAsync(
+        ArchiveSession session, byte[] content, IReadOnlyList<SparseExtent> holes)
+    {
+        using var stream = new MemoryStream(content, writable: false);
+        var archived = await session.ArchiveSparseFileAsync(stream, holes, content.Length, CancellationToken.None)
+            .AsTask().ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        await Task.Delay(100);
+
+        Assert.HasCount(ArchivedSegments, archived.SegmentReferences);
+        return (Settled(), new WeakReference(archived));
     }
 
     /// <summary>
