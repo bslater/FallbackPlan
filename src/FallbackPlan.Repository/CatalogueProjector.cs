@@ -242,7 +242,7 @@ public sealed class CatalogueProjector
         try
         {
             await foreach (var run in ReferenceRunReader.ReadAsync(
-                version, (runId, token) => ReadRunAsync(reader, runId, token), cancellationToken).ConfigureAwait(false))
+                version, reader.ReadReferenceRunAsync, cancellationToken).ConfigureAwait(false))
             {
                 target.RecordVersionContents(versionId, run.SegmentReferences.Select(reference => reference.ObjectId));
             }
@@ -260,15 +260,6 @@ public sealed class CatalogueProjector
         }
 
         return 0;
-    }
-
-    private static async ValueTask<ReadOnlyMemory<byte>?> ReadRunAsync(
-        RepositoryReader reader, ObjectId runId, CancellationToken cancellationToken)
-    {
-        var read = await reader.ReadSegmentAsync(runId, cancellationToken).ConfigureAwait(false);
-        return read.Outcome == RecordReadOutcome.Ok && read.Plaintext is { } plaintext
-            ? new ReadOnlyMemory<byte>(plaintext)
-            : default(ReadOnlyMemory<byte>?);
     }
 
     /// <summary>One when no blob the reader opened carries the record, zero when one does and it failed there.</summary>

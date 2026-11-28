@@ -213,46 +213,53 @@ public sealed class VerifyEngine : IDisposable
 
         using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-        var pieces = manifest.SegmentReferences
-            .Select(reference => (Offset: (ulong)reference.LogicalOffset, Reference: (SegmentReference?)reference, Extent: default(SparseExtent?)))
-            .Concat(manifest.SparseExtents.Select(extent => (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
-            .OrderBy(piece => piece.Item1);
-
-        foreach (var (_, reference, extent) in pieces)
+        try
         {
-            if (reference is { } segment)
+            // A large file is read a reference run at a time (ADR-0202).
+            await foreach (var pieces in RestorePart.StretchesAsync(manifest, reader, cancellationToken).ConfigureAwait(false))
             {
-                var read = await reader.ReadSegmentAsync(segment.ObjectId, cancellationToken).ConfigureAwait(false);
-
-                if (read.Outcome == RecordReadOutcome.ContentSealed)
+                foreach (var (_, reference, extent) in pieces)
                 {
-                    // Nothing is wrong with the file; nothing about its
-                    // content can be checked from here (ADR-0042 §7).
-                    return new FileVerifyResult(false,
-                        "The file's segments are sealed to the repository public key — content verification "
-                        + "needs a restore grant (ADR-0042); no damage was found.",
-                        NeedsRestoreGrant: true);
-                }
+                    if (reference is { } segment)
+                    {
+                        var read = await reader.ReadSegmentAsync(segment.ObjectId, cancellationToken).ConfigureAwait(false);
 
-                if (read.Outcome != RecordReadOutcome.Ok)
-                {
-                    return new FileVerifyResult(false,
-                        $"Segment at offset {segment.LogicalOffset}: {read.Outcome} — {read.Detail}");
-                }
+                        if (read.Outcome == RecordReadOutcome.ContentSealed)
+                        {
+                            // Nothing is wrong with the file; nothing about its
+                            // content can be checked from here (ADR-0042 §7).
+                            return new FileVerifyResult(false,
+                                "The file's segments are sealed to the repository public key — content verification "
+                                + "needs a restore grant (ADR-0042); no damage was found.",
+                                NeedsRestoreGrant: true);
+                        }
 
-                wholeFile.AppendData(read.Plaintext!);
+                        if (read.Outcome != RecordReadOutcome.Ok)
+                        {
+                            return new FileVerifyResult(false,
+                                $"Segment at offset {segment.LogicalOffset}: {read.Outcome} — {read.Detail}");
+                        }
+
+                        wholeFile.AppendData(read.Plaintext!);
+                    }
+                    else if (extent is { } sparse)
+                    {
+                        var zeroes = new byte[Math.Min(sparse.Length, 64 * 1024)];
+                        var remaining = sparse.Length;
+                        while (remaining > 0)
+                        {
+                            var take = (int)Math.Min(remaining, (ulong)zeroes.Length);
+                            wholeFile.AppendData(zeroes.AsSpan(0, take));
+                            remaining -= (ulong)take;
+                        }
+                    }
+                }
             }
-            else if (extent is { } sparse)
-            {
-                var zeroes = new byte[Math.Min(sparse.Length, 64 * 1024)];
-                var remaining = sparse.Length;
-                while (remaining > 0)
-                {
-                    var take = (int)Math.Min(remaining, (ulong)zeroes.Length);
-                    wholeFile.AppendData(zeroes.AsSpan(0, take));
-                    remaining -= (ulong)take;
-                }
-            }
+        }
+        catch (ManifestValidationException damaged)
+        {
+            // A run that did not read, or does not follow the one before it.
+            return new FileVerifyResult(false, damaged.Message);
         }
 
         Span<byte> hash = stackalloc byte[32];

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Crypto;
@@ -85,10 +86,39 @@ public static class RestorePart
 
     /// <summary>A file's pieces in its order: each segment, and each hole.</summary>
     internal static List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)> PiecesOf(FileVersionManifest manifest) =>
+        PiecesOf(manifest.SegmentReferences, manifest.SparseExtents);
+
+    /// <summary>
+    /// A file's pieces in its order a stretch at a time: the manifest's own,
+    /// or each of its reference runs, read through <paramref name="reader"/>
+    /// (ADR-0202), so that what a reader holds of a large file's pieces is one
+    /// run's however many the file has.
+    /// </summary>
+    /// <exception cref="ManifestValidationException">A run did not read, or does not follow the one before it.</exception>
+    internal static async IAsyncEnumerable<List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)>> StretchesAsync(
+        FileVersionManifest manifest,
+        RepositoryReader reader,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (manifest.ReferenceRuns.Count == 0)
+        {
+            yield return PiecesOf(manifest);
+            yield break;
+        }
+
+        await foreach (var run in ReferenceRunReader.ReadAsync(manifest, reader.ReadReferenceRunAsync, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return PiecesOf(run.SegmentReferences, run.SparseExtents);
+        }
+    }
+
+    private static List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)> PiecesOf(
+        IReadOnlyList<SegmentReference> references, IReadOnlyList<SparseExtent> extents) =>
         [
-            .. manifest.SegmentReferences
+            .. references
                 .Select(reference => (Offset: (ulong)reference.LogicalOffset, Reference: (SegmentReference?)reference, Extent: default(SparseExtent?)))
-                .Concat(manifest.SparseExtents.Select(extent => (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
+                .Concat(extents.Select(extent => (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
                 .OrderBy(piece => piece.Item1),
         ];
 
@@ -155,7 +185,7 @@ public static class RestorePart
     /// <summary>Whether the next <paramref name="length"/> bytes of <paramref name="part"/> are all zero.</summary>
     private static async ValueTask<bool> ReadsAsZeroesAsync(FileStream part, long length, CancellationToken cancellationToken)
     {
-        var buffer = new byte[ZeroesChunk];
+        var buffer = new byte[Math.Min(length, ZeroesChunk)];
         while (length > 0)
         {
             var take = (int)Math.Min(length, buffer.Length);

@@ -126,7 +126,9 @@ public sealed class RestoreEngine
         ThrowHelper.ThrowIfNull(manifest);
 
         var spoolPath = part ?? Path.Combine(_spoolDirectory, $"fbp-restore-{Guid.NewGuid():n}.spool");
-        var holes = manifest.SparseExtents.Count > 0;
+        // A large file's holes are in its runs, which are read only as it
+        // is assembled (ADR-0202), so its spool may hold them from the start.
+        var holes = manifest.SparseExtents.Count > 0 || manifest.ReferenceRuns.Count > 0;
         var keep = part is not null && destination is not null;
 
         // Only what this call made is removed: a name it could not make new
@@ -137,8 +139,6 @@ public sealed class RestoreEngine
         {
             using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-            var pieces = RestorePart.PiecesOf(manifest);
-
             var spool = SparseFile.Create(
                 spoolPath,
                 part is null || destination is null ? FileMode.CreateNew : takeUp ? FileMode.OpenOrCreate : FileMode.Create,
@@ -146,46 +146,76 @@ public sealed class RestoreEngine
             made = true;
             await using (spool.ConfigureAwait(false))
             {
-                var taken = takeUp ? await TakeUpAsync(spool, pieces, wholeFile, cancellationToken).ConfigureAwait(false) : 0;
-                var resumed = spool.Position;
-
-                // Every segment this file still needs, fetched in as few
-                // reads as the reader's bounds allow before the loop asks for
-                // the first of them (NFR-PERF-009). What the reader then holds
-                // is bounded by its own budget, not by this file.
-                _ = await _reader.PrefetchAsync(
-                    [.. pieces.Skip(taken).Where(piece => piece.Item2 is not null).Select(piece => piece.Item2!.Value.ObjectId)],
-                    cancellationToken).ConfigureAwait(false);
-
-                foreach (var (_, reference, extent) in pieces.Skip(taken))
+                // Where the file holds data, adjacent segments as one range,
+                // for an emission that leaves its holes as holes.
+                var data = new List<(long Offset, long Length)>();
+                long? resumed = takeUp ? null : 0;
+                try
                 {
-                    if (reference is { } segment)
+                    // A large file is assembled a reference run at a time
+                    // (ADR-0202), so what this holds of its pieces is one run's.
+                    await foreach (var pieces in RestorePart.StretchesAsync(manifest, _reader, cancellationToken).ConfigureAwait(false))
                     {
-                        var read = await _reader.ReadSegmentAsync(segment.ObjectId, cancellationToken).ConfigureAwait(false);
-
-                        if (read.Outcome != RecordReadOutcome.Ok)
+                        AddData(data, pieces);
+                        var taken = 0;
+                        if (resumed is null)
                         {
-                            return Refuse($"Segment at offset {segment.LogicalOffset}: {read.Outcome} — {read.Detail}");
+                            taken = await TakeUpAsync(spool, pieces, wholeFile, cancellationToken).ConfigureAwait(false);
+                            if (taken < pieces.Count)
+                            {
+                                resumed = spool.Position;
+                            }
                         }
 
-                        if (read.Plaintext!.LongLength != segment.LogicalLength)
-                        {
-                            return Refuse(
-                                $"Segment at offset {segment.LogicalOffset} restored {read.Plaintext.Length} bytes; the reference declares {segment.LogicalLength}.");
-                        }
+                        // Every segment this stretch still needs, fetched in as
+                        // few reads as the reader's bounds allow before the loop
+                        // asks for the first of them (NFR-PERF-009). What the
+                        // reader then holds is bounded by its own budget, not by
+                        // this file.
+                        _ = await _reader.PrefetchAsync(
+                            [.. pieces.Skip(taken).Where(piece => piece.Item2 is not null).Select(piece => piece.Item2!.Value.ObjectId)],
+                            cancellationToken).ConfigureAwait(false);
 
-                        await spool.WriteAsync(read.Plaintext, cancellationToken).ConfigureAwait(false);
-                        wholeFile.AppendData(read.Plaintext);
-                    }
-                    else if (extent is { } sparse)
-                    {
-                        // The hash covers the zeroes a hole reads as (06
-                        // §4.2), so a filesystem without sparse support
-                        // still verifies. The spool skips it.
-                        AppendZeroes(wholeFile, sparse.Length);
-                        spool.Seek((long)sparse.Length, SeekOrigin.Current);
+                        foreach (var (_, reference, extent) in pieces.Skip(taken))
+                        {
+                            if (reference is { } segment)
+                            {
+                                var read = await _reader.ReadSegmentAsync(segment.ObjectId, cancellationToken).ConfigureAwait(false);
+
+                                if (read.Outcome != RecordReadOutcome.Ok)
+                                {
+                                    return Refuse($"Segment at offset {segment.LogicalOffset}: {read.Outcome} — {read.Detail}");
+                                }
+
+                                if (read.Plaintext!.LongLength != segment.LogicalLength)
+                                {
+                                    return Refuse(
+                                        $"Segment at offset {segment.LogicalOffset} restored {read.Plaintext.Length} bytes; the reference declares {segment.LogicalLength}.");
+                                }
+
+                                await spool.WriteAsync(read.Plaintext, cancellationToken).ConfigureAwait(false);
+                                wholeFile.AppendData(read.Plaintext);
+                            }
+                            else if (extent is { } sparse)
+                            {
+                                // The hash covers the zeroes a hole reads as (06
+                                // §4.2), so a filesystem without sparse support
+                                // still verifies. The spool skips it.
+                                AppendZeroes(wholeFile, sparse.Length);
+                                spool.Seek((long)sparse.Length, SeekOrigin.Current);
+                            }
+                        }
                     }
                 }
+                catch (ManifestValidationException damaged)
+                {
+                    // A run that did not read, or does not follow the one
+                    // before it: the file cannot be read whole, and is never
+                    // put down short.
+                    return Refuse(damaged.Message);
+                }
+
+                resumed ??= spool.Position;
 
                 // A file ending in a hole has nothing written past its last
                 // data, so its length is set rather than reached: to where the
@@ -207,12 +237,12 @@ public sealed class RestoreEngine
                 if (destination is null)
                 {
                     keep = true;
-                    return new RestoreResult(true, spool.Length, hash, null) { Resumed = resumed };
+                    return new RestoreResult(true, spool.Length, hash, null) { Resumed = resumed.Value };
                 }
 
                 if (holes && destination.CanSeek && destination.Position >= destination.Length)
                 {
-                    await EmitLeavingHolesAsync(spool, destination, pieces, cancellationToken).ConfigureAwait(false);
+                    await EmitLeavingHolesAsync(spool, destination, data, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -221,7 +251,7 @@ public sealed class RestoreEngine
                 }
 
                 keep = false;
-                return new RestoreResult(true, spool.Length, hash, null) { Resumed = resumed };
+                return new RestoreResult(true, spool.Length, hash, null) { Resumed = resumed.Value };
             }
         }
         finally
@@ -236,9 +266,11 @@ public sealed class RestoreEngine
     }
 
     /// <summary>
-    /// Takes up what a kept part already holds, in the file's order and by
-    /// <see cref="RestorePart"/>'s rule, hashing what is taken as the rest
-    /// will be, and cuts the part back to the end of it.
+    /// Takes up what a kept part already holds of one stretch of the file, in
+    /// the file's order and by <see cref="RestorePart"/>'s rule, from where
+    /// the stretch before it was taken to, hashing what is taken as the rest
+    /// will be. Where it stops short of the stretch's end, the part is cut back
+    /// to the end of what it took: nothing after that is taken up.
     /// </summary>
     /// <returns>How many of <paramref name="pieces"/> were taken.</returns>
     private async ValueTask<int> TakeUpAsync(
@@ -247,6 +279,7 @@ public sealed class RestoreEngine
         IncrementalHash wholeFile,
         CancellationToken cancellationToken)
     {
+        var start = part.Position;
         var (taken, end) = await RestorePart.WalkAsync(
             part,
             pieces,
@@ -264,24 +297,53 @@ public sealed class RestoreEngine
             },
             cancellationToken).ConfigureAwait(false);
 
-        part.SetLength(end);
-        part.Position = end;
+        var reached = taken == 0 ? start : end;
+        part.Position = reached;
+        if (taken < pieces.Count)
+        {
+            part.SetLength(reached);
+        }
+
         return taken;
+    }
+
+    /// <summary>Adds <paramref name="pieces"/>' segments to where the file holds data, joining each to the range it continues.</summary>
+    private static void AddData(
+        List<(long Offset, long Length)> data,
+        List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)> pieces)
+    {
+        foreach (var (_, reference, _) in pieces)
+        {
+            if (reference is not { } segment)
+            {
+                continue;
+            }
+
+            if (data.Count > 0 && data[^1].Offset + data[^1].Length == segment.LogicalOffset)
+            {
+                data[^1] = (data[^1].Offset, data[^1].Length + segment.LogicalLength);
+            }
+            else
+            {
+                data.Add((segment.LogicalOffset, segment.LogicalLength));
+            }
+        }
     }
 
     /// <summary>
     /// Copies only the spool's data into <paramref name="destination"/>, each
-    /// run where the spool holds it, counted from where the destination
+    /// range where the spool holds it, counted from where the destination
     /// stands, and sets the length — so a hole is never written there either.
     /// The destination is left at the file's end, where a dense copy leaves
-    /// it. The pieces are walked as the spool was written, so what lands is
-    /// what was hashed. Called only for a destination with nothing past its
-    /// position, where a skipped range reads as zeroes on every platform.
+    /// it. The ranges are where the spool's segments were written, so what
+    /// lands is what was hashed. Called only for a destination with nothing
+    /// past its position, where a skipped range reads as zeroes on every
+    /// platform.
     /// </summary>
     private static async ValueTask EmitLeavingHolesAsync(
         FileStream spool,
         Stream destination,
-        List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)> pieces,
+        List<(long Offset, long Length)> data,
         CancellationToken cancellationToken)
     {
         if (destination is FileStream file)
@@ -291,32 +353,24 @@ public sealed class RestoreEngine
 
         var start = destination.Position;
         var buffer = new byte[64 * 1024];
-        long position = 0;
 
-        foreach (var (_, reference, extent) in pieces)
+        foreach (var (offset, length) in data)
         {
-            if (extent is { } hole)
-            {
-                position += (long)hole.Length;
-                continue;
-            }
+            spool.Position = offset;
+            destination.Position = start + offset;
 
-            spool.Position = position;
-            destination.Position = start + position;
-
-            var remaining = reference!.Value.LogicalLength;
+            var remaining = length;
             while (remaining > 0)
             {
                 var take = (int)Math.Min(remaining, (long)buffer.Length);
                 await spool.ReadExactlyAsync(buffer.AsMemory(0, take), cancellationToken).ConfigureAwait(false);
                 await destination.WriteAsync(buffer.AsMemory(0, take), cancellationToken).ConfigureAwait(false);
                 remaining -= take;
-                position += take;
             }
         }
 
-        destination.SetLength(start + position);
-        destination.Position = start + position;
+        destination.SetLength(start + spool.Length);
+        destination.Position = start + spool.Length;
     }
 
     private static void AppendZeroes(IncrementalHash hash, ulong length)
