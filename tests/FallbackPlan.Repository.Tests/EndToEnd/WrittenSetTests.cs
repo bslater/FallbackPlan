@@ -2,10 +2,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// A session writes each record once, however many of its files carry the
-/// content (NFR-PERF-010: segment reuse; 09 §6). Once a record's blob is
-/// uploaded the session keeps no claim to it in memory, only in its spool
-/// (ADR-0201), and a later file with the same content still reuses it rather
-/// than writing it a second time.
+/// content (FR-ARCH-004: reused by reference rather than re-stored; 09 §6).
+/// Once a record's blob is uploaded the session keeps no claim to it in
+/// memory, only in its spool (ADR-0201), and a later file with the same
+/// content still reuses it rather than writing it a second time.
 /// </summary>
 [TestClass]
 public sealed class WrittenSetTests : ArchiveTestHarness
