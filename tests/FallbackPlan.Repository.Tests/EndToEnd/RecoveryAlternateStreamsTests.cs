@@ -253,6 +253,50 @@ public sealed class RecoveryAlternateStreamsTests : IDisposable
         return source;
     }
 
+    /// <summary>
+    /// Every file the tree <paramref name="treeId"/> holds, read from its trees
+    /// and its files' manifests, each by its path from that tree with '/'
+    /// between names.
+    /// </summary>
+    private static async Task<IReadOnlyList<CapturedFile>> FilesOfAsync(RepositoryReader reader, ObjectId treeId)
+    {
+        var files = new List<CapturedFile>();
+        await AddFilesOfAsync(reader, treeId, string.Empty, files);
+        return files;
+    }
+
+    private static async Task AddFilesOfAsync(
+        RepositoryReader reader, ObjectId treeId, string prefix, List<CapturedFile> files)
+    {
+        List<TreeManifest> chain = [];
+        for (ObjectId? next = treeId; next is { } id;)
+        {
+            var tree = TreeManifestCodec.Decode(await ReadRecordAsync(reader, id));
+            chain.Add(tree);
+            next = tree.Continuation;
+        }
+
+        foreach (var entry in TreeChain.ValidateAndFlatten(chain))
+        {
+            var path = prefix + System.Text.Encoding.UTF8.GetString(entry.Name.Span);
+            if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
+            {
+                await AddFilesOfAsync(reader, entry.ObjectId, path + "/", files);
+                continue;
+            }
+
+            files.Add(new CapturedFile(
+                path, entry.ObjectId, FileVersionManifestCodec.Decode(await ReadRecordAsync(reader, entry.ObjectId))));
+        }
+    }
+
+    private static async Task<ReadOnlyMemory<byte>> ReadRecordAsync(RepositoryReader reader, ObjectId objectId)
+    {
+        var read = await reader.ReadSegmentAsync(objectId, CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        return read.Plaintext!;
+    }
+
     private static byte[] Deterministic(int length, byte seed)
     {
         var data = new byte[length];
@@ -315,9 +359,8 @@ public sealed class RecoveryAlternateStreamsTests : IDisposable
             {
                 using var probe = new RepositoryReader(repository.RepositoryId, repository.Keys, store, authority);
                 await probe.LoadBlobsAsync(CancellationToken.None);
-                var carrier = published.Files.Single(candidate => candidate.RelativePath == CarrierPath);
-                var manifest = FileVersionManifestCodec.Decode(
-                    (await probe.ReadSegmentAsync(carrier.ObjectId, CancellationToken.None)).Plaintext!);
+                var manifest = (await FilesOfAsync(probe, published.RootTreeObjectId))
+                    .Single(candidate => candidate.RelativePath == CarrierPath).Manifest;
                 var stream = manifest.Metadata.AlternateStreams.Single(
                     candidate => System.Text.Encoding.UTF8.GetString(candidate.Name.Span) == damage);
                 Assert.IsTrue(probe.TryLocateRecord(stream.ObjectId, out var blobKey, out var entry));

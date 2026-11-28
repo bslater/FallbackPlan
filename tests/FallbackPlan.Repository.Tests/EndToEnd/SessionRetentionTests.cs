@@ -283,8 +283,9 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
         var published = await publishing.AsTask().ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         await Task.Delay(100);
 
-        Assert.HasCount(TreeFiles, published.Files);
-        Assert.IsTrue(published.Files.All(file => file.Archive!.SegmentReferences.Count == SegmentsPerFile));
+        // Every file archived whole, in segments of the policy's fixed size.
+        Assert.AreEqual(TreeFiles, published.FileCount);
+        Assert.AreEqual((long)TreeFiles * SegmentsPerFile * SegmentBytes, published.BytesArchived);
         return (Settled(), new WeakReference(published));
     }
 

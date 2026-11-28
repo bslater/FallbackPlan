@@ -241,8 +241,11 @@ public sealed class HintPackTests : ArchiveTestHarness
         Assert.AreEqual(FirstCapture, pack.CapturedAt);
 
         using var deriver = new SourceIdentityKeyDeriver(keys.ContentIdKey);
-        var expected = published.Files
-            .Select(file => (Key: Convert.ToHexString(deriver.Derive(DeviceId, file.IdentityFileId!.Value)), file.ObjectId))
+        var expected = (await FilesOfAsync(store, keys, published))
+            .Select(file => (
+                Key: Convert.ToHexString(deriver.Derive(
+                    DeviceId, catalogue.LookupPath(SnapshotId(0xA1), file.RelativePath)!.IdentityFileId!.Value)),
+                file.ObjectId))
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .ToList();
         SequenceAssert.AreEqual(
@@ -445,10 +448,12 @@ public sealed class HintPackTests : ArchiveTestHarness
         var second = await CreateOrchestrator(counting, keys, credential, rebuilt)
             .PublishAsync(Job(source, 0xF2, now: FirstCapture + 1) with { PriorSnapshotId = SnapshotId(0xF1) }, CancellationToken.None);
 
+        var secondByPath = (await FilesOfAsync(inner, keys, second)).ToDictionary(file => file.RelativePath);
+        var firstByPath = (await FilesOfAsync(inner, keys, first)).ToDictionary(file => file.RelativePath);
         for (var index = 0; index < 20; index++)
         {
-            var moved = second.Files.Single(file => file.RelativePath == $"moved/file-{index:d3}.bin");
-            var original = first.Files.Single(file => file.RelativePath == $"docs/file-{index:d3}.bin");
+            var moved = secondByPath[$"moved/file-{index:d3}.bin"];
+            var original = firstByPath[$"docs/file-{index:d3}.bin"];
             var manifest = await ReadManifestAsync(inner, keys, moved.ObjectId);
             Assert.AreEqual(original.ObjectId, manifest.ParentVersion, moved.RelativePath);
         }
@@ -473,12 +478,12 @@ public sealed class HintPackTests : ArchiveTestHarness
         using var keys = CreateKeys();
         using var credential = CreateCredential();
 
-        PublishedFileVersion original;
+        CapturedFile original;
         using (var live = OpenCatalogue())
         {
             var first = await CreateOrchestrator(store, keys, credential, live)
                 .PublishAsync(Job(source, 0xA5), CancellationToken.None);
-            original = first.Files.Single();
+            original = (await FilesOfAsync(store, keys, first)).Single();
         }
 
         // The repository as an installation from before ADR-0090 left it: a
@@ -495,7 +500,7 @@ public sealed class HintPackTests : ArchiveTestHarness
         var second = await CreateOrchestrator(store, keys, credential, rebuilt)
             .PublishAsync(Job(source, 0xA6, now: FirstCapture + 1) with { PriorSnapshotId = SnapshotId(0xA5) }, CancellationToken.None);
 
-        var after = second.Files.Single(file => file.RelativePath == "archive/after.bin");
+        var after = (await FilesOfAsync(store, keys, second)).Single(file => file.RelativePath == "archive/after.bin");
         Assert.AreEqual(original.ObjectId, (await ReadManifestAsync(store, keys, after.ObjectId)).ParentVersion);
     }
 
@@ -516,7 +521,7 @@ public sealed class HintPackTests : ArchiveTestHarness
         {
             var first = await CreateOrchestrator(store, keys, credential, live)
                 .PublishAsync(Job(source, 0xB5), CancellationToken.None);
-            quiet = first.Files.Single(file => file.RelativePath == "docs/quiet.bin").ObjectId;
+            quiet = (await FilesOfAsync(store, keys, first)).Single(file => file.RelativePath == "docs/quiet.bin").ObjectId;
 
             // The older installation's hints, then this one's first backup:
             // the changed file's new version is named in a pack, the quiet
@@ -527,7 +532,7 @@ public sealed class HintPackTests : ArchiveTestHarness
                 .Metadata = EntryMetadata.Empty with { ModifiedAt = FirstCapture + 50 };
             var second = await CreateOrchestrator(store, keys, credential, live)
                 .PublishAsync(Job(source, 0xB6, now: FirstCapture + 100) with { PriorSnapshotId = SnapshotId(0xB5) }, CancellationToken.None);
-            changed = second.Files.Single(file => file.RelativePath == "docs/changing.bin").ObjectId;
+            changed = (await FilesOfAsync(store, keys, second)).Single(file => file.RelativePath == "docs/changing.bin").ObjectId;
         }
 
         Assert.ContainsSingle(await KeysUnderAsync(store, "hints/identity-pack/"));
@@ -543,8 +548,9 @@ public sealed class HintPackTests : ArchiveTestHarness
         var third = await CreateOrchestrator(store, keys, credential, rebuilt)
             .PublishAsync(Job(source, 0xB7, now: FirstCapture + 200) with { PriorSnapshotId = SnapshotId(0xB6) }, CancellationToken.None);
 
-        var movedChanging = third.Files.Single(file => file.RelativePath == "moved/changing.bin");
-        var movedQuiet = third.Files.Single(file => file.RelativePath == "moved/quiet.bin");
+        var thirdFiles = await FilesOfAsync(store, keys, third);
+        var movedChanging = thirdFiles.Single(file => file.RelativePath == "moved/changing.bin");
+        var movedQuiet = thirdFiles.Single(file => file.RelativePath == "moved/quiet.bin");
         Assert.AreEqual(changed, (await ReadManifestAsync(store, keys, movedChanging.ObjectId)).ParentVersion);
         Assert.AreEqual(quiet, (await ReadManifestAsync(store, keys, movedQuiet.ObjectId)).ParentVersion);
     }

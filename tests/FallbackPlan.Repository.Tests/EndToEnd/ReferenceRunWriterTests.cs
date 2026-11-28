@@ -150,7 +150,8 @@ public sealed class ReferenceRunWriterTests : ArchiveTestHarness
 
         Assert.IsEmpty(published.Failures, string.Join("; ", published.Failures.Select(failure => failure.Detail)));
         using var reader = await OpenReaderAsync(store, keys);
-        var manifest = await ReadManifestAsync(reader, published.Files.Single(file => file.RelativePath == "huge.bin").ObjectId);
+        var files = await FilesOfAsync(reader, published.RootTreeObjectId);
+        var manifest = files.Single(file => file.RelativePath == "huge.bin").Manifest;
 
         Assert.HasCount(2, manifest.ReferenceRuns);
         Assert.IsEmpty(manifest.SegmentReferences, "a manifest listing runs holds no references of its own");
@@ -168,7 +169,7 @@ public sealed class ReferenceRunWriterTests : ArchiveTestHarness
         await AssertRestoresAsync(reader, manifest, node.Content);
 
         // A file small enough for one manifest is one manifest, as ever.
-        var small = await ReadManifestAsync(reader, published.Files.Single(file => file.RelativePath == "small.bin").ObjectId);
+        var small = files.Single(file => file.RelativePath == "small.bin").Manifest;
         Assert.IsEmpty(small.ReferenceRuns);
         Assert.ContainsSingle(small.SegmentReferences);
     }
@@ -187,7 +188,7 @@ public sealed class ReferenceRunWriterTests : ArchiveTestHarness
 
         Assert.IsEmpty(published.Failures);
         using var reader = await OpenReaderAsync(store, keys);
-        var manifest = await ReadManifestAsync(reader, Assert.ContainsSingle(published.Files).ObjectId);
+        var manifest = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId)).Manifest;
 
         Assert.IsEmpty(manifest.ReferenceRuns);
         Assert.HasCount(Full / 2, manifest.SegmentReferences);
@@ -208,7 +209,7 @@ public sealed class ReferenceRunWriterTests : ArchiveTestHarness
 
         Assert.IsEmpty(published.Failures);
         using var reader = await OpenReaderAsync(store, keys);
-        var manifest = await ReadManifestAsync(reader, Assert.ContainsSingle(published.Files).ObjectId);
+        var manifest = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId)).Manifest;
 
         var runs = await ReadRunsAsync(reader, manifest);
         Assert.HasCount(2, runs);
@@ -234,7 +235,7 @@ public sealed class ReferenceRunWriterTests : ArchiveTestHarness
 
         Assert.IsEmpty(published.Failures);
         using var reader = await OpenReaderAsync(store, keys);
-        var manifest = await ReadManifestAsync(reader, Assert.ContainsSingle(published.Files).ObjectId);
+        var manifest = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId)).Manifest;
 
         Assert.IsEmpty(manifest.ReferenceRuns);
         Assert.HasCount(140_000, manifest.SegmentReferences);
@@ -257,7 +258,7 @@ public sealed class ReferenceRunWriterTests : ArchiveTestHarness
             .PublishAsync(Job(source, 0xE5), CancellationToken.None);
 
         using var reader = await OpenReaderAsync(store, keys);
-        var manifest = await ReadManifestAsync(reader, Assert.ContainsSingle(published.Files).ObjectId);
+        var manifest = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId)).Manifest;
 
         Assert.HasCount(2, manifest.ReferenceRuns);
         foreach (var run in manifest.ReferenceRuns)
@@ -286,7 +287,7 @@ public sealed class ReferenceRunWriterTests : ArchiveTestHarness
         using var catalogue = OpenCatalogue();
         var first = await CreateOrchestrator(store, keys, credential, FormatVersions.ReferenceRuns, ProductBlobs, catalogue)
             .PublishAsync(Job(source, 0xE6), CancellationToken.None);
-        var before = Assert.ContainsSingle(first.Files).ObjectId;
+        var before = Assert.ContainsSingle(await FilesOfAsync(store, keys, first)).ObjectId;
 
         // The same file, moved: same inode, same content, same time.
         Assert.IsTrue(source.Remove("docs/before.bin"));
@@ -297,7 +298,7 @@ public sealed class ReferenceRunWriterTests : ArchiveTestHarness
             .PublishAsync(
                 Job(source, 0xE7, now: 1_722_700_000_001) with { PriorSnapshotId = Enumerable.Repeat((byte)0xE6, 16).ToArray() },
                 CancellationToken.None);
-        var after = Assert.ContainsSingle(second.Files).ObjectId;
+        var after = Assert.ContainsSingle(await FilesOfAsync(store, keys, second)).ObjectId;
 
         Assert.IsEmpty(source.OpenedPaths, "a rename reads no content");
         using var reader = await OpenReaderAsync(store, keys);

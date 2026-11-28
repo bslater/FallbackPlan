@@ -370,9 +370,8 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
         var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var read = await reader.ReadSegmentAsync(Assert.ContainsSingle(snapshot.Files).ObjectId, CancellationToken.None);
-        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
-        return new Published(keys, reader, FileVersionManifestCodec.Decode(read.Plaintext!), plan, target);
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, snapshot.RootTreeObjectId));
+        return new Published(keys, reader, file.Manifest, plan, target);
     }
 
     private sealed record Published(

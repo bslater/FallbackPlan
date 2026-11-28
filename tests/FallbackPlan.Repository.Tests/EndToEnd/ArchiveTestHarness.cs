@@ -1,10 +1,12 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
+using System.Text;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
+using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 using Microsoft.Data.Sqlite;
@@ -150,6 +152,74 @@ public abstract class ArchiveTestHarness : IDisposable
     }
 
     /// <summary>
+    /// Every file a published tree snapshot holds, read from its trees and
+    /// its files' manifests: where each is, the version it names, and that
+    /// version. Folders come after the files beside them, each folder's
+    /// entries in the order its tree holds them.
+    /// </summary>
+    /// <remarks>
+    /// A published result counts its files and does not list them, so what a
+    /// snapshot captured is read from what it published. A folder the run
+    /// took as the snapshot before held it is read too: it is this snapshot's
+    /// as much as a walked one.
+    /// </remarks>
+    protected static async Task<IReadOnlyList<CapturedFile>> FilesOfAsync(
+        IObjectStore store, RepositoryKeySet keys, PublishedTreeSnapshot published)
+    {
+        ArgumentNullException.ThrowIfNull(published);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        return await FilesOfAsync(reader, published.RootTreeObjectId);
+    }
+
+    /// <inheritdoc cref="FilesOfAsync(IObjectStore, RepositoryKeySet, PublishedTreeSnapshot)"/>
+    protected static async Task<IReadOnlyList<CapturedFile>> FilesOfAsync(RepositoryReader reader, ObjectId rootTree)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        var files = new List<CapturedFile>();
+        await AddFilesOfAsync(reader, rootTree, string.Empty, files);
+        return files;
+    }
+
+    private static async Task AddFilesOfAsync(
+        RepositoryReader reader, ObjectId treeId, string prefix, List<CapturedFile> files)
+    {
+        List<TreeManifest> chain = [];
+        for (ObjectId? next = treeId; next is { } id;)
+        {
+            var tree = TreeManifestCodec.Decode(await ReadRecordAsync(reader, id));
+            chain.Add(tree);
+            next = tree.Continuation;
+        }
+
+        List<(string Path, ObjectId TreeId)> folders = [];
+        foreach (var entry in TreeChain.ValidateAndFlatten(chain))
+        {
+            var path = prefix + Encoding.UTF8.GetString(entry.Name.Span);
+            if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
+            {
+                folders.Add((path, entry.ObjectId));
+                continue;
+            }
+
+            files.Add(new CapturedFile(
+                path, entry.ObjectId, FileVersionManifestCodec.Decode(await ReadRecordAsync(reader, entry.ObjectId))));
+        }
+
+        foreach (var (path, folderId) in folders)
+        {
+            await AddFilesOfAsync(reader, folderId, path + "/", files);
+        }
+    }
+
+    private static async Task<ReadOnlyMemory<byte>> ReadRecordAsync(RepositoryReader reader, ObjectId objectId)
+    {
+        var read = await reader.ReadSegmentAsync(objectId, CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        return read.Plaintext!;
+    }
+
+    /// <summary>
     /// A deterministic ~3 MiB file: alternating 128 KiB regions of repeated
     /// ASCII (highly compressible) and seeded pseudo-random bytes
     /// (incompressible), so the per-record threshold decision goes both ways
@@ -214,4 +284,15 @@ public abstract class ArchiveTestHarness : IDisposable
             // Best effort.
         }
     }
+}
+
+/// <summary>
+/// One file a published tree snapshot holds, as its trees and its manifest
+/// state it: its path from the snapshot's root, the version it names, and that
+/// version's manifest.
+/// </summary>
+public sealed record CapturedFile(string RelativePath, ObjectId ObjectId, FileVersionManifest Manifest)
+{
+    /// <summary>What kind of entry the version is.</summary>
+    public EntryKind EntryKind => Manifest.EntryKind;
 }

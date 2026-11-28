@@ -155,24 +155,24 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
             },
             CancellationToken.None);
 
-        var firstFile = Assert.ContainsSingle(first.Files);
-        var secondFile = Assert.ContainsSingle(second.Files);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var firstFile = Assert.ContainsSingle(await FilesOfAsync(reader, first.RootTreeObjectId));
+        var secondFile = Assert.ContainsSingle(await FilesOfAsync(reader, second.RootTreeObjectId));
 
         // The file grew, so it carries more segments than it did.
         Assert.IsGreaterThan(
-            firstFile.Archive!.SegmentReferences.Count, secondFile.Archive!.SegmentReferences.Count);
+            firstFile.Manifest.SegmentReferences.Count, secondFile.Manifest.SegmentReferences.Count);
 
         // But the bytes newly stored are a small fraction of it: only the
         // segments the index could not already locate.
         var written = second.ContentBlobs.Sum(blob => blob.RecordCount);
         Assert.IsLessThan(
-            secondFile.Archive.SegmentReferences.Count / 2,
+            secondFile.Manifest.SegmentReferences.Count / 2,
             written,
             "the unchanged prefix should have been located, not re-stored");
 
         // It restores from the references its manifest declares.
-        using var reader = new RepositoryReader(Repo, keys, store, Authority);
-        await reader.LoadBlobsAsync(CancellationToken.None);
         using var restored = new MemoryStream();
         var outcome = await reader.RestoreAsync(
             await ReferencesOfAsync(reader, secondFile.ObjectId), restored, CancellationToken.None);

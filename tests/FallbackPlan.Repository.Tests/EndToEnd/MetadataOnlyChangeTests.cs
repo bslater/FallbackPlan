@@ -80,9 +80,10 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
     /// <summary>
     /// Runs two publications with only <paramref name="mutate"/> between them,
-    /// and returns the second publication's version of <c>secret.key</c>.
+    /// and returns the second publication's version of <c>secret.key</c> and
+    /// the first publication's.
     /// </summary>
-    private async Task<(PublishedFileVersion File, FileVersionManifest Manifest)> AfterMetadataChangeAsync(
+    private async Task<(CapturedFile File, FileVersionManifest Manifest, ObjectId First)> AfterMetadataChangeAsync(
         Func<EntryMetadata, EntryMetadata> mutate)
     {
         var source = new FakeFileSystemSource();
@@ -94,7 +95,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, credential, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         // The only thing that changes. The content is untouched, so identity,
@@ -112,28 +113,27 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        var file = Assert.ContainsSingle(second.Files);
-
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
-        return (file, await ReadFileVersionAsync(reader, file.ObjectId));
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, second.RootTreeObjectId));
+        return (file, file.Manifest, Assert.ContainsSingle(await FilesOfAsync(reader, first.RootTreeObjectId)).ObjectId);
     }
 
     [TestMethod]
     public async Task ThePermissionsTightened_TheSnapshotHoldsTheNewMode()
     {
         // 0o644 → 0o600: the world-readable private key, fixed.
-        var (file, manifest) = await AfterMetadataChangeAsync(
+        var (file, manifest, first) = await AfterMetadataChangeAsync(
             metadata => metadata with { PosixMode = 0x180 });
 
         Assert.AreEqual(0x180u, manifest.Metadata.PosixMode, "the snapshot still holds the old mode");
-        Assert.IsFalse(file.Reused, "a metadata change is a change; the prior version cannot stand in for it");
+        Assert.AreNotEqual(first, file.ObjectId, "a metadata change is a change; the prior version cannot stand in for it");
     }
 
     [TestMethod]
     public async Task TheOwnerChanged_TheSnapshotHoldsTheNewOwner()
     {
-        var (_, manifest) = await AfterMetadataChangeAsync(
+        var (_, manifest, _) = await AfterMetadataChangeAsync(
             metadata => metadata with { OwnerName = "archivist", GroupName = "staff" });
 
         Assert.AreEqual("archivist", manifest.Metadata.OwnerName);
@@ -143,7 +143,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     [TestMethod]
     public async Task AnExtendedAttributeChanged_TheSnapshotHoldsIt()
     {
-        var (_, manifest) = await AfterMetadataChangeAsync(
+        var (_, manifest, _) = await AfterMetadataChangeAsync(
             metadata => metadata with
             {
                 ExtendedAttributes = [new ExtendedAttributeEntry(Encoding.UTF8.GetBytes("user.label"), new byte[] { 1, 2, 3 })],
@@ -187,16 +187,18 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         Assert.IsEmpty(source.OpenedPaths, "the bytes did not change; re-reading them is the cost NFR-PERF-003 forbids");
         Assert.AreEqual(0, second.ContentBlobs.Sum(blob => blob.RecordCount), "no content record should be written");
 
-        // A new manifest, and it descends from the old one rather than
-        // claiming to be the file's first version.
-        var file = Assert.ContainsSingle(second.Files);
-        Assert.AreNotEqual(Assert.ContainsSingle(first.Files).ObjectId, file.ObjectId);
-
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
+
+        // A new manifest, and it descends from the old one rather than
+        // claiming to be the file's first version.
+        var original = Assert.ContainsSingle(await FilesOfAsync(reader, first.RootTreeObjectId)).ObjectId;
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, second.RootTreeObjectId));
+        Assert.AreNotEqual(original, file.ObjectId);
+
         var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
 
-        Assert.AreEqual(Assert.ContainsSingle(first.Files).ObjectId, manifest.ParentVersion);
+        Assert.AreEqual(original, manifest.ParentVersion);
         Assert.AreEqual(0x180u, manifest.Metadata.PosixMode);
     }
 
@@ -236,18 +238,19 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        var file = Assert.ContainsSingle(second.Files);
-        Assert.IsTrue(file.Reused, "a backup's own read must not make the next backup think the file changed");
-        Assert.AreEqual(Assert.ContainsSingle(first.Files).ObjectId, file.ObjectId);
+        var file = Assert.ContainsSingle(await FilesOfAsync(store, keys, second));
+        Assert.AreEqual(1, second.FilesReused, "a backup's own read must not make the next backup think the file changed");
+        Assert.AreEqual(Assert.ContainsSingle(await FilesOfAsync(store, keys, first)).ObjectId, file.ObjectId);
     }
 
     /// <summary>
     /// Runs two publications with the file's flags <paramref name="before"/>
     /// and then <paramref name="after"/>, and returns the second
     /// publication's version of <c>locked.bin</c>, whether its content was
-    /// opened, and the first publication's version.
+    /// opened, the first publication's version, and how many files the second
+    /// took unchanged.
     /// </summary>
-    private async Task<(PublishedFileVersion File, FileVersionManifest Manifest, bool Opened, ObjectId First)> AfterFlagsChangeAsync(
+    private async Task<(CapturedFile File, FileVersionManifest Manifest, bool Opened, ObjectId First, int Reused)> AfterFlagsChangeAsync(
         string[] before, string[] after,
         ushort firstFormat = FormatVersions.SealedDataPlane, ushort secondFormat = FormatVersions.SealedDataPlane)
     {
@@ -277,18 +280,23 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        var file = Assert.ContainsSingle(second.Files);
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
-        return (file, await ReadFileVersionAsync(reader, file.ObjectId), source.OpenedPaths.Count > 0, Assert.ContainsSingle(first.Files).ObjectId);
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, second.RootTreeObjectId));
+        return (
+            file,
+            file.Manifest,
+            source.OpenedPaths.Count > 0,
+            Assert.ContainsSingle(await FilesOfAsync(reader, first.RootTreeObjectId)).ObjectId,
+            second.FilesReused);
     }
 
     [TestMethod]
     public async Task OnlyTheFlagsChanged_TheSnapshotNamesTheNewOnes_WithoutReadingTheContentAgain()
     {
-        var (file, manifest, opened, _) = await AfterFlagsChangeAsync([], ["file-flags: immutable"]);
+        var (file, manifest, opened, first, _) = await AfterFlagsChangeAsync([], ["file-flags: immutable"]);
 
-        Assert.IsFalse(file.Reused, "a file newly made immutable is a change; the prior version cannot stand in for it");
+        Assert.AreNotEqual(first, file.ObjectId, "a file newly made immutable is a change; the prior version cannot stand in for it");
         Assert.Contains("file-flags: immutable", manifest.CaptureDiagnostics);
         Assert.IsFalse(opened, "the bytes did not change");
     }
@@ -296,20 +304,20 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     [TestMethod]
     public async Task TheFlagsWentAway_TheSnapshotNamesNone()
     {
-        var (file, manifest, _, _) = await AfterFlagsChangeAsync(["file-flags: no-dump"], []);
+        var (file, manifest, _, first, _) = await AfterFlagsChangeAsync(["file-flags: no-dump"], []);
 
-        Assert.IsFalse(file.Reused);
+        Assert.AreNotEqual(first, file.ObjectId);
         Assert.DoesNotContain(diagnostic => diagnostic.StartsWith("file-flags:", StringComparison.Ordinal), manifest.CaptureDiagnostics);
     }
 
     [TestMethod]
     public async Task AtFormatSix_OnlyTheFlagsChanged_TheSnapshotKeepsTheNewOnes_WithoutReadingTheContentAgain()
     {
-        var (file, manifest, opened, _) = await AfterFlagsChangeAsync(
+        var (file, manifest, opened, first, _) = await AfterFlagsChangeAsync(
             ["file-flags: no-dump"], ["file-flags: immutable, no-dump"],
             FormatVersions.FileFlagsAndLinkForms, FormatVersions.FileFlagsAndLinkForms);
 
-        Assert.IsFalse(file.Reused);
+        Assert.AreNotEqual(first, file.ObjectId);
         Assert.AreEqual(FileFlagBits.Immutable | FileFlagBits.NoDump, manifest.Metadata.FileFlags);
         Assert.DoesNotContain(diagnostic => diagnostic.StartsWith("file-flags:", StringComparison.Ordinal), manifest.CaptureDiagnostics);
         Assert.IsFalse(opened, "the bytes did not change");
@@ -318,11 +326,11 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     [TestMethod]
     public async Task AtFormatSix_TheFlagsStayedAsTheyWere_TheShortCircuitStillFires()
     {
-        var (file, manifest, opened, first) = await AfterFlagsChangeAsync(
+        var (file, manifest, opened, first, reused) = await AfterFlagsChangeAsync(
             ["file-flags: no-dump"], ["file-flags: no-dump"],
             FormatVersions.FileFlagsAndLinkForms, FormatVersions.FileFlagsAndLinkForms);
 
-        Assert.IsTrue(file.Reused);
+        Assert.AreEqual(1, reused);
         Assert.AreEqual(first, file.ObjectId);
         Assert.AreEqual(FileFlagBits.NoDump, manifest.Metadata.FileFlags);
         Assert.IsFalse(opened);
@@ -334,11 +342,11 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         // The flags count alike in the digest whether a diagnostic names them
         // or key 11 keeps them, so an upgrade rewrites no flagged file. Its
         // manifest still names them, and a reader takes either.
-        var (file, manifest, opened, first) = await AfterFlagsChangeAsync(
+        var (file, manifest, opened, first, reused) = await AfterFlagsChangeAsync(
             ["file-flags: no-dump"], ["file-flags: no-dump"],
             FormatVersions.DeltaCheckpoints, FormatVersions.FileFlagsAndLinkForms);
 
-        Assert.IsTrue(file.Reused);
+        Assert.AreEqual(1, reused);
         Assert.AreEqual(first, file.ObjectId);
         Assert.Contains("file-flags: no-dump", manifest.CaptureDiagnostics);
         Assert.IsFalse(opened);
@@ -347,11 +355,11 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     [TestMethod]
     public async Task UpgradedToFormatSix_AFileWhoseFlagsChanged_KeepsThemInKeyEleven_AndNamesThemNoMore()
     {
-        var (file, manifest, opened, _) = await AfterFlagsChangeAsync(
+        var (file, manifest, opened, first, _) = await AfterFlagsChangeAsync(
             ["file-flags: no-dump"], ["file-flags: hidden"],
             FormatVersions.DeltaCheckpoints, FormatVersions.FileFlagsAndLinkForms);
 
-        Assert.IsFalse(file.Reused);
+        Assert.AreNotEqual(first, file.ObjectId);
         Assert.AreEqual(FileFlagBits.Hidden, manifest.Metadata.FileFlags);
         Assert.DoesNotContain(diagnostic => diagnostic.StartsWith("file-flags:", StringComparison.Ordinal), manifest.CaptureDiagnostics);
         Assert.IsFalse(opened);
@@ -360,9 +368,9 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
     [TestMethod]
     public async Task TheFlagsStayedAsTheyWere_TheShortCircuitStillFires()
     {
-        var (file, _, opened, first) = await AfterFlagsChangeAsync(["file-flags: no-dump"], ["file-flags: no-dump"]);
+        var (file, _, opened, first, reused) = await AfterFlagsChangeAsync(["file-flags: no-dump"], ["file-flags: no-dump"]);
 
-        Assert.IsTrue(file.Reused);
+        Assert.AreEqual(1, reused);
         Assert.AreEqual(first, file.ObjectId);
         Assert.IsFalse(opened);
     }
@@ -397,7 +405,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
             published = live.LookupPath(snapshot, "locked.bin")!.MetadataDigest!.Value.ToArray();
             using var reader = new RepositoryReader(Repo, keys, store, Authority);
             await reader.LoadBlobsAsync(CancellationToken.None);
-            var manifest = await ReadFileVersionAsync(reader, Assert.ContainsSingle(first.Files).ObjectId);
+            var manifest = Assert.ContainsSingle(await FilesOfAsync(reader, first.RootTreeObjectId)).Manifest;
             withoutFlags = FileVersionManifestCodec.MetadataDigest(manifest.Metadata with { FileFlags = FileFlagBits.None });
         }
 
@@ -545,9 +553,9 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        var file = Assert.ContainsSingle(second.Files);
-        Assert.IsTrue(file.Reused);
-        Assert.AreEqual(Assert.ContainsSingle(first.Files).ObjectId, file.ObjectId);
+        var file = Assert.ContainsSingle(await FilesOfAsync(store, keys, second));
+        Assert.AreEqual(1, second.FilesReused);
+        Assert.AreEqual(Assert.ContainsSingle(await FilesOfAsync(store, keys, first)).ObjectId, file.ObjectId);
         Assert.IsEmpty(source.OpenedPaths);
     }
 }

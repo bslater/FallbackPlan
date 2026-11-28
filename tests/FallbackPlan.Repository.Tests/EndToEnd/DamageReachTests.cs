@@ -205,11 +205,10 @@ public sealed class DamageReachTests : ArchiveTestHarness
         var published = await Orchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(RichSource(), First), CancellationToken.None);
 
-        var tagged = published.Files.Single(file => file.RelativePath == "docs/tagged.txt");
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
-        var manifestRead = await reader.ReadSegmentAsync(tagged.ObjectId, CancellationToken.None);
-        var manifest = FileVersionManifestCodec.Decode(manifestRead.Plaintext!);
+        var manifest = (await FilesOfAsync(reader, published.RootTreeObjectId))
+            .Single(file => file.RelativePath == "docs/tagged.txt").Manifest;
         var stream = Assert.ContainsSingle(manifest.Metadata.AlternateStreams);
 
         CollectionAssert.Contains(manifest.ContentObjects().ToList(), stream.ObjectId, "a stream is content its file needs");

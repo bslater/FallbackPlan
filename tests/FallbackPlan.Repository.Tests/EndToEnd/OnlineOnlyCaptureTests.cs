@@ -118,7 +118,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         Assert.AreEqual(0, below.OpenAttempts, "sub/c.bin was not fetched");
 
         // The file on this device is still backed up.
-        Assert.AreEqual("local.bin", Assert.ContainsSingle(published.Files).RelativePath);
+        Assert.AreEqual("local.bin", Assert.ContainsSingle(await FilesOfAsync(store, keys, published)).RelativePath);
 
         Assert.HasCount(3, published.Failures);
         var failed = Detail(published, "a.bin");
@@ -154,7 +154,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         Assert.AreEqual(0, second.OpenAttempts, "b.bin was not fetched");
-        Assert.IsEmpty(published.Files);
+        Assert.IsEmpty(await FilesOfAsync(store, keys, published));
         Assert.Contains("a.bin", Detail(published, "b.bin"), StringComparison.Ordinal);
     }
 
@@ -179,7 +179,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         Assert.AreEqual(1, fetched.Opens);
-        Assert.AreEqual("d.bin", Assert.ContainsSingle(published.Files).RelativePath);
+        Assert.AreEqual("d.bin", Assert.ContainsSingle(await FilesOfAsync(store, keys, published)).RelativePath);
         Assert.HasCount(3, published.Failures);
         Assert.AreEqual("a bad sector", Detail(published, "c-local.bin"));
         foreach (var failure in published.Failures)
@@ -202,7 +202,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, credential, catalogue)
+        var before = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         // The provider answers again.
@@ -217,10 +217,11 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
                 CancellationToken.None);
 
         Assert.IsEmpty(published.Failures);
-        var byPath = published.Files.ToDictionary(file => file.RelativePath);
-        Assert.IsFalse(byPath["a.bin"].Reused);
-        Assert.IsFalse(byPath["b.bin"].Reused);
-        Assert.IsTrue(byPath["local.bin"].Reused);
+        var byPath = (await FilesOfAsync(store, keys, published)).ToDictionary(file => file.RelativePath);
+        CollectionAssert.AreEquivalent(new[] { "a.bin", "b.bin", "local.bin" }, byPath.Keys.ToArray());
+        Assert.AreEqual(1, published.FilesReused, "local.bin alone is taken unchanged");
+        Assert.AreEqual(
+            Assert.ContainsSingle(await FilesOfAsync(store, keys, before)).ObjectId, byPath["local.bin"].ObjectId);
         Assert.AreEqual(1, first.Opens);
         Assert.AreEqual(1, second.Opens);
     }
@@ -238,7 +239,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, credential, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
         Assert.AreEqual(1, kept.OpenAttempts);
 
@@ -252,7 +253,10 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
                 CancellationToken.None);
 
         Assert.AreEqual(1, kept.OpenAttempts, "an unchanged online-only file is not fetched again");
-        Assert.IsTrue(Assert.ContainsSingle(published.Files).Reused);
+        Assert.AreEqual(1, published.FilesReused);
+        Assert.AreEqual(
+            Assert.ContainsSingle(await FilesOfAsync(store, keys, first)).ObjectId,
+            Assert.ContainsSingle(await FilesOfAsync(store, keys, published)).ObjectId);
     }
 
     [TestMethod]
@@ -285,18 +289,16 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        var kept = Assert.ContainsSingle(second.Files);
-        Assert.IsTrue(kept.Reused, "where the provider keeps the content is not a change to the file");
-        Assert.AreEqual(Assert.ContainsSingle(first.Files).ObjectId, kept.ObjectId);
-        Assert.AreEqual(1, doc.OpenAttempts);
-
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
-        var read = await reader.ReadSegmentAsync(kept.ObjectId, CancellationToken.None);
-        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
+        var kept = Assert.ContainsSingle(await FilesOfAsync(reader, second.RootTreeObjectId));
+        Assert.AreEqual(1, second.FilesReused, "where the provider keeps the content is not a change to the file");
+        Assert.AreEqual(Assert.ContainsSingle(await FilesOfAsync(reader, first.RootTreeObjectId)).ObjectId, kept.ObjectId);
+        Assert.AreEqual(1, doc.OpenAttempts);
+
         Assert.AreEqual(
             Archive | ReparsePoint,
-            FileVersionManifestCodec.Decode(read.Plaintext!).Metadata.FileAttributes,
+            kept.Manifest.Metadata.FileAttributes,
             "the provider's bits are not kept");
     }
 
@@ -397,7 +399,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
-        Assert.HasCount(2, published.Files);
+        Assert.AreEqual(2, published.FileCount);
         Assert.IsEmpty(source.FreedPaths);
     }
 
@@ -415,7 +417,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
-        Assert.AreEqual("kept-here.bin", Assert.ContainsSingle(published.Files).RelativePath);
+        Assert.AreEqual("kept-here.bin", Assert.ContainsSingle(await FilesOfAsync(store, keys, published)).RelativePath);
         Assert.IsEmpty(published.Failures);
         Assert.AreEqual("kept-here.bin", Assert.ContainsSingle(source.FreedPaths));
     }
@@ -434,7 +436,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
 
         var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
-        var before = first.Files.ToDictionary(file => file.RelativePath);
+        var before = (await FilesOfAsync(store, keys, first)).ToDictionary(file => file.RelativePath);
 
         // Both change where the provider keeps them, and then it stops
         // delivering.
@@ -444,7 +446,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
 
-        var after = second.Files.ToDictionary(file => file.RelativePath);
+        var after = (await FilesOfAsync(store, keys, second)).ToDictionary(file => file.RelativePath);
         Assert.AreEqual(before["docs/doc.bin"].ObjectId, after["docs/doc.bin"].ObjectId, "the file whose fetch failed keeps the version before");
         Assert.AreEqual(before["docs/other.bin"].ObjectId, after["docs/other.bin"].ObjectId, "so does one the run did not ask for after it");
         Assert.AreEqual(1, other.OpenAttempts, "other.bin was not fetched again");
@@ -491,7 +493,9 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             .PublishAsync(After(source, 0xC3, 0xB2, now: 1_722_800_000_001), CancellationToken.None);
 
         Assert.AreEqual(3, doc.OpenAttempts, "each backup asks the provider again");
-        Assert.AreEqual(Assert.ContainsSingle(first.Files).ObjectId, Assert.ContainsSingle(third.Files).ObjectId);
+        Assert.AreEqual(
+            Assert.ContainsSingle(await FilesOfAsync(store, keys, first)).ObjectId,
+            Assert.ContainsSingle(await FilesOfAsync(store, keys, third)).ObjectId);
         Assert.Contains("stands in its place", Detail(third, "doc.bin"), StringComparison.Ordinal);
     }
 
@@ -511,7 +515,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
         Change(doc, 5);
         doc.OpenFailure = new IOException(TimedOut);
-        await CreateOrchestrator(store, keys, credential, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
 
         // The provider answers again, and the change journal names nothing:
@@ -521,9 +525,11 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
             .PublishAsync(After(source, 0xC3, 0xB2, now: 1_722_800_000_001) with { ChangedFolders = [] }, CancellationToken.None);
 
         Assert.IsEmpty(third.Failures);
-        var fetched = third.Files.Single(file => file.RelativePath == "docs/doc.bin");
-        Assert.IsFalse(fetched.Reused);
-        Assert.AreNotEqual(first.Files.Single(file => file.RelativePath == "docs/doc.bin").ObjectId, fetched.ObjectId);
+        var fetched = (await FilesOfAsync(store, keys, third)).Single(file => file.RelativePath == "docs/doc.bin");
+        Assert.AreNotEqual(
+            (await FilesOfAsync(store, keys, second)).Single(file => file.RelativePath == "docs/doc.bin").ObjectId, fetched.ObjectId);
+        Assert.AreNotEqual(
+            (await FilesOfAsync(store, keys, first)).Single(file => file.RelativePath == "docs/doc.bin").ObjectId, fetched.ObjectId);
         Assert.AreEqual(2, doc.Opens, "fetched by the first backup, and again by the third");
     }
 
@@ -547,7 +553,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
 
-        Assert.IsEmpty(second.Files);
+        Assert.IsEmpty(await FilesOfAsync(store, keys, second));
         Assert.AreEqual("a bad sector", Detail(second, "local.bin"));
     }
 
@@ -574,7 +580,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(After(source, 0xB2, 0xA1, now: 1_722_700_000_001), CancellationToken.None);
 
-        Assert.IsEmpty(second.Files);
+        Assert.IsEmpty(await FilesOfAsync(store, keys, second));
         Assert.DoesNotContain("stands in its place", Detail(second, "new/doc.bin"), StringComparison.Ordinal);
     }
 
@@ -900,7 +906,8 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         Assert.HasCount(3, second.Failures);
 
         // A file on the device is still backed up.
-        Assert.Contains("d/local.bin", second.Files.Select(file => file.RelativePath));
+        var backedUp = (await FilesOfAsync(store, keys, second)).Single(file => file.RelativePath == "d/local.bin");
+        Assert.AreNotEqual(catalogue.LookupPath(Snapshot(0xA1), "d/local.bin")!.ObjectId, backedUp.ObjectId);
 
         Assert.AreEqual(
             new NotFetchedFiles(Files: 1, KeptEarlier: 1, Path: "a-cloud", Reason: TimedOut, Folders: 2, FoldersKept: 2, Listing: true),
@@ -1109,7 +1116,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
         Assert.AreEqual(0, first.LeftOnlineOnly, "a set that fetches them leaves none");
-        var before = first.Files.ToDictionary(file => file.RelativePath);
+        var before = (await FilesOfAsync(store, keys, first)).ToDictionary(file => file.RelativePath);
 
         Change(doc, 5);
         var added = Online(source, "docs/new.bin", 3);
@@ -1125,12 +1132,12 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
         Assert.IsNull(second.NotFetched);
         Assert.IsFalse(second.Behind);
 
-        var after = second.Files.ToDictionary(file => file.RelativePath);
+        var after = (await FilesOfAsync(store, keys, second)).ToDictionary(file => file.RelativePath);
         Assert.IsFalse(after.ContainsKey("docs/doc.bin"), "a changed one is left out, its version before in the snapshot before");
         Assert.IsFalse(after.ContainsKey("docs/new.bin"));
         Assert.IsNull(catalogue.LookupPath(Snapshot(0xB2), "docs/doc.bin"));
         Assert.AreEqual(before["docs/kept.bin"].ObjectId, after["docs/kept.bin"].ObjectId, "an unchanged one keeps the version backed up");
-        Assert.IsFalse(after["docs/local.bin"].Reused, "a file on the device is taken as ever");
+        Assert.AreNotEqual(before["docs/local.bin"].ObjectId, after["docs/local.bin"].ObjectId, "a file on the device is taken as ever");
     }
 
     [TestMethod]
@@ -1158,7 +1165,7 @@ public sealed class OnlineOnlyCaptureTests : ArchiveTestHarness
 
         Assert.AreEqual(0, moved.OpenAttempts, "its content is the version before's");
         Assert.AreEqual(0, second.LeftOnlineOnly);
-        Assert.AreEqual("new/doc.bin", Assert.ContainsSingle(second.Files).RelativePath);
+        Assert.AreEqual("new/doc.bin", Assert.ContainsSingle(await FilesOfAsync(store, keys, second)).RelativePath);
     }
 
     [TestMethod]

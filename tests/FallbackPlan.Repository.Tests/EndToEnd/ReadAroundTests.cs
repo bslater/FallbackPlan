@@ -488,8 +488,7 @@ public sealed class ReadAroundTests : ArchiveTestHarness
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         reader.UseLocationSource(catalogue.ResolveLocation);
-        var read = await reader.ReadSegmentAsync(Assert.ContainsSingle(published.Files).ObjectId, CancellationToken.None);
-        var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
+        var manifest = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId)).Manifest;
         Assert.HasCount(2, manifest.ReferenceRuns);
         Assert.IsEmpty(manifest.SegmentReferences);
         var run = await reader.ReadReferenceRunAsync(manifest.ReferenceRuns[0], CancellationToken.None);

@@ -57,7 +57,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
             republished.ContentBlobs.Sum(blob => blob.RecordCount) > 0,
             "every segment was reused on the stale catalogue's word alone — the published manifest dangles.");
 
-        var file = Assert.ContainsSingle(republished.Files);
+        var file = Assert.ContainsSingle(await FilesOfAsync(store, keys, republished));
         var (success, restored, detail) = await TryRestoreFileAsync(store, keys, file.ObjectId);
         Assert.IsTrue(success, $"the republished snapshot does not restore: {detail}");
         SequenceAssert.AreEqual(content, restored);
@@ -82,8 +82,9 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         using var catalogue = OpenCatalogue("short-circuit");
 
         var content = Deterministic(120_000, 23);
-        await Publish(store, keys, credential, catalogue, "short-circuit")
+        var first = await Publish(store, keys, credential, catalogue, "short-circuit")
             .PublishAsync(Job(SourceWith(content), 0xB1), CancellationToken.None);
+        var original = Assert.ContainsSingle(await FilesOfAsync(store, keys, first)).ObjectId;
 
         DeleteEveryDataBlob();
 
@@ -98,8 +99,9 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        var file = Assert.ContainsSingle(republished.Files);
-        Assert.IsTrue(file.Reused);
+        var file = Assert.ContainsSingle(await FilesOfAsync(store, keys, republished));
+        Assert.AreEqual(1, republished.FilesReused);
+        Assert.AreEqual(original, file.ObjectId);
         Assert.IsEmpty(republished.Failures);
 
         // Containment: the loss is one file's clean, named restore failure —
@@ -137,7 +139,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         {
             var published = await Publish(store, keys, credential, catalogue, "behind")
                 .PublishAsync(Job(SourceWith(second, fileId: 9_002), 0xC2, now: 1_722_600_000_002), CancellationToken.None);
-            fileVersion2 = Assert.ContainsSingle(published.Files).ObjectId.ToArray();
+            fileVersion2 = Assert.ContainsSingle(await FilesOfAsync(store, keys, published)).ObjectId.ToArray();
         }
 
         // The client's local state rolls back — the catalogue is now BEHIND
@@ -161,7 +163,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
             // Everything the store ever committed still restores — the
             // rolled-back cache changed which work was repeated, not what is
             // true.
-            var file = Assert.ContainsSingle(republished.Files);
+            var file = Assert.ContainsSingle(await FilesOfAsync(store, keys, republished));
             var (success3, restored3, detail3) = await TryRestoreFileAsync(store, keys, file.ObjectId);
             Assert.IsTrue(success3, detail3);
             SequenceAssert.AreEqual(second, restored3);

@@ -115,7 +115,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
-        Assert.AreEqual(3, published.Files.Count);
+        Assert.AreEqual(3, published.FileCount);
         Assert.IsEmpty(published.Failures);
         Assert.IsNull(published.ErrorManifestObjectId);
 
@@ -340,15 +340,15 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var job = Job(source) with { IncludeRules = ["photos/**"] };
         var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
         SequenceAssert.AreEqual(
             ["photos/a.bin", "photos/deep/b.bin"],
-            [.. published.Files.Select(file => file.RelativePath).Order(StringComparer.Ordinal)]);
+            [.. (await FilesOfAsync(reader, published.RootTreeObjectId)).Select(file => file.RelativePath).Order(StringComparer.Ordinal)]);
         Assert.IsEmpty(published.Failures);
 
         // The tree graph carries no skeleton for what was not captured: the
         // root names photos alone — no docs directory, no d.bin.
-        using var reader = new RepositoryReader(Repo, keys, store, Authority);
-        await reader.LoadBlobsAsync(CancellationToken.None);
         var (_, rootEntries) = await ReadTreeAsync(reader, published.RootTreeObjectId);
         var rootNames = rootEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)).ToList();
         SequenceAssert.AreEqual(["photos"], rootNames);
@@ -378,7 +378,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var job = Job(source) with { IncludeRules = ["work/**"], ExcludeRules = ["work/secret.bin"] };
         var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
-        var file = Assert.ContainsSingle(published.Files);
+        var file = Assert.ContainsSingle(await FilesOfAsync(store, keys, published));
         Assert.AreEqual("work/keep.bin", file.RelativePath);
     }
 
@@ -398,10 +398,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         Assert.AreEqual(2, published.Failures.Count);
         Assert.IsNotNull(published.ErrorManifestObjectId);
-        Assert.ContainsSingle(published.Files); // good.bin captured
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
+        Assert.AreEqual("good.bin", Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId)).RelativePath);
 
         var errorRead = await reader.ReadSegmentAsync(published.ErrorManifestObjectId!.Value, CancellationToken.None);
         Assert.AreEqual(RecordReadOutcome.Ok, errorRead.Outcome);
@@ -438,10 +438,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var job = Job(source) with { ExcludeRules = ["skip"] };
         var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
-        Assert.ContainsSingle(published.Files);
+        var files = await FilesOfAsync(store, keys, published);
+        Assert.ContainsSingle(files);
         Assert.IsEmpty(published.Failures);
         Assert.IsNull(published.ErrorManifestObjectId);
-        Assert.DoesNotContain(file => file.RelativePath.StartsWith("skip", StringComparison.Ordinal), published.Files);
+        Assert.DoesNotContain(file => file.RelativePath.StartsWith("skip", StringComparison.Ordinal), files);
     }
 
     [TestMethod]
@@ -484,10 +485,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var byPath = published.Files.ToDictionary(file => file.RelativePath);
-        var one = await ReadFileVersionAsync(reader, byPath["one.bin"].ObjectId);
-        var two = await ReadFileVersionAsync(reader, byPath["two.bin"].ObjectId);
-        var solo = await ReadFileVersionAsync(reader, byPath["solo.bin"].ObjectId);
+        var byPath = (await FilesOfAsync(reader, published.RootTreeObjectId)).ToDictionary(file => file.RelativePath);
+        var one = byPath["one.bin"].Manifest;
+        var two = byPath["two.bin"].Manifest;
+        var solo = byPath["solo.bin"].Manifest;
 
         Assert.IsNotNull(one.HardlinkGroup);
         SequenceAssert.AreEqual(one.HardlinkGroup!.Value.ToArray(), two.HardlinkGroup!.Value.ToArray());
@@ -532,9 +533,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var byPath = published.Files.ToDictionary(file => file.RelativePath);
-        var link = await ReadFileVersionAsync(reader, byPath["link"].ObjectId);
-        var pipe = await ReadFileVersionAsync(reader, byPath["pipe"].ObjectId);
+        var byPath = (await FilesOfAsync(reader, published.RootTreeObjectId)).ToDictionary(file => file.RelativePath);
+        var link = byPath["link"].Manifest;
+        var pipe = byPath["pipe"].Manifest;
 
         Assert.AreEqual(EntryKind.Symlink, link.EntryKind);
         SequenceAssert.AreEqual("target/elsewhere"u8.ToArray(), link.LinkTarget!.Value.ToArray());
@@ -569,8 +570,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var manifest = await ReadFileVersionAsync(
-            reader, Assert.ContainsSingle(published.Files).ObjectId);
+        var manifest = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId)).Manifest;
 
         // The hole is an extent, not stored bytes: references cover exactly
         // the data runs (06 §3.2 tiling).
@@ -608,8 +608,8 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var byPath = published.Files.ToDictionary(file => file.RelativePath);
-        var carrier = await ReadFileVersionAsync(reader, byPath["carrier.bin"].ObjectId);
+        var byPath = (await FilesOfAsync(reader, published.RootTreeObjectId)).ToDictionary(file => file.RelativePath);
+        var carrier = byPath["carrier.bin"].Manifest;
 
         var stream = Assert.ContainsSingle(carrier.Metadata.AlternateStreams);
         SequenceAssert.AreEqual("Zone.Identifier"u8.ToArray(), stream.Name.ToArray());
@@ -621,7 +621,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         // The oversize stream is error reason 6; its file still captured.
         Assert.Contains(failure => failure.Reason == CaptureFailureReason.TooLarge, published.Failures);
-        var big = await ReadFileVersionAsync(reader, byPath["big-stream.bin"].ObjectId);
+        var big = byPath["big-stream.bin"].Manifest;
         Assert.IsEmpty(big.Metadata.AlternateStreams);
         Assert.AreEqual(2, snapshotStatusOf(published));
 
@@ -674,10 +674,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.Contains("16 MiB", failure.Detail, StringComparison.Ordinal);
 
         // Everything else is backed up as if the file were not there.
-        var byPath = published.Files.ToDictionary(file => file.RelativePath);
+        var byPath = (await FilesOfAsync(store, keys, published)).ToDictionary(file => file.RelativePath);
         CollectionAssert.AreEquivalent(new[] { "link", "small.bin" }, byPath.Keys.ToArray());
-        Assert.IsNull(byPath["link"].Archive, "a link archives nothing");
-        Assert.AreEqual(3000, byPath["small.bin"].Archive!.LogicalLength);
+        Assert.AreEqual(3000UL, byPath["small.bin"].Manifest.LogicalLength);
+        Assert.AreEqual(3000L, published.BytesArchived, "a link archives nothing");
         Assert.IsNotNull(published.ErrorManifestObjectId);
     }
 
@@ -700,9 +700,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var byPath = published.Files.ToDictionary(file => file.RelativePath);
-        var diagnosed = await ReadFileVersionAsync(reader, byPath["restless.bin"].ObjectId);
-        var settled = await ReadFileVersionAsync(reader, byPath["stable.bin"].ObjectId);
+        var byPath = (await FilesOfAsync(reader, published.RootTreeObjectId)).ToDictionary(file => file.RelativePath);
+        var diagnosed = byPath["restless.bin"].Manifest;
+        var settled = byPath["stable.bin"].Manifest;
 
         // ADR-0026 §Decision 2: content is the last complete read; the
         // diagnostic records the attempt count.
@@ -747,9 +747,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var byPath = published.Files.ToDictionary(file => file.RelativePath);
-        var diagnosed = await ReadFileVersionAsync(reader, byPath["swapped.bin"].ObjectId);
-        var ordinary = await ReadFileVersionAsync(reader, byPath[settled.RelativePath].ObjectId);
+        var byPath = (await FilesOfAsync(reader, published.RootTreeObjectId)).ToDictionary(file => file.RelativePath);
+        var diagnosed = byPath["swapped.bin"].Manifest;
+        var ordinary = byPath[settled.RelativePath].Manifest;
 
         Assert.Contains("captured-identity-changed", diagnosed.CaptureDiagnostics);
         Assert.DoesNotContain(diagnostic =>
@@ -777,7 +777,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
-        Assert.AreEqual(40, published.Files.Count);
+        Assert.AreEqual(40, published.FileCount);
         Assert.IsTrue(published.ContentBlobs.Count <= 2,
             $"40 small files must share blobs (specification 05 §5); got {published.ContentBlobs.Count}.");
     }
@@ -800,7 +800,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             Repo, Writer, KeyGeneration.Zero, keys, store, sequence, SpoolDirectory, SmallBlobPolicy.BlobWriteProfile,
             FormatVersions.SealedDataPlane);
 
-        var fileVersionId = published.Files[0].ObjectId;
+        var fileVersionId = Assert.ContainsSingle(await FilesOfAsync(store, keys, published)).ObjectId;
         var entries = Enumerable.Range(0, 100)
             .Select(i => new TreeEntry(Encoding.UTF8.GetBytes($"entry-{i:d4}"), fileVersionId, EntryKind.File))
             .ToList();
@@ -949,7 +949,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
             .PublishAsync(Job(source), CancellationToken.None);
-        Assert.HasCount(300, published.Files);
+        Assert.AreEqual(300, published.FileCount);
 
         var reports = reporter.Reports;
         Assert.Contains(
@@ -991,7 +991,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
             .PublishAsync(job, CancellationToken.None);
 
-        Assert.ContainsSingle(published.Files);
+        Assert.AreEqual(1, published.FileCount);
         var final = reporter.Reports[^1];
         Assert.AreEqual(1L, final.TotalFiles);
         Assert.AreEqual(100L, final.TotalBytes);
@@ -1043,7 +1043,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
             .PublishAsync(job, CancellationToken.None);
 
-        Assert.ContainsSingle(published.Files);
+        Assert.AreEqual(1, published.FileCount);
         var final = reporter.Reports[^1];
         Assert.AreEqual(1L, final.TotalFiles);
         Assert.AreEqual(100L, final.TotalBytes);

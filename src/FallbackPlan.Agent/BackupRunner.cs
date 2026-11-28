@@ -287,7 +287,7 @@ public static class BackupRunner
             // Always an explicit detail: Transition keeps the prior detail on
             // null, and a preempted run's prior detail is "resumed" — which
             // must not survive onto the terminal record a person reads.
-            var summary = $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged"
+            var summary = $"{published.FileCount} file(s), {published.FilesReused} unchanged"
                 + (published.FoldersReused > 0 ? $", {published.FoldersReused} folder(s) not walked" : string.Empty)
                 + (published.LeftOnlineOnly > 0 ? $"; {published.LeftOnlineOnly} online-only file(s) left to their cloud provider" : string.Empty);
             try

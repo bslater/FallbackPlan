@@ -1,3 +1,4 @@
+using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.TestSupport;
 
@@ -58,6 +59,30 @@ public sealed class CommandTests : IDisposable
         var snapshots = await _cli.RunAsync("snapshots");
         Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
         Assert.IsFalse(string.IsNullOrWhiteSpace(snapshots.Output), "snapshots printed nothing after a backup");
+    }
+
+    [TestMethod]
+    public async Task Backup_ATreeOfFiles_RecordsInTheJobHistoryHowManyFilesItBackedUp()
+    {
+        await _cli.InitAsync();
+        _cli.WriteFile("tree/one.txt", "first");
+        _cli.WriteFile("tree/nested/two.txt", "second");
+        var root = Path.Combine(_cli.WorkPath, "tree");
+
+        var first = await _cli.RunAsync("backup", root);
+        Assert.IsTrue(first.ExitCode == 0, first.All);
+        var second = await _cli.RunAsync("backup", root);
+        Assert.IsTrue(second.ExitCode == 0, second.All);
+        Assert.Contains("files          2 (2 unchanged, 0 failed)", second.Output, StringComparison.Ordinal);
+
+        // Each backup holds both files, however many it took unchanged.
+        var history = LocalState.LoadOrCreate(_cli.StatePath).JobHistory;
+        Assert.HasCount(2, history);
+        foreach (var entry in history)
+        {
+            Assert.AreEqual(2, entry.Files, entry.SnapshotId);
+            Assert.AreEqual(0, entry.Failures, entry.SnapshotId);
+        }
     }
 
     [TestMethod]
