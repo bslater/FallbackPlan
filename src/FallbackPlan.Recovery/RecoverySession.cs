@@ -1005,6 +1005,38 @@ public sealed class RecoverySession : IDisposable
             return read.Outcome == RecordReadOutcome.Ok ? (read.Plaintext, null) : (null, $"its record read {read.Outcome}");
         }
 
+        // A file's pieces in its order a stretch at a time: the manifest's
+        // own, or each of its reference runs, read as any record is, so a
+        // run that will not read is noted as its record (ADR-0202).
+        async IAsyncEnumerable<IEnumerable<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)>> StretchesAsync(
+            FileVersionManifest manifest, string path)
+        {
+            if (manifest.ReferenceRuns.Count == 0)
+            {
+                yield return PiecesOf(manifest.SegmentReferences, manifest.SparseExtents);
+                yield break;
+            }
+
+            await foreach (var run in ReferenceRunReader.ReadAsync(
+                manifest,
+                async (runId, token) => await ReadRecordAsync(runId, path, notes, token).ConfigureAwait(false) is { } record
+                    ? new ReadOnlyMemory<byte>(record)
+                    : default(ReadOnlyMemory<byte>?),
+                cancellationToken).ConfigureAwait(false))
+            {
+                yield return PiecesOf(run.SegmentReferences, run.SparseExtents);
+            }
+        }
+
+        static IEnumerable<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)> PiecesOf(
+            IReadOnlyList<SegmentReference> references, IReadOnlyList<SparseExtent> extents) =>
+            references
+                .Select(reference => (Offset: (ulong)reference.LogicalOffset,
+                    Reference: (SegmentReference?)reference, Extent: (SparseExtent?)null))
+                .Concat(extents.Select(extent =>
+                    (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
+                .OrderBy(piece => piece.Item1);
+
         // What the landed file got of its captured metadata, or null where
         // it did not land.
         async ValueTask<CapturedMetadata?> RestoreFileAsync(FileVersionManifest manifest, string path, string destination)
@@ -1015,13 +1047,6 @@ public sealed class RecoverySession : IDisposable
             {
                 using var wholeFile = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-                var pieces = manifest.SegmentReferences
-                    .Select(reference => (Offset: (ulong)reference.LogicalOffset,
-                        Reference: (SegmentReference?)reference, Extent: (SparseExtent?)null))
-                    .Concat(manifest.SparseExtents.Select(extent =>
-                        (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
-                    .OrderBy(piece => piece.Item1);
-
                 // Whatever stands at the spool's name, a link included, is
                 // removed rather than opened, and the spool is then made new,
                 // which refuses a name that is there again (ADR-0152).
@@ -1030,7 +1055,11 @@ public sealed class RecoverySession : IDisposable
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                         File.Delete(spool);
-                        made = SparseFile.Create(spool, FileMode.CreateNew, holes: manifest.SparseExtents.Count > 0);
+                        // A large file's holes are in its runs, read only as
+                        // it is written (ADR-0202), so its spool may hold them
+                        // from the start.
+                        made = SparseFile.Create(
+                            spool, FileMode.CreateNew, holes: manifest.SparseExtents.Count > 0 || manifest.ReferenceRuns.Count > 0);
                     }))
                 {
                     return null;
@@ -1039,45 +1068,65 @@ public sealed class RecoverySession : IDisposable
                 var output = made!;
                 await using (output.ConfigureAwait(false))
                 {
-                    foreach (var (_, reference, extent) in pieces)
+                    try
                     {
-                        if (reference is { } segment)
+                        // A large file is read a reference run at a time
+                        // (ADR-0202), each through this tool's own reader.
+                        await foreach (var pieces in StretchesAsync(manifest, path).ConfigureAwait(false))
                         {
-                            if (!_records.TryGetValue(segment.ObjectId, out var located))
+                            foreach (var (_, reference, extent) in pieces)
                             {
-                                notes.Add(new RecoveryNote(RecoveryNoteKind.SegmentMissing, path, Record: segment.ObjectId));
-                                return null;
-                            }
+                                if (reference is { } segment)
+                                {
+                                    if (!_records.TryGetValue(segment.ObjectId, out var located))
+                                    {
+                                        notes.Add(new RecoveryNote(RecoveryNoteKind.SegmentMissing, path, Record: segment.ObjectId));
+                                        return null;
+                                    }
 
-                            var read = await located.Reader.ReadRecordAsync(located.Entry, cancellationToken)
-                                .ConfigureAwait(false);
-                            if (read.Outcome != RecordReadOutcome.Ok)
-                            {
-                                notes.Add(new RecoveryNote(
-                                    RecoveryNoteKind.SegmentUnreadable, path, Outcome: read.Outcome, Detail: read.Detail));
-                                return null;
-                            }
+                                    var read = await located.Reader.ReadRecordAsync(located.Entry, cancellationToken)
+                                        .ConfigureAwait(false);
+                                    if (read.Outcome != RecordReadOutcome.Ok)
+                                    {
+                                        notes.Add(new RecoveryNote(
+                                            RecoveryNoteKind.SegmentUnreadable, path, Outcome: read.Outcome, Detail: read.Detail));
+                                        return null;
+                                    }
 
-                            await output.WriteAsync(read.Plaintext!, cancellationToken).ConfigureAwait(false);
-                            wholeFile.AppendData(read.Plaintext!);
+                                    await output.WriteAsync(read.Plaintext!, cancellationToken).ConfigureAwait(false);
+                                    wholeFile.AppendData(read.Plaintext!);
+                                }
+                                else if (extent is { } hole)
+                                {
+                                    // The hash covers the zeroes a hole reads as (06
+                                    // §4.2); the spool skips it, so it stays a hole
+                                    // wherever the output's filesystem can hold one
+                                    // (09 §4).
+                                    var zeroes = new byte[Math.Min(hole.Length, 64 * 1024)];
+                                    var remaining = (long)hole.Length;
+                                    while (remaining > 0)
+                                    {
+                                        var block = (int)Math.Min(remaining, zeroes.Length);
+                                        wholeFile.AppendData(zeroes.AsSpan(0, block));
+                                        remaining -= block;
+                                    }
+
+                                    output.Seek((long)hole.Length, SeekOrigin.Current);
+                                }
+                            }
                         }
-                        else if (extent is { } hole)
-                        {
-                            // The hash covers the zeroes a hole reads as (06
-                            // §4.2); the spool skips it, so it stays a hole
-                            // wherever the output's filesystem can hold one
-                            // (09 §4).
-                            var zeroes = new byte[Math.Min(hole.Length, 64 * 1024)];
-                            var remaining = (long)hole.Length;
-                            while (remaining > 0)
-                            {
-                                var block = (int)Math.Min(remaining, zeroes.Length);
-                                wholeFile.AppendData(zeroes.AsSpan(0, block));
-                                remaining -= block;
-                            }
-
-                            output.Seek((long)hole.Length, SeekOrigin.Current);
-                        }
+                    }
+                    catch (ReferenceRunMissingException)
+                    {
+                        // The read that missed it noted the run's record.
+                        return null;
+                    }
+                    catch (ManifestValidationException damaged)
+                    {
+                        // A run that does not follow the one before it: the
+                        // file cannot be read whole, and is never put down short.
+                        notes.Add(new RecoveryNote(RecoveryNoteKind.RecordUnreadable, path, Detail: damaged.Message));
+                        return null;
                     }
 
                     // A file ending in a hole has nothing written past its

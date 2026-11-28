@@ -59,22 +59,29 @@ public abstract class ReferenceRunHarness : ArchiveTestHarness
     /// second run in the manifest and never writes it;
     /// <paramref name="gapBeforeSecondRun"/> starts the second run a byte
     /// after the first ends, a run sound on its own that does not follow.
+    /// <paramref name="repository"/> names the repository the keys are, the
+    /// harness's own by default.
     /// </summary>
     protected async Task<Built> BuildAsync(
-        LocalFileSystemObjectStore store, RepositoryKeySet keys, bool writeSecondRun = true, bool gapBeforeSecondRun = false)
+        LocalFileSystemObjectStore store,
+        RepositoryKeySet keys,
+        bool writeSecondRun = true,
+        bool gapBeforeSecondRun = false,
+        RepositoryId? repository = null)
     {
+        var repositoryId = repository ?? Repo;
         var first = Random(40_000, 1);
         var second = Random(30_000, 2);
         ArchiveResult firstArchive;
         using (var source = new MemoryStream(first))
         {
-            firstArchive = await CreateArchiver(store, keys, SmallBlobPolicy, firstCounter: 1).ArchiveAsync(source, CancellationToken.None);
+            firstArchive = await Archiver(store, keys, repositoryId, firstCounter: 1).ArchiveAsync(source, CancellationToken.None);
         }
 
         ArchiveResult secondArchive;
         using (var source = new MemoryStream(second))
         {
-            secondArchive = await CreateArchiver(store, keys, SmallBlobPolicy, firstCounter: 100).ArchiveAsync(source, CancellationToken.None);
+            secondArchive = await Archiver(store, keys, repositoryId, firstCounter: 100).ArchiveAsync(source, CancellationToken.None);
         }
 
         var firstSegment = Assert.ContainsSingle(firstArchive.SegmentReferences);
@@ -108,7 +115,7 @@ public abstract class ReferenceRunHarness : ArchiveTestHarness
         whole.AppendData(second);
 
         var builder = new ManifestBuilder(
-            Repo, Writer, KeyGeneration.Zero, keys, store,
+            repositoryId, Writer, KeyGeneration.Zero, keys, store,
             new MonotonicBlobCounterAllocator(500), SpoolDirectory, BlobWriteProfile.LocalDefault,
             FormatVersions.SealedDataPlane);
         await using (builder.ConfigureAwait(false))
@@ -165,6 +172,17 @@ public abstract class ReferenceRunHarness : ArchiveTestHarness
                 firstData, secondData, builder.Blobs[0], [firstData, secondData, .. builder.Blobs]);
         }
     }
+
+    private FileArchiver Archiver(LocalFileSystemObjectStore store, RepositoryKeySet keys, RepositoryId repositoryId, ulong firstCounter) => new(
+        SmallBlobPolicy,
+        repositoryId,
+        Writer,
+        KeyGeneration.Zero,
+        keys,
+        store,
+        new MonotonicBlobCounterAllocator(firstCounter),
+        SpoolDirectory,
+        FormatVersions.SealedDataPlane);
 
     private static ObjectId DeriveRunId(RepositoryKeySet keys, byte[] encoded)
     {

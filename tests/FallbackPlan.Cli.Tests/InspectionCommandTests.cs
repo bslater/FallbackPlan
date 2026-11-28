@@ -1,5 +1,13 @@
+using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Cli.Tests;
@@ -24,7 +32,8 @@ namespace FallbackPlan.Cli.Tests;
 /// its folder will not let go is named (FR-RST-002; ADR-0180 Amendment 9).
 /// <c>inspect-manifest</c> shows the form manifest key 14
 /// keeps for a Windows directory junction (FR-MAN-003; ADR-0183
-/// Amendment 1).
+/// Amendment 1), the reference runs a large file's manifest lists in key 15,
+/// and the stretch of the file a run holds (FR-ARCH-010; ADR-0202).
 /// </summary>
 [TestClass]
 public sealed class InspectionCommandTests : IDisposable
@@ -109,6 +118,72 @@ public sealed class InspectionCommandTests : IDisposable
 
         Assert.IsTrue(inspect.ExitCode == 0, inspect.All);
         Assert.IsFalse(string.IsNullOrWhiteSpace(inspect.Output), "inspect-manifest printed nothing");
+    }
+
+    [TestMethod]
+    public async Task InspectManifest_AFileVersionListingRuns_NamesThem_AndARunSaysWhatOfTheFileItHolds()
+    {
+        // No writer in this build writes runs (ADR-0202), so a run and a
+        // manifest listing two are written into the repository by hand.
+        await _cli.InitAsync();
+        var store = new LocalFileSystemObjectStore(_cli.RepositoryPath);
+        ObjectId run;
+        ObjectId other;
+        ObjectId version;
+        using (var passphrase = Passphrase.Create("correct horse battery staple"))
+        {
+            var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+            using var _repository = repository;
+            using var _authority = authority;
+            var spool = Directory.CreateDirectory(Path.Combine(_cli.WorkPath, "runs-spool")).FullName;
+            var builder = new ManifestBuilder(
+                repository.RepositoryId, WriterId.FromBytes([.. Enumerable.Repeat((byte)0x7E, 16)]), KeyGeneration.Zero,
+                repository.Keys, store, new MonotonicBlobCounterAllocator(9_000), spool, BlobWriteProfile.LocalDefault,
+                repository.EffectiveFormatVersion);
+            await using (builder)
+            {
+                var segment = ObjectId.FromBytes(SHA256.HashData("a segment of the file"u8));
+                run = await builder.AppendManifestAsync(
+                    ObjectType.ReferenceRun,
+                    ReferenceRunCodec.Encode(new ReferenceRun
+                    {
+                        Start = 1_000,
+                        Length = 300,
+                        SegmentReferences = [new SegmentReference(1_000, 200, segment)],
+                        SparseExtents = [new SparseExtent(1_200, 100)],
+                    }),
+                    CancellationToken.None);
+                other = ObjectId.FromBytes(SHA256.HashData("another run"u8));
+                version = await builder.AppendManifestAsync(
+                    ObjectType.FileVersionManifest,
+                    FileVersionManifestCodec.Encode(new FileVersionManifest
+                    {
+                        EntryKind = EntryKind.File,
+                        Name = "huge.bin"u8.ToArray(),
+                        NameNormalisation = NameNormalisation.Nfc,
+                        LogicalLength = 1_300,
+                        SegmentReferences = [],
+                        ReferenceRuns = [other, run],
+                        WholeFileHash = SHA256.HashData("huge"u8),
+                        SegmentationProfile = 0x0001,
+                    }),
+                    CancellationToken.None);
+                await builder.FlushAsync(CancellationToken.None);
+            }
+        }
+
+        var manifest = await _cli.RunAsync("inspect-manifest", version.ToString());
+        var stretch = await _cli.RunAsync("inspect-manifest", run.ToString());
+
+        Assert.AreEqual(0, manifest.ExitCode, manifest.All);
+        Assert.Contains("reference runs 2", manifest.Output, StringComparison.Ordinal);
+        Assert.Contains($"run            {other}", manifest.Output, StringComparison.Ordinal);
+        Assert.Contains($"run            {run}", manifest.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("segments", manifest.Output, StringComparison.Ordinal);
+        Assert.AreEqual(0, stretch.ExitCode, stretch.All);
+        Assert.Contains("object type    ReferenceRun", stretch.Output, StringComparison.Ordinal);
+        Assert.Contains(string.Create(CultureInfo.InvariantCulture, $"stretch        1000 to 1300"), stretch.Output, StringComparison.Ordinal);
+        Assert.Contains("segments       1 (+1 sparse extents)", stretch.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]

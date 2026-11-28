@@ -204,27 +204,6 @@ public static class RestoreSpace
     public static ulong Allocated(ulong dataBytes) =>
         dataBytes / ClusterBytes * ClusterBytes + (dataBytes % ClusterBytes == 0 ? 0 : ClusterBytes);
 
-    /// <summary>The bytes restoring <paramref name="manifest"/> writes: its segments, its holes skipped.</summary>
-    public static ulong WrittenBytes(FileVersionManifest manifest)
-    {
-        ThrowHelper.ThrowIfNull(manifest);
-        return manifest.SegmentReferences.Aggregate(0ul, (sum, reference) => sum + (ulong)reference.LogicalLength);
-    }
-
-    /// <summary>
-    /// The bytes the first <paramref name="segments"/> of a file's segments
-    /// write: what a part holds of it that holds them. The codec keeps a
-    /// manifest's segments in the file's order.
-    /// </summary>
-    /// <param name="manifest">The file's manifest.</param>
-    /// <param name="segments">How many of its segments, from its start.</param>
-    public static ulong HeldBytes(FileVersionManifest manifest, int segments)
-    {
-        ThrowHelper.ThrowIfNull(manifest);
-        return manifest.SegmentReferences.Take(segments)
-            .Aggregate(0ul, (sum, reference) => sum + (ulong)reference.LogicalLength);
-    }
-
     /// <summary>
     /// What each file writes, read from its manifest through
     /// <paramref name="reader"/>. A manifest that will not read answers null,
@@ -281,14 +260,25 @@ public static class RestoreSpace
                 return new RestoreFileBytes(0);
             }
 
-            var held = partsDirectory is null
-                ? 0
-                : await RestorePart.HeldSegmentsAsync(
-                    Path.Combine(partsDirectory, RestorePart.NameOf(manifest)),
+            // A large file is measured through its reference runs (ADR-0202);
+            // one that will not read is measured as a manifest that will not.
+            RestoreMeasure measure;
+            try
+            {
+                measure = await RestorePart.MeasureAsync(
                     manifest,
+                    partsDirectory is null ? null : Path.Combine(partsDirectory, RestorePart.NameOf(manifest)),
+                    reader.ReadReferenceRunAsync,
                     (reference, plaintext) => reader.Proves(reference, plaintext),
+                    eachSegment: null,
                     cancellationToken).ConfigureAwait(false);
-            return new RestoreFileBytes(WrittenBytes(manifest), HeldBytes(manifest, held));
+            }
+            catch (FormatException)
+            {
+                return null;
+            }
+
+            return new RestoreFileBytes(measure.WrittenBytes, measure.HeldBytes);
         };
     }
 

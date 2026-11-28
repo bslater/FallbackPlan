@@ -9,6 +9,12 @@ namespace FallbackPlan.Web.DomTests;
 /// still sending, so a read is a copy taken under the lock each command is
 /// recorded under, never the list itself mid-append. Needs no browser.
 /// </summary>
+/// <remarks>
+/// The sending waits for the first read. Fifty thousand commands are sent in
+/// milliseconds, so on a busy machine a sender left to start at once could
+/// finish before the reading began, and the test would read nothing while
+/// anything was sent.
+/// </remarks>
 [TestClass]
 public sealed class FakeServiceClientTests
 {
@@ -16,8 +22,10 @@ public sealed class FakeServiceClientTests
     public async Task WhatTheConsoleSent_ReadsWhileItIsStillSending()
     {
         var client = new FakeServiceClient();
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sending = Task.Run(async () =>
         {
+            await reading.Task;
             for (var sent = 0; sent < 50_000; sent++)
             {
                 await client.ExecuteAsync(new ListRestoreRunsCommand(), CancellationToken.None);
@@ -29,6 +37,7 @@ public sealed class FakeServiceClientTests
         {
             Assert.IsEmpty(client.Received.OfType<ForgetRestoreRunCommand>());
             reads++;
+            reading.TrySetResult();
         }
 
         await sending;

@@ -58,6 +58,19 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
     /// </summary>
     private const double BytesPerReferencedSegment = 16;
 
+    /// <summary>
+    /// How many times the tree's result may be released before the least
+    /// figure stands. Whatever else the process lets go of between a
+    /// release's two readings is counted as the result's: a pooled array
+    /// trimmed, say, or a retiring thread's caches. That only ever raises a
+    /// release's figure, and it comes when it comes, while what the result
+    /// keeps it keeps in every release; so the least of them is what it kept.
+    /// </summary>
+    private const int TreeReleases = 3;
+
+    /// <summary>The large object heap's place in <see cref="GCMemoryInfo.GenerationInfo"/>.</summary>
+    private const int LargeObjectHeap = 3;
+
     [TestMethod]
     public async Task ASession_KeepsLittleInMemoryForEachRecordItHasStored()
     {
@@ -100,31 +113,44 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
             source.AddFile(string.Create(CultureInfo.InvariantCulture, $"data/{file:d2}.bin"), content);
         }
 
-        var store = CreateStore();
+        const int segments = TreeFiles * SegmentsPerFile;
         using var keys = CreateKeys();
         using var credential = CreateCredential();
-        using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
-        var (held, result) = await PublishTreeAsync(source, store, keys, credential, catalogue);
-        for (var attempt = 0; result.IsAlive && attempt < 50; attempt++)
+        List<string> releases = [];
+        var perSegment = double.PositiveInfinity;
+        for (var release = 0; release < TreeReleases && perSegment >= BytesPerReferencedSegment; release++)
         {
-            await Task.Delay(20);
-            _ = Settled();
+            // Each release publishes the same tree afresh, into a store and a
+            // catalogue of its own, so none reuses what one before it stored.
+            var store = new LocalFileSystemObjectStore(
+                Path.Combine(StoreRoot, release.ToString(CultureInfo.InvariantCulture)));
+            using var catalogue = CatalogueDb.Open(
+                Path.Combine(SpoolDirectory, string.Create(CultureInfo.InvariantCulture, $"catalogue-{release}.db")), Repo);
+            var (held, result) = await PublishTreeAsync(source, store, keys, credential, catalogue, release);
+            for (var attempt = 0; result.IsAlive && attempt < 50; attempt++)
+            {
+                await Task.Delay(20);
+                _ = Settled();
+            }
+
+            var after = Settled();
+            Assert.IsFalse(result.IsAlive, "the measurement needs the published result to be gone");
+
+            var released = (held.Live - after.Live) / (double)segments;
+            perSegment = Math.Min(perSegment, released);
+            releases.Add(string.Create(CultureInfo.InvariantCulture,
+                $"{released:f1} (heap {held.Heap} then {after.Heap} bytes, large objects {held.LargeObjects} then {after.LargeObjects}, fragmented {held.Fragmented} then {after.Fragmented})"));
         }
 
-        var after = Settled();
-        Assert.IsFalse(result.IsAlive, "the measurement needs the published result to be gone");
-
         // The files' content is the source's, not the snapshot's, and is in
-        // both readings.
+        // every reading.
         GC.KeepAlive(source);
 
-        const int segments = TreeFiles * SegmentsPerFile;
-        var perSegment = (held.Live - after.Live) / (double)segments;
         Assert.IsLessThan(
             BytesPerReferencedSegment,
             perSegment,
             string.Create(CultureInfo.InvariantCulture,
-                $"the snapshot kept {perSegment:f1} bytes for each of {segments} segments its files reference (heap {held.Heap} then {after.Heap} bytes, fragmented {held.Fragmented} then {after.Fragmented})"));
+                $"the snapshot kept at least {perSegment:f1} bytes for each of {segments} segments its files reference, in every release: {string.Join("; ", releases)}"));
     }
 
     /// <summary>
@@ -141,13 +167,15 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
     /// instead, and the reading waits for the thread that finished the
     /// publication to unwind.
     /// </remarks>
-    private async Task<((long Live, long Heap, long Fragmented) Held, WeakReference Result)> PublishTreeAsync(
+    private async Task<((long Live, long Heap, long LargeObjects, long Fragmented) Held, WeakReference Result)> PublishTreeAsync(
         FakeFileSystemSource source, LocalFileSystemObjectStore store, RepositoryKeySet keys,
-        RepositoryWriteCredential credential, CatalogueDb catalogue)
+        RepositoryWriteCredential credential, CatalogueDb catalogue, int release)
     {
+        var sequence = Path.Combine(
+            SpoolDirectory, string.Create(CultureInfo.InvariantCulture, $"sequence-{release}.txt"));
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
-            new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
+            new WriterSequence(new FileSequenceStateStore(sequence)),
             SpoolDirectory, FormatVersions.SealedDataPlane, observer: null, catalogue);
 
         var publishing = orchestrator.PublishAsync(new SnapshotJob
@@ -183,7 +211,7 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
         }
     }
 
-    private static (long Live, long Heap, long Fragmented) Settled()
+    private static (long Live, long Heap, long LargeObjects, long Fragmented) Settled()
     {
         for (var pass = 0; pass < 2; pass++)
         {
@@ -193,6 +221,10 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
         }
 
         var info = GC.GetGCMemoryInfo(GCKind.FullBlocking);
-        return (info.HeapSizeBytes - info.FragmentedBytes, info.HeapSizeBytes, info.FragmentedBytes);
+        return (
+            info.HeapSizeBytes - info.FragmentedBytes,
+            info.HeapSizeBytes,
+            info.GenerationInfo[LargeObjectHeap].SizeAfterBytes,
+            info.FragmentedBytes);
     }
 }

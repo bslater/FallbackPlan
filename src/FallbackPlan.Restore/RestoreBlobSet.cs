@@ -362,21 +362,82 @@ public static class RestoreBlobSet
             // order (ADR-0132). Nor does what a part holds need room in the
             // working space again (ADR-0136).
             var landed = held is not null && held.Landed.Contains(item.Path);
-            var heldSegments = landed
-                ? manifest.SegmentReferences.Count
-                : held?.PartsDirectory is { } parts
-                    ? await RestorePart.HeldSegmentsAsync(
-                        Path.Combine(parts, RestorePart.NameOf(manifest)),
-                        manifest,
-                        (reference, plaintext) => RestorePart.Proves(objectIdDeriver, reference, plaintext),
-                        cancellationToken).ConfigureAwait(false)
-                    : 0;
+
+            // A lost segment makes the path missing whatever else of it is
+            // archived, because no rehydration brings that segment back. Each
+            // is probed as the file is measured, in its order.
+            var archivedSegment = false;
+            var lost = false;
+            async ValueTask ProbeAsync(ObjectId referenced, bool counted)
+            {
+                if (lost)
+                {
+                    return;
+                }
+
+                var holding = catalogue.ResolveLocation(referenced) is { } segmentLocation
+                    ? await HoldingAsync(referenced, segmentLocation, counted).ConfigureAwait(false)
+                    : Holding.Absent;
+                if (holding == Holding.Absent)
+                {
+                    lost = true;
+                    return;
+                }
+
+                archivedSegment |= holding == Holding.Archived;
+            }
+
+            // A large file's segments are named by its reference runs
+            // (ADR-0202), metadata read from its blobs as the manifest is, and
+            // needed as the manifest is: a run that is not there leaves the
+            // file's segments unnamed, so no plan reaches the file.
+            var runArchived = false;
+            async ValueTask<ReadOnlyMemory<byte>?> ReadRunAsync(ObjectId runId, CancellationToken token)
+            {
+                if (catalogue.ResolveLocation(runId) is not { } runLocation)
+                {
+                    return null;
+                }
+
+                switch (await HoldingAsync(runId, runLocation).ConfigureAwait(false))
+                {
+                    case Holding.Absent:
+                        return null;
+
+                    case Holding.Archived:
+                        runArchived = true;
+                        return null;
+                }
+
+                return await ReadManifestAsync(
+                    store, repositoryId, keys, runId, runLocation, keyDeriver, objectIdDeriver, metaReaders, token)
+                    .ConfigureAwait(false) is { } run
+                    ? new ReadOnlyMemory<byte>(run)
+                    : default(ReadOnlyMemory<byte>?);
+            }
+
+            RestoreMeasure measure;
+            try
+            {
+                measure = await RestorePart.MeasureAsync(
+                    manifest,
+                    !landed && held?.PartsDirectory is { } parts ? Path.Combine(parts, RestorePart.NameOf(manifest)) : null,
+                    ReadRunAsync,
+                    (reference, plaintext) => RestorePart.Proves(objectIdDeriver, reference, plaintext),
+                    (segment, segmentHeld) => ProbeAsync(segment.ObjectId, !landed && !segmentHeld),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (ManifestValidationException)
+            {
+                (runArchived ? archived : missing).Add(item.Path);
+                continue;
+            }
 
             facts[item.ObjectId] = new RestoreItemFacts(
-                manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), MetadataRules.Captured(manifest.Metadata),
+                manifest.EntryKind, measure.WrittenBytes, MetadataRules.Captured(manifest.Metadata),
                 manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode,
                 MetadataRules.KindsOf(manifest.Metadata), HardLinkGroups.KeyOf(manifest),
-                RestoreSpace.HeldBytes(manifest, heldSegments), MetadataRules.AccountsOf(manifest.Metadata),
+                landed ? measure.WrittenBytes : measure.HeldBytes, MetadataRules.AccountsOf(manifest.Metadata),
                 manifest.Metadata.FileAttributes,
                 manifest.Metadata.AlternateStreams.Count(stream => !AlternateStreams.TryName(stream.Name.Span, out _, out _)),
                 MetadataRules.DescriptorOwnerOf(manifest.Metadata),
@@ -391,26 +452,9 @@ public static class RestoreBlobSet
                     manifest.LinkForm, manifest.CaptureDiagnostics,
                     manifest.LinkTarget is { } named ? System.Text.Encoding.UTF8.GetString(named.Span) : null));
 
-            // A lost segment makes the path missing whatever else of it is
-            // archived, because no rehydration brings that segment back. The
-            // codec holds a manifest's segments in the file's order.
-            var references = manifest.SegmentReferences
-                .Select((reference, index) => (reference.ObjectId, Counted: index >= heldSegments))
-                .Concat(manifest.Metadata.AlternateStreams.Select(stream => (stream.ObjectId, Counted: !landed)));
-            var archivedSegment = false;
-            var lost = false;
-            foreach (var (referenced, counted) in references)
+            foreach (var stream in manifest.Metadata.AlternateStreams)
             {
-                var holding = catalogue.ResolveLocation(referenced) is { } segmentLocation
-                    ? await HoldingAsync(referenced, segmentLocation, counted).ConfigureAwait(false)
-                    : Holding.Absent;
-                if (holding == Holding.Absent)
-                {
-                    lost = true;
-                    break;
-                }
-
-                archivedSegment |= holding == Holding.Archived;
+                await ProbeAsync(stream.ObjectId, counted: !landed).ConfigureAwait(false);
             }
 
             if (lost)
@@ -740,8 +784,10 @@ public static class RestoreBlobSet
             var manifests = new Dictionary<ObjectId, RecordTableEntry>();
             foreach (var entry in reader.RecordTable)
             {
+                // A reference run is read as a manifest is: it names a large
+                // file's segments (ADR-0202).
                 if (entry.ObjectType is ObjectType.FileVersionManifest or ObjectType.TreeManifest
-                    or ObjectType.SnapshotManifest or ObjectType.ErrorManifest)
+                    or ObjectType.SnapshotManifest or ObjectType.ErrorManifest or ObjectType.ReferenceRun)
                 {
                     manifests.TryAdd(entry.ObjectId, entry);
                 }
