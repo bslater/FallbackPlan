@@ -197,6 +197,26 @@ public sealed record PublishedTreeSnapshot(
     public int FoldersReused { get; init; }
 
     /// <summary>
+    /// How many files the snapshot holds a version of: those it archived,
+    /// those it took unchanged, and those it restated from the manifest they
+    /// had.
+    /// </summary>
+    public int FileCount { get; init; }
+
+    /// <summary>
+    /// How many of them it took unchanged from the snapshot before, naming the
+    /// version that snapshot holds without reading the file (NFR-PERF-003).
+    /// </summary>
+    public int FilesReused { get; init; }
+
+    /// <summary>
+    /// The logical bytes of the files it archived: those it read, whatever
+    /// part of them it found already stored. A file taken unchanged or
+    /// restated archives none.
+    /// </summary>
+    public long BytesArchived { get; init; }
+
+    /// <summary>
     /// The online-only files the run did not fetch (ADR-0193), or null where
     /// it fetched every one it asked for.
     /// </summary>
@@ -690,10 +710,8 @@ public sealed partial class PublicationOrchestrator
             // number somebody actually wants at two in the morning.
             if (_logger.IsEnabled(LogLevel.Information))
             {
-                var files = walker.Files.Count;
-                var failures = walker.Failures.Count;
-                var logicalBytes = walker.Files.Sum(file => file.Archive?.LogicalLength ?? 0);
-                Log.SnapshotPublished(_logger, snapshotForLog, files, failures, logicalBytes);
+                Log.SnapshotPublished(
+                    _logger, snapshotForLog, walker.FileCount, walker.Failures.Count, walker.BytesArchived);
             }
 
             return new PublishedTreeSnapshot(
@@ -709,6 +727,9 @@ public sealed partial class PublicationOrchestrator
                 builder.Blobs)
             {
                 FoldersReused = walker.FoldersReused,
+                FileCount = walker.FileCount,
+                FilesReused = walker.FilesReused,
+                BytesArchived = walker.BytesArchived,
                 NotFetched = walker.NotFetched,
                 LeftOnlineOnly = walker.LeftOnlineOnly,
             };
@@ -872,12 +893,23 @@ public sealed partial class PublicationOrchestrator
         private int _foldersNotListed;
         private int _foldersKept;
         private int _leftOnlineOnly;
+        private int _filesReused;
+        private long _bytesArchived;
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
         public ObjectId? RootTreeId { get; private set; }
 
         public List<PublishedFileVersion> Files => _files;
+
+        /// <summary>How many files this walk published a version of.</summary>
+        public int FileCount => _files.Count;
+
+        /// <summary>How many of them it took unchanged from the snapshot before.</summary>
+        public int FilesReused => _filesReused;
+
+        /// <summary>The logical bytes of the files it archived.</summary>
+        public long BytesArchived => _bytesArchived;
 
         public List<CaptureFailure> Failures => _failures;
 
@@ -925,6 +957,18 @@ public sealed partial class PublicationOrchestrator
         /// </remarks>
         public IReadOnlyList<SourceIdentityPackEntry> SourceIdentities =>
             [.. _hints.Values.Where(static hint => hint is not null).Select(static hint => hint!)];
+
+        /// <summary>A file's version, as the walk publishes it, counted as it is.</summary>
+        private void Published(PublishedFileVersion file)
+        {
+            _files.Add(file);
+            if (file.Reused)
+            {
+                _filesReused++;
+            }
+
+            _bytesArchived += file.Archive?.LogicalLength ?? 0;
+        }
 
         public async ValueTask ConsumeAsync(ScanEvent scanEvent, CancellationToken cancellationToken)
         {
@@ -1202,7 +1246,7 @@ public sealed partial class PublicationOrchestrator
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "reused"));
                 Log.FileUnchanged(logger, new LogPath(entry.RelativePath));
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
-                _files.Add(new PublishedFileVersion(
+                Published(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
                     prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true,
                     HasAlternateStreams: prior.HasAlternateStreams));
@@ -1288,7 +1332,7 @@ public sealed partial class PublicationOrchestrator
                 _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, manifest.EntryKind));
                 // Its manifest is written, so its references and content
                 // identifiers wait in the spool until the catalogue reads them.
-                _files.Add(new PublishedFileVersion(
+                Published(new PublishedFileVersion(
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind,
                     LastArchive is { } archived ? session.SpillSegments(archived) : null,
                     entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId,
@@ -1370,7 +1414,7 @@ public sealed partial class PublicationOrchestrator
             kept = true;
 
             _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, prior.ObjectId, EntryKind.File));
-            _files.Add(new PublishedFileVersion(
+            Published(new PublishedFileVersion(
                 entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
                 prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true,
                 HasAlternateStreams: prior.HasAlternateStreams));
@@ -1468,7 +1512,7 @@ public sealed partial class PublicationOrchestrator
             EngineDiagnostics.ScanFiles.Add(
                 1, new KeyValuePair<string, object?>("outcome", moved ? "renamed" : "restated"));
             _frames.Peek().Entries.Add(new TreeEntry(entry.NameBytes, objectId, EntryKind.File));
-            _files.Add(new PublishedFileVersion(
+            Published(new PublishedFileVersion(
                 entry.RelativePath, entry.NameBytes, objectId, EntryKind.File, Archive: null,
                 entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId, Inherited: rewritten,
                 HasAlternateStreams: rewritten.Metadata.AlternateStreams.Count > 0,

@@ -1543,16 +1543,15 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null, 
             BackupSetId = Hex(backupSetId),
             StartedAt = now,
             CaptureStatus = (byte)(published.ErrorManifestObjectId is null ? 1 : 2),
-            Files = published.Files.Count,
+            Files = published.FileCount,
             Failures = published.Failures.Count,
         });
 
-        var reused = published.Files.Count(file => file.Reused);
         List<string> report =
         [
             $"snapshot id    {Hex(snapshotId)}",
             string.Create(CultureInfo.InvariantCulture,
-                $"files          {published.Files.Count} ({reused} unchanged, {published.Failures.Count} failed)"),
+                $"files          {published.FileCount} ({published.FilesReused} unchanged, {published.Failures.Count} failed)"),
             string.Create(CultureInfo.InvariantCulture, $"data blobs     {published.ContentBlobs.Count} new"),
         ];
 
