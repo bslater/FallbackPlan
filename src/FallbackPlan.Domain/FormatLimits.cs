@@ -10,10 +10,11 @@ public static class FormatLimits
 {
     /// <summary>
     /// The repository format version a new repository is created with unless
-    /// told otherwise: format 7, whose records are format 3's, whose index is
-    /// format 5's, whose manifests are format 6's, and whose capture failures
-    /// may say that what stands at their path is what the snapshot before held
-    /// ([ADR-0197](../../docs/adr/0197-format-7-a-failure-says-what-stands-in-its-place.md)).
+    /// told otherwise: format 8, whose records are format 3's, whose index is
+    /// format 5's, whose manifests are format 6's, whose capture failures are
+    /// format 7's, and whose large files' references may be written in
+    /// reference runs
+    /// ([ADR-0202](../../docs/adr/0202-format-8-a-large-files-references-are-written-in-runs.md)).
     /// The descriptor carries it.
     /// </summary>
     /// <remarks>
@@ -26,10 +27,10 @@ public static class FormatLimits
     /// migrated by this: its version is fixed at creation and moves only
     /// under a signed upgrade record.
     /// </remarks>
-    public const ushort FormatVersion = FormatVersions.StandInFailures;
+    public const ushort FormatVersion = FormatVersions.ReferenceRuns;
 
     /// <summary>
-    /// The newest repository format this implementation reads: format 7.
+    /// The newest repository format this implementation reads: format 8.
     /// Readers accept every version from <see cref="FormatVersions.SealedDataPlane"/>
     /// to this one (<see cref="FormatVersions.IsReadable"/>), so a format-2
     /// repository written before the default moved is read in place and never
@@ -37,7 +38,7 @@ public static class FormatLimits
     /// not renumbered, because they are bound into every descriptor and every
     /// sealed blob's AAD already on disk.
     /// </summary>
-    public const ushort LatestFormatVersion = FormatVersions.StandInFailures;
+    public const ushort LatestFormatVersion = FormatVersions.ReferenceRuns;
 
     /// <summary>
     /// The version stamped on a <b>symmetric</b> container — a metadata blob

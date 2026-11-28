@@ -61,9 +61,9 @@ public static class FormatVersions
     /// <summary>
     /// Format 8: a large file's segment references and holes may be written in
     /// reference runs, objects of type <c>0x12</c> its version manifest lists
-    /// in key 15 (06 §4, ADR-0202). Defined here before this build reads or
-    /// writes it: <see cref="FormatLimits.LatestFormatVersion"/> moves to it
-    /// once every reader of a file's references follows its runs.
+    /// in key 15 (06 §4, ADR-0202). Failures are format 7's, manifests
+    /// otherwise format 6's, the index format 5's, records and blobs format
+    /// 3's.
     /// </summary>
     public const ushort ReferenceRuns = 8;
 

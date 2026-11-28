@@ -273,7 +273,7 @@ public static class RepositoryLifecycle
     /// sealed data plane and the reclaim authority always; relocatable
     /// records from format 3; index generations from format 4; delta
     /// checkpoints from format 5; file flags and link forms from format 6;
-    /// stand-in failures from format 7.
+    /// stand-in failures from format 7; reference runs from format 8.
     /// </summary>
     private static ushort[] RequiredFeaturesFor(ushort formatVersion)
     {
@@ -305,6 +305,11 @@ public static class RepositoryLifecycle
         if (FormatVersions.HasStandInFailures(formatVersion))
         {
             features.Add(RepositoryDescriptorCodec.FeatureStandInFailures);
+        }
+
+        if (FormatVersions.HasReferenceRuns(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureReferenceRuns);
         }
 
         return [.. features];

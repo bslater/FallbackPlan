@@ -243,7 +243,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
-        var settings = Settings with { FormatVersion = 8 };
+        var settings = Settings with { FormatVersion = 9 };
         Assert.IsFalse(settings.Validate().IsValid);
         await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
             await RepositoryLifecycle.CreateFromPassphraseAsync(
