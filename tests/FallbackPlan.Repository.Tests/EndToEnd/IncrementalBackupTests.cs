@@ -268,11 +268,13 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         Assert.AreEqual(4, file.Archive!.SegmentReferences.Count);
         Assert.AreEqual(1, second.ContentBlobs.Sum(blob => blob.RecordCount));
 
-        // And the second version still restores byte-identical.
+        // And the second version still restores byte-identical, from the
+        // references its manifest declares.
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         using var restored = new MemoryStream();
-        var restore = await reader.RestoreAsync(file.Archive.SegmentReferences, restored, CancellationToken.None);
+        var restore = await reader.RestoreAsync(
+            await ReferencesOfAsync(reader, file.ObjectId), restored, CancellationToken.None);
         Assert.IsTrue(restore.Success, restore.FailureDetail);
         SequenceAssert.AreEqual(changed.Content, restored.ToArray());
     }
