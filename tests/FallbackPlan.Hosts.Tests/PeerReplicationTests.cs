@@ -323,16 +323,18 @@ public sealed class PeerReplicationTests : IDisposable
 
         // The destination: a notice that survives restarts (re-opened store),
         // and the source's grant gone. The listener handles the frame after
-        // the sender has already returned, so this waits rather than races.
-        await WaitForAsync(() =>
-            FallbackPlan.Application.NoticeStore.Open(_destinationState).Unacknowledged.Count > 0);
+        // the sender has already returned, and raises the notice before it
+        // revokes the grant, so this waits for both rather than racing either.
+        using (var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory))
+        {
+            await WaitForAsync(() =>
+                FallbackPlan.Application.NoticeStore.Open(_destinationState).Unacknowledged.Count > 0
+                && _destinationGrants!.Find(sourceKeypair.Identity) is null);
+        }
+
         var destinationNotice = Assert.ContainsSingle(
             FallbackPlan.Application.NoticeStore.Open(_destinationState).Unacknowledged);
         Assert.Contains("ended the peering", destinationNotice.Message, StringComparison.Ordinal);
-        using (var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory))
-        {
-            Assert.IsNull(_destinationGrants!.Find(sourceKeypair.Identity));
-        }
 
         // The source: its own grant revoked, tombstoned rather than merely
         // forgotten — a dialler is later told `revoked`, not `not_paired`.
