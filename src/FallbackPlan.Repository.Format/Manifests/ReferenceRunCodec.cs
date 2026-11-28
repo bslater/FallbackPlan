@@ -91,28 +91,13 @@ public static class ReferenceRunCodec
             throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceCount(manifest.ReferenceRuns.Count, runs.Count));
         }
 
-        var expected = 0UL;
-        for (var index = 0; index < runs.Count; index++)
+        var sequence = new Sequence(manifest);
+        foreach (var run in runs)
         {
-            var run = runs[index];
-            if (run.Start != expected)
-            {
-                throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceBreaks(index, run.Start, expected));
-            }
-
-            var pieces = run.SegmentReferences.Count + run.SparseExtents.Count;
-            if (index < runs.Count - 1 && pieces != MaxPieces)
-            {
-                throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceNotFull(index, pieces));
-            }
-
-            expected = checked(run.Start + run.Length);
+            sequence.Next(run);
         }
 
-        if (expected != manifest.LogicalLength)
-        {
-            throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceShort(expected, manifest.LogicalLength));
-        }
+        sequence.End();
     }
 
     private static ReferenceRun DecodeCore(ReadOnlyMemory<byte> data)
@@ -223,6 +208,46 @@ public static class ReferenceRunCodec
             if (run.SegmentReferences[i].LogicalOffset <= run.SegmentReferences[i - 1].LogicalOffset)
             {
                 throw new ManifestValidationException(Strings.FileVersionManifestCodec_SegmentReferencesMUSTOrderedAscending);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A file's runs held to its manifest one at a time, as a reader meets
+    /// them: each starts where the one before it ended and is full unless it
+    /// is the last, and the last ends at the file's length.
+    /// </summary>
+    internal sealed class Sequence(FileVersionManifest manifest)
+    {
+        private ulong _end;
+        private int _index;
+
+        /// <summary>Holds the next run to the manifest.</summary>
+        /// <exception cref="ManifestValidationException">The run does not follow the one before it, or is not full though another follows it.</exception>
+        public void Next(ReferenceRun run)
+        {
+            if (run.Start != _end)
+            {
+                throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceBreaks(_index, run.Start, _end));
+            }
+
+            var pieces = run.SegmentReferences.Count + run.SparseExtents.Count;
+            if (_index < manifest.ReferenceRuns.Count - 1 && pieces != MaxPieces)
+            {
+                throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceNotFull(_index, pieces));
+            }
+
+            _end = checked(run.Start + run.Length);
+            _index++;
+        }
+
+        /// <summary>Holds the runs, all read, to the file's length.</summary>
+        /// <exception cref="ManifestValidationException">The runs end short of the file's length, or past it.</exception>
+        public void End()
+        {
+            if (_end != manifest.LogicalLength)
+            {
+                throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceShort(_end, manifest.LogicalLength));
             }
         }
     }

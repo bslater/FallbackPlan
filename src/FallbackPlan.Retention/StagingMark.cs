@@ -233,6 +233,26 @@ public static class StagingMark
             reachable.Add(stream.ObjectId);
         }
 
+        // A large file's references are in its runs (ADR-0202): each run is
+        // kept, and every segment it names. A run that will not read leaves
+        // segments unnamed, so the walk is unwalkable and nothing is swept.
+        reachable.UnionWith(manifest.ReferenceRuns);
+        try
+        {
+            await foreach (var run in ReferenceRunReader.ReadAsync(
+                manifest, (runId, token) => ReadRunAsync(reader, runId, token), cancellationToken).ConfigureAwait(false))
+            {
+                foreach (var reference in run.SegmentReferences)
+                {
+                    reachable.Add(reference.ObjectId);
+                }
+            }
+        }
+        catch (FormatException exception)
+        {
+            unwalkable.Add($"{versionId}: {exception.Message}");
+        }
+
         // ParentVersion is deliberately NOT walked. It is lineage, not a
         // restore dependency — nothing dereferences it to read content — and
         // following it would chain every kept version back through every
@@ -242,6 +262,15 @@ public static class StagingMark
         // exactly as the snapshot's own ParentSnapshots may name expired
         // snapshots. Deleted-file history keeps whole snapshots, never a
         // version on its own (ADR-0094), so it gives no reason to walk them.
+    }
+
+    private static async ValueTask<ReadOnlyMemory<byte>?> ReadRunAsync(
+        RepositoryReader reader, ObjectId runId, CancellationToken cancellationToken)
+    {
+        var result = await reader.ReadSegmentAsync(runId, cancellationToken).ConfigureAwait(false);
+        return result.Outcome == RecordReadOutcome.Ok && result.Plaintext is { } plaintext
+            ? new ReadOnlyMemory<byte>(plaintext)
+            : default(ReadOnlyMemory<byte>?);
     }
 
     private static async ValueTask<T?> ReadAsync<T>(

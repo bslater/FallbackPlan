@@ -332,6 +332,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ReferenceRunCodec_SequenceShort, arg0, arg1);
 
     /// <summary>
+    /// Reference run {0}, run {1} of the {2} its file version lists, did not read: the version cannot be read whole (ADR-0202).
+    /// </summary>
+    private static string ReferenceRunReader_RunDidNotRead => Get(nameof(ReferenceRunReader_RunDidNotRead));
+
+    /// <summary>
+    /// Reference run {0}, run {1} of the {2} its file version lists, did not read: the version cannot be read whole (ADR-0202).
+    /// </summary>
+    internal static string FormatReferenceRunReader_RunDidNotRead(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, ReferenceRunReader_RunDidNotRead, arg0, arg1, arg2);
+
+    /// <summary>
     /// The encoded manifest is {0} bytes; the metadata limit is 16 MiB (specification 00 §8).
     /// </summary>
     private static string FileVersionManifestCodec_EncodedManifestBytesMetadataLimit => Get(nameof(FileVersionManifestCodec_EncodedManifestBytesMetadataLimit));

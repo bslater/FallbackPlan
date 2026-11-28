@@ -69,11 +69,14 @@ public sealed record FileVersionManifest
     public IReadOnlyList<ObjectId> ReferenceRuns { get; init; } = [];
 
     /// <summary>
-    /// Every content object restoring this version reads: its segments in
-    /// order, then each alternate stream's content — what a damaged object is
-    /// traced back to the version through (FR-VER-005).
+    /// Every object restoring this version reads that the manifest itself
+    /// names: its reference runs, its segments in order, then each alternate
+    /// stream's content — what a damaged object is traced back to the version
+    /// through (FR-VER-005). The segments a run names are the run's to say:
+    /// a reader that needs them reads the runs (ADR-0202).
     /// </summary>
     public IEnumerable<ObjectId> ContentObjects() =>
-        SegmentReferences.Select(reference => reference.ObjectId)
+        ReferenceRuns
+            .Concat(SegmentReferences.Select(reference => reference.ObjectId))
             .Concat(Metadata.AlternateStreams.Select(stream => stream.ObjectId));
 }
