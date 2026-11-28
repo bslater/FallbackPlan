@@ -198,15 +198,17 @@ Until this is settled, a v2 set's replica is registered only if the passphrase h
 > **2026-11: the files' references are built** ([Amendment 2](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool)).
 > Once a tree snapshot has written a captured file's manifest, the file's
 > references wait in the same spill and its content ids are let go, and the
-> catalogue reads the references back at the end: 3.8 bytes kept per
-> referenced segment, where it was 84.
+> catalogue reads the references back at the end: 1.0 byte kept per
+> referenced segment, where it was 81 (re-measured 2026-11-28, once the
+> publication's own frames had unwound; the first reading said 3.8 and 84).
 > Every decision of ADR-0201 is built, and the question stays open for two
 > costs outside them. A file holds its own references and content ids while it
 > is archived, about 80 bytes a segment, so a single 2 TiB file still holds
 > about 160 MB of them at 1 MiB segments until its manifest is written. And
 > each captured file's result stays in memory until the snapshot publishes,
-> about 1.2 KB a file measured over 20,000 small ones, which grows with how
-> many files a snapshot captures: around 1.2 GB at a million.
+> 652 bytes a file measured over 20,000 small ones (first read as about
+> 1.2 KB), which grows with how many files a snapshot captures: around 650 MB
+> at a million.
 
 **Owner:** maintainer · **Blocks:** FR-ARCH-002's 2 TiB acceptance, and NFR-PERF-001 for any snapshot that stores more than a few hundred gigabytes
 

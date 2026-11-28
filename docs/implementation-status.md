@@ -6754,8 +6754,9 @@ bytes are, and the files' references.
 > The catalogue reads them back as it records each file, and
 > `Repository.Tests/SpilledReferenceTests` holds that damage to the content
 > still reaches every file. Afterwards a file's references say to read its
-> manifest. A tree snapshot now keeps 3.8 bytes per referenced segment where
-> it kept 84.0, against a bound of 16. What still grows is outside the
+> manifest. A tree snapshot now keeps 1.0 byte per referenced segment where
+> it kept 81.0, against a bound of 16 (re-measured 2026-11-28 once the
+> publication's frames had unwound; first read as 3.8 and 84.0). What still grows is outside the
 > decisions and stays with Q24: a file's own references while it is archived,
 > about 80 bytes a segment of that file, and each captured file's result, about
-> 1.2 KB a file until the snapshot publishes.
+> 652 bytes a file until the snapshot publishes (first read as 1.2 KB).
