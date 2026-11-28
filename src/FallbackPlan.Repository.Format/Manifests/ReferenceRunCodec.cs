@@ -20,6 +20,76 @@ public static class ReferenceRunCodec
     /// </summary>
     public const int MaxPieces = 262_144;
 
+    /// <summary>
+    /// The runs a file of these pieces is written as (ADR-0202 decision 3):
+    /// none when they number <see cref="MaxPieces"/> or fewer, so the file
+    /// is one manifest; otherwise its references and holes taken in file
+    /// order, each run but the last holding exactly <see cref="MaxPieces"/>.
+    /// </summary>
+    /// <remarks>
+    /// Each run is made only as the one before it is taken, so a caller that
+    /// writes each before asking for the next holds one run's pieces at a
+    /// time. The pieces are the manifest's, which already cover the file.
+    /// </remarks>
+    /// <param name="references">The file's segment references, in file order.</param>
+    /// <param name="holes">The file's holes, in file order.</param>
+    /// <param name="logicalLength">The file's length, where the last run ends.</param>
+    /// <exception cref="ManifestValidationException">The pieces end short of, or past, the file's length; raised before the last run is given.</exception>
+    public static IEnumerable<ReferenceRun> Cut(
+        IReadOnlyList<SegmentReference> references, IReadOnlyList<SparseExtent> holes, ulong logicalLength)
+    {
+        ThrowHelper.ThrowIfNull(references);
+        ThrowHelper.ThrowIfNull(holes);
+
+        return references.Count + holes.Count <= MaxPieces ? [] : CutRuns(references, holes, logicalLength);
+    }
+
+    private static IEnumerable<ReferenceRun> CutRuns(
+        IReadOnlyList<SegmentReference> references, IReadOnlyList<SparseExtent> holes, ulong logicalLength)
+    {
+        var reference = 0;
+        var hole = 0;
+        ulong start = 0;
+        while (reference < references.Count || hole < holes.Count)
+        {
+            List<SegmentReference> runReferences = [];
+            List<SparseExtent> runHoles = [];
+            ulong end = start;
+            while (runReferences.Count + runHoles.Count < MaxPieces && (reference < references.Count || hole < holes.Count))
+            {
+                if (hole == holes.Count ||
+                    (reference < references.Count && (ulong)references[reference].LogicalOffset < holes[hole].Offset))
+                {
+                    var next = references[reference++];
+                    runReferences.Add(next);
+                    end = (ulong)(next.LogicalOffset + next.LogicalLength);
+                }
+                else
+                {
+                    var next = holes[hole++];
+                    runHoles.Add(next);
+                    end = next.Offset + next.Length;
+                }
+            }
+
+            // A manifest that lists runs holds no pieces to be held to its
+            // length, so the last run is, before it is given.
+            if (reference == references.Count && hole == holes.Count && end != logicalLength)
+            {
+                throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceShort(end, logicalLength));
+            }
+
+            yield return new ReferenceRun
+            {
+                Start = start,
+                Length = end - start,
+                SegmentReferences = runReferences,
+                SparseExtents = runHoles,
+            };
+            start = end;
+        }
+    }
+
     /// <summary>Encodes a run canonically, validating it first.</summary>
     /// <exception cref="ManifestValidationException">The run breaks ADR-0202's rules.</exception>
     public static byte[] Encode(ReferenceRun run)
