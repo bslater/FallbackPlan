@@ -30,7 +30,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// place with its size and modification time put back is missed by the
 /// short-circuit, which is its stated risk, and caught by a backup that reads
 /// every file; and a modification time moved backwards is a change
-/// (FR-MAN-006, NFR-PERF-003).
+/// (FR-MAN-006, NFR-PERF-003). A snapshot's result counts the files it holds a
+/// version of, those it took unchanged, and the bytes it archived.
 /// </summary>
 [TestClass]
 public sealed class IncrementalBackupTests : ArchiveTestHarness
@@ -230,6 +231,49 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         SequenceAssert.AreEqual(
             catalogue.ListDirectory(Enumerable.Repeat((byte)0xA1, 16).ToArray(), "docs").Select(entry => entry.Path),
             catalogue.ListDirectory(Enumerable.Repeat((byte)0xB2, 16).ToArray(), "docs").Select(entry => entry.Path));
+    }
+
+    [TestMethod]
+    public async Task IncrementalBackup_ItsResult_CountsItsFiles_ThoseTakenUnchanged_AndTheBytesItArchived()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/big.bin", Deterministic(300_000, 3));
+        source.AddFile("docs/before.bin", Deterministic(4_000, 11), fileId: 4_242);
+        source.AddFile("readme.md", Deterministic(2_000, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue();
+
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(Job(source, 0xA1), CancellationToken.None);
+
+        // A first backup takes nothing unchanged, and archives every byte.
+        Assert.AreEqual(3, first.FileCount);
+        Assert.AreEqual(0, first.FilesReused);
+        Assert.AreEqual(306_000L, first.BytesArchived);
+
+        // One file changed, one moved, and one as it was.
+        var changed = source.AddFile("readme.md", Deterministic(2_500, 9));
+        changed.Metadata = changed.Metadata with { ModifiedAt = 1_722_700_000_000 };
+        Assert.IsTrue(source.Remove("docs/before.bin"));
+        source.AddFile("archive/after.bin", Deterministic(4_000, 11), fileId: 4_242);
+
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
+            .PublishAsync(
+                Job(source, 0xB2, now: 1_722_700_000_001) with
+                {
+                    PriorSnapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray(),
+                },
+                CancellationToken.None);
+
+        // It holds a version of all three. The one as it was is taken
+        // unchanged, the moved one is restated from the manifest it had, and
+        // only the changed one's bytes are archived (NFR-PERF-003).
+        Assert.AreEqual(3, second.FileCount);
+        Assert.AreEqual(1, second.FilesReused);
+        Assert.AreEqual(2_500L, second.BytesArchived);
     }
 
     [TestMethod]
