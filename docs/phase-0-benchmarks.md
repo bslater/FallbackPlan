@@ -106,12 +106,14 @@ and process working set are sampled every 250 ms.
 > | CI runner | scratch | 32 GiB | 176 MiB/s | 135.5; 66.6, 67.9 MiB | 210.5, 137.4 MiB | 7.7 MiB | 348 MB |
 > | container | direct | 32 GiB | 108 MiB/s | 57.7; 58.6, 59.9 MiB | 127.0, 128.3 MiB | 3.7 MiB | 279 MB |
 > | container | direct | 32 GiB | 111 MiB/s | 57.7; 58.6, 59.9 MiB | 126.8, 129.5 MiB | 3.7 MiB | 290 MB |
+> | CI runner | direct | 32 GiB | 144 MiB/s | 66.0; 66.6, 67.9 MiB | 136.9, 138.2 MiB | 3.7 MiB | 347 MB |
 >
 > The over-idle figure is **above** the 256 MB NFR-PERF-001 states for a
 > 2 TiB file. Since the codec change it is the working set's peak in a
-> run's opening seconds, 310 to 320 MiB; settled, a run holds about 84 MiB
-> over idle. That is why the 256 MiB clause below is asserted on the live
-> set. The 32 GiB run replaces 3 GiB below as the largest input this page
+> run's opening seconds, 310 to 377 MiB. The change lowered that peak in a
+> container and left it where it was on a CI runner. Settled, a run holds
+> 84 to 93 MiB over idle. That is why the 256 MiB clause below is asserted
+> on the live set. The 32 GiB run replaces 3 GiB below as the largest input this page
 > measures.
 
 The claim this proves is the *shape* of NFR-PERF-001: tripling the input

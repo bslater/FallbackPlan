@@ -34,8 +34,8 @@ public static class MemoryBoundProof
 
     /// <summary>
     /// How long into a run its memory is not judged for growth. A run's
-    /// working set peaks in its opening seconds, at 310 to 320 MiB here,
-    /// and has settled to about 128 MiB by 45 s, however fast it reads.
+    /// working set peaks in its opening seconds, at 310 to 377 MiB, and has
+    /// settled to 127 to 138 MiB by 45 s, however fast it reads.
     /// Until the zstd codec stopped renting a scratch buffer from the
     /// shared array pool, the live set did the same, holding 70 MiB more
     /// for 35 to 40 s whether the machine read 104 MiB/s or 213. A warm-up
