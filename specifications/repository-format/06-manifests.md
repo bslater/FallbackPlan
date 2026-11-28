@@ -58,6 +58,8 @@ Segment references MUST be ordered by ascending `logical_offset`, MUST NOT overl
 
 Maximum references per manifest: 1 048 576. A file needing more requires a larger segment size.
 
+> **2026-11 ([ADR-0202](../../docs/adr/0202-format-8-a-large-files-references-are-written-in-runs.md)).** From format 8 a file with more than 262 144 references and holes together is described in reference runs (§4.4), each holding at most that many, and its manifest lists them rather than holding its references. The limit above is then one a manifest without runs holds, and the 16 MiB a manifest may be (00 §8) reaches it first.
+
 ## 4 File-version manifest
 
 Object type `0x02`.
@@ -78,6 +80,7 @@ Object type `0x02`.
 | 12 | bytes[16] | `hardlink_group` — present when the file is one of several links to one inode |
 | 13 | array | `capture_diagnostics` — array of text, present only when non-empty |
 | 14 | u8 | `link_form` — 1 the link is a mount point, as a Windows junction is; absent for a symbolic link. Format 6 and later |
+| 15 | array | `reference_runs` — the object identifiers of the file's reference runs (§4.4), in file order, each `bytes[32]`; absent unless the file needs them. Format 8 and later |
 
 ### 4.1 Metadata map
 
@@ -129,6 +132,11 @@ Key 7 holds the owner, the group and the DACL, and the audit list (SACL) as well
 > - **A writer MUST NOT write either key below format 6.** A reader that predates format 6 rejects a manifest carrying either as an unknown key, so a repository such a reader is entitled to read never holds one.
 > - The metadata digest an incremental compares covers key 11 as it covers every key, so a file whose flags alone change gets a new version.
 
+> **2026-11 ([ADR-0202](../../docs/adr/0202-format-8-a-large-files-references-are-written-in-runs.md)).** Format 8 assigns key 15.
+>
+> - **`reference_runs`** is present only on a file (`entry_kind` 1) whose references and holes together number more than 262 144, and then lists at least two runs. Such a manifest's `segment_references` is the empty array and it carries no `sparse_extents`: its runs hold them. A reader MUST reject key 15 on any other entry, with fewer than two runs, or beside references or holes of its own.
+> - **A writer MUST NOT write it below format 8.** A reader that predates format 8 rejects a manifest carrying it as an unknown key, so a repository such a reader is entitled to read never holds one.
+
 > **2026-11 ([ADR-0180 Amendment 3](../../docs/adr/0180-capture-names-the-file-flags-it-does-not-keep.md#amendment-3-2026-11--format-6-keeps-the-flags-a-folders-too)).** The product writes key 11 from format 6, for a file and a folder alike. Its metadata digest, which is the product's and no part of the format, counts the flags key 11 keeps as it counts those key 13's `file-flags:` names, so either form digests alike.
 
 ### 4.2 The whole-file hash
@@ -156,6 +164,23 @@ That last rule exists because the failure it prevents is silent. An entry stored
 > **The rendering convention is settled in advance, so nothing gets built against a guess.** Where a host string is genuinely unavoidable — terminal output, the restore receipt's JSON, the catalogue's path key — a byte that is not part of a valid UTF-8 sequence is rendered **percent-encoded**: `%` followed by two uppercase hexadecimal digits, with a literal `%` in an otherwise-decodable name rendered `%25`. It was chosen over the two alternatives on one property each. Surrogate-escaping (lone `U+DC80`–`U+DCFF`, the PEP 383 convention) round-trips inside a host string and then fails at every boundary that writes UTF-8, which moves the loss to the edge instead of removing it. Rendering `U+FFFD` for display only keeps the bytes authoritative but produces a name the user cannot paste back as an argument. Percent-encoding is the only one of the three that is lossless, valid UTF-8, and typeable.
 >
 > This is a **rendering** rule and nothing more. `name` in this format stays raw bytes; no percent-encoded form is ever stored in a manifest, and an implementation that encodes into the field rather than out of it has stored a name the file does not have.
+
+### 4.4 Reference runs
+
+Object type `0x12`. Format 8 and later ([ADR-0202](../../docs/adr/0202-format-8-a-large-files-references-are-written-in-runs.md)).
+
+A reference run holds one contiguous stretch of one file's segment references and holes, for a file whose manifest lists it in key 15.
+
+| Key | Type | Value |
+|-----|------|-------|
+| 1 | u64 | `start` — the offset in the file where the stretch begins |
+| 2 | u64 | `length` — how much of the file the stretch covers |
+| 3 | array | `segment_references` (§3), offsets in the file |
+| 4 | array | `sparse_extents` — array of `[offset, length]` pairs, offsets in the file; absent when there are none |
+
+- A run's references and holes, in ascending order, MUST cover `[start, start + length)` exactly, as a manifest's cover its file (§3.2). A run MUST hold at least one piece and at most **262 144**, references and holes together. A reader MUST reject a run that fails either, and one carrying an unknown key.
+- A file's runs, in the order its manifest lists them, MUST start at 0, each where the one before it ends, and the last MUST end at the file's `logical_length`. Each run but the last MUST hold exactly 262 144 pieces, so that the same file is described by the same objects on every device. A reader MUST read every run before it treats the version as read, and MUST treat a missing run, or runs that fail any of this, as a damage finding.
+- A run is not a file version, and nothing but a file version manifest names one. What a version's content is includes its runs: what a restore reads, what the collector keeps reachable, and what damage is traced back to the version through.
 
 ## 5 Tree manifest
 
