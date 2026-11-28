@@ -91,6 +91,7 @@ public static class MemoryBoundProof
     /// <param name="PeakWorkingSetEarlier">The peak working set over the earlier judged window.</param>
     /// <param name="PeakWorkingSetLater">The peak working set over the later judged window.</param>
     /// <param name="PeakLive">The peak forced-collection live set over the whole run.</param>
+    /// <param name="PeakLiveWarmUp">The peak live set over the warm-up, before the judged windows.</param>
     /// <param name="PeakLiveEarlier">The peak live set over the earlier judged window.</param>
     /// <param name="PeakLiveLater">The peak live set over the later judged window.</param>
     /// <param name="LeftLive">What stayed live, over idle, once the archive had returned.</param>
@@ -101,6 +102,7 @@ public static class MemoryBoundProof
         long PeakWorkingSetEarlier,
         long PeakWorkingSetLater,
         long PeakLive,
+        long PeakLiveWarmUp,
         long PeakLiveEarlier,
         long PeakLiveLater,
         long LeftLive);
@@ -122,7 +124,8 @@ public static class MemoryBoundProof
     /// <summary>
     /// Judges a run's readings: the live set within its bound; neither the
     /// live set nor the working set growing from the earlier judged window to
-    /// the later; little left live once the archive returned; and what
+    /// the later; no more live in the warm-up than after it; little left live
+    /// once the archive returned; and what
     /// processing added over idle short of a regression. A run too short to
     /// have two judged windows fails rather than passing unjudged.
     /// </summary>
@@ -151,6 +154,15 @@ public static class MemoryBoundProof
             {
                 failures.Add(string.Create(CultureInfo.InvariantCulture,
                     $"the live set grew with the input: {Mib(readings.PeakLiveEarlier)} MiB over the earlier window, {Mib(readings.PeakLiveLater)} MiB over the later"));
+            }
+
+            // The peak is what NFR-PERF-001 bounds, and a run that holds more
+            // early than it settles to has its peak set by whatever it was
+            // holding: buffers a pool kept, a cache filled once.
+            if (readings.PeakLiveWarmUp > readings.PeakLiveLater + LiveGrowthAllowance)
+            {
+                failures.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"the run held {Mib(readings.PeakLiveWarmUp)} MiB live in its first {WarmUp.TotalSeconds:f0} s and {Mib(readings.PeakLiveLater)} MiB once settled"));
             }
 
             if (readings.PeakWorkingSetLater > readings.PeakWorkingSetEarlier + GrowthAllowance)
@@ -263,6 +275,7 @@ public static class MemoryBoundProof
                 PeakBetween(workingSets, WarmUp, midpoint),
                 PeakBetween(workingSets, midpoint, end),
                 peakLive,
+                PeakBetween(liveSets, TimeSpan.Zero, WarmUp),
                 PeakBetween(liveSets, WarmUp, midpoint),
                 PeakBetween(liveSets, midpoint, end),
                 leftLive);
@@ -281,7 +294,7 @@ public static class MemoryBoundProof
                     $"judged windows:   {WarmUp.TotalSeconds:f0} to {midpoint.TotalSeconds:f1} s, and {midpoint.TotalSeconds:f1} to {elapsed.TotalSeconds:f1} s")
                 : "judged windows:   none, the run was too short");
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"peak live set:    {Mib(peakLive)} MiB (forced-collection samples; {Mib(PeakBetween(liveSets, TimeSpan.Zero, WarmUp))} MiB in the warm-up, {Mib(readings.PeakLiveEarlier)} and {Mib(readings.PeakLiveLater)} MiB over the judged windows)"));
+                $"peak live set:    {Mib(peakLive)} MiB (forced-collection samples; {Mib(readings.PeakLiveWarmUp)} MiB in the warm-up, {Mib(readings.PeakLiveEarlier)} and {Mib(readings.PeakLiveLater)} MiB over the judged windows)"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"peak raw heap:    {Mib(peakHeap)} MiB (includes uncollected garbage)"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
