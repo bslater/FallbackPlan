@@ -309,4 +309,17 @@ public sealed class ReferenceRunCodecTests
         var ids = Enumerable.Range(0, runs.Count).Select(index => Id(1_000 + index)).ToArray();
         ReferenceRunCodec.ValidateSequence(Head(length, ids), runs);
     }
+
+    [TestMethod]
+    public void PiecesThatStopShortOfTheFile_AreRefusedAsTheyAreCut_BeforeTheLastRunIsGiven()
+    {
+        // A manifest that lists runs holds no pieces of its own, so the cut is
+        // where a writer's pieces are last held to the file's length.
+        var (references, holes, length) = Alternating((Full / 2) + 1, Full / 2);
+
+        using var runs = ReferenceRunCodec.Cut(references, holes, length + 5).GetEnumerator();
+        Assert.IsTrue(runs.MoveNext(), "the full run is given");
+        var refused = Assert.ThrowsExactly<ManifestValidationException>(() => runs.MoveNext());
+        Assert.Contains(length.ToString(System.Globalization.CultureInfo.InvariantCulture), refused.Message, StringComparison.Ordinal);
+    }
 }
