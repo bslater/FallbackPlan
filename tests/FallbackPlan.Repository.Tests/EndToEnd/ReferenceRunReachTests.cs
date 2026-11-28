@@ -58,9 +58,12 @@ public sealed class ReferenceRunReachTests : ArchiveTestHarness
 
     /// <summary>
     /// Writes the snapshot. <paramref name="writeSecondRun"/> false lists the
-    /// second run in the manifest and never writes it.
+    /// second run in the manifest and never writes it;
+    /// <paramref name="gapBeforeSecondRun"/> starts the second run a byte
+    /// after the first ends, a run sound on its own that does not follow.
     /// </summary>
-    private async Task<Built> BuildAsync(LocalFileSystemObjectStore store, RepositoryKeySet keys, bool writeSecondRun = true)
+    private async Task<Built> BuildAsync(
+        LocalFileSystemObjectStore store, RepositoryKeySet keys, bool writeSecondRun = true, bool gapBeforeSecondRun = false)
     {
         var first = Content(40_000, 1);
         var second = Content(30_000, 2);
@@ -89,11 +92,12 @@ public sealed class ReferenceRunReachTests : ArchiveTestHarness
             SegmentReferences = [firstSegment],
             SparseExtents = [.. Enumerable.Range(0, Holes).Select(hole => new SparseExtent(holesStart + (ulong)hole, 1))],
         };
+        var secondRunStart = gapBeforeSecondRun ? secondStart + 1 : secondStart;
         var secondRun = new ReferenceRun
         {
-            Start = secondStart,
+            Start = secondRunStart,
             Length = (ulong)second.Length,
-            SegmentReferences = [new SegmentReference((long)secondStart, second.Length, secondSegment.ObjectId)],
+            SegmentReferences = [new SegmentReference((long)secondRunStart, second.Length, secondSegment.ObjectId)],
         };
 
         using var whole = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -241,6 +245,22 @@ public sealed class ReferenceRunReachTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task TheCollectorsMark_OverARunThatDoesNotFollowTheOneBefore_IsUnwalkable()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        var built = await BuildAsync(store, keys, gapBeforeSecondRun: true);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var (_, unwalkable) = await StagingMark.MarkAsync(reader, [Surveyed(built)], CancellationToken.None);
+
+        var reason = Assert.ContainsSingle(unwalkable);
+        Assert.StartsWith(built.Version.ToString(), reason, StringComparison.Ordinal);
+        Assert.Contains("run 1", reason, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task ACatalogueProjectedFromTheRepository_TracesARunsSegments_AndTheRun_ToTheFile()
     {
         var store = CreateStore();
@@ -279,6 +299,26 @@ public sealed class ReferenceRunReachTests : ArchiveTestHarness
         var finding = Assert.ContainsSingle(catalogue.Findings().Where(finding => finding.Kind == DamageKind.MissingIndexObject));
         Assert.Contains(built.SecondRun.ToString(), finding.Detail, StringComparison.Ordinal);
         AssertReaches(catalogue, keys, built.FirstData, "the segment the run before the missing one names");
+    }
+
+    [TestMethod]
+    public async Task ACatalogueProjectedOverARunThatDoesNotFollowTheOneBefore_RecordsTheVersionDamaged()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var built = await BuildAsync(store, keys, gapBeforeSecondRun: true);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        using var catalogue = OpenCatalogue("projected-gap");
+
+        var report = await CatalogueProjector.ProjectAsync(catalogue, reader, store, Repo, keys, credential, CancellationToken.None);
+
+        Assert.AreEqual(0, report.Missing, "every run is in a blob");
+        var finding = Assert.ContainsSingle(catalogue.Findings());
+        Assert.AreEqual(DamageKind.CorruptRecord, finding.Kind);
+        Assert.Contains(built.Version.ToString(), finding.Detail, StringComparison.Ordinal);
+        Assert.Contains("run 1", finding.Detail, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -332,6 +372,26 @@ public sealed class ReferenceRunReachTests : ArchiveTestHarness
 
         var finding = Assert.ContainsSingle(report.Findings.Where(finding => finding.Kind == DamageKind.MissingIndexObject));
         Assert.Contains(built.SecondRun.ToString(), finding.Detail, StringComparison.Ordinal);
+        Assert.Contains(finding, catalogue.Findings().ToList(), "the rebuilt catalogue keeps the finding as the report states it");
         AssertReaches(catalogue, keys, built.FirstData, "the segment the run before the missing one names");
+    }
+
+    [TestMethod]
+    public async Task AForensicRebuildOverARunThatDoesNotFollowTheOneBefore_RecordsTheVersionDamaged()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var built = await BuildAsync(store, keys, gapBeforeSecondRun: true);
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
+        using var catalogue = OpenCatalogue("forensic-gap");
+
+        var report = await rebuilder.RebuildAsync(catalogue, new ForensicTarget.Everything(), CancellationToken.None);
+
+        var finding = Assert.ContainsSingle(report.Findings);
+        Assert.AreEqual(DamageKind.CorruptRecord, finding.Kind);
+        Assert.Contains(built.Version.ToString(), finding.Detail, StringComparison.Ordinal);
+        Assert.Contains("run 1", finding.Detail, StringComparison.Ordinal);
+        Assert.Contains(finding, catalogue.Findings().ToList(), "the rebuilt catalogue keeps the finding as the report states it");
     }
 }
