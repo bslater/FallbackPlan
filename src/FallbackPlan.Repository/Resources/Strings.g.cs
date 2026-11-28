@@ -313,6 +313,17 @@ internal static class Strings
     internal static string StoreAdmission_NoRangedReads => Get(nameof(StoreAdmission_NoRangedReads));
 
     /// <summary>
+    /// not backed up: its {0} segment reference(s) and {1} hole(s) need a manifest of {2} bytes, over the 16 MiB a manifest may be (specification 00 §8). A larger segment size describes a file in fewer references.
+    /// </summary>
+    private static string TreeWalkPublisher_ManifestTooLarge => Get(nameof(TreeWalkPublisher_ManifestTooLarge));
+
+    /// <summary>
+    /// not backed up: its {0} segment reference(s) and {1} hole(s) need a manifest of {2} bytes, over the 16 MiB a manifest may be (specification 00 §8). A larger segment size describes a file in fewer references.
+    /// </summary>
+    internal static string FormatTreeWalkPublisher_ManifestTooLarge(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, TreeWalkPublisher_ManifestTooLarge, arg0, arg1, arg2);
+
+    /// <summary>
     /// online-only, and fetching it failed: {0}
     /// </summary>
     private static string TreeWalkPublisher_OnlineOnlyFetchFailed => Get(nameof(TreeWalkPublisher_OnlineOnlyFetchFailed));

@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem;
@@ -21,7 +22,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// stream becomes a full manifest graph — bottom-up trees, per-kind file
 /// versions with the ADR-0026 shapes, populated policy and error manifests,
 /// the probed source filesystem — and everything restores from a cold
-/// reader.
+/// reader. A file too large for one manifest is recorded as too large, and the
+/// rest of the snapshot publishes (FR-ARCH-002; Q25).
 /// </summary>
 [TestClass]
 public sealed class SnapshotPublicationTests : ArchiveTestHarness
@@ -30,9 +32,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
     private PublicationOrchestrator CreateOrchestrator(
         IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, ILogger? logger = null,
-        IJobProgressReporter? progress = null) =>
+        IJobProgressReporter? progress = null, CapturePolicy? policy = null) =>
         new(
-            SmallBlobPolicy,
+            policy ?? SmallBlobPolicy,
             Repo,
             Writer,
             KeyGeneration.Zero,
@@ -624,6 +626,59 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.AreEqual(2, snapshotStatusOf(published));
 
         int snapshotStatusOf(PublishedTreeSnapshot snapshot) => snapshot.ErrorManifestObjectId is null ? 1 : 2;
+    }
+
+    [TestMethod]
+    public async Task TreePublication_AFileWhoseManifestWouldExceedTheMetadataLimit_IsAnErrorManifestEntry_AndTheRestPublishes()
+    {
+        // A manifest may be at most 16 MiB (00 §8), and each segment reference
+        // and each hole costs it bytes, about 48 together here. Four hundred
+        // thousand one-byte runs of data, a one-byte hole after each, need about
+        // 19 MB of manifest from 800 KB of file: what a file of 400,000 segments
+        // needs, without reading 400,000 segments.
+        const int runs = 400_000;
+        var source = new FakeFileSystemSource();
+        source.AddFile("small.bin", Deterministic(3000, 18));
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "huge.bin",
+            Content = new byte[runs * 2],
+            Identity = new ScanIdentity(Device: 7, FileId: 9_001, LinkCount: 1),
+            Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000, PosixMode = 0x1A4 },
+            SparseExtents = [.. Enumerable.Range(0, runs).Select(run => new SparseExtent((ulong)((run * 2) + 1), 1))],
+        });
+
+        // Next in the walk, and with no content of its own to archive: it must
+        // not be given what the huge file's archive left behind.
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "link",
+            Kind = ScanEntryKind.Symlink,
+            LinkTarget = "small.bin"u8.ToArray(),
+            Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000, PosixMode = 0x1FF },
+        });
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        // Blobs as large as the product writes them, so that the manifest's own
+        // limit is what it meets, not a small blob's.
+        var policy = SmallBlobPolicy with { BlobWriteProfile = BlobWriteProfile.LocalDefault };
+        var published = await CreateOrchestrator(store, keys, credential, policy: policy)
+            .PublishAsync(Job(source), CancellationToken.None);
+
+        var failure = Assert.ContainsSingle(published.Failures);
+        Assert.AreEqual(CaptureFailureReason.TooLarge, failure.Reason);
+        Assert.AreEqual("huge.bin", Encoding.UTF8.GetString(failure.PathComponents.Single().Span));
+        Assert.Contains("16 MiB", failure.Detail, StringComparison.Ordinal);
+
+        // Everything else is backed up as if the file were not there.
+        var byPath = published.Files.ToDictionary(file => file.RelativePath);
+        CollectionAssert.AreEquivalent(new[] { "link", "small.bin" }, byPath.Keys.ToArray());
+        Assert.IsNull(byPath["link"].Archive, "a link archives nothing");
+        Assert.AreEqual(3000, byPath["small.bin"].Archive!.LogicalLength);
+        Assert.IsNotNull(published.ErrorManifestObjectId);
     }
 
     [TestMethod]

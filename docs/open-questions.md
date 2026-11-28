@@ -232,6 +232,29 @@ Until this is settled, the memory gate's growth allowances absorb the growth at 
 
 ---
 
+## Q25 — The largest file one manifest can describe
+
+> **2026-11: direction chosen — (a), chain file manifests.** The maintainer
+> chose a chain, as a tree has, written link by link as the file is archived.
+> Until it is built, a file too large for one manifest is recorded as too large
+> and the rest of its snapshot is backed up, where before it ended the run.
+
+**Owner:** maintainer · **Blocks:** FR-ARCH-002's 2 TiB acceptance, and backing up any file of more than about 343,000 segments
+
+A file version manifest holds all of a file's segment references in one object, and an object may be at most 16 MiB (00 §8). A reference costs about 49 bytes encoded: 300,000 encode to 14.7 MB and 400,000 are refused (2026-11, measured). So at the default 1 MiB segments the largest file one manifest describes is about 335 GiB, and a 2 TiB file, which FR-ARCH-002 names, would need about 2 million references. Only a tree manifest can be split (06 §9). 06 §3.2's own limit of 1,048,576 references, and its advice that a file needing more needs a larger segment size, are never reached, since the 16 MiB limit binds first.
+
+Until 2026-11 such a file ended its snapshot's run: the manifest refused to encode, and nothing caught it. It is now recorded as error reason 6, too large, naming its references and holes and the bytes they need, and the rest of the snapshot publishes (`Repository.Tests/SnapshotPublicationTests`).
+
+Three directions were put to the maintainer:
+
+**(a) Chain file manifests.** A file whose references would exceed the limit is described by more than one manifest, as a tree that would is. Its references can then be written as the file is archived, which also bounds what one huge file holds in memory (Q24). A format change: a new format version, readers, the recovery tool and conformance vectors.
+
+**(b) Scale the segment size.** A larger fixed segment size for a very large file keeps its references under the limit, with no format change. A file that crosses the size loses positional reuse against its previous version.
+
+**(c) State the limit.** Document the largest file each segment size allows, refuse such a file before reading it, and amend FR-ARCH-002.
+
+---
+
 ## Closed
 
 | Question | Resolution |

@@ -157,6 +157,9 @@
   <data name="StoreAdmission_NoRangedReads" xml:space="preserve">
     <value>This store declares no ranged reads, and opening a blob needs three of them before a single record is read. Refused rather than guessed (ADR-0012).</value>
   </data>
+  <data name="TreeWalkPublisher_ManifestTooLarge" xml:space="preserve">
+    <value>not backed up: its {0} segment reference(s) and {1} hole(s) need a manifest of {2} bytes, over the 16 MiB a manifest may be (specification 00 §8). A larger segment size describes a file in fewer references.</value>
+  </data>
   <data name="TreeWalkPublisher_OnlineOnlyFetchFailed" xml:space="preserve">
     <value>online-only, and fetching it failed: {0}</value>
   </data>
