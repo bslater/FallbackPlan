@@ -137,8 +137,6 @@ internal sealed class RecordTableSpill : IDisposable
                     path, FileMode.Open, FileAccess.ReadWrite, FileShare.None, FileOptions.DeleteOnClose))
                 {
                 }
-
-                File.Delete(Path.ChangeExtension(path, WrittenSetExtension));
             }
             catch (IOException)
             {
@@ -150,8 +148,10 @@ internal sealed class RecordTableSpill : IDisposable
             }
         }
 
-        // A session creates its spill before its written set, so a written set
-        // with no spill beside it belongs to a session that is gone.
+        // A session creates its spill before its written set and deletes it
+        // after, so a written set with no spill beside it belongs to a session
+        // that is gone: one whose spill was just removed, or one that died
+        // where the system deletes a spill when its holder dies, as Windows does.
         foreach (var path in Directory.EnumerateFiles(spoolDirectory, $"{Prefix}*{WrittenSetExtension}"))
         {
             if (File.Exists(Path.ChangeExtension(path, Extension)))
