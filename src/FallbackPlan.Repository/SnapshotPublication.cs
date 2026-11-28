@@ -197,9 +197,10 @@ public sealed record PublishedTreeSnapshot(
     public int FoldersReused { get; init; }
 
     /// <summary>
-    /// How many files the snapshot holds a version of: those it archived,
+    /// How many files the run published a version of: those it archived,
     /// those it took unchanged, and those it restated from the manifest they
-    /// had.
+    /// had. The files of a folder it took as the snapshot before held it are
+    /// that folder's, and are not counted here (<see cref="FoldersReused"/>).
     /// </summary>
     public int FileCount { get; init; }
 

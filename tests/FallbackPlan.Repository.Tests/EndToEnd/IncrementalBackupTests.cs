@@ -216,14 +216,14 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // Only the changed file was opened (NFR-PERF-003).
         SequenceAssert.AreEqual(["readme.md"], source.OpenedPaths.Distinct());
 
-        var byPath = second.Files.ToDictionary(file => file.RelativePath);
-        Assert.IsTrue(byPath["docs/big.bin"].Reused);
-        Assert.IsTrue(byPath["docs/small.txt"].Reused);
-        Assert.IsFalse(byPath["readme.md"].Reused);
-
-        // The reused entries name the FIRST snapshot's file versions.
-        var firstByPath = first.Files.ToDictionary(file => file.RelativePath);
+        // The reused entries name the FIRST snapshot's file versions, and the
+        // changed one a version of its own.
+        var byPath = (await FilesOfAsync(store, keys, second)).ToDictionary(file => file.RelativePath);
+        var firstByPath = (await FilesOfAsync(store, keys, first)).ToDictionary(file => file.RelativePath);
+        Assert.AreEqual(2, second.FilesReused);
         Assert.AreEqual(firstByPath["docs/big.bin"].ObjectId, byPath["docs/big.bin"].ObjectId);
+        Assert.AreEqual(firstByPath["docs/small.txt"].ObjectId, byPath["docs/small.txt"].ObjectId);
+        Assert.AreNotEqual(firstByPath["readme.md"].ObjectId, byPath["readme.md"].ObjectId);
 
         // Both snapshots list identically-shaped trees in the catalogue.
         var snapshots = catalogue.EnumerateSnapshots();
