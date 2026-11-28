@@ -105,13 +105,6 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
         using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
         var (held, result) = await PublishTreeAsync(source, store, keys, credential, catalogue);
-
-        // What the published result held is what the snapshot held for its
-        // files until it published: the same list, handed on. The publication's
-        // last step ran this method's continuation on its own thread, so its
-        // frames, with the result in them, stay beneath this one until this
-        // method yields and that thread unwinds.
-        await Task.Yield();
         for (var attempt = 0; result.IsAlive && attempt < 50; attempt++)
         {
             await Task.Delay(20);
@@ -137,8 +130,17 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
     /// <summary>
     /// Publishes the tree and reads the heap while its result is held, in a
     /// method of its own, so that once it returns nothing of the caller's
-    /// refers to the result.
+    /// refers to the result. What the result holds is what the snapshot held
+    /// for its files until it published: the same list, handed on.
     /// </summary>
+    /// <remarks>
+    /// Left to itself, the publication's last step runs the awaiting code on
+    /// as part of its own frames, which still refer to what the publication
+    /// used (its index entries and source-identity hints among them), so a
+    /// reading taken there counts them as the result's. The await yields
+    /// instead, and the reading waits for the thread that finished the
+    /// publication to unwind.
+    /// </remarks>
     private async Task<((long Live, long Heap, long Fragmented) Held, WeakReference Result)> PublishTreeAsync(
         FakeFileSystemSource source, LocalFileSystemObjectStore store, RepositoryKeySet keys,
         RepositoryWriteCredential credential, CatalogueDb catalogue)
@@ -148,7 +150,7 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory, FormatVersions.SealedDataPlane, observer: null, catalogue);
 
-        var published = await orchestrator.PublishAsync(new SnapshotJob
+        var publishing = orchestrator.PublishAsync(new SnapshotJob
         {
             Source = source,
             Roots = [new ScanRoot("/")],
@@ -160,6 +162,8 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
             ExpiryGeneration = 5,
             ClientVersion = "fallbackplan-tests/1.0",
         }, CancellationToken.None);
+        var published = await publishing.AsTask().ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        await Task.Delay(100);
 
         Assert.HasCount(TreeFiles, published.Files);
         Assert.IsTrue(published.Files.All(file => file.Archive!.SegmentReferences.Count == SegmentsPerFile));
