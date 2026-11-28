@@ -54,6 +54,29 @@ public sealed class SpilledRecordTableTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task OnceASessionEnds_ItsBlobsTablesSayToReadTheFooter()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        var archiver = CreateArchiver(store, keys);
+
+        IReadOnlyList<ArchivedBlob> blobs;
+        var session = archiver.OpenSession();
+        await using (session)
+        {
+            using var source = new MemoryStream(BuildTestFile());
+            _ = await session.ArchiveFileAsync(source, priorVersion: null, CancellationToken.None);
+            await session.FlushAsync(CancellationToken.None);
+            blobs = session.Blobs;
+        }
+
+        Assert.IsNotEmpty(blobs);
+        var refused = Assert.ThrowsExactly<InvalidOperationException>(() => blobs[0].RecordTable.ToArray());
+        Assert.Contains("footer", refused.Message, StringComparison.Ordinal);
+        Assert.AreEqual(blobs[0].RecordCount, blobs[0].RecordTable.Count, "the count is the blob's, not the spill's");
+    }
+
+    [TestMethod]
     public async Task ASpillACrashedSessionLeft_IsRemovedByTheNextSessionThatSpills()
     {
         // What a session that died mid-run leaves: its tables, on disk, held

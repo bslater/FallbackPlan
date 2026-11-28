@@ -3,6 +3,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
@@ -72,10 +73,13 @@ public sealed class DeltaSplitPublicationTests : ArchiveTestHarness
             deltas.Select(delta => delta.Delta.Sequence).Order(), deltas.Select(delta => delta.Delta.Sequence));
         Assert.HasCount(deltas.Count, published.DeltaIds);
 
-        AssertEveryBlobCoveredOnce([.. published.ContentBlobs, .. published.MetadataBlobs], deltas);
+        // A tree's content blobs kept their tables in a session that has
+        // ended (ADR-0201), so what each holds is read from its footer.
+        var footers = await FootersAsync(store, keys);
+        AssertEveryBlobCoveredOnce([.. published.ContentBlobs, .. published.MetadataBlobs], deltas, footers);
 
         // The live catalogue applied every delta, not just the last.
-        foreach (var record in published.ContentBlobs.Concat(published.MetadataBlobs).SelectMany(blob => blob.RecordTable))
+        foreach (var record in published.ContentBlobs.Concat(published.MetadataBlobs).SelectMany(blob => RecordsOf(blob, footers)))
         {
             Assert.IsNotNull(catalogue.ResolveLocation(record.ObjectId), $"Object {record.ObjectId} is not located.");
         }
@@ -102,7 +106,7 @@ public sealed class DeltaSplitPublicationTests : ArchiveTestHarness
         }
 
         Assert.HasCount(deltas.Count, published.DeltaIds);
-        AssertEveryBlobCoveredOnce([.. published.Archive.Blobs, .. published.MetadataBlobs], deltas);
+        AssertEveryBlobCoveredOnce([.. published.Archive.Blobs, .. published.MetadataBlobs], deltas, await FootersAsync(store, keys));
     }
 
     [TestMethod]
@@ -125,7 +129,10 @@ public sealed class DeltaSplitPublicationTests : ArchiveTestHarness
     /// that delta. A split anywhere but a blob boundary would cover a blob
     /// twice or leave its entries apart from its digest.
     /// </summary>
-    private static void AssertEveryBlobCoveredOnce(IReadOnlyList<ArchivedBlob> blobs, IReadOnlyList<DecodedDelta> deltas)
+    private static void AssertEveryBlobCoveredOnce(
+        IReadOnlyList<ArchivedBlob> blobs,
+        IReadOnlyList<DecodedDelta> deltas,
+        IReadOnlyDictionary<BlobId, IReadOnlyList<RecordTableEntry>> footers)
     {
         var coveredBy = new Dictionary<BlobId, IndexDelta>();
         foreach (var delta in deltas.Select(decoded => decoded.Delta))
@@ -144,10 +151,24 @@ public sealed class DeltaSplitPublicationTests : ArchiveTestHarness
             var delta = coveredBy[blob.BlobId];
             var entries = delta.Entries.Where(entry => entry.BlobId == blob.BlobId).Select(entry => entry.ObjectId).ToHashSet();
             Assert.IsTrue(
-                entries.SetEquals(blob.RecordTable.Select(record => record.ObjectId)),
+                entries.SetEquals(RecordsOf(blob, footers).Select(record => record.ObjectId)),
                 $"Blob {blob.BlobId}'s records are not the entries of the delta that covers it.");
         }
     }
+
+    /// <summary>Each data blob in the store, with the record table its footer declares.</summary>
+    private static async Task<Dictionary<BlobId, IReadOnlyList<RecordTableEntry>>> FootersAsync(
+        LocalFileSystemObjectStore store, RepositoryKeySet keys)
+    {
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        return reader.Blobs.ToDictionary(blob => blob.BlobId, blob => blob.Records);
+    }
+
+    /// <summary>A blob's records: its footer's where the store holds it as a data blob, its own table otherwise.</summary>
+    private static IReadOnlyList<RecordTableEntry> RecordsOf(
+        ArchivedBlob blob, IReadOnlyDictionary<BlobId, IReadOnlyList<RecordTableEntry>> footers) =>
+        footers.TryGetValue(blob.BlobId, out var declared) ? declared : blob.RecordTable;
 
     private static async Task<List<DecodedDelta>> OwnDeltasAsync(
         LocalFileSystemObjectStore store, RepositoryWriteCredential credential)

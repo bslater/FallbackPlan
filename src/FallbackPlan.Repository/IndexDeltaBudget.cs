@@ -64,12 +64,29 @@ public static class IndexDeltaBudget
     /// <param name="byteBudget">The most one delta's encoded form may occupy.</param>
     /// <returns>The deltas to publish, in order; empty for no blobs.</returns>
     /// <exception cref="InvalidOperationException">One blob's entries alone exceed the budget.</exception>
-    public static IReadOnlyList<IndexDeltaPart> Split(IReadOnlyList<CoveredBlob> blobs, int byteBudget)
+    public static IReadOnlyList<IndexDeltaPart> Split(IReadOnlyList<CoveredBlob> blobs, int byteBudget) =>
+        [.. SplitAsItGoes(blobs, byteBudget)];
+
+    /// <summary>
+    /// Cuts covered blobs into deltas as it reads them: each delta is handed
+    /// out as soon as the next blob would not fit it, having read that one
+    /// blob beyond it and no more (ADR-0201). A publication whose blobs'
+    /// entries are read back from a spool one blob at a time never holds
+    /// more than one delta's entries.
+    /// </summary>
+    /// <param name="blobs">The blobs, in the order their entries are to be published; each carries a Merkle root, or none does.</param>
+    /// <param name="byteBudget">The most one delta's encoded form may occupy.</param>
+    /// <returns>The deltas to publish, in order; empty for no blobs.</returns>
+    /// <exception cref="InvalidOperationException">One blob's entries alone exceed the budget.</exception>
+    public static IEnumerable<IndexDeltaPart> SplitAsItGoes(IEnumerable<CoveredBlob> blobs, int byteBudget)
     {
         ThrowHelper.ThrowIfNull(blobs);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteBudget);
+        return Cut(blobs, byteBudget);
+    }
 
-        var parts = new List<IndexDeltaPart>();
+    private static IEnumerable<IndexDeltaPart> Cut(IEnumerable<CoveredBlob> blobs, int byteBudget)
+    {
         var ids = new List<BlobId>();
         var digests = new List<ReadOnlyMemory<byte>>();
         var roots = new List<ReadOnlyMemory<byte>>();
@@ -87,7 +104,7 @@ public static class IndexDeltaBudget
 
             if (ids.Count > 0 && cost + blobCost > byteBudget)
             {
-                parts.Add(new IndexDeltaPart([.. ids], [.. digests], [.. roots], [.. entries]));
+                yield return new IndexDeltaPart([.. ids], [.. digests], [.. roots], [.. entries]);
                 ids.Clear();
                 digests.Clear();
                 roots.Clear();
@@ -108,9 +125,7 @@ public static class IndexDeltaBudget
 
         if (ids.Count > 0)
         {
-            parts.Add(new IndexDeltaPart([.. ids], [.. digests], [.. roots], [.. entries]));
+            yield return new IndexDeltaPart([.. ids], [.. digests], [.. roots], [.. entries]);
         }
-
-        return parts;
     }
 }

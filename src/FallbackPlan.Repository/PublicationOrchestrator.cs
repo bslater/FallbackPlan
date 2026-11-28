@@ -452,7 +452,10 @@ public sealed partial class PublicationOrchestrator
     /// <summary>
     /// Step 6: every record of every blob the publication wrote, as entries
     /// cut into deltas at blob boundaries under <see cref="DeltaByteBudget"/>
-    /// and published in that order (07 §2; FR-MAN-008).
+    /// and published in that order (07 §2; FR-MAN-008). Each blob's table is
+    /// read and projected as the cut reaches it, and each delta published
+    /// before the next is cut, so the publication holds one delta's entries
+    /// at a time rather than the snapshot's (ADR-0201).
     /// </summary>
     /// <remarks>
     /// The Merkle commitment over the same bytes as the flat digest is the one
@@ -477,11 +480,10 @@ public sealed partial class PublicationOrchestrator
                     record.StoredLength,
                     record.CompressionProfileValue,
                     record.EncryptionProfileValue,
-                    IndexEntryType.Insertion))]))
-            .ToList();
+                    IndexEntryType.Insertion))]));
 
         var published = new List<(DeltaId DeltaId, IndexDelta Delta)>();
-        foreach (var part in IndexDeltaBudget.Split(covered, DeltaByteBudget))
+        foreach (var part in IndexDeltaBudget.SplitAsItGoes(covered, DeltaByteBudget))
         {
             published.Add(await indexPublisher.PublishDeltaDetailedAsync(
                 _generation.Value,

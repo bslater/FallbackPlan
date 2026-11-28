@@ -66,6 +66,12 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly ConcurrentBag<byte[]> _buffers = [];
     private readonly List<ArchivedBlob> _blobs = [];
 
+    // The uploaded blobs' record tables, which wait for publication (ADR-0201).
+    // Opened with the first blob uploaded, and closed — which deletes it — when
+    // the session is disposed, so a blob's table is readable only while the
+    // session that wrote it runs.
+    private RecordTableSpill? _recordTables;
+
     // Upload leaves the archive loop (ADR-0029 §2). A sealed blob is handed to
     // a bounded set of workers and the loop continues; before this, the whole
     // pipeline stalled for the duration of every PUT — the largest structural
@@ -907,6 +913,12 @@ public sealed class ArchiveSession : IAsyncDisposable
             EngineDiagnostics.BlobFillFraction.Record(
                 sealedBlob.Length / (double)_policy.BlobWriteProfile.TargetSizeBytes);
 
+            RecordTableSpill recordTables;
+            lock (_blobGate)
+            {
+                recordTables = _recordTables ??= RecordTableSpill.Create(_spoolDirectory);
+            }
+
             var archived = new ArchivedBlob(
                 sealedBlob.BlobId,
                 storeBlobKey,
@@ -915,7 +927,7 @@ public sealed class ArchiveSession : IAsyncDisposable
                 sealedBlob.MerkleRoot,
                 sealedBlob.RecordTable.Count,
                 sealedBlob.Length,
-                sealedBlob.RecordTable);
+                recordTables.Append(sealedBlob.RecordTable));
 
             lock (_blobGate)
             {
@@ -1219,6 +1231,10 @@ public sealed class ArchiveSession : IAsyncDisposable
         {
             codec.Dispose();
         }
+
+        // Last, after the workers that append to it have stopped. Closing the
+        // spill deletes it.
+        _recordTables?.Dispose();
     }
 
     /// <summary>

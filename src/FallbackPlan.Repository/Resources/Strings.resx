@@ -130,6 +130,9 @@
   <data name="BlobCompactor_SourceRecordRefused" xml:space="preserve">
     <value>Record {1} of compaction source '{0}' was refused rather than relocated: {2}. A compactor that carried it anyway would launder damage into a blob nothing suspects.</value>
   </data>
+  <data name="RecordTableSpill_SessionHasEnded" xml:space="preserve">
+    <value>This blob's record table was kept in the spool of the session that wrote it, and that session has ended, which deletes it. Read the blob's footer instead: it declares the same table.</value>
+  </data>
   <data name="IndexDeltaBudget_BlobExceedsDeltaBudget" xml:space="preserve">
     <value>Blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound would be refused on every read, so it is refused here instead.</value>
   </data>
