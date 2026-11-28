@@ -1346,9 +1346,10 @@ public sealed class RestoreExecutor(
                     }
 
                     var streamsLeft = await WriteStreamsAsync(landing, manifest, cancellationToken).ConfigureAwait(false);
+                    var runsReadAround = await RunSegmentsReadAroundAsync(manifest, cancellationToken).ConfigureAwait(false);
                     var (settled, notApplied, degraded) = Settle(
                         item, manifest, landing, (ulong)result.Length, writtenAs, notLinked, foundInPlace: false,
-                        streamsLeft, resumedAt: (ulong)result.Resumed);
+                        streamsLeft, resumedAt: (ulong)result.Resumed, readAroundInRuns: runsReadAround);
                     if (!degraded && group is not null && notLinked is null)
                     {
                         groups.TryAdd(group, new LandedName(HardLinkGroups.KeyOf(manifest)!, item.Path, landing, notApplied));
@@ -1573,7 +1574,8 @@ public sealed class RestoreExecutor(
         string? notLinked,
         bool foundInPlace,
         string? streamsLeft,
-        ulong resumedAt = 0)
+        ulong resumedAt = 0,
+        IReadOnlyList<ObjectId>? readAroundInRuns = null)
     {
         // Metadata strictly AFTER content (architecture 08 §3): a crash
         // between the two leaves verified content with default metadata,
@@ -1592,7 +1594,7 @@ public sealed class RestoreExecutor(
         // per item, exactly where the shortfall is (RR-6).
         if (streamsLeft is not null)
         {
-            return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
+            return (ReadAroundOf(item.ObjectId, manifest, readAroundInRuns, new ReceiptItem
             {
                 Path = item.Path, Outcome = "degraded", Bytes = length, WrittenAs = writtenAs,
                 Detail = Joined(notLinked, streamsLeft, written.Detail),
@@ -1604,7 +1606,7 @@ public sealed class RestoreExecutor(
 
         if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams && !_streamsAsAttributes)
         {
-            return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
+            return (ReadAroundOf(item.ObjectId, manifest, readAroundInRuns, new ReceiptItem
             {
                 Path = item.Path, Outcome = "degraded", Bytes = length, WrittenAs = writtenAs,
                 Detail = Joined(
@@ -1618,7 +1620,7 @@ public sealed class RestoreExecutor(
             }), notApplied, true);
         }
 
-        return (ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
+        return (ReadAroundOf(item.ObjectId, manifest, readAroundInRuns, new ReceiptItem
         {
             Path = item.Path, Outcome = "restored", Bytes = length, WrittenAs = writtenAs,
             Detail = Joined(notLinked, written.Detail), NotApplied = notApplied,
@@ -1664,7 +1666,56 @@ public sealed class RestoreExecutor(
     /// store, and what was wrong with those it was read around (FR-RST-007).
     /// </summary>
     private ReceiptItem ReadAroundOf(ObjectId manifestId, FileVersionManifest manifest, ReceiptItem landed) =>
-        ReadAroundOf(manifest.ContentObjects().Prepend(manifestId), landed);
+        ReadAroundOf(manifestId, manifest, readAroundInRuns: null, landed);
+
+    /// <summary>
+    /// <paramref name="landed"/>, as the overload above, counting also the
+    /// segments only the file's reference runs name that were read around
+    /// (<see cref="RunSegmentsReadAroundAsync"/>).
+    /// </summary>
+    private ReceiptItem ReadAroundOf(
+        ObjectId manifestId, FileVersionManifest manifest, IReadOnlyList<ObjectId>? readAroundInRuns, ReceiptItem landed) =>
+        ReadAroundOf(manifest.ContentObjects().Prepend(manifestId).Concat(readAroundInRuns ?? []), landed);
+
+    /// <summary>
+    /// The segments of a file that only its reference runs name and that
+    /// this restore read around, so that its receipt says which copies they
+    /// came from (FR-RST-007; ADR-0202). A manifest that lists runs names
+    /// none of its segments, so they are found by walking its runs again:
+    /// only when something was read around at all, since that is a read of
+    /// each run.
+    /// </summary>
+    private async ValueTask<IReadOnlyList<ObjectId>> RunSegmentsReadAroundAsync(
+        FileVersionManifest manifest, CancellationToken cancellationToken)
+    {
+        if (manifest.ReferenceRuns.Count == 0 || reader.ReadAround.Count == 0)
+        {
+            return [];
+        }
+
+        List<ObjectId> readAround = [];
+        try
+        {
+            await foreach (var run in ReferenceRunReader.ReadAsync(manifest, reader.ReadReferenceRunAsync, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                foreach (var reference in run.SegmentReferences)
+                {
+                    if (reader.TryGetReadAround(reference.ObjectId, out _))
+                    {
+                        readAround.Add(reference.ObjectId);
+                    }
+                }
+            }
+        }
+        catch (ManifestValidationException)
+        {
+            // The file restored through these runs moments ago; one that will
+            // not read now names what it can, and the restore stands.
+        }
+
+        return readAround;
+    }
 
     /// <summary>
     /// Writes each alternate stream <paramref name="manifest"/> carries onto

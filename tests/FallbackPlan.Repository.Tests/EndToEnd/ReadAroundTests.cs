@@ -19,7 +19,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// A restore that meets a record its own store will not serve reads that
 /// record from another copy of the same blob (FR-RST-007): a record whose
 /// bytes fail their checks, a blob the store holds but will not read, or one
-/// it no longer holds. The other copy passes the same checks as the first,
+/// it no longer holds, a segment only a file's reference runs name among
+/// them (ADR-0202). The other copy passes the same checks as the first,
 /// is opened only once every earlier copy has failed, and each copy passed
 /// over is named with what was wrong. With every copy failed, the record still
 /// fails (FR-RST-005), naming each one tried; and a reader given no other
@@ -298,6 +299,32 @@ public sealed class ReadAroundTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task ARestoredFileOfReferenceRuns_ReadAroundASegmentOnlyItsRunsName_SaysWhereItCameFrom()
+    {
+        var (plan, catalogue, store, keys, path, segment) = await PublishRunFileAsync();
+        using var held = keys;
+        using var _ = catalogue;
+        var spare = await MirrorAsync(store, SpareRoot);
+        RotRecord(StoreRoot, keys, catalogue.ResolveLocation(segment)!);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+        reader.UseOtherCopies(Own, [Serve(Sibling, spare)]);
+
+        var receipt = await RestoreAsync(reader, plan, Path.Combine(SpoolDirectory, "read-around-runs-out"));
+
+        // The file's manifest names its runs and none of its segments, and
+        // the segment was read from the spare, so the spare is named all
+        // the same.
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        var item = receipt.Items.Single(candidate => candidate.Path == path);
+        Assert.AreEqual("restored", item.Outcome);
+        Assert.IsNotNull(item.ReadFrom, "the receipt names no copy the file's segments came from");
+        Assert.AreEqual(Sibling, Assert.ContainsSingle(item.ReadFrom));
+        Assert.Contains(Own, Assert.ContainsSingle(item.ReadAround!), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task AFileWhoseBlobsItsOwnStoreNoLongerHolds_NamesTheCopy_AndNothingItWasReadAround()
     {
         // Routine after a staging trim, so nothing to warn about: the receipt
@@ -405,6 +432,73 @@ public sealed class ReadAroundTests : ArchiveTestHarness
             catalogue, Enumerable.Repeat((byte)0xEA, 16).ToArray(), string.Empty,
             RestoreTargetProfile.ForLocalPlatform());
         return (plan, catalogue, store, keys);
+    }
+
+    /// <summary>
+    /// A format-8 snapshot of one file of 280,000 pieces, one-byte stretches
+    /// of data with a hole after each, so its manifest lists two reference
+    /// runs and names none of its segments; the first segment its first run
+    /// names, and the file's path.
+    /// </summary>
+    private async Task<(RestorePlan Plan, CatalogueDb Catalogue, LocalFileSystemObjectStore Store, RepositoryKeySet Keys, string Path, ObjectId Segment)>
+        PublishRunFileAsync()
+    {
+        const int stretches = 140_000;
+        var content = new byte[stretches * 2];
+        for (var stretch = 0; stretch < stretches; stretch++)
+        {
+            content[stretch * 2] = (byte)(1 + (stretch % 251));
+        }
+
+        var source = new FakeFileSystemSource();
+        source.AddNode(new FakeFileSystemSource.Node
+        {
+            RelativePath = "data/runs.bin",
+            Content = content,
+            Identity = new ScanIdentity(Device: 7, FileId: 9_500, LinkCount: 1),
+            Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000, PosixMode = 0x1A4 },
+            SparseExtents = [.. Enumerable.Range(0, stretches).Select(hole => new SparseExtent((ulong)((hole * 2) + 1), 1))],
+        });
+
+        var store = CreateStore();
+        var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue-read-around-runs.db"), Repo);
+        var spool = Path.Combine(SpoolDirectory, "read-around-runs");
+        Directory.CreateDirectory(spool);
+        var published = await new PublicationOrchestrator(
+                SmallBlobPolicy with { BlobWriteProfile = BlobWriteProfile.LocalDefault }, Repo, Writer, KeyGeneration.Zero,
+                keys, credential, store,
+                new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
+                spool, FormatVersions.ReferenceRuns, observer: null, catalogue)
+            .PublishAsync(
+                new SnapshotJob
+                {
+                    Source = source,
+                    Roots = [new ScanRoot("/")],
+                    DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+                    BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
+                    SnapshotId = Enumerable.Repeat((byte)0xEB, 16).ToArray(),
+                    NowUnixMilliseconds = 1_722_600_000_000,
+                    DeclaredMaxDurationMs = 3_600_000,
+                    ExpiryGeneration = 5,
+                    ClientVersion = "read-around-tests/1.0",
+                },
+                CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+        var read = await reader.ReadSegmentAsync(Assert.ContainsSingle(published.Files).ObjectId, CancellationToken.None);
+        var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
+        Assert.HasCount(2, manifest.ReferenceRuns);
+        Assert.IsEmpty(manifest.SegmentReferences);
+        var run = await reader.ReadReferenceRunAsync(manifest.ReferenceRuns[0], CancellationToken.None);
+        var segment = ReferenceRunCodec.Decode(run!.Value).SegmentReferences[0].ObjectId;
+
+        var plan = RestorePlanner.Plan(
+            catalogue, Enumerable.Repeat((byte)0xEB, 16).ToArray(), string.Empty,
+            RestoreTargetProfile.ForLocalPlatform());
+        return (plan, catalogue, store, keys, "data/runs.bin", segment);
     }
 
     private static async Task<(ObjectId Segment, Repository.Catalogue.ResolvedLocation Location)> FirstSegmentAsync(
