@@ -10,6 +10,8 @@ public sealed class SyntheticStream(long length, int seed) : Stream
 {
     private readonly byte[] _block = CreateBlock(seed);
     private long _position;
+    private long _keyedStretch = -1;
+    private ulong _stretchKey;
 
     private static byte[] CreateBlock(int seed)
     {
@@ -19,6 +21,20 @@ public sealed class SyntheticStream(long length, int seed) : Stream
         var block = new byte[1024 * 1024];
         new Random(seed).NextBytes(block);
         return block;
+    }
+
+    private static ulong KeyFor(long stretch)
+    {
+        if (stretch == 0)
+        {
+            return 0;
+        }
+
+        // SplitMix64's finaliser: a bijection, so no two stretches share a key.
+        var key = (ulong)stretch * 0x9E3779B97F4A7C15UL;
+        key = (key ^ (key >> 30)) * 0xBF58476D1CE4E5B9UL;
+        key = (key ^ (key >> 27)) * 0x94D049BB133111EBUL;
+        return key ^ (key >> 31);
     }
 
     /// <inheritdoc />
@@ -47,7 +63,21 @@ public sealed class SyntheticStream(long length, int seed) : Stream
         for (var index = 0; index < take; index++)
         {
             var absolute = _position + index;
-            var salt = (byte)((absolute >> 20) * 31);
+
+            // The per-mebibyte salt is a byte, so it comes round again every
+            // 256 MiB, and content that repeats is measured as deduplication:
+            // a repeated segment is never compressed, encrypted, packed or
+            // uploaded. Each 256 MiB stretch after the first is keyed apart
+            // from the others; the first keeps the bytes the suites archiving
+            // less than that were measured on.
+            var stretch = absolute >> 28;
+            if (stretch != _keyedStretch)
+            {
+                _keyedStretch = stretch;
+                _stretchKey = KeyFor(stretch);
+            }
+
+            var salt = (byte)(((absolute >> 20) * 31) ^ (long)(_stretchKey >> (int)((absolute & 7) << 3)));
             buffer[offset + index] = (byte)(_block[absolute % _block.Length] ^ salt);
         }
 

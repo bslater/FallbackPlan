@@ -274,18 +274,21 @@ jobs:
         run: python3 specifications/repository-format/conformance/generate.py --check
 
   # FR-ARCH-002 and NFR-PERF-001: one synthetic file far larger than any of
-  # the pipeline's buffers, never materialised, through the real archive
-  # pipeline. Memory must not grow with the input: past the first 45 s, in
-  # which a run's working set peaks before it settles, the live set and the
-  # working set are each no larger over the later half of the run than the
-  # earlier; the live set is no larger in those 45 s than after them and
-  # within NFR-PERF-001's bound; and little is left live at the end. The
-  # windows are measured in time because the warm-up is, so the harness
-  # refuses a run too short to have two of them: 85 s. Runners here have
-  # read 168 to 213 MiB/s, which over 32 GiB is 154 s at the fastest. The
-  # 2 TiB the requirement names is out of reach. What processing adds over
-  # idle is judged only against twice the requirement: it measures above
-  # the requirement today, in the working set's opening peak.
+  # the pipeline's buffers, every byte of it new and never materialised,
+  # through the real archive pipeline, so every segment is compressed,
+  # encrypted, packed and uploaded. Memory must not grow with the input:
+  # past the first 45 s, the live set and the working set may grow by no
+  # more than 16 and 64 MiB from the earlier half of the run to the later;
+  # the live set is no larger in those 45 s than after them and within
+  # NFR-PERF-001's bound; and little is left live at the end. The windows
+  # are measured in time because what a run fills once it fills over time,
+  # so the harness refuses a run too short to have two of them: 85 s.
+  # Runners here have read 138 to 213 MiB/s, which over 32 GiB is 154 s at
+  # the fastest. The 2 TiB the requirement names is out of reach, and what
+  # a snapshot keeps per stored object grows the live set by 4 to 6 MiB a
+  # half here, which would not stay inside the bound there (open question
+  # Q24). What processing adds over idle is judged only against twice the
+  # requirement: it measures above the requirement today.
   memory-bound:
     name: Memory stays bounded over a 32 GiB file
     runs-on: ubuntu-latest
