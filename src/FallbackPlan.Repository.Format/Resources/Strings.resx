@@ -130,6 +130,48 @@
   <data name="FileVersionManifestCodec_CoverageBreaksOffsetNextPiece" xml:space="preserve">
     <value>Coverage breaks at offset {0}: the next piece starts at {1}. References and sparse extents MUST cover [0, logical_length) exactly, without gaps or overlap (specification 06 §3.2).</value>
   </data>
+  <data name="FileVersionManifestCodec_ReferenceRunsOnlyForAFile" xml:space="preserve">
+    <value>Only a file's manifest lists reference runs (specification 06 §4 key 15; ADR-0202).</value>
+  </data>
+  <data name="FileVersionManifestCodec_ReferenceRunsAtLeastTwo" xml:space="preserve">
+    <value>A manifest lists reference runs only when its file needs two or more: one run holds no more than one manifest may (ADR-0202).</value>
+  </data>
+  <data name="FileVersionManifestCodec_ReferenceRunsHoldTheReferences" xml:space="preserve">
+    <value>A manifest listing reference runs holds no segment references or sparse extents of its own; its runs hold them (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_NotCanonicalCbor" xml:space="preserve">
+    <value>The reference run is not canonical CBOR: {0}</value>
+  </data>
+  <data name="ReferenceRunCodec_UnknownKey" xml:space="preserve">
+    <value>The reference run carries an unknown key, and is refused rather than skipped (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_OmitsMandatoryKey" xml:space="preserve">
+    <value>The reference run omits its start, its length or its segment references (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_Empty" xml:space="preserve">
+    <value>The reference run holds no reference and no hole; a run holds at least one (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_TooManyPieces" xml:space="preserve">
+    <value>The reference run holds {0} references and holes; a run holds at most 262,144 (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_CoverageBreaks" xml:space="preserve">
+    <value>The run's coverage breaks at offset {0}: its next piece starts at {1}. A run's references and holes MUST cover its stretch exactly (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_CoverageShort" xml:space="preserve">
+    <value>The run's references and holes end at {0}, but its stretch ends at {1} (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_SequenceCount" xml:space="preserve">
+    <value>The manifest lists {0} reference run(s), but {1} were read (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_SequenceBreaks" xml:space="preserve">
+    <value>Reference run {0} starts at {1}, but the one before it ended at {2}: a file's runs MUST follow one another from 0 (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_SequenceNotFull" xml:space="preserve">
+    <value>Reference run {0} holds {1} references and holes; every run but a file's last holds exactly 262,144 (ADR-0202).</value>
+  </data>
+  <data name="ReferenceRunCodec_SequenceShort" xml:space="preserve">
+    <value>A file's reference runs end at {0}, but the file is {1} bytes (ADR-0202).</value>
+  </data>
   <data name="FileVersionManifestCodec_EncodedManifestBytesMetadataLimit" xml:space="preserve">
     <value>The encoded manifest is {0} bytes; the metadata limit is 16 MiB (specification 00 §8).</value>
   </data>

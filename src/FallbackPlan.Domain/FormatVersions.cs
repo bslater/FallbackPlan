@@ -58,6 +58,15 @@ public static class FormatVersions
     /// </summary>
     public const ushort StandInFailures = 7;
 
+    /// <summary>
+    /// Format 8: a large file's segment references and holes may be written in
+    /// reference runs, objects of type <c>0x12</c> its version manifest lists
+    /// in key 15 (06 §4, ADR-0202). Defined here before this build reads or
+    /// writes it: <see cref="FormatLimits.LatestFormatVersion"/> moves to it
+    /// once every reader of a file's references follows its runs.
+    /// </summary>
+    public const ushort ReferenceRuns = 8;
+
     /// <summary>Whether a descriptor's version is one this implementation reads.</summary>
     public static bool IsReadable(ushort formatVersion) =>
         formatVersion is >= SealedDataPlane and <= FormatLimits.LatestFormatVersion;
@@ -128,6 +137,13 @@ public static class FormatVersions
     /// refuses the error manifest and reports it as damage.
     /// </summary>
     public static bool HasStandInFailures(ushort formatVersion) => formatVersion >= StandInFailures;
+
+    /// <summary>
+    /// Whether a writer at this version may write a reference run, or a
+    /// manifest listing runs (06 §4 key 15). Below format 8 it must not: a
+    /// reader that predates them refuses the manifest's key and the run's type.
+    /// </summary>
+    public static bool HasReferenceRuns(ushort formatVersion) => formatVersion >= ReferenceRuns;
 
     /// <summary>
     /// The version a blob of this class is stamped with inside a repository
