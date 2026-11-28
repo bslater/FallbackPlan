@@ -67,6 +67,21 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
+    public void FileVersionManifest_ReferencesThatCoverTheFileOutOfOrder_AreRefused()
+    {
+        // Sorted, they cover the file exactly, so only the order is wrong:
+        // 06 §3.2 requires the encoded array itself in ascending offset.
+        var references = SampleFileVersion().SegmentReferences;
+        var shuffled = SampleFileVersion() with
+        {
+            SegmentReferences = [references[0], references[2], references[1]],
+        };
+
+        var refused = Assert.ThrowsExactly<ManifestValidationException>(() => FileVersionManifestCodec.Encode(shuffled));
+        Assert.Contains("ascending", refused.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void FileVersionManifest_CarriesAnUnknownKey_IsRejectedRatherThanSkipped()
     {
         // Hand-build a manifest carrying key 16 — exactly where a physical
