@@ -57,12 +57,12 @@ public sealed class ArchiveSession : IAsyncDisposable
     private readonly ConcurrentBag<ZstdSegmentCodec> _codecs = [];
 
     // Segment buffers, pooled per session rather than through
-    // ArrayPool<byte>.Shared. Shared stops pooling above 1 MiB and a cdc-v1
-    // segment can be 8 MiB, so renting one per segment from it allocated a
-    // fresh large array every time — measured, and materially worse than the
-    // single session-long buffer it replaced. ArrayPool.Create was worse again:
-    // its implementation takes a lock per rent. A bag of same-sized buffers is
-    // what this actually needs, and it holds no more than can be in flight.
+    // ArrayPool<byte>.Shared. Shared pools arrays this large, but
+    // process-wide: what it is lent stays after the session is done, until
+    // its own trimming, and other components rent from it. ArrayPool.Create
+    // was worse again: its implementation takes a lock per rent. A bag of
+    // same-sized buffers is what this actually needs, and it holds no more
+    // than can be in flight.
     private readonly ConcurrentBag<byte[]> _buffers = [];
     private readonly List<ArchivedBlob> _blobs = [];
 
