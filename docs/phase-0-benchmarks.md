@@ -66,6 +66,44 @@ and process working set are sampled every 250 ms.
 | 1 GiB | 37.6 s | 27 MiB/s | 813 | 16 | **89.1 MiB** | 228.7 MiB | 270.0 MiB | PASS |
 | 3 GiB | 111.3 s | 28 MiB/s | 2 437 | 48 | **103.3 MiB** | 253.9 MiB | 297.7 MiB | PASS |
 
+> **2026-11: gated in CI.** The CI job `memory-bound` now runs this harness
+> over 32 GiB on every push and fails the build on its verdict. The harness
+> measures the idle working set and live set before archiving and stamps every
+> sample with the time it was taken. Every run holds about seventy mebibytes
+> more live for its first 35 to 40 seconds than afterwards, however fast it
+> reads. Those are zstd output buffers the shared array pool keeps and later
+> lets go of; with the codec allocating them instead, the live set is steady
+> from the first sample. So the harness sets aside the first 45 s and splits
+> the rest of the run in two by time. It fails on any of these:
+> - the later half's live set more than 16 MiB above the earlier half's;
+> - the later half's working set more than 64 MiB above the earlier half's;
+> - a live set past 256 MiB;
+> - more than 32 MiB left live once the archive returns;
+> - more than 512 MB over idle;
+> - a run shorter than 85 s, too short to have two halves of at least 20 s.
+>
+> Each planted leak fails it, in a detached worktree at 24 GiB:
+>
+> | Leak | Live set, halves | Left live | Working set, halves | Fails on |
+> |---|---|---|---|---|
+> | one segment in 128, heap | 183.2, 255.2 MiB | 200.3 MiB | 293.3, 329.1 MiB | live growth, left live |
+> | one segment in 512, heap | 93.3, 107.0 MiB | 47.4 MiB | 244.4, 174.7 MiB | left live |
+> | one segment in 64, native | 58.7, 60.0 MiB | 7.8 MiB | 348.8, 514.8 MiB | working-set growth |
+>
+> Clean runs, cdc-v1:
+>
+> | Where | Input | Throughput | Live set: warm-up, halves | Left live | Over idle | Verdict |
+> |---|---|---|---|---|---|---|
+> | container | 24 GiB | 105 MiB/s | 143.0; 66.6, 67.9 MiB | 7.7 MiB | 342 MB | PASS |
+> | container | 32 GiB | 108 MiB/s | 138.5; 58.6, 59.9 MiB | 7.7 MiB | 317 MB | PASS |
+> | CI runner | 24 GiB | 213 MiB/s | 143.5; 66.6, 67.9 MiB | 7.7 MiB | 349 MB | PASS |
+> | CI runner | 32 GiB | 176 MiB/s | 135.5; 66.6, 67.9 MiB | 7.7 MiB | 348 MB | PASS |
+>
+> The over-idle figure is **above** the 256 MB NFR-PERF-001 states for a
+> 2 TiB file. Most of it is garbage the collector has not yet taken, which
+> is why the 256 MiB clause below is asserted on the live set. The 32 GiB
+> run replaces 3 GiB below as the largest input this page measures.
+
 The claim this proves is the *shape* of NFR-PERF-001: tripling the input
 moved the peak live set by ~14 MiB (sampling noise and GC timing), not by
 gigabytes — memory is a function of segment size and blob buffers, not input
