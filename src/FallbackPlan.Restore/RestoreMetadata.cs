@@ -14,7 +14,7 @@ namespace FallbackPlan.Restore;
 /// already holds.
 /// </summary>
 /// <param name="Kind">The entry's kind.</param>
-/// <param name="WrittenBytes">Its segments' bytes, its holes skipped (<see cref="RestoreSpace.WrittenBytes"/>); none for a folder.</param>
+/// <param name="WrittenBytes">Its segments' bytes, its holes skipped, across its reference runs where it has them (<see cref="RestorePart.MeasureAsync"/>); none for a folder.</param>
 /// <param name="Captured">The metadata captured with it.</param>
 /// <param name="Owner">The name of the owner it was captured under, which the plan resolves on the target.</param>
 /// <param name="Group">The name of the group it was captured under, which the plan resolves on the target.</param>
@@ -24,7 +24,7 @@ namespace FallbackPlan.Restore;
 /// <param name="HeldBytes">
 /// What the run a plan resumes already holds of its written bytes: all of
 /// them for a file it landed, and for one it was cut short in what the part
-/// it kept proves (<see cref="RestoreSpace.HeldBytes"/>; ADR-0132,
+/// it kept proves (<see cref="RestorePart.MeasureAsync"/>; ADR-0132,
 /// ADR-0136). None for a plan of a run afresh.
 /// </param>
 /// <param name="Accounts">

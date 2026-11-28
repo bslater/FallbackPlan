@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Bodu;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 
@@ -48,39 +49,99 @@ public static class RestorePart
     }
 
     /// <summary>
-    /// How many of the file's segments the part at <paramref name="path"/>
-    /// holds, read and proved as a resume would take them up, writing
-    /// nothing. A part that is not there, or will not open, holds none.
+    /// What restoring a file writes, and what the part at
+    /// <paramref name="partPath"/> holds of it, read and proved as a resume
+    /// would take it up, writing nothing: one walk of the file in its order,
+    /// a reference run at a time (ADR-0202). A part that is not there, or
+    /// will not open, holds none of it.
     /// </summary>
-    /// <param name="path">Where the part would be.</param>
     /// <param name="manifest">The file's manifest.</param>
+    /// <param name="partPath">Where the file's part would be, or null where the run kept none.</param>
+    /// <param name="readRun">Reads a run's plaintext, or answers null when it cannot.</param>
     /// <param name="proves">Whether a segment's bytes derive its object identifier.</param>
+    /// <param name="eachSegment">
+    /// Told of each segment in the file's order, and whether the part holds
+    /// it, for a caller that asks something of each; null for none.
+    /// </param>
     /// <param name="cancellationToken">Cancels the reading.</param>
-    public static async ValueTask<int> HeldSegmentsAsync(
-        string path,
+    /// <exception cref="ManifestValidationException">A run did not read, or does not follow the one before it.</exception>
+    public static async ValueTask<RestoreMeasure> MeasureAsync(
         FileVersionManifest manifest,
+        string? partPath,
+        Func<ObjectId, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>> readRun,
         Func<SegmentReference, byte[], bool> proves,
+        Func<SegmentReference, bool, ValueTask>? eachSegment,
         CancellationToken cancellationToken)
     {
-        ThrowHelper.ThrowIfNull(path);
         ThrowHelper.ThrowIfNull(manifest);
+        ThrowHelper.ThrowIfNull(readRun);
         ThrowHelper.ThrowIfNull(proves);
 
-        FileStream part;
+        var part = Open(partPath);
         try
         {
-            part = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous);
+            var written = 0UL;
+            var heldSegments = 0;
+            var heldBytes = 0UL;
+            var holding = part is not null;
+            await foreach (var pieces in StretchesAsync(manifest, readRun, cancellationToken).ConfigureAwait(false))
+            {
+                // Nothing past the first piece the part does not hold is
+                // held, so a stretch is walked only while every one before it
+                // was held whole.
+                var held = 0;
+                if (holding)
+                {
+                    (held, _) = await WalkAsync(part!, pieces, proves, taken: null, cancellationToken).ConfigureAwait(false);
+                    holding = held == pieces.Count;
+                }
+
+                for (var index = 0; index < pieces.Count; index++)
+                {
+                    if (pieces[index].Reference is not { } segment)
+                    {
+                        continue;
+                    }
+
+                    written += (ulong)segment.LogicalLength;
+                    if (index < held)
+                    {
+                        heldSegments++;
+                        heldBytes += (ulong)segment.LogicalLength;
+                    }
+
+                    if (eachSegment is not null)
+                    {
+                        await eachSegment(segment, index < held).ConfigureAwait(false);
+                    }
+                }
+            }
+
+            return new RestoreMeasure(written, heldSegments, heldBytes);
+        }
+        finally
+        {
+            if (part is not null)
+            {
+                await part.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static FileStream? Open(string? path)
+    {
+        if (path is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return 0;
-        }
-
-        await using (part.ConfigureAwait(false))
-        {
-            var pieces = PiecesOf(manifest);
-            var (held, _) = await WalkAsync(part, pieces, proves, taken: null, cancellationToken).ConfigureAwait(false);
-            return pieces.Take(held).Count(piece => piece.Reference is not null);
+            return null;
         }
     }
 
@@ -95,9 +156,15 @@ public static class RestorePart
     /// run's however many the file has.
     /// </summary>
     /// <exception cref="ManifestValidationException">A run did not read, or does not follow the one before it.</exception>
-    internal static async IAsyncEnumerable<List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)>> StretchesAsync(
+    internal static IAsyncEnumerable<List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)>> StretchesAsync(
         FileVersionManifest manifest,
         RepositoryReader reader,
+        CancellationToken cancellationToken) =>
+        StretchesAsync(manifest, reader.ReadReferenceRunAsync, cancellationToken);
+
+    private static async IAsyncEnumerable<List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)>> StretchesAsync(
+        FileVersionManifest manifest,
+        Func<ObjectId, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>> readRun,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (manifest.ReferenceRuns.Count == 0)
@@ -106,7 +173,7 @@ public static class RestorePart
             yield break;
         }
 
-        await foreach (var run in ReferenceRunReader.ReadAsync(manifest, reader.ReadReferenceRunAsync, cancellationToken)
+        await foreach (var run in ReferenceRunReader.ReadAsync(manifest, readRun, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return PiecesOf(run.SegmentReferences, run.SparseExtents);
@@ -201,3 +268,13 @@ public static class RestorePart
         return true;
     }
 }
+
+/// <summary>
+/// What restoring a file writes, its segments with its holes skipped, and
+/// what a part its run kept already holds of it in the file's order: how
+/// many of its segments, and their bytes (ADR-0132, ADR-0136).
+/// </summary>
+/// <param name="WrittenBytes">The bytes the file's segments write.</param>
+/// <param name="HeldSegments">How many of its segments, from its start, the part holds.</param>
+/// <param name="HeldBytes">The bytes those segments write.</param>
+public readonly record struct RestoreMeasure(ulong WrittenBytes, int HeldSegments, ulong HeldBytes);
