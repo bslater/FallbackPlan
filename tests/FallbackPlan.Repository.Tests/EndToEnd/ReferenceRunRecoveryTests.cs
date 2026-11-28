@@ -52,7 +52,16 @@ public sealed class ReferenceRunRecoveryTests : ReferenceRunHarness
 
         Assert.AreEqual(1, report.Restored, string.Join("; ", report.Notes));
         Assert.AreEqual(0, report.Failed);
-        SequenceAssert.AreEqual(built.Content, File.ReadAllBytes(Path.Combine(output, "huge.bin")));
+        var landed = Path.Combine(output, "huge.bin");
+        SequenceAssert.AreEqual(built.Content, File.ReadAllBytes(landed));
+
+        // The holes are the first run's: the tool's spool keeps them as holes
+        // only if it was made able to before any run was read. Its last hole
+        // is two thirds of the file and one every filesystem keeps.
+        var allocated = AllocatedSize.Of(landed);
+        Assert.IsLessThan(
+            built.Content.LongLength / 2, allocated,
+            $"{allocated} bytes allocated for a {built.Content.LongLength}-byte file holding 70,000 bytes of data");
     }
 
     [TestMethod]

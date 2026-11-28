@@ -126,6 +126,23 @@ public sealed class ReferenceRunPlanTests : ReferenceRunHarness
     }
 
     [TestMethod]
+    public async Task APlan_NamesAFileArchived_WhoseRunsAreHeldOnlyInAnArchivalTier()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var planned = await PlanAsync(store, keys);
+        var runs = planned.Built.Runs.StoreKey.Value;
+
+        // A rehydration brings the runs back, so the file is archived, not
+        // missing, though no segment of it can be named until it does.
+        var result = await RestoreBlobSet.ResolveAsync(
+            planned.Catalogue, planned.Plan, new ArchivingObjectStore(store, key => key == runs), Repo, keys, CancellationToken.None);
+
+        Assert.AreEqual(Path0, Assert.ContainsSingle(result.Archived));
+        Assert.IsEmpty(result.Missing);
+    }
+
+    [TestMethod]
     public async Task WhatAFileWrites_AndWhatItsPartHolds_AreCountedAcrossItsRuns()
     {
         var store = CreateStore();
@@ -143,6 +160,57 @@ public sealed class ReferenceRunPlanTests : ReferenceRunHarness
         Assert.AreEqual(new RestoreFileBytes(DataBytes), fresh);
         Assert.AreEqual(new RestoreFileBytes(DataBytes, 40_000), resumed, "the part holds the first run's segment, and the second's only in part");
         Assert.AreEqual(40_000UL, probed.Facts[planned.Built.Version].HeldBytes);
+        Assert.DoesNotContain(planned.Built.FirstData.StoreKey, probed.Blobs.ToList(), "what the part holds is not read again");
+        Assert.Contains(planned.Built.SecondData.StoreKey, probed.Blobs.ToList());
+    }
+
+    [TestMethod]
+    public async Task APartThatDoesNotHoldTheFilesStart_HoldsNoneOfIt_WhateverItHoldsAfter()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var planned = await PlanAsync(store, keys);
+        using var reader = Reader(planned, store, keys);
+        var parts = Path.Combine(SpoolDirectory, "stray-parts");
+
+        // Every byte the file's is, but its first: a resume takes a part up
+        // only from the file's start, so the second run's segment there is
+        // nothing it holds.
+        var held = planned.Built.Content.ToArray();
+        held[0] ^= 0xFF;
+        File.WriteAllBytes(PartIn(parts, planned.Built), held);
+
+        var resumed = await RestoreSpace.WrittenBytesThrough(reader, parts)(Assert.ContainsSingle(planned.Plan.Items), CancellationToken.None);
+
+        Assert.AreEqual(new RestoreFileBytes(DataBytes), resumed);
+    }
+
+    [TestMethod]
+    public async Task AFileTheRunLanded_HoldsAllItWrites()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var planned = await PlanAsync(store, keys);
+
+        var probed = await RestoreBlobSet.ResolveAsync(
+            planned.Catalogue, planned.Plan, store, [], Repo, keys,
+            new RestoreHeld { Landed = new HashSet<string>(StringComparer.Ordinal) { Path0 } }, CancellationToken.None);
+
+        Assert.AreEqual(DataBytes, probed.Facts[planned.Built.Version].HeldBytes);
+        Assert.DoesNotContain(planned.Built.SecondData.StoreKey, probed.Blobs.ToList(), "a landed file's segments are not read again");
+    }
+
+    [TestMethod]
+    public async Task WhatAFileWrites_IsUnknown_WhereARunWillNotRead()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var planned = await PlanAsync(store, keys, writeSecondRun: false);
+        using var reader = Reader(planned, store, keys);
+
+        var measured = await RestoreSpace.WrittenBytesThrough(reader)(Assert.ContainsSingle(planned.Plan.Items), CancellationToken.None);
+
+        Assert.IsNull(measured, "a file measured short would make a plan say it fits where it may not");
     }
 
     [TestMethod]
