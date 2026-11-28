@@ -31,12 +31,12 @@ public sealed class SessionRetentionTests : ArchiveTestHarness
     private const int FileBytes = 512;
 
     /// <summary>
-    /// What a session may keep per record it has stored. A blob's record
-    /// table spills to the session's spool once the blob is uploaded
-    /// (ADR-0201), so what stays is the claim each record holds in the
-    /// session's written set.
+    /// What a session may keep per record it has stored. Once a record's blob
+    /// is uploaded, its entry in the blob's record table and its claim in the
+    /// session's written set both wait in the session's spool (ADR-0201), so
+    /// what stays is the blob's own identity, shared by every record in it.
     /// </summary>
-    private const double BytesPerStoredRecord = 128;
+    private const double BytesPerStoredRecord = 16;
 
     [TestMethod]
     public async Task ASession_KeepsLittleInMemoryForEachRecordItHasStored()
