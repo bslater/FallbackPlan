@@ -767,6 +767,23 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>
+    /// Records that <paramref name="versionId"/> needs everything
+    /// <paramref name="sameContentAs"/> is recorded as needing. A version
+    /// rewritten from another without its content being read, as a rename
+    /// is, needs that one's content, the segments its runs name among it.
+    /// </summary>
+    public void RecordVersionContentsOf(ObjectId versionId, ObjectId sameContentAs)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText =
+            "INSERT OR IGNORE INTO version_contents (object_id, version_id) " +
+            "SELECT object_id, $version FROM version_contents WHERE version_id = $source;";
+        command.Parameters.AddWithValue("$version", versionId.ToArray());
+        command.Parameters.AddWithValue("$source", sameContentAs.ToArray());
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Records one of the records <paramref name="snapshotId"/> is made of
     /// besides its files' own: its manifest, its policy or error manifest, or
     /// a tree manifest of its structure.

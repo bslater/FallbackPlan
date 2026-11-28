@@ -160,7 +160,9 @@ public sealed record SnapshotJob
 /// catalogue. <c>Streams</c> is the content of a captured version's
 /// alternate streams; with the segments <c>Archive</c> or <c>Inherited</c>
 /// already carries, it is what the catalogue traces damage back to the version
-/// through.
+/// through. <c>Runs</c> is a captured version's reference runs, when it was
+/// written in runs (ADR-0202): the segments are still <c>Archive</c>'s, and
+/// the runs are needed too.
 /// </remarks>
 public sealed record PublishedFileVersion(
     string RelativePath,
@@ -175,7 +177,8 @@ public sealed record PublishedFileVersion(
     FileVersionManifest? Inherited = null,
     bool HasAlternateStreams = false,
     ReadOnlyMemory<byte>? MetadataDigest = null,
-    IReadOnlyList<ObjectId>? Streams = null);
+    IReadOnlyList<ObjectId>? Streams = null,
+    IReadOnlyList<ObjectId>? Runs = null);
 
 /// <summary>The published outcome of a tree snapshot.</summary>
 public sealed record PublishedTreeSnapshot(
@@ -800,13 +803,23 @@ public sealed partial class PublicationOrchestrator
                 file.MetadataDigest);
 
             // What the version needs, for damage to be traced back to it: the
-            // segments it archived or inherited, and its streams' content.
+            // segments it archived or inherited, the runs it was written in,
+            // and its streams' content.
             _catalogue.RecordVersionContents(
                 file.ObjectId,
                 inherited is not null
                     ? inherited.ContentObjects()
                     : (archive?.SegmentReferences.Select(reference => reference.ObjectId) ?? [])
+                        .Concat(file.Runs ?? [])
                         .Concat(file.Streams ?? []));
+
+            // An inherited manifest that lists runs names none of its
+            // segments, which only its runs do, and those were not read. They
+            // are the segments of the version it was rewritten from, unchanged.
+            if (inherited is { ReferenceRuns.Count: > 0, ParentVersion: { } rewrittenFrom })
+            {
+                _catalogue.RecordVersionContentsOf(file.ObjectId, rewrittenFrom);
+            }
         }
 
         _catalogue.SetSource("live");
@@ -1262,8 +1275,9 @@ public sealed partial class PublicationOrchestrator
                     ? manifest with { ParentVersion = parentVersion }
                     : manifest;
 
+                var written = await WrittenInRunsAsync(withParent, cancellationToken).ConfigureAwait(false);
                 var objectId = await builder.AppendManifestAsync(
-                    ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(withParent), cancellationToken)
+                    ObjectType.FileVersionManifest, FileVersionManifestCodec.Encode(written), cancellationToken)
                     .ConfigureAwait(false);
 
                 EngineDiagnostics.ScanFiles.Add(1, new KeyValuePair<string, object?>("outcome", "captured"));
@@ -1282,7 +1296,8 @@ public sealed partial class PublicationOrchestrator
                     MetadataDigest: FileVersionManifestCodec.MetadataDigest(withParent.Metadata, MetadataRules.FileFlagsOf(withParent.CaptureDiagnostics)),
                     Streams: withParent.Metadata.AlternateStreams.Count > 0
                         ? [.. withParent.Metadata.AlternateStreams.Select(stream => stream.ObjectId)]
-                        : null));
+                        : null,
+                    Runs: written.ReferenceRuns.Count > 0 ? written.ReferenceRuns : null));
                 RecordSourceIdentity(entry, objectId);
             }
             catch (ManifestTooLargeException tooLarge)
@@ -1367,6 +1382,33 @@ public sealed partial class PublicationOrchestrator
                     DateTimeOffset.FromUnixTimeMilliseconds((long)modified)
                         .ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture))
                 : Strings.FormatTreeWalkPublisher_EarlierVersionStandsUndated(detail);
+        }
+
+        /// <summary>
+        /// The manifest as it is written: itself, or, at format 8 for a file
+        /// of more pieces than one manifest holds, its references and holes
+        /// written as reference runs first and the manifest listing them
+        /// (ADR-0202 decisions 3 and 5). Each run is written before the next
+        /// is cut.
+        /// </summary>
+        private async ValueTask<FileVersionManifest> WrittenInRunsAsync(
+            FileVersionManifest manifest, CancellationToken cancellationToken)
+        {
+            if (!FormatVersions.HasReferenceRuns(repositoryFormatVersion))
+            {
+                return manifest;
+            }
+
+            List<ObjectId> runs = [];
+            foreach (var run in ReferenceRunCodec.Cut(manifest.SegmentReferences, manifest.SparseExtents, manifest.LogicalLength))
+            {
+                runs.Add(await builder.AppendManifestAsync(
+                    ObjectType.ReferenceRun, ReferenceRunCodec.Encode(run), cancellationToken).ConfigureAwait(false));
+            }
+
+            return runs.Count == 0
+                ? manifest
+                : manifest with { SegmentReferences = [], SparseExtents = [], ReferenceRuns = runs };
         }
 
         /// <summary>
