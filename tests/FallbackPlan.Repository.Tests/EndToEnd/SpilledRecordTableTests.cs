@@ -54,6 +54,29 @@ public sealed class SpilledRecordTableTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task ASpillACrashedSessionLeft_IsRemovedByTheNextSessionThatSpills()
+    {
+        // What a session that died mid-run leaves: its tables, on disk, held
+        // by nothing. Nothing will read them again.
+        Directory.CreateDirectory(SpoolDirectory);
+        var left = Path.Combine(SpoolDirectory, $"record-tables-{Guid.NewGuid():N}.spill");
+        await File.WriteAllBytesAsync(left, new byte[4096]);
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        var archiver = CreateArchiver(store, keys);
+        var session = archiver.OpenSession();
+        await using (session)
+        {
+            using var source = new MemoryStream(BuildTestFile());
+            _ = await session.ArchiveFileAsync(source, priorVersion: null, CancellationToken.None);
+            await session.FlushAsync(CancellationToken.None);
+
+            Assert.IsFalse(File.Exists(left), "the next session that spilled should have removed the crashed one's tables");
+        }
+    }
+
+    [TestMethod]
     public async Task ASingleFileArchive_KeepsItsBlobsRecordTablesAfterItsSessionHasEnded()
     {
         var store = CreateStore();
