@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using FallbackPlan.Domain;
@@ -21,6 +22,8 @@ public static class MemoryBoundProof
 {
     private const int SampleEveryMs = 250;
 
+    private const int LiveSampleEveryMs = 5000;
+
     private const long Mebibyte = 1024 * 1024;
 
     /// <summary>The live-set bound NFR-PERF-001 demands at scale.</summary>
@@ -30,49 +33,77 @@ public static class MemoryBoundProof
     private const long RequirementOverIdleBytes = 256_000_000;
 
     /// <summary>
-    /// How far the second half's peak working set may stand above the first
-    /// half's. A pipeline that buffered its input would add half the input
-    /// between them, gigabytes here; what a streaming one shows is the
-    /// collector's timing, a few tens of mebibytes either way.
+    /// How long into a run its memory is not judged for growth. Every run
+    /// holds about seventy mebibytes more live for its first 35 to 40
+    /// seconds than it does afterwards, however fast it reads: measured at
+    /// 104 MiB/s in a container and at 168 MiB/s on a CI runner. Those are
+    /// compressor output buffers the shared array pool keeps and later lets
+    /// go of; with the codec allocating them instead, the live set is
+    /// steady from the first sample. Judged by the input's position, a
+    /// faster machine carried that warm-up into the stretch being compared
+    /// and hid a leak behind it, so the windows are measured in time.
+    /// </summary>
+    private static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// The shortest each of the two judged windows may be: four live
+    /// samples, so that a window's peak is a reading rather than one
+    /// collection's timing.
+    /// </summary>
+    private static readonly TimeSpan ShortestWindow = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// How far the later window's peak working set may stand above the
+    /// earlier one's. A pipeline that buffered its input would add gigabytes
+    /// between them; what a streaming one shows is the collector's timing, a
+    /// few tens of mebibytes either way. The working set is the only reading
+    /// that sees native memory, which the live set does not.
     /// </summary>
     private const long GrowthAllowance = 64 * Mebibyte;
 
     /// <summary>
-    /// How far the live set's last-quarter peak may stand above its
-    /// third-quarter peak. A streaming pipeline's steady live set reads the
-    /// same to the mebibyte across them; a run that kept one segment in
-    /// sixty-four of an 8 GiB input adds about forty.
+    /// How far the later window's peak live set may stand above the earlier
+    /// one's. A streaming pipeline's steady live set reads the same to the
+    /// mebibyte across them.
     /// </summary>
     private const long LiveGrowthAllowance = 16 * Mebibyte;
 
     /// <summary>
+    /// How much a run past its warm-up may leave live, over idle, once the
+    /// archive has returned. A clean run leaves under 6 MiB, and one that
+    /// kept one segment in a hundred and twenty-eight left 80.
+    /// </summary>
+    private const long LeftLiveAllowance = 32 * Mebibyte;
+
+    /// <summary>
     /// The most processing may add over idle before the run is a regression
     /// rather than a reading: twice the figure NFR-PERF-001 states. The
-    /// figure itself is printed and judged nowhere, because what a container
-    /// measures of it lies within the collector's spread of the bound.
+    /// figure itself measures above the requirement today, mostly in garbage
+    /// the collector has not yet taken, so it is printed and judged only
+    /// against this.
     /// </summary>
     private const long RegressionOverIdle = 2 * RequirementOverIdleBytes;
 
-    /// <summary>What one run measured, each peak over its half of the input.</summary>
-    /// <param name="TotalBytes">How much was archived.</param>
+    /// <summary>What one run measured.</summary>
+    /// <param name="Elapsed">How long the archive took.</param>
     /// <param name="IdleWorkingSet">The working set before a byte was archived.</param>
-    /// <param name="PeakFirstHalf">The peak working set while the first half of the input was read.</param>
-    /// <param name="PeakSecondHalf">The peak working set while the second half was read.</param>
+    /// <param name="PeakWorkingSet">The peak working set over the whole run.</param>
+    /// <param name="PeakWorkingSetEarlier">The peak working set over the earlier judged window.</param>
+    /// <param name="PeakWorkingSetLater">The peak working set over the later judged window.</param>
     /// <param name="PeakLive">The peak forced-collection live set over the whole run.</param>
-    /// <param name="PeakLiveThirdQuarter">
-    /// The peak live set while the third quarter of the input was read: the
-    /// first steady reading on an 8 GiB input, the run's warm-up having ended
-    /// in the first half.
-    /// </param>
-    /// <param name="PeakLiveLastQuarter">The peak live set while the last quarter was read.</param>
+    /// <param name="PeakLiveEarlier">The peak live set over the earlier judged window.</param>
+    /// <param name="PeakLiveLater">The peak live set over the later judged window.</param>
+    /// <param name="LeftLive">What stayed live, over idle, once the archive had returned.</param>
     public sealed record Readings(
-        long TotalBytes,
+        TimeSpan Elapsed,
         long IdleWorkingSet,
-        long PeakFirstHalf,
-        long PeakSecondHalf,
+        long PeakWorkingSet,
+        long PeakWorkingSetEarlier,
+        long PeakWorkingSetLater,
         long PeakLive,
-        long PeakLiveThirdQuarter,
-        long PeakLiveLastQuarter);
+        long PeakLiveEarlier,
+        long PeakLiveLater,
+        long LeftLive);
 
     /// <summary>What a run's readings say, and every bound they broke.</summary>
     /// <param name="OverIdle">The peak working set over the whole run, less the idle one.</param>
@@ -80,39 +111,59 @@ public static class MemoryBoundProof
     public sealed record Verdict(long OverIdle, IReadOnlyList<string> Failures);
 
     /// <summary>
-    /// Judges a run's readings: the live set within its bound, neither the
-    /// live set nor the working set growing from the first half of the input
-    /// to the second, and what processing added over idle short of a
-    /// regression.
+    /// Where the two judged windows meet: the run after its warm-up, split in
+    /// two by time.
+    /// </summary>
+    public static TimeSpan MidpointOf(TimeSpan elapsed) => WarmUp + ((elapsed - WarmUp) / 2);
+
+    /// <summary>Whether a run lasted long enough to have two judged windows after its warm-up.</summary>
+    public static bool IsLongEnoughToJudge(TimeSpan elapsed) => elapsed >= WarmUp + ShortestWindow + ShortestWindow;
+
+    /// <summary>
+    /// Judges a run's readings: the live set within its bound; neither the
+    /// live set nor the working set growing from the earlier judged window to
+    /// the later; little left live once the archive returned; and what
+    /// processing added over idle short of a regression. A run too short to
+    /// have two judged windows fails rather than passing unjudged.
     /// </summary>
     public static Verdict Judge(Readings readings)
     {
         ArgumentNullException.ThrowIfNull(readings);
         var failures = new List<string>();
-        var overIdle = Math.Max(readings.PeakFirstHalf, readings.PeakSecondHalf) - readings.IdleWorkingSet;
+        var overIdle = readings.PeakWorkingSet - readings.IdleWorkingSet;
         if (readings.PeakLive > LiveSetBound)
         {
             failures.Add(string.Create(CultureInfo.InvariantCulture,
                 $"peak live set {Mib(readings.PeakLive)} MiB exceeds the {Mib(LiveSetBound)} MiB bound"));
         }
 
-        // The live set is the cleaner signal: the working set is mostly the
-        // collector's uncollected garbage, whose swings hide a slow leak. The
-        // third quarter is the baseline because the run's first forty seconds
-        // or so hold tens of mebibytes above the steady state and would hide
-        // that much growth. Warm-up can only raise an earlier quarter, so a
-        // slow machine makes the comparison stricter and a fast one more
-        // lenient, and neither fails a streaming run.
-        if (readings.PeakLiveLastQuarter > readings.PeakLiveThirdQuarter + LiveGrowthAllowance)
+        if (!IsLongEnoughToJudge(readings.Elapsed))
         {
             failures.Add(string.Create(CultureInfo.InvariantCulture,
-                $"the live set grew with the input: {Mib(readings.PeakLiveThirdQuarter)} MiB over its third quarter, {Mib(readings.PeakLiveLastQuarter)} MiB over its last"));
+                $"the run took {readings.Elapsed.TotalSeconds:f1} s, too short to judge: growth is judged after the first {WarmUp.TotalSeconds:f0} s, over two windows of at least {ShortestWindow.TotalSeconds:f0} s each, so archive a larger input"));
         }
-
-        if (readings.PeakSecondHalf > readings.PeakFirstHalf + GrowthAllowance)
+        else
         {
-            failures.Add(string.Create(CultureInfo.InvariantCulture,
-                $"the working set grew with the input: {Mib(readings.PeakFirstHalf)} MiB over the first {Mib(readings.TotalBytes / 2)} MiB, {Mib(readings.PeakSecondHalf)} MiB over the second"));
+            // The live set is the cleaner signal: the working set is mostly
+            // the collector's uncollected garbage, whose swings hide a slow
+            // leak.
+            if (readings.PeakLiveLater > readings.PeakLiveEarlier + LiveGrowthAllowance)
+            {
+                failures.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"the live set grew with the input: {Mib(readings.PeakLiveEarlier)} MiB over the earlier window, {Mib(readings.PeakLiveLater)} MiB over the later"));
+            }
+
+            if (readings.PeakWorkingSetLater > readings.PeakWorkingSetEarlier + GrowthAllowance)
+            {
+                failures.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"the working set grew with the input: {Mib(readings.PeakWorkingSetEarlier)} MiB over the earlier window, {Mib(readings.PeakWorkingSetLater)} MiB over the later"));
+            }
+
+            if (readings.LeftLive > LeftLiveAllowance)
+            {
+                failures.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"the run left {Mib(readings.LeftLive)} MiB live once the archive returned, past the {Mib(LeftLiveAllowance)} MiB allowed"));
+            }
         }
 
         if (overIdle > RegressionOverIdle)
@@ -125,6 +176,9 @@ public static class MemoryBoundProof
     }
 
     private static string Mib(long bytes) => (bytes / (double)Mebibyte).ToString("f1", CultureInfo.InvariantCulture);
+
+    private static long PeakBetween(IEnumerable<(TimeSpan At, long Bytes)> samples, TimeSpan from, TimeSpan to) =>
+        samples.Where(sample => sample.At >= from && sample.At < to).Select(sample => sample.Bytes).DefaultIfEmpty(0).Max();
 
     public static async Task<int> RunAsync(long gibibytes)
     {
@@ -164,66 +218,70 @@ public static class MemoryBoundProof
 
         // Two cadences: the fast sampler watches the raw heap (which includes
         // garbage not yet collected — an allocation-rate number, not a
-        // retention number) and the working set, each half of the input
-        // separately; the slow sampler forces a collection and records the
-        // LIVE set, which is what NFR-PERF-001 actually bounds.
+        // retention number) and the working set; the slow sampler forces a
+        // collection and records the LIVE set, which is what NFR-PERF-001
+        // actually bounds. Each sample keeps when it was taken, because the
+        // windows it is judged in are measured in time.
         using var source = new SyntheticStream(totalBytes, seed: 42);
-        var half = totalBytes / 2;
         var peakHeap = 0L;
-        var peakFirstHalf = 0L;
-        var peakSecondHalf = 0L;
-        var peakLive = 0L;
-        var peakLiveByQuarter = new long[4];
+        var workingSets = new ConcurrentQueue<(TimeSpan At, long Bytes)>();
+        var liveSets = new ConcurrentQueue<(TimeSpan At, long Bytes)>();
+        var stopwatch = Stopwatch.StartNew();
         using var sampler = new Timer(_ =>
         {
             peakHeap = Math.Max(peakHeap, GC.GetTotalMemory(forceFullCollection: false));
-            var workingSet = Process.GetCurrentProcess().WorkingSet64;
-            if (source.Position < half)
-            {
-                peakFirstHalf = Math.Max(peakFirstHalf, workingSet);
-            }
-            else
-            {
-                peakSecondHalf = Math.Max(peakSecondHalf, workingSet);
-            }
+            workingSets.Enqueue((stopwatch.Elapsed, Process.GetCurrentProcess().WorkingSet64));
         }, null, 0, SampleEveryMs);
         using var liveSampler = new Timer(_ =>
         {
             var live = GC.GetTotalMemory(forceFullCollection: true);
-            peakLive = Math.Max(peakLive, live);
-            var quarter = (int)Math.Min(3, source.Position / Math.Max(1, totalBytes / 4));
-            peakLiveByQuarter[quarter] = Math.Max(peakLiveByQuarter[quarter], live);
-        }, null, 5000, 5000);
+            liveSets.Enqueue((stopwatch.Elapsed, live));
+        }, null, LiveSampleEveryMs, LiveSampleEveryMs);
 
-        var stopwatch = Stopwatch.StartNew();
         try
         {
             var result = await archiver.ArchiveAsync(source, CancellationToken.None);
             stopwatch.Stop();
             await sampler.DisposeAsync();
             await liveSampler.DisposeAsync();
+            var elapsed = stopwatch.Elapsed;
 
-            // What the run left live once the archive returned: printed, not
-            // judged. A run past the warm-up leaves a few mebibytes and one
-            // that kept part of its input leaves all of it, but a run shorter
-            // than the warm-up leaves tens of mebibytes it has not let go of
-            // yet, so the figure depends on how fast the machine is.
+            // What the run left live once the archive returned. A run past
+            // the warm-up leaves a few mebibytes, and one that kept part of
+            // its input leaves all of it; a run shorter than the warm-up
+            // still holds the pooled buffers, which is one reason a short
+            // run is not judged.
             var leftLive = GC.GetTotalMemory(forceFullCollection: true) - idleLive;
-            peakLive = Math.Max(peakLive, leftLive + idleLive);
+            var end = elapsed + TimeSpan.FromTicks(1);
+            var midpoint = MidpointOf(elapsed);
+            var peakLive = Math.Max(PeakBetween(liveSets, TimeSpan.Zero, end), leftLive + idleLive);
 
-            var verdict = Judge(new Readings(
-                totalBytes, idleWorkingSet, peakFirstHalf, peakSecondHalf, peakLive, peakLiveByQuarter[2], peakLiveByQuarter[3]));
-            var throughput = totalBytes / Math.Max(stopwatch.Elapsed.TotalSeconds, 0.001) / (1024 * 1024);
+            var readings = new Readings(
+                elapsed,
+                idleWorkingSet,
+                PeakBetween(workingSets, TimeSpan.Zero, end),
+                PeakBetween(workingSets, WarmUp, midpoint),
+                PeakBetween(workingSets, midpoint, end),
+                peakLive,
+                PeakBetween(liveSets, WarmUp, midpoint),
+                PeakBetween(liveSets, midpoint, end),
+                leftLive);
+            var verdict = Judge(readings);
+            var throughput = totalBytes / Math.Max(elapsed.TotalSeconds, 0.001) / (1024 * 1024);
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"input:            {gibibytes} GiB ({totalBytes} bytes, synthetic, never materialised)"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"elapsed:          {stopwatch.Elapsed.TotalSeconds:f1} s ({throughput:f0} MiB/s)"));
+                $"elapsed:          {elapsed.TotalSeconds:f1} s ({throughput:f0} MiB/s)"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"segments:         {result.SegmentReferences.Count}"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"blobs sealed:     {result.Blobs.Count} ({store.BytesConsumed} stored bytes discarded)"));
+            Console.WriteLine(IsLongEnoughToJudge(elapsed)
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"judged windows:   {WarmUp.TotalSeconds:f0} to {midpoint.TotalSeconds:f1} s, and {midpoint.TotalSeconds:f1} to {elapsed.TotalSeconds:f1} s")
+                : "judged windows:   none, the run was too short");
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"peak live set:    {Mib(peakLive)} MiB (forced-collection samples; by quarter of the input {Mib(peakLiveByQuarter[0])}, {Mib(peakLiveByQuarter[1])}, {Mib(peakLiveByQuarter[2])}, {Mib(peakLiveByQuarter[3])} MiB)"));
+                $"peak live set:    {Mib(peakLive)} MiB (forced-collection samples; {Mib(PeakBetween(liveSets, TimeSpan.Zero, WarmUp))} MiB in the warm-up, {Mib(readings.PeakLiveEarlier)} and {Mib(readings.PeakLiveLater)} MiB over the judged windows)"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"peak raw heap:    {Mib(peakHeap)} MiB (includes uncollected garbage)"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
@@ -231,7 +289,7 @@ public static class MemoryBoundProof
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"idle working set: {Mib(idleWorkingSet)} MiB"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"peak working set: {Mib(peakFirstHalf)} MiB over the first half, {Mib(peakSecondHalf)} MiB over the second"));
+                $"peak working set: {Mib(readings.PeakWorkingSet)} MiB ({Mib(PeakBetween(workingSets, TimeSpan.Zero, WarmUp))} MiB in the warm-up, {Mib(readings.PeakWorkingSetEarlier)} and {Mib(readings.PeakWorkingSetLater)} MiB over the judged windows)"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"over idle:        {Mib(verdict.OverIdle)} MiB ({verdict.OverIdle / 1_000_000.0:f0} MB; "
                 + $"NFR-PERF-001 states {RequirementOverIdleBytes / 1_000_000} MB for a 2 TiB file)"));

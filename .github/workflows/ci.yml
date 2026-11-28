@@ -275,17 +275,19 @@ jobs:
 
   # FR-ARCH-002 and NFR-PERF-001: one synthetic file far larger than any of
   # the pipeline's buffers, never materialised, through the real archive
-  # pipeline. Memory must not grow with the input: the live set within
-  # NFR-PERF-001's bound and steady from the input's third quarter to its
-  # last, the working set no larger over its second half than its first, and
-  # nothing near a regression over idle. The 2 TiB the requirement names is
-  # out of reach; eight GiB is the least at which a run that kept one segment
-  # in thirty-two failed, and one that kept one in a hundred and twenty-eight
-  # fails too. What processing adds over idle is judged only against twice
-  # the requirement: it measures above the requirement today, mostly in
-  # garbage the collector has not yet taken.
+  # pipeline. Memory must not grow with the input: past the first 45 s,
+  # which every run spends holding pooled buffers it later lets go of, the
+  # live set and the working set are each no larger over the later half of
+  # the run than the earlier, the live set is within NFR-PERF-001's bound,
+  # and little is left live at the end. The windows are measured in time
+  # because the warm-up is, so the harness refuses a run too short to have
+  # two of them, and 24 GiB leaves this runner room: it read 168 MiB/s, and
+  # 85 s is the least the harness will judge. The 2 TiB the requirement
+  # names is out of reach. What processing adds over idle is judged only
+  # against twice the requirement: it measures above the requirement today,
+  # mostly in garbage the collector has not yet taken.
   memory-bound:
-    name: Memory stays bounded over an 8 GiB file
+    name: Memory stays bounded over a 24 GiB file
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -297,8 +299,8 @@ jobs:
         run: dotnet restore FallbackPlan.slnx --locked-mode
       - name: Build the harness
         run: dotnet build tests/FallbackPlan.PerformanceTests -c Release --no-restore
-      - name: Archive 8 GiB and judge the memory it took
-        run: dotnet tests/FallbackPlan.PerformanceTests/bin/Release/net10.0/FallbackPlan.PerformanceTests.dll membound 8
+      - name: Archive 24 GiB and judge the memory it took
+        run: dotnet tests/FallbackPlan.PerformanceTests/bin/Release/net10.0/FallbackPlan.PerformanceTests.dll membound 24
 
   # The console page in a real browser (ADR-0073): dialog modality, CSP,
   # focus and downloads only exist there, and the three defects that motivated
