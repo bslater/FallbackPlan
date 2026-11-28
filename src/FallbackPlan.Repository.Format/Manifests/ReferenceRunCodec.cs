@@ -34,6 +34,7 @@ public static class ReferenceRunCodec
     /// <param name="references">The file's segment references, in file order.</param>
     /// <param name="holes">The file's holes, in file order.</param>
     /// <param name="logicalLength">The file's length, where the last run ends.</param>
+    /// <exception cref="ManifestValidationException">The pieces end short of, or past, the file's length; raised before the last run is given.</exception>
     public static IEnumerable<ReferenceRun> Cut(
         IReadOnlyList<SegmentReference> references, IReadOnlyList<SparseExtent> holes, ulong logicalLength)
     {
@@ -71,11 +72,17 @@ public static class ReferenceRunCodec
                 }
             }
 
-            var last = reference == references.Count && hole == holes.Count;
+            // A manifest that lists runs holds no pieces to be held to its
+            // length, so the last run is, before it is given.
+            if (reference == references.Count && hole == holes.Count && end != logicalLength)
+            {
+                throw new ManifestValidationException(Strings.FormatReferenceRunCodec_SequenceShort(end, logicalLength));
+            }
+
             yield return new ReferenceRun
             {
                 Start = start,
-                Length = (last ? logicalLength : end) - start,
+                Length = end - start,
                 SegmentReferences = runReferences,
                 SparseExtents = runHoles,
             };
