@@ -609,6 +609,33 @@ public sealed class ArchiveSession : IAsyncDisposable
     /// <summary>Whether another segment of this run claimed the record and has not yet appended it.</summary>
     private bool ClaimantPending(ObjectId objectId) => _written.ClaimantPending(objectId);
 
+    /// <summary>
+    /// <paramref name="archived"/>, its segment references and content
+    /// identifiers waiting in this session's spill rather than in memory
+    /// (ADR-0201). A tree snapshot keeps every file it captures until it
+    /// publishes, and once a file's manifest is written, the catalogue reading
+    /// them back at the end is all that needs them.
+    /// </summary>
+    internal ArchiveResult SpillSegments(ArchiveResult archived)
+    {
+        ArgumentNullException.ThrowIfNull(archived);
+        if (archived.SegmentReferences.Count == 0)
+        {
+            return archived;
+        }
+
+        var (references, contentIds) = Spill().AppendSegments(archived.SegmentReferences, archived.SegmentContentIds);
+        return archived.WithSegments(references, contentIds);
+    }
+
+    private RecordTableSpill Spill()
+    {
+        lock (_blobGate)
+        {
+            return _recordTables ??= RecordTableSpill.Create(_spoolDirectory);
+        }
+    }
+
     /// <summary>A buffer big enough for any segment this policy can produce.</summary>
     private byte[] RentBuffer() =>
         _buffers.TryTake(out var buffer) ? buffer : new byte[_policy.MaximumSegmentBytes];
@@ -907,12 +934,7 @@ public sealed class ArchiveSession : IAsyncDisposable
             EngineDiagnostics.BlobFillFraction.Record(
                 sealedBlob.Length / (double)_policy.BlobWriteProfile.TargetSizeBytes);
 
-            RecordTableSpill recordTables;
-            lock (_blobGate)
-            {
-                recordTables = _recordTables ??= RecordTableSpill.Create(_spoolDirectory);
-            }
-
+            var recordTables = Spill();
             var archived = new ArchivedBlob(
                 sealedBlob.BlobId,
                 storeBlobKey,

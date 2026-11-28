@@ -63,7 +63,7 @@ public sealed class SpilledReferenceTests : ArchiveTestHarness
         // What the file is stays answerable: its length and how many segments.
         Assert.AreEqual(content.Length, archive.LogicalLength);
         Assert.AreEqual(4, archive.SegmentReferences.Count);
-        Assert.HasCount(4, archive.SegmentContentIds);
+        Assert.AreEqual(4, archive.SegmentContentIds.Count);
 
         var references = Assert.ThrowsExactly<InvalidOperationException>(() => archive.SegmentReferences.ToList());
         Assert.Contains("manifest", references.Message, StringComparison.Ordinal);
