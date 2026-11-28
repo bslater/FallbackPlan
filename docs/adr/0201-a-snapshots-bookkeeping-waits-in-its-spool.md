@@ -109,8 +109,8 @@ without revealing it, so one left until the next session leaks nothing.
 
 ## Consequences
 
-- What a session keeps per stored record falls from 160.6 bytes to what
-  `SessionRetentionTests` measures after it, over a hundred thousand
+- What a session keeps per stored record fell from 160.6 bytes to 78.0 to
+  78.5, measured by `SessionRetentionTests` over a hundred thousand
   one-record files. The rest is the written set's, which decision 3
   addresses.
 - Publication reads the spill once, sequentially, in the order the blobs were
