@@ -281,13 +281,13 @@ jobs:
   # the run than the earlier, the live set is within NFR-PERF-001's bound,
   # and little is left live at the end. The windows are measured in time
   # because the warm-up is, so the harness refuses a run too short to have
-  # two of them, and 24 GiB leaves this runner room: it read 168 MiB/s, and
-  # 85 s is the least the harness will judge. The 2 TiB the requirement
-  # names is out of reach. What processing adds over idle is judged only
-  # against twice the requirement: it measures above the requirement today,
-  # mostly in garbage the collector has not yet taken.
+  # two of them: 85 s. Runners here have read 168 to 213 MiB/s, which over
+  # 32 GiB is 154 s at the fastest. The 2 TiB the requirement names is out
+  # of reach. What processing adds over idle is judged only against twice
+  # the requirement: it measures above the requirement today, mostly in
+  # garbage the collector has not yet taken.
   memory-bound:
-    name: Memory stays bounded over a 24 GiB file
+    name: Memory stays bounded over a 32 GiB file
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -299,8 +299,8 @@ jobs:
         run: dotnet restore FallbackPlan.slnx --locked-mode
       - name: Build the harness
         run: dotnet build tests/FallbackPlan.PerformanceTests -c Release --no-restore
-      - name: Archive 24 GiB and judge the memory it took
-        run: dotnet tests/FallbackPlan.PerformanceTests/bin/Release/net10.0/FallbackPlan.PerformanceTests.dll membound 24
+      - name: Archive 32 GiB and judge the memory it took
+        run: dotnet tests/FallbackPlan.PerformanceTests/bin/Release/net10.0/FallbackPlan.PerformanceTests.dll membound 32
 
   # The console page in a real browser (ADR-0073): dialog modality, CSP,
   # focus and downloads only exist there, and the three defects that motivated
