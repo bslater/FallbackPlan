@@ -33,15 +33,13 @@ public static class MemoryBoundProof
     private const long RequirementOverIdleBytes = 256_000_000;
 
     /// <summary>
-    /// How long into a run its memory is not judged for growth. A run's
-    /// working set peaks in its opening seconds, at 310 to 377 MiB, and has
-    /// settled to 127 to 138 MiB by 45 s, however fast it reads.
-    /// Until the zstd codec stopped renting a scratch buffer from the
-    /// shared array pool, the live set did the same, holding 70 MiB more
-    /// for 35 to 40 s whether the machine read 104 MiB/s or 213. A warm-up
-    /// is a length of time, so the windows are too: judged by the input's
-    /// position, a faster machine carried that warm-up into the stretch
-    /// being compared and hid a leak behind it.
+    /// How long into a run its memory is not judged for growth. What a run
+    /// fills once (a pool, a cache, the collector's first budgets) it fills
+    /// over a length of time, not an amount of input: the zstd codec's
+    /// pooled scratch buffers held 70 MiB for 35 to 40 s whether the
+    /// machine read 104 MiB/s or 213. Judged by the input's position, a
+    /// faster machine carried that into the stretch being compared and hid
+    /// a leak behind it, so the windows are measured in time.
     /// </summary>
     private static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(45);
 
@@ -55,32 +53,35 @@ public static class MemoryBoundProof
     /// <summary>
     /// How far the later window's peak working set may stand above the
     /// earlier one's. A pipeline that buffered its input would add gigabytes
-    /// between them; what a streaming one shows is the collector's timing, a
-    /// few tens of mebibytes either way. The working set is the only reading
-    /// that sees native memory, which the live set does not.
+    /// between them; clean 32 GiB runs add 7 to 34 MiB, and one that copied
+    /// one stored record in 128 to native memory added 128. The working set
+    /// is the only reading that sees native memory, which the live set does
+    /// not.
     /// </summary>
     private const long GrowthAllowance = 64 * Mebibyte;
 
     /// <summary>
     /// How far the later window's peak live set may stand above the earlier
-    /// one's. A streaming pipeline's steady live set reads the same to the
-    /// mebibyte across them.
+    /// one's. What a snapshot keeps for each object it stores, until it
+    /// publishes, adds 4 to 6 MiB from one half of a clean 32 GiB run to the
+    /// next (open question Q24); a 16 GiB run that kept one stored record in
+    /// 512 added 18.
     /// </summary>
     private const long LiveGrowthAllowance = 16 * Mebibyte;
 
     /// <summary>
     /// How much a run past its warm-up may leave live, over idle, once the
-    /// archive has returned. A clean 32 GiB run leaves 3.7 MiB, and one that
-    /// kept one segment in 512 of a 24 GiB input left 47.
+    /// archive has returned. A clean 32 GiB run leaves 8.4 MiB, most of it
+    /// the record tables its result carries, and one that kept one segment
+    /// in 512 of a 24 GiB input left 47.
     /// </summary>
     private const long LeftLiveAllowance = 32 * Mebibyte;
 
     /// <summary>
     /// The most processing may add over idle before the run is a regression
     /// rather than a reading: twice the figure NFR-PERF-001 states. The
-    /// figure itself measures above the requirement today, mostly in garbage
-    /// the collector has not yet taken, so it is printed and judged only
-    /// against this.
+    /// figure itself measures above the requirement today, at 344 to 400 MB,
+    /// so it is printed and judged only against this.
     /// </summary>
     private const long RegressionOverIdle = 2 * RequirementOverIdleBytes;
 

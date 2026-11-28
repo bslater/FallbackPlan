@@ -111,7 +111,9 @@ Read as a bounded stream and divided at fixed 1 MiB offsets:
 | 2 | 2,097,152 – 3,145,728 | 1,048,576 |
 | 3 | 3,145,728 – 3,670,016 | 524,288 |
 
-Only the final segment may be short. Nothing here depends on the file fitting in memory — segments flow through a bounded pipeline, so a 2 TiB file costs no more resident memory than this one.
+Only the final segment may be short. Nothing here depends on the file fitting in memory — segments flow through a bounded pipeline, so a 2 TiB file's bytes take no more resident memory than this one's.
+
+> **Corrected 2026-11.** This sentence used to say a 2 TiB file *costs* no more resident memory than this one. Its bytes do not, but its bookkeeping does. Each segment's reference and content id, and each stored record's index entry, are held until the snapshot publishes: about half a mebibyte per gibibyte, measured, and on the order of a gigabyte at 2 TiB. → [Q24](../open-questions.md#q24--what-a-snapshot-holds-per-object-it-stores)
 
 > **The known weakness.** Boundaries are anchored at byte 0, so *inserting* bytes shifts every subsequent boundary and the whole file looks new. An in-place page rewrite — this example — is the good case. A prepended log line, or a recompressed container, is the bad one.
 >

@@ -184,6 +184,28 @@ Three resolutions, one to pick:
 
 Until this is settled, a v2 set's replica is registered only if the passphrase happens to be present when a session runs, and peer-protocol 07 §5.3 (since withdrawn) makes an unregistered replica say so plainly rather than fail as a wrong passphrase.
 
+## Q24 — What a snapshot holds per object it stores
+
+**Owner:** maintainer · **Blocks:** FR-ARCH-002's 2 TiB acceptance, and NFR-PERF-001 for any snapshot that stores more than a few hundred gigabytes
+
+A snapshot keeps a little memory for every record it stores and every segment it reads, for as long as it runs. Over 32 GiB of unique content (2026-11, `PerformanceTests/MemoryBoundProof`), the live set grows by about 0.4 to 0.6 MiB per GiB, some 500 to 700 bytes per stored segment. Three things hold it:
+
+- **Each stored record's entry in its blob's record table.** `ArchivedBlob` keeps the table in memory, because index-delta publication projects the snapshot's entries from it once the snapshot ends.
+- **Each stored record's claim in the session's written set.** The claim settles which of two concurrent duplicates is written, and the set lives as long as the snapshot's session.
+- **Each segment's reference and content id on its file's result.** The references are the manifest's content.
+
+None of it is a leak, since each is read when the snapshot publishes. But a 2 TiB file holds on the order of a gigabyte of it, and so does a first backup of a few terabytes. That is past NFR-PERF-001's 256 MB for the file and its 1 GB for the agent at scale L. A file's bytes, by contrast, never sit in memory beyond the pipeline's buffers.
+
+Three directions, not exclusive:
+
+**(a) Publish as the snapshot goes.** Index deltas could be published per run of blobs rather than once at the end, so a blob's record table is dropped once its entries are in a delta. What has to be settled is what protects the objects those deltas name before any published snapshot does.
+
+**(b) Spill what must wait.** Record tables, and the written set beyond the claims still in flight, could go to the session's spool directory, which is on disk already, and be read back at publication. Memory stays bounded; the price is disk traffic at publication.
+
+**(c) State the cost instead.** NFR-PERF-001 and FR-ARCH-002 could bound memory by configuration plus a fixed cost per object a snapshot stores, with scale L's agent memory sized against it. That is honest about what is built, but it leaves a 2 TiB file at a gigabyte.
+
+Until this is settled, the memory gate's growth allowances absorb the growth at the size it runs: 4 to 6 MiB of live set from one half of a 32 GiB run to the next.
+
 ---
 
 ## Closed
