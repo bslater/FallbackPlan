@@ -100,6 +100,34 @@ public sealed class SpilledRecordTableTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task ASpillALiveSessionHolds_IsLeftAloneByAnotherSessionInTheSameSpool()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        var first = CreateArchiver(store, keys).OpenSession();
+        var second = CreateArchiver(store, keys, SmallBlobPolicy, firstCounter: 10_000).OpenSession();
+        await using (first)
+        await using (second)
+        {
+            using (var source = new MemoryStream(BuildTestFile(seed: 1)))
+            {
+                _ = await first.ArchiveFileAsync(source, priorVersion: null, CancellationToken.None);
+                await first.FlushAsync(CancellationToken.None);
+            }
+
+            using (var source = new MemoryStream(BuildTestFile(seed: 2)))
+            {
+                _ = await second.ArchiveFileAsync(source, priorVersion: null, CancellationToken.None);
+                await second.FlushAsync(CancellationToken.None);
+            }
+
+            Assert.HasCount(2, Directory.GetFiles(SpoolDirectory, "record-tables-*.spill"));
+            await AssertTablesMatchFootersAsync(store, keys, first.Blobs);
+            await AssertTablesMatchFootersAsync(store, keys, second.Blobs);
+        }
+    }
+
+    [TestMethod]
     public async Task ASingleFileArchive_KeepsItsBlobsRecordTablesAfterItsSessionHasEnded()
     {
         var store = CreateStore();
