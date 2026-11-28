@@ -112,11 +112,22 @@ public static class RepositoryDescriptorCodec
     /// </summary>
     public const ushort FeatureStandInFailures = 0x0007;
 
+    /// <summary>
+    /// <c>reference-runs</c>: a large file's segment references and holes may
+    /// be written in reference runs its manifest lists in key 15 (06 §4,
+    /// §4.4) ([ADR-0202](../../../docs/adr/0202-format-8-a-large-files-references-are-written-in-runs.md)):
+    /// a format-8 repository names it in <c>required_features</c>, beside
+    /// <c>stand-in-failures</c>, and no earlier format may. A reader that
+    /// predates format 8 refuses the repository by that name rather than
+    /// reading a large file's manifest as a file of nothing.
+    /// </summary>
+    public const ushort FeatureReferenceRuns = 0x0008;
+
     /// <summary>The feature identifiers this implementation understands.</summary>
     private static readonly HashSet<ushort> Implemented =
     [
         FeatureSealedDataPlane, FeatureReclaimAuthority, FeatureRelocatableRecords, FeatureIndexGenerations,
-        FeatureDeltaCheckpoints, FeatureFileFlagsAndLinkForms, FeatureStandInFailures,
+        FeatureDeltaCheckpoints, FeatureFileFlagsAndLinkForms, FeatureStandInFailures, FeatureReferenceRuns,
     ];
 
     /// <summary>Serialises a descriptor to its store bytes.</summary>
@@ -129,8 +140,8 @@ public static class RepositoryDescriptorCodec
             throw new ArgumentException(Strings.RepositoryDescriptorCodec_KDFSaltExactlyBytes, nameof(descriptor));
         }
 
-        // Only formats 2 to 7 are written (ADR-0042 §1, ADR-0052, ADR-0096,
-        // ADR-0097, ADR-0184, ADR-0197; format 1 withdrawn before freeze), and a descriptor of
+        // Only formats 2 to 8 are written (ADR-0042 §1, ADR-0052, ADR-0096,
+        // ADR-0097, ADR-0184, ADR-0197, ADR-0202; format 1 withdrawn before freeze), and a descriptor of
         // any is nothing without its sealing public key — the verifier every
         // open compares against. A caller handing over anything else is a bug
         // refused here rather than a stored contradiction.
@@ -409,8 +420,8 @@ public static class RepositoryDescriptorCodec
     /// they agree (01 §3.2): format 3 and later list relocatable-records,
     /// format 4 and later list index-generations, format 5 and later list
     /// delta-checkpoints, format 6 and later list file-flags-and-link-forms,
-    /// format 7 and later list stand-in-failures, and an earlier format lists
-    /// none of the five.
+    /// format 7 and later list stand-in-failures, format 8 and later list
+    /// reference-runs, and an earlier format lists none of the six.
     /// </summary>
     private static string? FeatureVersionDisagreement(ushort formatVersion, IReadOnlyList<ushort> required) =>
         FeatureDisagreement(
@@ -427,7 +438,10 @@ public static class RepositoryDescriptorCodec
             FormatVersions.HasFileFlagsAndLinkForms(formatVersion))
         ?? FeatureDisagreement(
             formatVersion, required, FeatureStandInFailures, "stand-in-failures",
-            FormatVersions.HasStandInFailures(formatVersion));
+            FormatVersions.HasStandInFailures(formatVersion))
+        ?? FeatureDisagreement(
+            formatVersion, required, FeatureReferenceRuns, "reference-runs",
+            FormatVersions.HasReferenceRuns(formatVersion));
 
     private static string? FeatureDisagreement(
         ushort formatVersion, IReadOnlyList<ushort> required, ushort feature, string name, bool implied)

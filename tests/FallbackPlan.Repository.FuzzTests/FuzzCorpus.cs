@@ -105,6 +105,42 @@ internal static class FuzzCorpus
                 }),
                 bytes => FileVersionManifestCodec.Decode(bytes)),
 
+            // Format 8 (ADR-0202): a large file's manifest lists its runs in
+            // key 15 and holds no reference of its own, and a run holds one
+            // stretch of the file's references and holes.
+            new("file-version-format-8",
+                FileVersionManifestCodec.Encode(new FileVersionManifest
+                {
+                    EntryKind = EntryKind.File,
+                    Name = "huge.bin"u8.ToArray(),
+                    NameNormalisation = NameNormalisation.Nfc,
+                    LogicalLength = 1L << 40,
+                    SegmentReferences = [],
+                    ReferenceRuns =
+                    [
+                        ObjectId.FromBytes(SHA256.HashData("first run"u8)),
+                        ObjectId.FromBytes(SHA256.HashData("second run"u8)),
+                    ],
+                    WholeFileHash = SHA256.HashData("huge"u8),
+                    SegmentationProfile = 0x0001,
+                    Metadata = new EntryMetadata { ModifiedAt = 1_722_600_000_000 },
+                }),
+                bytes => FileVersionManifestCodec.Decode(bytes)),
+
+            new("reference-run",
+                ReferenceRunCodec.Encode(new ReferenceRun
+                {
+                    Start = 1L << 20,
+                    Length = 3 * 64 * 1024,
+                    SegmentReferences =
+                    [
+                        new SegmentReference(1L << 20, 64 * 1024, ObjectId.FromBytes(SHA256.HashData("a"u8))),
+                        new SegmentReference((1L << 20) + (2 * 64 * 1024), 64 * 1024, ObjectId.FromBytes(SHA256.HashData("b"u8))),
+                    ],
+                    SparseExtents = [new SparseExtent((1UL << 20) + (64 * 1024), 64 * 1024)],
+                }),
+                bytes => ReferenceRunCodec.Decode(bytes)),
+
             new("tree",
                 TreeManifestCodec.Encode(new TreeManifest
                 {

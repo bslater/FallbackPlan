@@ -157,6 +157,32 @@ do, the passphrase restores `fixture.bin` byte for byte, and the snapshot
 is partial and its one failure names the file and carries key 4.
 Regeneration is no more byte-identical than format 3's.
 
+## fixture-repository-v8
+
+The same objects, written at **format 8**
+([ADR-0202](../../../../docs/adr/0202-format-8-a-large-files-references-are-written-in-runs.md))
+under the passphrase `fallbackplan-fixture-v8-passphrase`, and one file more.
+Format 8 changes how a large file is described and nothing else, so the
+failure is format 7's, the other manifests format 6's, the checkpoint
+carries the one delta as at format 5, and everything sealed is format 3's
+and stamped 3. The descriptor declares format 8 and lists `reference-runs`
+beside `stand-in-failures`, `file-flags-and-link-forms`, `delta-checkpoints`,
+`index-generations` and `relocatable-records` as **required** features.
+
+The tree holds format 7's two entries and `fixture-runs.bin`, whose manifest
+lists two reference runs in key 15 and holds no segment reference or hole of
+its own. The first run holds `fixture.bin`'s first 64 KiB segment and 262 143
+one-byte holes, 262 144 pieces, which is full; the second holds its second
+segment, ending at the file's length. The file reuses those segments, so the
+runs are all it adds, and the first run is most of the fixture's size: its
+holes encode to about 1.8 MB, uncompressed as every manifest is.
+
+`FixtureRepositoryV8Tests` holds the read contract on these bytes: what
+`FixtureRepositoryV7Tests` holds, the descriptor naming format 8 and its six
+features, and the runs file: its manifest lists two runs, the first full,
+the second ending at its length, and it restores byte for byte through them.
+Regeneration is no more byte-identical than format 3's.
+
 A format-1 fixture (`fixture-repository-v1`, with a key object and a
 byte-identical regeneration) and its committed recovery kit lived here while
 format v1 did. Both were withdrawn with the format, before any freeze; the
