@@ -78,6 +78,14 @@ public sealed class ReferenceRunRestoreTests : ReferenceRunHarness
 
         Assert.IsTrue(result.Success, result.FailureDetail);
         SequenceAssert.AreEqual(built.Content, File.ReadAllBytes(landed));
+
+        // The holes are the first run's, so the spool may hold them only if
+        // it was made able to before any run was read; a dense copy would
+        // allocate the whole file.
+        var allocated = AllocatedSize.Of(landed);
+        Assert.IsLessThan(
+            built.Content.LongLength - (Holes / 4), allocated,
+            $"{allocated} bytes allocated for a {built.Content.LongLength}-byte file holding 70,000 bytes of data");
     }
 
     [TestMethod]
@@ -162,6 +170,29 @@ public sealed class ReferenceRunRestoreTests : ReferenceRunHarness
 
         Assert.IsTrue(result.Success, result.FailureDetail);
         Assert.AreEqual(SecondRunStart(built), result.Resumed, "the part holds the first run whole and the second's segment only in part");
+        SequenceAssert.AreEqual(built.Content, restored.ToArray());
+    }
+
+    [TestMethod]
+    public async Task AKeptPartIsCutBackWhereTakingUpStops_SoTheHolesAfterItAreZeroes()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        var (built, reader) = await OpenAsync(store, keys);
+        using var _ = reader;
+        var part = Path.Combine(SpoolDirectory, "stray.part");
+
+        // The part holds the first segment and ten of the holes, and then
+        // bytes that are not the file's, where its holes go: a hole is
+        // skipped as the file is assembled, never written.
+        File.WriteAllBytes(part, [.. built.Content.AsSpan(0, 40_010), .. Enumerable.Repeat((byte)0xEE, 100_000)]);
+        using var restored = new MemoryStream();
+
+        var result = await new RestoreEngine(reader, SpoolDirectory).RestoreFileAsync(
+            built.Manifest, restored, part, takeUp: true, CancellationToken.None);
+
+        Assert.IsTrue(result.Success, result.FailureDetail);
+        Assert.AreEqual(40_010L, result.Resumed);
         SequenceAssert.AreEqual(built.Content, restored.ToArray());
     }
 
