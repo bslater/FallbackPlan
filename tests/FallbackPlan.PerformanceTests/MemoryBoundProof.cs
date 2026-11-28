@@ -33,15 +33,15 @@ public static class MemoryBoundProof
     private const long RequirementOverIdleBytes = 256_000_000;
 
     /// <summary>
-    /// How long into a run its memory is not judged for growth. Every run
-    /// holds about seventy mebibytes more live for its first 35 to 40
-    /// seconds than it does afterwards, however fast it reads: measured at
-    /// 104 MiB/s in a container and at 168 MiB/s on a CI runner. Those are
-    /// compressor output buffers the shared array pool keeps and later lets
-    /// go of; with the codec allocating them instead, the live set is
-    /// steady from the first sample. Judged by the input's position, a
-    /// faster machine carried that warm-up into the stretch being compared
-    /// and hid a leak behind it, so the windows are measured in time.
+    /// How long into a run its memory is not judged for growth. A run's
+    /// working set peaks in its opening seconds, at 310 to 320 MiB here,
+    /// and has settled to about 128 MiB by 45 s, however fast it reads.
+    /// Until the zstd codec stopped renting a scratch buffer from the
+    /// shared array pool, the live set did the same, holding 70 MiB more
+    /// for 35 to 40 s whether the machine read 104 MiB/s or 213. A warm-up
+    /// is a length of time, so the windows are too: judged by the input's
+    /// position, a faster machine carried that warm-up into the stretch
+    /// being compared and hid a leak behind it.
     /// </summary>
     private static readonly TimeSpan WarmUp = TimeSpan.FromSeconds(45);
 
@@ -70,8 +70,8 @@ public static class MemoryBoundProof
 
     /// <summary>
     /// How much a run past its warm-up may leave live, over idle, once the
-    /// archive has returned. A clean run leaves under 6 MiB, and one that
-    /// kept one segment in a hundred and twenty-eight left 80.
+    /// archive has returned. A clean 32 GiB run leaves 3.7 MiB, and one that
+    /// kept one segment in 512 of a 24 GiB input left 47.
     /// </summary>
     private const long LeftLiveAllowance = 32 * Mebibyte;
 
@@ -258,11 +258,9 @@ public static class MemoryBoundProof
             await liveSampler.DisposeAsync();
             var elapsed = stopwatch.Elapsed;
 
-            // What the run left live once the archive returned. A run past
-            // the warm-up leaves a few mebibytes, and one that kept part of
-            // its input leaves all of it; a run shorter than the warm-up
-            // still holds the pooled buffers, which is one reason a short
-            // run is not judged.
+            // What the run left live once the archive returned: a few
+            // mebibytes for a clean run, and all of it for one that kept
+            // part of its input.
             var leftLive = GC.GetTotalMemory(forceFullCollection: true) - idleLive;
             var end = elapsed + TimeSpan.FromTicks(1);
             var midpoint = MidpointOf(elapsed);

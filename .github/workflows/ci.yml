@@ -275,17 +275,17 @@ jobs:
 
   # FR-ARCH-002 and NFR-PERF-001: one synthetic file far larger than any of
   # the pipeline's buffers, never materialised, through the real archive
-  # pipeline. Memory must not grow with the input: past the first 45 s,
-  # which every run spends holding pooled buffers it later lets go of, the
-  # live set and the working set are each no larger over the later half of
-  # the run than the earlier, the live set is within NFR-PERF-001's bound,
-  # and little is left live at the end. The windows are measured in time
-  # because the warm-up is, so the harness refuses a run too short to have
-  # two of them: 85 s. Runners here have read 168 to 213 MiB/s, which over
-  # 32 GiB is 154 s at the fastest. The 2 TiB the requirement names is out
-  # of reach. What processing adds over idle is judged only against twice
-  # the requirement: it measures above the requirement today, mostly in
-  # garbage the collector has not yet taken.
+  # pipeline. Memory must not grow with the input: past the first 45 s, in
+  # which a run's working set peaks before it settles, the live set and the
+  # working set are each no larger over the later half of the run than the
+  # earlier; the live set is no larger in those 45 s than after them and
+  # within NFR-PERF-001's bound; and little is left live at the end. The
+  # windows are measured in time because the warm-up is, so the harness
+  # refuses a run too short to have two of them: 85 s. Runners here have
+  # read 168 to 213 MiB/s, which over 32 GiB is 154 s at the fastest. The
+  # 2 TiB the requirement names is out of reach. What processing adds over
+  # idle is judged only against twice the requirement: it measures above
+  # the requirement today, in the working set's opening peak.
   memory-bound:
     name: Memory stays bounded over a 32 GiB file
     runs-on: ubuntu-latest
