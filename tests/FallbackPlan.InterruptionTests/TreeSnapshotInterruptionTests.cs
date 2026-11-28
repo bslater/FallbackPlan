@@ -92,7 +92,8 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var published = await CreateOrchestrator(store, keys, credential, concurrency: concurrency)
             .PublishAsync(TreeJob(0xC4), CancellationToken.None);
 
-        Assert.AreEqual(files.Count, published.Files.Count);
+        Assert.AreEqual(files.Count, published.FileCount);
+        Assert.AreEqual(files.Values.Sum(content => (long)content.Length), published.BytesArchived);
         Assert.IsEmpty(published.Failures);
 
         // NFR-PERF-002 over the scanner-driven path. The single-stream theory
@@ -101,23 +102,22 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         // its ordinal sequence are all shared across files rather than reset.
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
-        foreach (var file in published.Files)
+        var held = await FilesOfAsync(reader, published);
+        Assert.HasCount(files.Count, held);
+        foreach (var (relativePath, manifest) in held)
         {
-            var archive = file.Archive;
-            Assert.IsNotNull(archive);
-
-            var content = files[file.RelativePath.Replace('\\', '/')];
-            SequenceAssert.AreEqual(SHA256.HashData(content), archive.WholeFileHash);
-            Assert.AreEqual(content.Length, archive.LogicalLength);
+            var content = files[relativePath];
+            SequenceAssert.AreEqual(SHA256.HashData(content), manifest.WholeFileHash.ToArray());
+            Assert.AreEqual((ulong)content.Length, manifest.LogicalLength);
 
             // 06 §3.2: the encoded references must ascend by logical offset and
             // tile the file exactly. Producing segments concurrently is allowed;
             // emitting them out of order is not. They are read from the
-            // manifest that encodes them.
-            var manifestRead = await reader.ReadSegmentAsync(file.ObjectId, CancellationToken.None);
-            Assert.AreEqual(RecordReadOutcome.Ok, manifestRead.Outcome);
-            var references = FileVersionManifestCodec.Decode(manifestRead.Plaintext!).SegmentReferences;
-            Assert.HasCount(archive.SegmentReferences.Count, references);
+            // manifest that encodes them, one for each fixed-size segment the
+            // file spans.
+            var references = manifest.SegmentReferences;
+            var segmentBytes = SmallBlobPolicy.SegmentSize.Bytes;
+            Assert.HasCount((content.Length + segmentBytes - 1) / segmentBytes, references);
 
             long expectedOffset = 0;
             foreach (var reference in references)
@@ -160,7 +160,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var published = await CreateOrchestrator(store, keys, credential)
             .PublishAsync(TreeJob(0xB3), CancellationToken.None);
 
-        Assert.AreEqual(3, published.Files.Count);
+        Assert.AreEqual(3, published.FileCount);
         Assert.IsEmpty(published.Failures);
 
         // The rerun snapshot is byte-verified, not merely counted: a crash,
@@ -172,16 +172,14 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
             await reader.LoadBlobsAsync(CancellationToken.None);
             var engine = new RestoreEngine(reader);
 
-            foreach (var file in published.Files)
+            var held = await FilesOfAsync(reader, published);
+            Assert.HasCount(files.Count, held);
+            foreach (var (relativePath, manifest) in held)
             {
-                var read = await reader.ReadSegmentAsync(file.ObjectId, CancellationToken.None);
-                Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
-                var manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
-
                 using var restored = new MemoryStream();
                 var restore = await engine.RestoreFileAsync(manifest, restored, CancellationToken.None);
                 Assert.IsTrue(restore.Success, restore.FailureDetail);
-                SequenceAssert.AreEqual(files[file.RelativePath.Replace('\\', '/')], restored.ToArray());
+                SequenceAssert.AreEqual(files[relativePath], restored.ToArray());
             }
         }
 
@@ -233,7 +231,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var published = await CreateOrchestrator(faulting, keys, credential)
             .PublishAsync(TreeJob(0xB2), CancellationToken.None);
 
-        Assert.AreEqual(files.Count, published.Files.Count);
+        Assert.AreEqual(files.Count, published.FileCount);
         Assert.IsEmpty(published.Failures);
         Assert.AreEqual(0, CountUnder("hints"));
         Assert.AreEqual(1, CountUnder("snapshots"));
@@ -324,7 +322,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         // A fresh process completes the job over whatever the fault left —
         // spool leftovers, covered blobs, published deltas — with no repair.
         var published = await CreateOrchestrator(store, keys, credential).PublishAsync(TreeJob(0xC3), CancellationToken.None);
-        Assert.AreEqual(files.Count, published.Files.Count);
+        Assert.AreEqual(files.Count, published.FileCount);
         Assert.IsEmpty(published.Failures);
 
         SequenceAssert.AreEqual(files["nested/b.bin"], await RestoreTreeFileFromColdReaderAsync(store, keys, 0xC3, "nested/b.bin"));
@@ -403,6 +401,54 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 
             current = entry.ObjectId;
         }
+    }
+
+    /// <summary>
+    /// Every file a published tree snapshot holds, read from its trees and its
+    /// files' manifests: its path from the snapshot's root, with '/' between
+    /// names, and the version it names.
+    /// </summary>
+    private static async Task<List<(string RelativePath, FileVersionManifest Manifest)>> FilesOfAsync(
+        RepositoryReader reader, PublishedTreeSnapshot published)
+    {
+        var files = new List<(string RelativePath, FileVersionManifest Manifest)>();
+        await AddFilesOfAsync(reader, published.RootTreeObjectId, string.Empty, files);
+        return files;
+    }
+
+    private static async Task AddFilesOfAsync(
+        RepositoryReader reader,
+        FallbackPlan.Domain.Identifiers.ObjectId treeId,
+        string prefix,
+        List<(string RelativePath, FileVersionManifest Manifest)> files)
+    {
+        List<TreeManifest> chain = [];
+        for (FallbackPlan.Domain.Identifiers.ObjectId? next = treeId; next is { } id;)
+        {
+            var tree = TreeManifestCodec.Decode(await ReadRecordAsync(reader, id));
+            chain.Add(tree);
+            next = tree.Continuation;
+        }
+
+        foreach (var entry in TreeChain.ValidateAndFlatten(chain))
+        {
+            var path = prefix + System.Text.Encoding.UTF8.GetString(entry.Name.Span);
+            if (entry.EntryKind == FallbackPlan.Domain.EntryKind.DirectoryPlaceholder)
+            {
+                await AddFilesOfAsync(reader, entry.ObjectId, path + "/", files);
+                continue;
+            }
+
+            files.Add((path, FileVersionManifestCodec.Decode(await ReadRecordAsync(reader, entry.ObjectId))));
+        }
+    }
+
+    private static async Task<ReadOnlyMemory<byte>> ReadRecordAsync(
+        RepositoryReader reader, FallbackPlan.Domain.Identifiers.ObjectId objectId)
+    {
+        var read = await reader.ReadSegmentAsync(objectId, CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome, read.Detail);
+        return read.Plaintext!;
     }
 
     /// <summary>Records every observer callback, in order.</summary>

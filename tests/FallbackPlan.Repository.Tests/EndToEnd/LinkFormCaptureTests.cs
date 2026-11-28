@@ -96,7 +96,7 @@ public sealed class LinkFormCaptureTests : ArchiveTestHarness
         Assert.AreEqual(LinkForm.MountPoint, junction.LinkForm);
         Assert.AreEqual(folder, Encoding.UTF8.GetString(junction.LinkTarget!.Value.Span));
         Assert.DoesNotContain("link-form: mount-point", junction.CaptureDiagnostics);
-        Assert.ContainsSingle(published.Files.Where(file => file.RelativePath.EndsWith("kept.bin", StringComparison.Ordinal)));
+        Assert.ContainsSingle((await FilesHeldAsync(published)).Where(file => file.RelativePath.EndsWith("kept.bin", StringComparison.Ordinal)));
     }
 
     [TestMethod]
@@ -165,15 +165,13 @@ public sealed class LinkFormCaptureTests : ArchiveTestHarness
                 CancellationToken.None);
     }
 
-    private async Task<FileVersionManifest> ManifestOfAsync(PublishedTreeSnapshot published, string name)
+    private async Task<FileVersionManifest> ManifestOfAsync(PublishedTreeSnapshot published, string name) =>
+        (await FilesHeldAsync(published)).Single(file => file.RelativePath == name).Manifest;
+
+    private async Task<IReadOnlyList<CapturedFile>> FilesHeldAsync(PublishedTreeSnapshot published)
     {
         using var keys = CreateKeys();
-        using var reader = new RepositoryReader(Repo, keys, CreateStore(), Authority);
-        await reader.LoadBlobsAsync(CancellationToken.None);
-        var read = await reader.ReadSegmentAsync(
-            published.Files.Single(file => file.RelativePath == name).ObjectId, CancellationToken.None);
-        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
-        return FileVersionManifestCodec.Decode(read.Plaintext!);
+        return await FilesOfAsync(CreateStore(), keys, published);
     }
 
     /// <inheritdoc />

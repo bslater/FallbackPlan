@@ -73,7 +73,7 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
 
         var published = await orchestrator.PublishAsync(job, CancellationToken.None);
 
-        Assert.AreEqual(files.Count, published.Files.Count);
+        Assert.AreEqual(files.Count, published.FileCount);
         Assert.IsEmpty(published.Failures);
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);

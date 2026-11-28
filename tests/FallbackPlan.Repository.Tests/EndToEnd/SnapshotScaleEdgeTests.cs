@@ -92,7 +92,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
-        Assert.IsEmpty(published.Files);
+        Assert.IsEmpty(await FilesOfAsync(store, keys, published));
         Assert.IsEmpty(published.Failures);
         Assert.AreEqual(0, published.ContentBlobs.Sum(blob => blob.RecordCount));
 
@@ -115,7 +115,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xC1), CancellationToken.None);
 
-        Assert.HasCount(3, published.Files);
+        Assert.HasCount(3, await FilesOfAsync(store, keys, published));
         Assert.IsEmpty(published.Failures);
         Assert.AreEqual(0, published.ContentBlobs.Sum(blob => blob.RecordCount));
         Assert.IsEmpty(await KeysUnderAsync(store, "blobs/data/"), "an empty file stores no data blob");
@@ -262,7 +262,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        Assert.IsEmpty(second.Files);
+        Assert.IsEmpty(await FilesOfAsync(store, keys, second));
         Assert.IsEmpty(second.Failures);
         Assert.ContainsSingle(catalogue.ListDirectory(Enumerable.Repeat((byte)0xA1, 16).ToArray(), string.Empty));
         Assert.IsEmpty(catalogue.ListDirectory(Enumerable.Repeat((byte)0xB2, 16).ToArray(), string.Empty));
@@ -290,7 +290,7 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
         var published = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
-        Assert.AreEqual(Many, published.Files.Count);
+        Assert.AreEqual(Many, published.FileCount);
         Assert.IsEmpty(published.Failures);
 
         var snapshot = Enumerable.Repeat((byte)0xA1, 16).ToArray();
@@ -342,8 +342,8 @@ public sealed class SnapshotScaleEdgeTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        Assert.AreEqual(Many, second.Files.Count);
-        Assert.AreEqual(Many, second.Files.Count(file => file.Reused));
+        Assert.AreEqual(Many, second.FileCount);
+        Assert.AreEqual(Many, second.FilesReused);
         Assert.IsEmpty(source.OpenedPaths, "an unchanged file was re-read at scale");
     }
 }

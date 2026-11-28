@@ -76,7 +76,9 @@ public sealed class SpilledReferenceTests : ArchiveTestHarness
         await reader.LoadBlobsAsync(CancellationToken.None);
         using var restored = new MemoryStream();
         var restore = await reader.RestoreAsync(
-            await ReferencesOfAsync(reader, published.Files[0].ObjectId), restored, CancellationToken.None);
+            await ReferencesOfAsync(reader, Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId)).ObjectId),
+            restored,
+            CancellationToken.None);
         Assert.IsTrue(restore.Success, restore.FailureDetail);
         SequenceAssert.AreEqual(content, restored.ToArray());
     }

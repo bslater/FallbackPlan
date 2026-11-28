@@ -121,12 +121,7 @@ public sealed class FileFlagsCaptureTests : ArchiveTestHarness
     private async Task<FileVersionManifest> ManifestOfAsync(PublishedTreeSnapshot published, string name)
     {
         using var keys = CreateKeys();
-        using var reader = new RepositoryReader(Repo, keys, CreateStore(), Authority);
-        await reader.LoadBlobsAsync(CancellationToken.None);
-        var read = await reader.ReadSegmentAsync(
-            published.Files.Single(file => file.RelativePath == name).ObjectId, CancellationToken.None);
-        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
-        return FileVersionManifestCodec.Decode(read.Plaintext!);
+        return (await FilesOfAsync(CreateStore(), keys, published)).Single(file => file.RelativePath == name).Manifest;
     }
 
     private async Task<TreeManifest> FolderOfAsync(PublishedTreeSnapshot published, string name)

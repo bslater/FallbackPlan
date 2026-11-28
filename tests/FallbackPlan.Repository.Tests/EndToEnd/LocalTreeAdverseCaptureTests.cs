@@ -201,8 +201,8 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
             "the first snapshot must not have acquired bytes from a rewrite that happened after it");
 
         Assert.AreNotEqual(
-            VersionOf(first, "ledger.bin").ObjectId,
-            VersionOf(second, "ledger.bin").ObjectId,
+            (await VersionOfAsync(first, "ledger.bin")).ObjectId,
+            (await VersionOfAsync(second, "ledger.bin")).ObjectId,
             "two different versions of one file are two different objects");
 
         SequenceAssert.AreEqual(bystander, await RestoreAsync(first, "notes.txt"));
@@ -232,7 +232,7 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
         Assert.IsEmpty(published.Failures);
         Assert.AreEqual(1, await CaptureStatusAsync(published));
 
-        var manifest = await ReadFileVersionAsync(VersionOf(published, "doomed.bin").ObjectId);
+        var manifest = (await VersionOfAsync(published, "doomed.bin")).Manifest;
         Assert.DoesNotContain(
             diagnostic => diagnostic.StartsWith("captured-inconsistent", StringComparison.Ordinal),
             manifest.CaptureDiagnostics);
@@ -265,7 +265,7 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
         Assert.IsEmpty(published.Failures);
         Assert.AreEqual(1, await CaptureStatusAsync(published));
 
-        var manifest = await ReadFileVersionAsync(VersionOf(published, "doomed.bin").ObjectId);
+        var manifest = (await VersionOfAsync(published, "doomed.bin")).Manifest;
         Assert.Contains("captured-inconsistent: 1", manifest.CaptureDiagnostics);
         SequenceAssert.AreEqual(content, await RestoreAsync(published, "doomed.bin"));
     }
@@ -479,12 +479,15 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
     private async Task AssertRestoresAsync(PublishedTreeSnapshot published, string name, byte[] expected) =>
         SequenceAssert.AreEqual(expected, await RestoreAsync(published, name));
 
-    private static PublishedFileVersion VersionOf(PublishedTreeSnapshot published, string name) =>
-        published.Files.Single(file => file.RelativePath == name);
+    private async Task<CapturedFile> VersionOfAsync(PublishedTreeSnapshot published, string name)
+    {
+        using var keys = CreateKeys();
+        return (await FilesOfAsync(CreateStore(), keys, published)).Single(file => file.RelativePath == name);
+    }
 
     private async Task<byte[]> RestoreAsync(PublishedTreeSnapshot published, string name)
     {
-        var manifest = await ReadFileVersionAsync(VersionOf(published, name).ObjectId);
+        var manifest = (await VersionOfAsync(published, name)).Manifest;
         using var keys = CreateKeys();
         using var reader = new RepositoryReader(Repo, keys, CreateStore(), Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
@@ -498,16 +501,6 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
             manifest, restored, CancellationToken.None);
         Assert.IsTrue(result.Success, result.FailureDetail);
         return restored.ToArray();
-    }
-
-    private async Task<FileVersionManifest> ReadFileVersionAsync(ObjectId id)
-    {
-        using var keys = CreateKeys();
-        using var reader = new RepositoryReader(Repo, keys, CreateStore(), Authority);
-        await reader.LoadBlobsAsync(CancellationToken.None);
-        var read = await reader.ReadSegmentAsync(id, CancellationToken.None);
-        Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
-        return FileVersionManifestCodec.Decode(read.Plaintext!);
     }
 
     private async Task<int> CaptureStatusAsync(PublishedTreeSnapshot published)

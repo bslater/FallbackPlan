@@ -70,13 +70,13 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         Assert.AreEqual(CaptureFailureReason.IoError, ReasonFor(published, "locked.bin"));
         Assert.AreEqual(CaptureFailureReason.NotFound, ReasonFor(published, "gone.bin"));
 
-        // The backup happened. That is the point of the error manifest.
-        var captured = Assert.ContainsSingle(published.Files);
-        Assert.AreEqual("good.bin", captured.RelativePath);
-        Assert.IsNotNull(published.ErrorManifestObjectId);
-
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
+
+        // The backup happened. That is the point of the error manifest.
+        var captured = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId));
+        Assert.AreEqual("good.bin", captured.RelativePath);
+        Assert.IsNotNull(published.ErrorManifestObjectId);
         SequenceAssert.AreEqual(wanted, await RestoreAsync(reader, captured.ObjectId));
         Assert.AreEqual(2, await CaptureStatusAsync(reader, published));
     }
@@ -106,17 +106,18 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         Assert.AreEqual(CaptureFailureReason.ChangedDuringRead, failure.Reason);
         Assert.AreEqual("restless.bin", Encoding.UTF8.GetString(failure.PathComponents[0].Span));
 
-        Assert.DoesNotContain(file => file.RelativePath == "restless.bin", published.Files);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var files = await FilesOfAsync(reader, published.RootTreeObjectId);
+        Assert.DoesNotContain(file => file.RelativePath == "restless.bin", files);
 
         // The attempt budget is for a file that CHANGED, not for one that will
         // not read: a second attempt would reference segment ids the first
         // attempt reserved but never wrote.
         Assert.AreEqual(1, source.OpenedPaths.Count(path => path == "restless.bin"));
 
-        using var reader = new RepositoryReader(Repo, keys, store, Authority);
-        await reader.LoadBlobsAsync(CancellationToken.None);
-
-        var calm = Assert.ContainsSingle(published.Files);
+        var calm = Assert.ContainsSingle(files);
         SequenceAssert.AreEqual(calmContent, await RestoreAsync(reader, calm.ObjectId));
         Assert.AreEqual(2, await CaptureStatusAsync(reader, published));
 
@@ -179,7 +180,7 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var file = Assert.ContainsSingle(published.Files);
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId));
         var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
         Assert.Contains("captured-inconsistent: 2", manifest.CaptureDiagnostics);
         SequenceAssert.AreEqual(content, await RestoreAsync(reader, file.ObjectId));
@@ -211,7 +212,7 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var file = Assert.ContainsSingle(published.Files);
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId));
         var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
 
         // One attempt, not two: re-reading a name that no longer resolves
@@ -252,7 +253,7 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var file = Assert.ContainsSingle(published.Files);
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId));
         var restored = await RestoreAsync(reader, file.ObjectId);
 
         SequenceAssert.AreEqual(after, restored);
@@ -294,7 +295,7 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var file = Assert.ContainsSingle(published.Files);
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId));
         var restored = await RestoreAsync(reader, file.ObjectId);
         SequenceAssert.AreEqual(after, restored);
 
@@ -334,7 +335,7 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
-        var file = Assert.ContainsSingle(published.Files);
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId));
         var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
         var restored = await RestoreAsync(reader, file.ObjectId);
 
@@ -379,7 +380,7 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         Assert.AreEqual(
             CaptureFailureReason.NameNotRepresentable, Assert.ContainsSingle(errors.Failures).Reason);
 
-        var file = Assert.ContainsSingle(published.Files);
+        var file = Assert.ContainsSingle(await FilesOfAsync(reader, published.RootTreeObjectId));
         SequenceAssert.AreEqual(content, await RestoreAsync(reader, file.ObjectId));
     }
 
