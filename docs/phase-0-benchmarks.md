@@ -111,12 +111,19 @@ and process working set are sampled every 250 ms.
 > | container | 32 GiB | 103 MiB/s | 58.3; 69.2, 74.1 MiB | 377.3, 410.9 MiB | 8.4 MiB | 385 MB |
 > | container | 32 GiB | 102 MiB/s | 58.3; 64.3, 70.1 MiB | 366.1, 372.6 MiB | 8.4 MiB | 344 MB |
 > | CI runner | 32 GiB | 138 MiB/s | 66.5; 71.5, 75.8 MiB | 394.5, 427.1 MiB | 8.4 MiB | 400 MB |
+> | container, record tables spilled | 32 GiB | 95 MiB/s | 64.1; 69.3, 73.7 MiB | 396.4, 429.8 MiB | 8.0 MiB | 404 MB |
 >
 > On unique content the live set grows with what the run stores, by about
 > 0.4 to 0.6 MiB per GiB, and the working set with it. That is the
 > snapshot's bookkeeping for each object it stores, held until it publishes,
 > and it is inside the gate's allowances at 32 GiB. At 2 TiB it would be on
-> the order of a gigabyte → [Q24](open-questions.md#q24--what-a-snapshot-holds-per-object-it-stores). The
+> the order of a gigabyte → [Q24](open-questions.md#q24--what-a-snapshot-holds-per-object-it-stores).
+> Since [ADR-0201](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md)
+> the uploaded blobs' record tables wait in the session's spool. This run
+> barely shows it: the tables were about 2 MiB of its 26 000 records, and a
+> single-file archive reads them back at the end. Over a hundred thousand
+> one-record files, `Repository.Tests/SessionRetentionTests` measures what a
+> session keeps per stored record falling from 160.6 bytes to 78. The
 > over-idle figure is **above** the 256 MB NFR-PERF-001 states for a 2 TiB
 > file. That is why the 256 MiB clause below is asserted on the live set. The
 > 32 GiB run replaces 3 GiB below as the largest input this page measures.
