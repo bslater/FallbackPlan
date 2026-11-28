@@ -139,6 +139,8 @@ without revealing it, so one left until the next session leaks nothing.
   > **Amended 2026-11 ([Amendment 2](#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool)).** And what a tree
   > snapshot keeps for each segment its files reference fell from 84 bytes to
   > 3.8.
+  > **Corrected 2026-11-28 ([Amendment 2](#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool)).** Read once the
+  > publication's own frames have unwound, it fell from 81.0 bytes to 1.0.
 - Publication reads the spill once, sequentially, in the order the blobs were
   uploaded. The disk traffic is 61 bytes a record written once and read once.
 - The format is unchanged. Nothing durable is written differently, and a
@@ -240,6 +242,14 @@ record tables' 61 a record. `Repository.Tests/SpilledReferenceTests` holds that
 damage to a snapshot's content blobs still reaches every file that needs
 them, so the catalogue still learns what each version is made of.
 
+> **Corrected 2026-11-28.** Those two figures were read while the
+> publication's own frames were still on the thread beneath the test. The
+> publication's last step had run the test's code on, and its frames still
+> held what it used, its index entries and source-identity hints among them,
+> so the reading counted those as the result's. The test now waits for that
+> thread to unwind before it reads. Read that way it is 1.0 byte a segment,
+> where it was 81.0.
+
 **What it leaves.** Two costs still grow with what a snapshot holds, and
 [Q24](../open-questions.md#q24--what-a-snapshot-holds-per-object-it-stores)
 stays open for them:
@@ -254,6 +264,9 @@ stays open for them:
   which grows with how many files a snapshot captures, not what they hold:
   around 1.2 GB at a million files. The walk holds a little more besides, for
   the source-identity hints and the folders, which that figure leaves out.
+  > **Corrected 2026-11-28.** Read once the publication's frames have
+  > unwound, as above, the published result holds 652 bytes a file, where it
+  > held 1,004 before this amendment: around 650 MB at a million files.
 
 ## Status history
 
@@ -262,3 +275,4 @@ stays open for them:
 | 2026-11 | Accepted | Decisions 1, 2 and 5 built, tests first: `Repository/RecordTableSpill`, `Repository/ArchiveSession`, `Repository/FileArchiver`, `Repository/IndexDeltaBudget` and `Repository/PublicationOrchestrator`, held by `Repository.Tests/SessionRetentionTests`, `Repository.Tests/SpilledRecordTableTests` and `Repository.Tests/IndexDeltaBudgetTests`. Decisions 3 and 4 are not yet built. |
 | 2026-11 | Amended | [Amendment 1](#amendment-1-2026-11--the-written-set-waits-in-the-spool): decision 3 built, without the filter it proposed. `Repository/WrittenSet` keeps claims and records of blobs not yet uploaded in memory and the rest in `Repository.Catalogue/SpooledObjectSet`, beside the spill. A session keeps 1.7 bytes per stored record where it kept 78. Held by `Repository.Tests/WrittenSetTests` and `Repository.Tests/SessionRetentionTests`. Decision 4 is not yet built. |
 | 2026-11 | Amended | [Amendment 2](#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool): decision 4 built. `Repository/ArchiveSession` writes a captured file's references to `Repository/RecordTableSpill` once `Repository/SnapshotPublication` has written its manifest, and lets its content ids go, which nothing reads again. A tree snapshot keeps 3.8 bytes per referenced segment where it kept 84.0. Held by `Repository.Tests/SpilledReferenceTests` and `Repository.Tests/SessionRetentionTests`. Every decision is built. A file's own references while it is archived, and each captured file's result, still grow with the snapshot (Q24). |
+| 2026-11-28 | Corrected | [Amendment 2](#amendment-2-2026-11--a-tree-snapshots-files-references-wait-in-the-spool)'s measurements re-read once the publication's own frames have unwound, which `Repository.Tests/SessionRetentionTests` now waits for: 81.0 bytes per referenced segment before it and 1.0 after, where it said 84.0 and 3.8, and 652 bytes per captured file, 1,004 before it, where it said about 1.2 KB. |
