@@ -231,4 +231,82 @@ public sealed class ReferenceRunCodecTests
         Assert.ThrowsExactly<ManifestValidationException>(() =>
             ReferenceRunCodec.ValidateSequence(head with { LogicalLength = 2 * (ulong)Full }, [Run(0, Full), Run(Full, Full)]));
     }
+
+    /// <summary>
+    /// <paramref name="data"/> one-byte references with a one-byte hole after
+    /// each, the last's left off when <paramref name="holes"/> is one fewer,
+    /// starting with a hole of its own when <paramref name="leadingHole"/>.
+    /// </summary>
+    private static (List<SegmentReference> References, List<SparseExtent> Holes, ulong Length) Alternating(
+        int data, int holes, bool leadingHole = false)
+    {
+        List<SegmentReference> references = [];
+        List<SparseExtent> extents = [];
+        ulong at = 0;
+        if (leadingHole)
+        {
+            extents.Add(new SparseExtent(at++, 1));
+        }
+
+        for (var stretch = 0; stretch < data; stretch++)
+        {
+            references.Add(new SegmentReference((long)at++, 1, Id(stretch % 7)));
+            if (stretch < holes)
+            {
+                extents.Add(new SparseExtent(at++, 1));
+            }
+        }
+
+        return (references, extents, at);
+    }
+
+    [TestMethod]
+    public void AFileOfNoMorePiecesThanARunHolds_IsCutIntoNoRuns()
+    {
+        var (references, holes, length) = Alternating(Full / 2, Full / 2);
+
+        Assert.IsEmpty(ReferenceRunCodec.Cut(references, holes, length));
+    }
+
+    [TestMethod]
+    public void AFileOfOnePieceMore_IsCutIntoAFullRunAndARunOfThatPiece()
+    {
+        var (references, holes, length) = Alternating((Full / 2) + 1, Full / 2);
+
+        var runs = ReferenceRunCodec.Cut(references, holes, length).ToList();
+
+        Assert.HasCount(2, runs);
+        Assert.AreEqual(0ul, runs[0].Start);
+        Assert.AreEqual((ulong)Full, runs[0].Length);
+        Assert.HasCount(Full / 2, runs[0].SegmentReferences);
+        Assert.HasCount(Full / 2, runs[0].SparseExtents);
+        Assert.AreEqual((ulong)Full, runs[1].Start);
+        Assert.AreEqual(1ul, runs[1].Length);
+        Assert.AreEqual(references[^1], Assert.ContainsSingle(runs[1].SegmentReferences));
+        Assert.IsEmpty(runs[1].SparseExtents);
+    }
+
+    [TestMethod]
+    public void AFilesRuns_AsCut_TakeItsPiecesInOrder_AHoleFirstAmongThem_AndAreItsRunsByEveryRule()
+    {
+        // A hole at 0 is the first run's first piece; two runs and a third
+        // ending with a hole, every rule a reader holds a file's runs to.
+        var (references, holes, length) = Alternating(Full + 10, Full + 10, leadingHole: true);
+
+        var runs = ReferenceRunCodec.Cut(references, holes, length).ToList();
+
+        Assert.HasCount(3, runs);
+        Assert.AreEqual(new SparseExtent(0, 1), runs[0].SparseExtents[0]);
+        Assert.AreEqual(1L, runs[0].SegmentReferences[0].LogicalOffset);
+        CollectionAssert.AreEqual(references, runs.SelectMany(run => run.SegmentReferences).ToList());
+        CollectionAssert.AreEqual(holes, runs.SelectMany(run => run.SparseExtents).ToList());
+        Assert.AreEqual(length, runs[^1].Start + runs[^1].Length);
+        foreach (var run in runs)
+        {
+            _ = ReferenceRunCodec.Encode(run);
+        }
+
+        var ids = Enumerable.Range(0, runs.Count).Select(index => Id(1_000 + index)).ToArray();
+        ReferenceRunCodec.ValidateSequence(Head(length, ids), runs);
+    }
 }
