@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Numerics;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -92,9 +91,10 @@ public sealed class ZstdSegmentCodec : IDisposable
     /// <summary>
     /// Compresses a segment and applies the storage threshold
     /// (specification 10 §3). Returns <see langword="true"/> with the frame
-    /// copied into <paramref name="destination"/> when the compressed form is
+    /// written into <paramref name="destination"/> when the compressed form is
     /// stored; <see langword="false"/> when the record stores the plaintext
-    /// unchanged under profile <c>none</c>.
+    /// unchanged under profile <c>none</c>, in which case what
+    /// <paramref name="destination"/> holds is unspecified.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="destination"/> is smaller than <paramref name="plaintext"/>.</exception>
     public bool TryCompressForStorage(
@@ -117,27 +117,21 @@ public sealed class ZstdSegmentCodec : IDisposable
             return false;
         }
 
-        var bound = Compressor.GetCompressBound(plaintext.Length);
-        var rented = ArrayPool<byte>.Shared.Rent(bound);
-
-        try
+        // Into the destination, with no buffer of the codec's own. A frame the
+        // threshold stores is never longer than the plaintext and the
+        // destination holds at least that, so a frame that does not fit is
+        // one the threshold refuses. A scratch buffer the size of the
+        // compress bound would be the largest allocation in the pipeline, and
+        // the shared array pool rounds such a buffer up to a power of two and
+        // keeps it process-wide after the archive is done.
+        if (!_compressor.TryWrap(plaintext, destination, out var frameLength)
+            || !CompressionThreshold.StoreCompressed((ulong)plaintext.Length, (ulong)frameLength, thresholdPermille))
         {
-            var frameLength = _compressor.Wrap(plaintext, rented);
-
-            if (!CompressionThreshold.StoreCompressed((ulong)plaintext.Length, (ulong)frameLength, thresholdPermille))
-            {
-                return false;
-            }
-
-            rented.AsSpan(0, frameLength).CopyTo(destination);
-            written = frameLength;
-
-            return true;
+            return false;
         }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+
+        written = frameLength;
+        return true;
     }
 
     /// <summary>

@@ -62,6 +62,23 @@ public sealed class ZstdSegmentCodecTests
     }
 
     [TestMethod]
+    public void ZstdSegmentCodec_FrameSavesLessThanTheThresholdAsks_StoresItUncompressed()
+    {
+        // Half repetitive, half random: a frame of a little over half the
+        // plaintext, which fits the destination and saves too little at 900.
+        using var codec = CreateCodec();
+        var plaintext = Compressible(10_000);
+        RandomNumberGenerator.Fill(plaintext.AsSpan(5_000));
+        var frame = new byte[plaintext.Length];
+
+        Assert.IsTrue(codec.TryCompressForStorage(plaintext, 50, frame, out var smallSaving));
+        Assert.IsGreaterThan(plaintext.Length / 10, smallSaving);
+
+        Assert.IsFalse(codec.TryCompressForStorage(plaintext, 900, frame, out var written));
+        Assert.AreEqual(0, written);
+    }
+
+    [TestMethod]
     public void Decompress_WhenTheFrameExceedsTheLogicalLength_ShouldThrow()
     {
         // A record's logical_length is the hard output limit (10 §4.1): a

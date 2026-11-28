@@ -69,14 +69,19 @@ and process working set are sampled every 250 ms.
 > **2026-11: gated in CI.** The CI job `memory-bound` now runs this harness
 > over 32 GiB on every push and fails the build on its verdict. The harness
 > measures the idle working set and live set before archiving and stamps every
-> sample with the time it was taken. Every run holds about seventy mebibytes
-> more live for its first 35 to 40 seconds than afterwards, however fast it
-> reads. Those are zstd output buffers the shared array pool keeps and later
-> lets go of; with the codec allocating them instead, the live set is steady
-> from the first sample. So the harness sets aside the first 45 s and splits
-> the rest of the run in two by time. It fails on any of these:
+> sample with the time it was taken. A run's memory warms up over a length
+> of time, not an amount of input. The working set peaks in a run's opening
+> seconds and has settled by 45 s, however fast it reads. Until the zstd
+> codec changed, the live set also held about seventy mebibytes more for its
+> first 35 to 40 seconds. Those were compress-bound scratch buffers the codec
+> rented from the shared array pool, which the pool kept and later let go
+> of. The codec now compresses into the segment buffer it is handed, and the
+> live set is steady from the first sample. So the harness sets aside the
+> first 45 s and splits the rest of the run in two by time. It fails on any
+> of these:
 > - the later half's live set more than 16 MiB above the earlier half's;
 > - the later half's working set more than 64 MiB above the earlier half's;
+> - the first 45 s's live set more than 16 MiB above the later half's;
 > - a live set past 256 MiB;
 > - more than 32 MiB left live once the archive returns;
 > - more than 512 MB over idle;
@@ -90,19 +95,26 @@ and process working set are sampled every 250 ms.
 > | one segment in 512, heap | 93.3, 107.0 MiB | 47.4 MiB | 244.4, 174.7 MiB | left live |
 > | one segment in 64, native | 58.7, 60.0 MiB | 7.8 MiB | 348.8, 514.8 MiB | working-set growth |
 >
-> Clean runs, cdc-v1:
+> Clean runs, cdc-v1. The first four predate the codec change and would now
+> fail on their warm-up's live set:
 >
-> | Where | Input | Throughput | Live set: warm-up, halves | Left live | Over idle | Verdict |
-> |---|---|---|---|---|---|---|
-> | container | 24 GiB | 105 MiB/s | 143.0; 66.6, 67.9 MiB | 7.7 MiB | 342 MB | PASS |
-> | container | 32 GiB | 108 MiB/s | 138.5; 58.6, 59.9 MiB | 7.7 MiB | 317 MB | PASS |
-> | CI runner | 24 GiB | 213 MiB/s | 143.5; 66.6, 67.9 MiB | 7.7 MiB | 349 MB | PASS |
-> | CI runner | 32 GiB | 176 MiB/s | 135.5; 66.6, 67.9 MiB | 7.7 MiB | 348 MB | PASS |
+> | Where | Codec | Input | Throughput | Live set: warm-up; halves | Working set: halves | Left live | Over idle |
+> |---|---|---|---|---|---|---|---|
+> | container | scratch | 24 GiB | 105 MiB/s | 143.0; 66.6, 67.9 MiB | 256.7, 134.1 MiB | 7.7 MiB | 342 MB |
+> | container | scratch | 32 GiB | 108 MiB/s | 138.5; 58.6, 59.9 MiB | 263.2, 127.7 MiB | 7.7 MiB | 317 MB |
+> | CI runner | scratch | 24 GiB | 213 MiB/s | 143.5; 66.6, 67.9 MiB | 288.1, 137.5 MiB | 7.7 MiB | 349 MB |
+> | CI runner | scratch | 32 GiB | 176 MiB/s | 135.5; 66.6, 67.9 MiB | 210.5, 137.4 MiB | 7.7 MiB | 348 MB |
+> | container | direct | 32 GiB | 108 MiB/s | 57.7; 58.6, 59.9 MiB | 127.0, 128.3 MiB | 3.7 MiB | 279 MB |
+> | container | direct | 32 GiB | 111 MiB/s | 57.7; 58.6, 59.9 MiB | 126.8, 129.5 MiB | 3.7 MiB | 290 MB |
+> | CI runner | direct | 32 GiB | 144 MiB/s | 66.0; 66.6, 67.9 MiB | 136.9, 138.2 MiB | 3.7 MiB | 347 MB |
 >
 > The over-idle figure is **above** the 256 MB NFR-PERF-001 states for a
-> 2 TiB file. Most of it is garbage the collector has not yet taken, which
-> is why the 256 MiB clause below is asserted on the live set. The 32 GiB
-> run replaces 3 GiB below as the largest input this page measures.
+> 2 TiB file. Since the codec change it is the working set's peak in a
+> run's opening seconds, 310 to 377 MiB. The change lowered that peak in a
+> container and left it where it was on a CI runner. Settled, a run holds
+> 84 to 93 MiB over idle. That is why the 256 MiB clause below is asserted
+> on the live set. The 32 GiB run replaces 3 GiB below as the largest input this page
+> measures.
 
 The claim this proves is the *shape* of NFR-PERF-001: tripling the input
 moved the peak live set by ~14 MiB (sampling noise and GC timing), not by
