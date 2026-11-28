@@ -73,6 +73,7 @@ public sealed class CommandTests : IDisposable
         Assert.IsTrue(first.ExitCode == 0, first.All);
         var second = await _cli.RunAsync("backup", root);
         Assert.IsTrue(second.ExitCode == 0, second.All);
+        Assert.Contains("files          2 (2 unchanged, 0 failed)", second.Output, StringComparison.Ordinal);
 
         // Each backup holds both files, however many it took unchanged.
         var history = LocalState.LoadOrCreate(_cli.StatePath).JobHistory;
