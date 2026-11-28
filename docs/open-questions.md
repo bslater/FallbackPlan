@@ -210,6 +210,13 @@ Until this is settled, a v2 set's replica is registered only if the passphrase h
 > 1.2 KB), which grows with how many files a snapshot captures: around 650 MB
 > at a million.
 
+> **2026-11-28: a file's own references are built** ([Amendment 3](adr/0201-a-snapshots-bookkeeping-waits-in-its-spool.md#amendment-3-2026-11-28--a-files-references-wait-in-the-spool-as-it-is-archived)).
+> A file's references and content ids wait in the same spill as it is
+> archived, a chunk of 65,536 held in memory, so a 2 TiB file costs a chunk of
+> them rather than about 160 MB: 0.04 bytes a segment kept where it was 159.9.
+> The question stays open for each captured file's result until the snapshot
+> publishes, and for a file's holes, which the scanner gives as one list.
+
 **Owner:** maintainer · **Blocks:** FR-ARCH-002's 2 TiB acceptance, and NFR-PERF-001 for any snapshot that stores more than a few hundred gigabytes
 
 A snapshot keeps a little memory for every record it stores and every segment it reads, for as long as it runs. Over 32 GiB of unique content (2026-11, `PerformanceTests/MemoryBoundProof`), the live set grows by about 0.4 to 0.6 MiB per GiB, some 500 to 700 bytes per stored segment. Three things hold it:
